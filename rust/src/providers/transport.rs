@@ -262,6 +262,11 @@ impl ProviderHttpClient {
         );
         let mut builder = Client::builder(TokioExecutor::new());
         builder
+            // Request retry/failover belongs to the coordinator, after it
+            // owns persistence and attempt state.  Hyper-util otherwise
+            // retries a request that loses a reused idle connection before
+            // writing, which would silently consume a transport attempt.
+            .retry_canceled_requests(false)
             .pool_timer(TokioTimer::new())
             .pool_idle_timeout(config.keepalive_timeout)
             .pool_max_idle_per_host(config.max_keepalive);

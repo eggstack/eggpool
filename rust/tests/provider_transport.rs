@@ -39,6 +39,7 @@ struct RequestObservation {
 enum ResponseMode {
     Normal,
     Chunked,
+    Redirect,
     SlowHeaders,
     Premature,
 }
@@ -46,6 +47,7 @@ enum ResponseMode {
 #[derive(Clone, Copy)]
 enum ProxyMode {
     HttpConnect { authenticated: bool },
+    Socks4,
     Socks5 { authenticated: bool },
 }
 
@@ -66,6 +68,10 @@ impl ProxyFixture {
 
     fn socks5(authenticated: bool, expected_connections: usize) -> Self {
         Self::start(ProxyMode::Socks5 { authenticated }, expected_connections)
+    }
+
+    fn socks4(expected_connections: usize) -> Self {
+        Self::start(ProxyMode::Socks4, expected_connections)
     }
 
     fn start(mode: ProxyMode, expected_connections: usize) -> Self {
@@ -182,6 +188,51 @@ fn handle_proxy_connection(
                 .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .expect("proxy connect response");
             target
+        }
+        ProxyMode::Socks4 => {
+            let Some(request) = read_exact_bytes(&mut client, 8) else {
+                return;
+            };
+            if request[0] != 4 || request[1] != 1 {
+                return;
+            }
+            let port = u16::from_be_bytes([request[2], request[3]]);
+            let host = if request[4..8] == [0, 0, 0, 1] {
+                let mut raw = Vec::new();
+                loop {
+                    let Some(byte) = read_exact_bytes(&mut client, 1) else {
+                        return;
+                    };
+                    if byte[0] == 0 {
+                        break;
+                    }
+                }
+                loop {
+                    let Some(byte) = read_exact_bytes(&mut client, 1) else {
+                        return;
+                    };
+                    if byte[0] == 0 {
+                        break;
+                    }
+                    raw.push(byte[0]);
+                }
+                let Ok(host) = String::from_utf8(raw) else {
+                    return;
+                };
+                host
+            } else {
+                format!(
+                    "{}.{}.{}.{}",
+                    request[4], request[5], request[6], request[7]
+                )
+            };
+            targets.lock().unwrap().push(format!("{host}:{port}"));
+            client
+                .write_all(&[
+                    0, 90, request[2], request[3], request[4], request[5], request[6], request[7],
+                ])
+                .expect("SOCKS4 connect response");
+            (host, port)
         }
         ProxyMode::Socks5 { authenticated } => {
             let Some(header) = read_exact_bytes(&mut client, 2) else {
@@ -470,6 +521,13 @@ fn write_response(stream: &mut TestStream, mode: ResponseMode) {
             thread::sleep(Duration::from_millis(150));
             stream.write_all(b"6\r\nsecond\r\n0\r\n\r\n").unwrap();
         }
+        ResponseMode::Redirect => {
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nlocation: /redirected\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .unwrap();
+        }
         ResponseMode::SlowHeaders => {
             thread::sleep(Duration::from_millis(150));
             stream
@@ -585,6 +643,22 @@ async fn direct_http_preserves_request_shape_and_reuses_http11_connection() {
             }
         ]
     );
+    assert_eq!(first.headers["content-length"], "2");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn direct_http_returns_redirect_without_following_or_retrying() {
+    let server = FixtureServer::http(ResponseMode::Redirect, 1);
+    let client = make_client(&server.http_url());
+    let response = client
+        .send(Method::GET, "/original", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("redirect response");
+
+    assert_eq!(response.status.as_u16(), 302);
+    assert_eq!(response.headers["location"], "/redirected");
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests()[0].target, "/original");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1100,6 +1174,62 @@ async fn http_connect_proxy_preserves_target_and_request_response() {
         proxy.targets(),
         vec![format!("localhost:{}", server.port())]
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn socks4_proxy_preserves_target_and_request_response() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let proxy = ProxyFixture::socks4(1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("socks4://{}", proxy.uri()),
+    )
+    .expect("SOCKS4 client");
+    let mut response = client
+        .send(Method::GET, "/through", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("SOCKS4 response");
+
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(
+        proxy.targets(),
+        vec![format!("localhost:{}", server.port())]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proxied_http_reuses_one_tunneled_connection() {
+    let server = FixtureServer::http(ResponseMode::Normal, 2);
+    let proxy = ProxyFixture::http_connect(false, 1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://{}", proxy.uri()),
+    )
+    .expect("HTTP CONNECT client");
+
+    for path in ["/first", "/second"] {
+        let mut response = client
+            .send(Method::GET, path, HeaderMap::new(), Bytes::new())
+            .await
+            .expect("proxied response");
+        assert_eq!(response.status.as_u16(), 200);
+        assert_eq!(
+            response.body.next().await.unwrap().unwrap(),
+            Bytes::from_static(b"ok")
+        );
+        assert!(response.body.next().await.is_none());
+    }
+
+    assert_eq!(
+        proxy.targets(),
+        vec![format!("localhost:{}", server.port())]
+    );
+    assert_eq!(server.connections.load(Ordering::SeqCst), 1);
+    assert_eq!(server.requests().len(), 2);
 }
 
 #[tokio::test(flavor = "current_thread")]
