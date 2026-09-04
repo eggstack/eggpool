@@ -21,13 +21,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
-| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | corrective pass active | F006 |
+| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 
 ## Dependency-ready implementation plans
 
-| ID | Plan | Class | Dependencies | Status |
-|---|---|---|---|---|
-| F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | F001-F005 closed | ready for handoff |
+No dependency-ready implementation plans are currently registered. M4
+Provider HTTP + Eggress handoff may be registered after its own roadmap and
+implementation plan are reviewed; F006 no longer blocks that registration.
 
 ## Completed implementation plans
 
@@ -38,15 +38,23 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
 | F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | [`9cc9fc4`](https://github.com/eggstack/eggpool/commit/9cc9fc4) | [closed](closure/foundation/004-status.md) |
 | F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | [`9d272b8`](https://github.com/eggstack/eggpool/commit/9d272b862cf8e7f55a8583ff51a020305922c431) | [closed](closure/foundation/005-status.md) |
+| F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | [`df902b5`](https://github.com/eggstack/eggpool/commit/df902b5) | [closed](closure/foundation/006-status.md) |
 
-## Blocked future work
+## Future work and unblock state
 
-M4 Provider HTTP + Eggress subsystem-roadmap drafting may proceed in parallel, but its implementation handoff must not be registered dependency-ready until F006 closes. The dual-run provider qualification work will depend on F006's guarantee that listener rejection cannot mutate durable state and that the supported Rust foreground server invocation is explicit.
+M4 Provider HTTP + Eggress subsystem-roadmap drafting and implementation
+handoff registration are now unblocked by foundation. No M4 roadmap or
+implementation plan is currently represented in this registry, so there is no
+future plan status to update. Its dual-run provider qualification work can use
+F006's guarantee that listener rejection cannot mutate durable state and that
+the supported Rust foreground server invocation is explicit.
 
 Routing/quota/health, transcoding/SSE, coordinator/finalization, runtime generations, operational lifecycle, qualification, and cutover remain intentionally unrepresented by implementation handoff plans. They remain sequenced by `002-long-term-roadmap.md` and should receive repository-specific subsystem roadmaps/plans only as their correctness dependencies stabilize.
 
 ## Closure state
 
-F001 through F005 remain closed on their recorded evidence. Post-closure review identified an integration defect not covered by F005's bind test: Rust currently opens/migrates/synchronizes SQLite before listener bind, so a bind failure can have durable side effects. It also identified silent migration-stage semantics for executable `serve` options, the currently deferred `server.threads` runtime meaning, and a layout-sensitive checksum parser.
-
-F006 is the bounded corrective plan for those findings and is ready for handoff. Foundation must not be declared fully closed again until F006 has its own implementation and closure evidence.
+F001 through F006 are closed on their recorded evidence. F006 corrected the
+post-F005 startup-order defect, made migration-stage serve behavior explicit,
+made the deferred `server.threads` meaning visible, and replaced the
+layout-sensitive checksum parser. Foundation is closed; later subsystem work
+remains unrepresented until its own roadmap and handoff are reviewed.

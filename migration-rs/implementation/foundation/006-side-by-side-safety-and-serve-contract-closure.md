@@ -1,6 +1,6 @@
 # Foundation Corrective Milestone F006 — Side-by-Side Safety and Serve-Contract Closure
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/foundation/006-status.md)
 
 Repository baseline: `b0a987bcada7cb793b7eaec645243c12159fa60c`
 

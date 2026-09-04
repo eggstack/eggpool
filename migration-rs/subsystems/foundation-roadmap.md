@@ -1,6 +1,6 @@
 # Migration Foundation Subsystem Roadmap
 
-Status: corrective pass active
+Status: closed after corrective pass
 
 Canonical source:
 
@@ -55,9 +55,12 @@ F001 Rust scaffold
                                       +----> M4 provider HTTP + Eggress handoff may become ready
 ```
 
-F003 and F004 proceeded in parallel after F002. F005 closed against those stable interfaces. F006 is a corrective integration pass over F003/F004/F005 and is now the only open foundation milestone.
+F003 and F004 proceeded in parallel after F002. F005 closed against those
+stable interfaces. F006 was the corrective integration pass over
+F003/F004/F005 and is now closed.
 
-M4 subsystem-roadmap drafting may proceed while F006 is implemented, but the M4 Provider HTTP + Eggress implementation plan must not be registered dependency-ready until F006 closes.
+M4 subsystem-roadmap drafting and implementation handoff registration may now
+proceed because F006 is closed.
 
 ## 5. Milestones
 
@@ -103,7 +106,7 @@ Exit: selected dashboard pages/static resources and health/readiness work from R
 
 Closure: [F005 closure record](../closure/foundation/005-status.md). The selected read-plane slice, static-resource guard, and operational evidence are complete; provider dispatch and the remaining dashboard are explicitly deferred to later subsystem roadmaps.
 
-### F006 — Side-by-side safety and serve-contract closure (ready for handoff)
+### F006 — Side-by-side safety and serve-contract closure (closed)
 
 Class: invariant
 
@@ -123,6 +126,8 @@ Exit: startup rejection is side-effect-free, resource cleanup is bounded on post
 
 Implementation plan: [F006 corrective closure](../implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md).
 
+Closure record: [F006 closure](../closure/foundation/006-status.md).
+
 ## 6. Risks
 
 The main foundation risks are over-normalizing behavioral differences, prematurely porting internal Python abstractions instead of contracts, duplicating static assets without drift control, making the initial Rust crate hierarchy more complex than the product needs, allowing side-by-side runs to share mutable state unintentionally, and presenting migration-stage CLI/config compatibility fields as implemented runtime behavior when they are still deferred.
@@ -135,4 +140,8 @@ F006 must not absorb those systems. In particular, it does not implement Python 
 
 ## 8. Foundation exit condition
 
-Foundation closes after F006 when the Rust implementation has a reproducible build plus trustworthy differential machinery, independently satisfies the config/CLI, SQLite baseline, and initial HTTP/SSR compatibility slices, and can be started/rejected side-by-side without mutating durable state before listener ownership or silently accepting unsupported command/runtime semantics.
+Foundation is closed after F006: the Rust implementation has a reproducible
+build plus trustworthy differential machinery, independently satisfies the
+config/CLI, SQLite baseline, and initial HTTP/SSR compatibility slices, and can
+be started/rejected side-by-side without mutating durable state before listener
+ownership or silently accepting unsupported command/runtime semantics.
