@@ -1,6 +1,6 @@
 # D006 — Routing Eligibility, Fairness, and Local Selection Claims
 
-Status: dependency-ready; D005 closed
+Status: closed; see [closure record](../../closure/routing-domain/006-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d006--eligibility-priority-tiers-fairness-and-local-selection-claims`
 

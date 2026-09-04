@@ -14,6 +14,7 @@ mod error;
 pub mod health;
 pub mod providers;
 pub mod quota;
+pub mod routing;
 mod runtime;
 pub mod server;
 pub mod version;

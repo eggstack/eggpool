@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: active; D001-D005 closed; D006 ready for handoff
+Status: active; D001-D006 closed; D007 ready for handoff
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
@@ -201,10 +201,10 @@ D004 quota/claims/scoring  D005 health/backoff/quarantine
        |                   |
        +---------+---------+
                  v
-D006 eligibility/routing/fairness/local claims
+D006 eligibility/routing/fairness/local claims (closed; see [closure](../closure/routing-domain/006-status.md))
                  |
                  v
-D007 model-router compilation + bounded affinity
+D007 model-router compilation + bounded affinity (dependency-ready)
                  |
                  v
 D008 differential qualification + M5 closure
