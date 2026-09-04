@@ -447,6 +447,37 @@ impl ModelCatalogCache {
         authoritative: bool,
         allow_withdrawals: bool,
     ) -> Result<AccountCatalogUpdateResult, CatalogCacheError> {
+        self.update_from_account_inner(
+            account_name,
+            provider_id,
+            models,
+            authoritative,
+            allow_withdrawals,
+            true,
+        )
+    }
+
+    /// Apply provider observations without claiming that a live refresh
+    /// succeeded.  Static configuration is durable routing knowledge, but it
+    /// is not freshness evidence and must not advance catalog refresh state.
+    pub fn seed_from_account(
+        &mut self,
+        account_name: &str,
+        provider_id: &str,
+        models: &[ModelInput],
+    ) -> Result<AccountCatalogUpdateResult, CatalogCacheError> {
+        self.update_from_account_inner(account_name, provider_id, models, false, false, false)
+    }
+
+    fn update_from_account_inner(
+        &mut self,
+        account_name: &str,
+        provider_id: &str,
+        models: &[ModelInput],
+        authoritative: bool,
+        allow_withdrawals: bool,
+        record_refresh: bool,
+    ) -> Result<AccountCatalogUpdateResult, CatalogCacheError> {
         if !self.account_providers.contains_key(account_name) {
             return Err(CatalogCacheError::UnknownAccountName(account_name.into()));
         }
@@ -525,21 +556,23 @@ impl ModelCatalogCache {
                 updated += 1;
             }
         }
-        self.freshness.insert(
-            account_name.into(),
-            AccountFreshness {
-                last_successful_refresh_at: now,
-                source: "runtime_success".into(),
-            },
-        );
-        self.outcomes.insert(
-            account_name.into(),
-            if destructive {
-                AccountCatalogOutcome::SuccessAuthoritative
-            } else {
-                AccountCatalogOutcome::SuccessPartial
-            },
-        );
+        if record_refresh {
+            self.freshness.insert(
+                account_name.into(),
+                AccountFreshness {
+                    last_successful_refresh_at: now,
+                    source: "runtime_success".into(),
+                },
+            );
+            self.outcomes.insert(
+                account_name.into(),
+                if destructive {
+                    AccountCatalogOutcome::SuccessAuthoritative
+                } else {
+                    AccountCatalogOutcome::SuccessPartial
+                },
+            );
+        }
         Ok(AccountCatalogUpdateResult {
             account_name: account_name.into(),
             provider_id: provider_id.into(),
@@ -602,6 +635,18 @@ impl ModelCatalogCache {
                 if result.capabilities.supports_vision.is_none() {
                     result.capabilities.supports_vision = old.capabilities.supports_vision;
                 }
+                if result.limits.context_tokens.is_none() {
+                    result.limits.context_tokens = old.limits.context_tokens;
+                    result.limits.context_source = old.limits.context_source.clone();
+                }
+                if result.limits.input_tokens.is_none() {
+                    result.limits.input_tokens = old.limits.input_tokens;
+                    result.limits.input_source = old.limits.input_source.clone();
+                }
+                if result.limits.output_tokens.is_none() {
+                    result.limits.output_tokens = old.limits.output_tokens;
+                    result.limits.output_source = old.limits.output_source.clone();
+                }
             }
             if !destructive && old.protocol.is_some() && result.protocol.is_none() {
                 result.protocol = old.protocol.clone();
@@ -643,12 +688,10 @@ impl ModelCatalogCache {
                     self.account_provider_keys
                         .entry(account.name.clone())
                         .or_default();
-                    self.update_from_account(
+                    self.seed_from_account(
                         &account.name,
                         provider_id,
                         std::slice::from_ref(&input),
-                        false,
-                        false,
                     )?;
                     seeded += 1;
                 }
@@ -733,6 +776,24 @@ impl ModelCatalogCache {
         self.freshness.get(account_name).is_some_and(|freshness| {
             now.saturating_sub(freshness.last_successful_refresh_at) <= ttl_seconds.max(0)
         })
+    }
+
+    /// Return the models last associated with one account.  This is used by
+    /// the refresh event boundary and never performs durable I/O.
+    pub fn models_for_account(&self, account_name: &str) -> BTreeSet<String> {
+        self.account_support
+            .iter()
+            .filter(|(_, accounts)| accounts.contains(account_name))
+            .map(|(model_id, _)| model_id.clone())
+            .collect()
+    }
+
+    /// Return the provider/model keys last advertised by one account.
+    pub fn provider_keys_for_account(&self, account_name: &str) -> BTreeSet<(String, String)> {
+        self.account_provider_keys
+            .get(account_name)
+            .cloned()
+            .unwrap_or_default()
     }
     pub fn freshness(&self, account_name: &str) -> Option<&AccountFreshness> {
         self.freshness.get(account_name)

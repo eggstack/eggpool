@@ -1,5 +1,7 @@
 //! Typed repositories for the first Rust read-plane and compatibility writes.
 
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use tokio_rusqlite::rusqlite::{OptionalExtension, params};
 
 use super::{Database, DatabaseError};
@@ -88,6 +90,60 @@ pub struct CatalogRefreshState {
     pub last_successful_refresh_at: String,
     pub last_outcome: String,
     pub model_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CatalogModelWrite {
+    pub model_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub capabilities: Value,
+    pub source_metadata: Value,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
+    pub protocol_source: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderModelWrite {
+    pub model_id: String,
+    pub provider_id: String,
+    pub display_name: Option<String>,
+    pub protocol: Option<String>,
+    pub capabilities: Value,
+    pub source_metadata: Value,
+    pub protocol_source: Option<String>,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
+    pub resolution_status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CatalogRefreshWrite {
+    pub account_id: i64,
+    pub provider_id: String,
+    pub refreshed_at: i64,
+    pub outcome: String,
+    pub model_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CatalogPingWrite {
+    pub provider_id: String,
+    pub account_name: String,
+    pub latency_ms: i64,
+    pub status_code: Option<i64>,
+    pub error: Option<String>,
+    pub model_count: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CatalogPersistenceBatch {
+    pub models: Vec<CatalogModelWrite>,
+    pub provider_models: Vec<ProviderModelWrite>,
+    pub support: BTreeSet<(i64, String)>,
+    pub refresh: Vec<CatalogRefreshWrite>,
+    pub pings: Vec<CatalogPingWrite>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -369,6 +425,193 @@ impl CatalogRepository {
             statement.query_map([], refresh_state_from_row)?.collect()
         }).await
     }
+
+    /// Apply one catalog refresh's semantic state in a single schema-54
+    /// transaction. The caller supplies the already-hydrated durable rows so
+    /// semantic comparison remains outside the transaction while all writes
+    /// stay behind the typed catalog repository boundary.
+    pub async fn apply_persistence_batch(
+        &self,
+        existing_models: Vec<CatalogModel>,
+        existing_provider_models: Vec<ProviderModelMetadata>,
+        existing_support: Vec<AccountModelSupport>,
+        batch: CatalogPersistenceBatch,
+    ) -> Result<(), DatabaseError> {
+        self.database.with_transaction(move |connection| {
+            let desired_model_ids: BTreeSet<String> = batch
+                .models
+                .iter()
+                .map(|row| row.model_id.clone())
+                .collect();
+            let desired_provider_keys: BTreeSet<(String, String)> = batch
+                .provider_models
+                .iter()
+                .map(|row| (row.model_id.clone(), row.provider_id.clone()))
+                .collect();
+            let existing_model_ids: BTreeSet<String> = existing_models
+                .iter()
+                .map(|row| row.model_id.clone())
+                .filter(|id| id != "__deprecated__")
+                .collect();
+            let existing_provider_keys: BTreeSet<(String, String)> = existing_provider_models
+                .iter()
+                .map(|row| (row.model_id.clone(), row.provider_id.clone()))
+                .collect();
+            let existing_model_map: BTreeMap<_, _> = existing_models
+                .into_iter()
+                .map(|row| (row.model_id.clone(), row))
+                .collect();
+            for row in &batch.models {
+                let capabilities = canonical_json(&row.capabilities);
+                let source_metadata = canonical_json(&row.source_metadata);
+                match existing_model_map.get(&row.model_id) {
+                    None => {
+                        connection.execute(
+                            "INSERT INTO models (model_id, display_name, protocol, capabilities, source_metadata, first_seen_at, last_seen_at, protocol_source, resolution_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'resolved')",
+                            params![row.model_id, row.display_name, row.protocol, capabilities, source_metadata, timestamp(row.first_seen_at), timestamp(row.last_seen_at), row.protocol_source.as_deref().filter(|value| *value != "unresolved")],
+                        )?;
+                    }
+                    Some(old)
+                        if (
+                            old.display_name.as_ref(),
+                            old.protocol.as_str(),
+                            canonical_stored(&old.capabilities),
+                            canonical_stored(&old.source_metadata),
+                            old.protocol_source.as_ref(),
+                            old.resolution_status.as_str(),
+                        ) != (
+                            row.display_name.as_ref(),
+                            row.protocol.as_str(),
+                            capabilities.clone(),
+                            source_metadata.clone(),
+                            row.protocol_source.as_ref(),
+                            "resolved",
+                        ) =>
+                    {
+                        connection.execute(
+                            "UPDATE models SET display_name = ?1, protocol = ?2, capabilities = ?3, source_metadata = ?4, last_seen_at = ?5, protocol_source = ?6, resolution_status = 'resolved' WHERE model_id = ?7",
+                            params![row.display_name, row.protocol, capabilities, source_metadata, timestamp(row.last_seen_at), row.protocol_source.as_deref().filter(|value| *value != "unresolved"), row.model_id],
+                        )?;
+                    }
+                    _ => {}
+                }
+            }
+            let existing_provider_map: BTreeMap<_, _> = existing_provider_models
+                .into_iter()
+                .map(|row| ((row.model_id.clone(), row.provider_id.clone()), row))
+                .collect();
+            for row in &batch.provider_models {
+                let capabilities = canonical_json(&row.capabilities);
+                let source_metadata = canonical_json(&row.source_metadata);
+                if let Some(old) = existing_provider_map
+                    .get(&(row.model_id.clone(), row.provider_id.clone()))
+                {
+                    let old_key = (
+                        old.display_name.as_ref(),
+                        old.protocol.as_ref(),
+                        canonical_stored(&old.capabilities),
+                        canonical_stored(&old.source_metadata),
+                        old.protocol_source.as_ref(),
+                        old.resolution_status.as_str(),
+                    );
+                    let new_key = (
+                        row.display_name.as_ref(),
+                        row.protocol.as_ref(),
+                        capabilities.clone(),
+                        source_metadata.clone(),
+                        row.protocol_source.as_ref(),
+                        row.resolution_status.as_str(),
+                    );
+                    if old_key != new_key {
+                        connection.execute(
+                            "UPDATE provider_model_metadata SET display_name = ?1, protocol = ?2, capabilities = ?3, source_metadata = ?4, protocol_source = ?5, last_seen_at = ?6, resolution_status = ?7 WHERE model_id = ?8 AND provider_id = ?9",
+                            params![row.display_name, row.protocol, capabilities, source_metadata, row.protocol_source, timestamp(row.last_seen_at), row.resolution_status, row.model_id, row.provider_id],
+                        )?;
+                    }
+                } else {
+                    connection.execute(
+                        "INSERT INTO provider_model_metadata (model_id, provider_id, display_name, protocol, capabilities, source_metadata, protocol_source, first_seen_at, last_seen_at, resolution_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        params![row.model_id, row.provider_id, row.display_name, row.protocol, capabilities, source_metadata, row.protocol_source, timestamp(row.first_seen_at), timestamp(row.last_seen_at), row.resolution_status],
+                    )?;
+                }
+            }
+            let old_support: BTreeSet<(i64, String)> = existing_support
+                .into_iter()
+                .filter(|row| row.enabled)
+                .map(|row| (row.account_id, row.model_id))
+                .collect();
+            for (account_id, model_id) in batch.support.difference(&old_support) {
+                connection.execute(
+                    "INSERT INTO account_models (account_id, model_id, enabled) VALUES (?1, ?2, 1) ON CONFLICT(account_id, model_id) DO UPDATE SET enabled = 1",
+                    params![account_id, model_id],
+                )?;
+            }
+            for (account_id, model_id) in old_support.difference(&batch.support) {
+                connection.execute(
+                    "UPDATE account_models SET enabled = 0 WHERE account_id = ?1 AND model_id = ?2 AND enabled = 1",
+                    params![account_id, model_id],
+                )?;
+            }
+            for refresh in &batch.refresh {
+                connection.execute(
+                    "INSERT INTO catalog_refresh_state (account_id, provider_id, last_successful_refresh_at, last_outcome, model_count) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(account_id) DO UPDATE SET provider_id = excluded.provider_id, last_successful_refresh_at = excluded.last_successful_refresh_at, last_outcome = excluded.last_outcome, model_count = excluded.model_count",
+                    params![refresh.account_id, refresh.provider_id, timestamp(refresh.refreshed_at), refresh.outcome, refresh.model_count],
+                )?;
+            }
+            for ping in &batch.pings {
+                connection.execute(
+                    "INSERT INTO provider_pings (provider_id, account_name, latency_ms, status_code, error, model_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![ping.provider_id, ping.account_name, ping.latency_ms, ping.status_code, ping.error, ping.model_count],
+                )?;
+            }
+            let stale_models = existing_model_ids
+                .difference(&desired_model_ids)
+                .cloned()
+                .collect::<Vec<_>>();
+            if !stale_models.is_empty() {
+                connection.execute(
+                    "INSERT OR IGNORE INTO models (model_id, display_name, protocol, resolution_status, provider_id) VALUES ('__deprecated__', 'Deprecated models', 'openai', 'resolved', 'opencode-go')",
+                    [],
+                )?;
+                for model_id in stale_models {
+                    connection.execute(
+                        "UPDATE requests SET original_model_id = model_id, model_id = '__deprecated__' WHERE model_id = ?1",
+                        [&model_id],
+                    )?;
+                    connection.execute(
+                        "UPDATE reservations SET original_model_id = model_id, model_id = '__deprecated__' WHERE model_id = ?1",
+                        [&model_id],
+                    )?;
+                    connection.execute("DELETE FROM account_models WHERE model_id = ?1", [&model_id])?;
+                    connection.execute(
+                        "DELETE FROM provider_model_metadata WHERE model_id = ?1",
+                        [&model_id],
+                    )?;
+                    connection.execute("DELETE FROM models WHERE model_id = ?1", [&model_id])?;
+                }
+            }
+            for (model_id, provider_id) in existing_provider_keys.difference(&desired_provider_keys) {
+                connection.execute(
+                    "DELETE FROM provider_model_metadata WHERE model_id = ?1 AND provider_id = ?2",
+                    params![model_id, provider_id],
+                )?;
+            }
+            Ok(())
+        }).await
+    }
+}
+
+fn canonical_json(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "{}".into())
+}
+
+fn canonical_stored(value: &str) -> String {
+    serde_json::from_str::<Value>(value)
+        .map_or_else(|_| value.to_owned(), |value| canonical_json(&value))
+}
+
+fn timestamp(value: i64) -> String {
+    value.to_string()
 }
 
 #[derive(Debug, Clone)]

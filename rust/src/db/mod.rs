@@ -12,7 +12,8 @@ pub use connection::{Database, DatabaseConfig, DatabaseError, DatabaseStats};
 pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{
     Account, AccountConfig, AccountModelSupport, AccountRepository, CatalogModel,
-    CatalogRefreshState, CatalogRepository, DashboardSummary, Model, ModelRepository, Ping,
-    PingRepository, ProviderModelMetadata, Request, RequestRepository, UsageRollupRepository,
-    UsageSummary,
+    CatalogModelWrite, CatalogPersistenceBatch, CatalogPingWrite, CatalogRefreshState,
+    CatalogRefreshWrite, CatalogRepository, DashboardSummary, Model, ModelRepository, Ping,
+    PingRepository, ProviderModelMetadata, ProviderModelWrite, Request, RequestRepository,
+    UsageRollupRepository, UsageSummary,
 };

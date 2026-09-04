@@ -92,6 +92,9 @@ pub enum TransportError {
     /// Response body reading failed.
     #[error("provider response read failed")]
     Read,
+    /// The finite response body exceeded the catalog/request boundary.
+    #[error("provider response body exceeds the configured limit")]
+    ResponseBodyTooLarge,
     /// HTTP framing or protocol validation failed.
     #[error("provider HTTP protocol failed")]
     Protocol,
@@ -206,6 +209,21 @@ impl ProviderBody {
                 None => return None,
             }
         }
+    }
+
+    /// Buffer a response only when the caller supplies an explicit finite
+    /// bound.  Catalog discovery is the first caller of this helper; the
+    /// neutral transport itself never assumes an unbounded response body.
+    pub async fn read_to_bytes(&mut self, max_bytes: usize) -> Result<Bytes, TransportError> {
+        let mut body = Vec::new();
+        while let Some(chunk) = self.next().await {
+            let chunk = chunk?;
+            if body.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(TransportError::ResponseBodyTooLarge);
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(Bytes::from(body))
     }
 }
 
