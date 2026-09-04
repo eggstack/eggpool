@@ -1,0 +1,14 @@
+# Minimal, credential-free configuration used by migration contract probes.
+[server]
+host = "127.0.0.1"
+port = 11301
+
+[database]
+path = "migration.sqlite3"
+
+[models]
+startup_refresh = false
+
+[model_info]
+enabled = false
+startup_refresh = false

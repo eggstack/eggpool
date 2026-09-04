@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "plan": "F002",
+  "implementation": "python",
+  "source": "tests/migration_rs/fixtures",
+  "captures": [
+    {
+      "case": "cli-version",
+      "contract_args": ["version"],
+      "exit_code": 0,
+      "stdout": "0.7.4\n",
+      "stderr": ""
+    },
+    {
+      "case": "config-valid",
+      "fixture": "tests/migration_rs/fixtures/config/valid.toml",
+      "valid": true,
+      "error_category": null
+    },
+    {
+      "case": "config-invalid-port",
+      "fixture": "tests/migration_rs/fixtures/config/invalid-port.toml",
+      "valid": false,
+      "error_category": "schema"
+    },
+    {
+      "case": "http-health",
+      "method": "GET",
+      "path": "/v1/healthz",
+      "status": 200,
+      "headers": {"content-type": "application/json"},
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "case": "database-schema",
+      "fixture": "created by the Python migration command in an isolated temp root",
+      "observation": "tables, columns, indexes, row counts, and migration checksums"
+    },
+    {
+      "case": "ssr-static",
+      "source": "src/eggpool/dashboard/static",
+      "resources": [
+        "/static/dashboard.css",
+        "/static/dashboard.js",
+        "/static/chart.js",
+        "/static/favicon.svg"
+      ],
+      "hashing": "SHA-256 of exact response bytes"
+    }
+  ]
+}
