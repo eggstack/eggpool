@@ -72,7 +72,11 @@ EggPool accepts any valid [pproxy URI](https://github.com/qwj/python-proxy#uri-s
 | `ssh://` | SSH tunnel | Requires `asyncssh` package |
 | `trojan://` | Trojan protocol | Typically combined with SSL |
 
-You can combine schemes with `+` (e.g. `http+socks5://`).
+pproxy also uses `+` for listener protocol composition (for example
+`http+socks5://`). That form is not a provider outbound URI: Eggress's
+listener-free outbound connector has no upstream for it. Use `__` between
+actual outbound hops when configuring an account, for example
+`http://proxy-a:8080__socks5://proxy-b:1080`.
 
 ### Authentication in URIs
 

@@ -1,5 +1,6 @@
 use std::{
     io::{Read, Write},
+    net::{Shutdown, SocketAddr},
     net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
@@ -31,6 +32,219 @@ enum ResponseMode {
     Chunked,
     SlowHeaders,
     Premature,
+}
+
+#[derive(Clone, Copy)]
+enum ProxyMode {
+    HttpConnect { authenticated: bool },
+    Socks5 { authenticated: bool },
+}
+
+struct ProxyFixture {
+    address: SocketAddr,
+    targets: Arc<Mutex<Vec<String>>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl ProxyFixture {
+    fn http_connect(authenticated: bool, expected_connections: usize) -> Self {
+        Self::start(
+            ProxyMode::HttpConnect { authenticated },
+            expected_connections,
+        )
+    }
+
+    fn socks5(authenticated: bool, expected_connections: usize) -> Self {
+        Self::start(ProxyMode::Socks5 { authenticated }, expected_connections)
+    }
+
+    fn start(mode: ProxyMode, expected_connections: usize) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy listener");
+        let address = listener.local_addr().expect("proxy address");
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let target_log = Arc::clone(&targets);
+        let thread = thread::spawn(move || {
+            for _ in 0..expected_connections {
+                let (stream, _) = listener.accept().expect("proxy accept");
+                handle_proxy_connection(stream, mode, &target_log);
+            }
+        });
+        Self {
+            address,
+            targets,
+            thread: Some(thread),
+        }
+    }
+
+    fn uri(&self) -> String {
+        format!("127.0.0.1:{}", self.address.port())
+    }
+
+    fn targets(&self) -> Vec<String> {
+        self.targets.lock().unwrap().clone()
+    }
+}
+
+impl Drop for ProxyFixture {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("proxy thread");
+        }
+    }
+}
+
+fn read_exact_bytes(stream: &mut TcpStream, length: usize) -> Option<Vec<u8>> {
+    let mut bytes = vec![0; length];
+    stream.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn read_until_headers(stream: &mut TcpStream) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    let mut byte = [0; 1];
+    loop {
+        stream.read_exact(&mut byte).ok()?;
+        head.push(byte[0]);
+        if head.ends_with(b"\r\n\r\n") {
+            return Some(head);
+        }
+        if head.len() > 64 * 1024 {
+            return None;
+        }
+    }
+}
+
+fn parse_target_authority(value: &str) -> Option<(String, u16)> {
+    let (host, port) = value.rsplit_once(':')?;
+    Some((host.trim_matches(['[', ']']).to_owned(), port.parse().ok()?))
+}
+
+fn handle_proxy_connection(
+    mut client: TcpStream,
+    mode: ProxyMode,
+    targets: &Arc<Mutex<Vec<String>>>,
+) {
+    let (host, port) = match mode {
+        ProxyMode::HttpConnect { authenticated } => {
+            let Some(head) = read_until_headers(&mut client) else {
+                return;
+            };
+            let text = String::from_utf8_lossy(&head);
+            let mut first = text.lines().next().unwrap_or_default().split_whitespace();
+            if first.next() != Some("CONNECT") {
+                return;
+            }
+            let authority = first.next().unwrap_or_default();
+            if authenticated
+                && !text.lines().any(|line| {
+                    line.eq_ignore_ascii_case(
+                        "Proxy-Authorization: Basic cHJveHktdXNlcjpwcm94eS1wYXNz",
+                    )
+                })
+            {
+                client
+                    .write_all(
+                        b"HTTP/1.1 407 Proxy Authentication Required\r\nConnection: close\r\n\r\n",
+                    )
+                    .expect("proxy auth response");
+                return;
+            }
+            let Some(target) = parse_target_authority(authority) else {
+                return;
+            };
+            targets.lock().unwrap().push(authority.to_owned());
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .expect("proxy connect response");
+            target
+        }
+        ProxyMode::Socks5 { authenticated } => {
+            let Some(header) = read_exact_bytes(&mut client, 2) else {
+                return;
+            };
+            let Some(_methods) = read_exact_bytes(&mut client, header[1] as usize) else {
+                return;
+            };
+            let method = if authenticated { 2 } else { 0 };
+            client
+                .write_all(&[5, method])
+                .expect("SOCKS method response");
+            if authenticated {
+                let Some(auth_head) = read_exact_bytes(&mut client, 2) else {
+                    return;
+                };
+                let Some(_user) = read_exact_bytes(&mut client, auth_head[1] as usize) else {
+                    return;
+                };
+                let Some(password_length) = read_exact_bytes(&mut client, 1) else {
+                    return;
+                };
+                let Some(_password) = read_exact_bytes(&mut client, password_length[0] as usize)
+                else {
+                    return;
+                };
+                client.write_all(&[1, 0]).expect("SOCKS auth response");
+            }
+            let Some(request) = read_exact_bytes(&mut client, 4) else {
+                return;
+            };
+            if request[0] != 5 || request[1] != 1 {
+                return;
+            }
+            let (host, target_label) = match request[3] {
+                1 => {
+                    let Some(raw) = read_exact_bytes(&mut client, 4) else {
+                        return;
+                    };
+                    let host = format!("{}.{}.{}.{}", raw[0], raw[1], raw[2], raw[3]);
+                    (host.clone(), host)
+                }
+                3 => {
+                    let Some(length) = read_exact_bytes(&mut client, 1) else {
+                        return;
+                    };
+                    let Some(raw) = read_exact_bytes(&mut client, length[0] as usize) else {
+                        return;
+                    };
+                    let Ok(host) = String::from_utf8(raw) else {
+                        return;
+                    };
+                    (host.clone(), host)
+                }
+                _ => return,
+            };
+            let Some(raw_port) = read_exact_bytes(&mut client, 2) else {
+                return;
+            };
+            let port = u16::from_be_bytes([raw_port[0], raw_port[1]]);
+            targets.lock().unwrap().push(format!(
+                "{}:{}",
+                if request[3] == 3 { "domain" } else { "ip" },
+                target_label
+            ));
+            client
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                .expect("SOCKS connect response");
+            (host, port)
+        }
+    };
+
+    let Ok(target) = TcpStream::connect((host.as_str(), port)) else {
+        return;
+    };
+    relay_streams(client, target);
+}
+
+fn relay_streams(mut client: TcpStream, mut target: TcpStream) {
+    let mut reverse_client = client.try_clone().expect("proxy client clone");
+    let mut reverse_target = target.try_clone().expect("proxy target clone");
+    let to_target = thread::spawn(move || {
+        let _ = std::io::copy(&mut client, &mut target);
+    });
+    let _ = std::io::copy(&mut reverse_target, &mut reverse_client);
+    let _ = reverse_client.shutdown(Shutdown::Both);
+    let _ = reverse_target.shutdown(Shutdown::Both);
+    to_target.join().expect("proxy relay thread");
 }
 
 struct FixtureServer {
@@ -120,6 +334,10 @@ impl FixtureServer {
             "https://127.0.0.1:{}",
             self.address.rsplit(':').next().unwrap()
         )
+    }
+
+    fn port(&self) -> u16 {
+        self.address.rsplit(':').next().unwrap().parse().unwrap()
     }
 
     fn requests(&self) -> Vec<RequestObservation> {
@@ -562,4 +780,219 @@ fn transport_error_display_is_secret_free_and_uri_validation_is_fail_closed() {
     let error = TransportError::Connect;
     assert!(!error.to_string().contains(marker));
     assert!(ProviderHttpConfig::new(&format!("https://user:{marker}@provider.example")).is_err());
+}
+
+fn proxy_test_config(base_url: &str) -> ProviderHttpConfig {
+    let mut config = ProviderHttpConfig::new(base_url).expect("provider config");
+    config.connect_timeout = Duration::from_secs(2);
+    config.read_timeout = Duration::from_secs(2);
+    config.write_timeout = Duration::from_secs(2);
+    config.pool_timeout = Duration::from_secs(1);
+    config
+}
+
+#[test]
+fn mandatory_proxy_corpus_uri_families_construct() {
+    let port = 1;
+    let uris = [
+        "direct://".to_owned(),
+        format!("http://127.0.0.1:{port}"),
+        format!("http://127.0.0.1:{port}#proxy-user:proxy-pass"),
+        format!("socks4://127.0.0.1:{port}"),
+        format!("socks5://127.0.0.1:{port}"),
+        format!("socks5://127.0.0.1:{port}#proxy-user:proxy-pass"),
+        format!("http://127.0.0.1:{port}__socks5://127.0.0.1:{port}"),
+        format!("ss://aes-256-gcm:synthetic-key@127.0.0.1:{port}"),
+        format!("ssr://aes-256-cfb:synthetic-key@127.0.0.1:{port}"),
+        format!("trojan://aes-256-gcm:synthetic-key@127.0.0.1:{port}"),
+        format!("ssh://aes-256-cfb:synthetic-key@127.0.0.1:{port}"),
+    ];
+    for uri in uris {
+        let result =
+            ProviderHttpClient::new_with_proxy(proxy_test_config("http://127.0.0.1:1"), &uri);
+        assert!(
+            result.is_ok(),
+            "mandatory proxy URI did not construct: {uri}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn direct_eggress_control_uri_uses_the_same_http_client() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let client =
+        ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), "direct://")
+            .expect("direct Eggress adapter");
+    let mut response = client
+        .send(Method::GET, "/control", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("direct Eggress response");
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_connect_proxy_preserves_target_and_request_response() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let proxy = ProxyFixture::http_connect(false, 1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://{}", proxy.uri()),
+    )
+    .expect("HTTP CONNECT client");
+    let mut response = client
+        .send(Method::GET, "/through", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("proxied response");
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(
+        proxy.targets(),
+        vec![format!("localhost:{}", server.port())]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authenticated_http_connect_preserves_provider_tls_verification() {
+    let server = FixtureServer::https(1);
+    let ca = server.tls_certificate.clone().expect("TLS root");
+    let proxy = ProxyFixture::http_connect(true, 1);
+    let mut config = proxy_test_config(&server.https_url());
+    config.additional_root_certificates.push(ca);
+    let client = ProviderHttpClient::new_with_proxy(
+        config,
+        &format!("http://{}#proxy-user:proxy-pass", proxy.uri()),
+    )
+    .expect("authenticated HTTP CONNECT client");
+    let mut response = client
+        .send(Method::GET, "/secure", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("proxied TLS response");
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(
+        proxy.targets(),
+        vec![format!("localhost:{}", server.port())]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_then_socks5_chain_preserves_both_hops() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let first = ProxyFixture::http_connect(false, 1);
+    let second = ProxyFixture::socks5(false, 1);
+    let chain = format!("http://{}__socks5://{}", first.uri(), second.uri());
+    let client = ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &chain)
+        .expect("proxy chain client");
+    let mut response = client
+        .send(Method::GET, "/chained", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("chained response");
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(first.targets(), vec![second.uri()]);
+    assert_eq!(second.targets(), vec!["domain:localhost".to_owned()]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn socks5_auth_preserves_domain_target_and_rejection_is_not_direct() {
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let proxy = ProxyFixture::socks5(true, 1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("socks5://{}#proxy-user:proxy-pass", proxy.uri()),
+    )
+    .expect("authenticated SOCKS5 client");
+    let mut response = client
+        .send(Method::GET, "/through", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("SOCKS5 response");
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(proxy.targets(), vec!["domain:localhost".to_owned()]);
+
+    let rejecting_proxy = ProxyFixture::http_connect(true, 1);
+    let rejecting_client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://{}", rejecting_proxy.uri()),
+    )
+    .expect("proxy client");
+    let error = rejecting_client
+        .send(
+            Method::GET,
+            "/must-not-be-direct",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("proxy authentication rejection");
+    assert!(matches!(
+        error,
+        TransportError::ProxyAuthentication | TransportError::ProxyConnect
+    ));
+    assert!(rejecting_proxy.targets().is_empty());
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn identical_proxy_endpoints_keep_account_pools_isolated() {
+    let server = FixtureServer::http(ResponseMode::Normal, 2);
+    let proxy = ProxyFixture::http_connect(false, 2);
+    let proxy_url = format!("http://{}", proxy.uri());
+    {
+        let client =
+            ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &proxy_url)
+                .expect("first account client");
+        let mut response = client
+            .send(Method::GET, "/one", HeaderMap::new(), Bytes::new())
+            .await
+            .expect("first account response");
+        response
+            .body
+            .next()
+            .await
+            .expect("first body")
+            .expect("body");
+    }
+    {
+        let client =
+            ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &proxy_url)
+                .expect("second account client");
+        let mut response = client
+            .send(Method::GET, "/two", HeaderMap::new(), Bytes::new())
+            .await
+            .expect("second account response");
+        response
+            .body
+            .next()
+            .await
+            .expect("second body")
+            .expect("body");
+    }
+    assert_eq!(proxy.targets().len(), 2);
+    assert_eq!(server.connections.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn malformed_proxy_fails_closed_without_secret_bearing_diagnostics() {
+    let marker = "proxy-secret-marker-t003";
+    let result = ProviderHttpClient::new_with_proxy(
+        proxy_test_config("http://127.0.0.1:1"),
+        &format!("unsupported://{marker}@127.0.0.1:1"),
+    );
+    let error = result.expect_err("unsupported proxy must fail construction");
+    assert_eq!(error, TransportError::ProxyConfiguration);
+    assert!(!error.to_string().contains(marker));
+    assert!(!format!("{error:?}").contains(marker));
 }

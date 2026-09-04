@@ -141,6 +141,13 @@ recorded as parser drift rather than promoted to a Rust-only EggPool feature.
 These are documentation corrections, not silent supported differences.  The
 working Python forms remain mandatory in the corpus.
 
+The corpus also records a provider-outbound distinction for `http+socks5://`.
+pproxy parses that spelling as listener protocol composition, but Eggress's
+listener-free `OutboundConnector` correctly reports no upstream for it.  It is
+therefore not an EggPool account proxy form; multi-hop outbound configuration
+uses the `__` chain syntax.  The row is retained as documentation drift rather
+than being silently treated as a Rust-only supported difference.
+
 ## Deterministic fixture inventory
 
 `provider_transport_fixtures.py` provides:

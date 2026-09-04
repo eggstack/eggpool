@@ -1136,6 +1136,66 @@ pub struct Config {
 pub type AppConfig = Config;
 
 impl Config {
+    /// Resolve an account's explicit outbound proxy using the Python
+    /// precedence contract.  Environment values are trimmed at the boundary;
+    /// inline values are retained exactly and are validated by the transport
+    /// constructor.  Secret values never appear in the returned errors.
+    pub fn resolve_account_proxy_url(
+        &self,
+        account: &AccountConfig,
+    ) -> Result<Option<String>, ConfigError> {
+        if let Some(proxy_url) = &account.proxy_url {
+            return Ok(Some(proxy_url.clone()));
+        }
+        if let Some(env_name) = &account.proxy_url_env {
+            return Self::resolve_proxy_url_env(env_name, &account.name).map(Some);
+        }
+        let Some(proxy_name) = &account.proxy else {
+            return Ok(None);
+        };
+        let Some(proxy) = self.proxies.get(proxy_name) else {
+            return Err(ConfigError::validation(
+                "account references an unknown proxy",
+            ));
+        };
+        if let Some(proxy_url) = &proxy.url {
+            return Ok(Some(proxy_url.clone()));
+        }
+        let Some(env_name) = &proxy.url_env else {
+            return Err(ConfigError::validation("proxy url_env is not set"));
+        };
+        Self::resolve_proxy_url_env(env_name, &account.name).map(Some)
+    }
+
+    fn resolve_proxy_url_env(env_name: &str, account_name: &str) -> Result<String, ConfigError> {
+        let value = env::var(env_name).ok();
+        Self::resolve_proxy_url_env_value(env_name, account_name, value)
+    }
+
+    fn resolve_proxy_url_env_value(
+        env_name: &str,
+        account_name: &str,
+        value: Option<String>,
+    ) -> Result<String, ConfigError> {
+        let value = value.ok_or_else(|| {
+            ConfigError::validation(format!(
+                "Account {account_name:?} references proxy env var {env_name:?}, but it is not set"
+            ))
+        })?;
+        if value.is_empty() {
+            return Err(ConfigError::validation(format!(
+                "Account {account_name:?} references proxy env var {env_name:?}, but it is not set"
+            )));
+        }
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(ConfigError::validation(format!(
+                "Account {account_name:?} references proxy env var {env_name:?}, but it is whitespace-only"
+            )));
+        }
+        Ok(trimmed.to_owned())
+    }
+
     pub fn from_toml(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         if !path.exists() {
@@ -2018,5 +2078,64 @@ mod tests {
             },
         );
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn account_proxy_resolution_matches_precedence_and_env_trimming() {
+        let mut config = Config::default();
+        config.proxies.insert(
+            "shared".into(),
+            ProxyConfig {
+                url: Some("http://named.example:8080".into()),
+                url_env: None,
+            },
+        );
+        assert_eq!(
+            config
+                .resolve_account_proxy_url(&AccountConfig {
+                    name: "inline".into(),
+                    proxy_url: Some("  socks5://inline.example:1080  ".into()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            Some("  socks5://inline.example:1080  ".into())
+        );
+        assert_eq!(
+            config
+                .resolve_account_proxy_url(&AccountConfig {
+                    name: "named".into(),
+                    proxy: Some("shared".into()),
+                    ..Default::default()
+                })
+                .unwrap(),
+            Some("http://named.example:8080".into())
+        );
+        assert_eq!(
+            config
+                .resolve_account_proxy_url(&AccountConfig {
+                    name: "direct".into(),
+                    ..Default::default()
+                })
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            Config::resolve_proxy_url_env_value(
+                "ACCOUNT_PROXY",
+                "account",
+                Some(" \tsocks5://proxy.example:1080 \n".into())
+            )
+            .unwrap(),
+            "socks5://proxy.example:1080"
+        );
+        for (value, expected) in [
+            (None, "not set"),
+            (Some(String::new()), "not set"),
+            (Some(" \t\n ".into()), "whitespace-only"),
+        ] {
+            let error = Config::resolve_proxy_url_env_value("MISSING", "account", value)
+                .expect_err("invalid proxy environment value");
+            assert!(error.to_string().contains(expected));
+        }
     }
 }

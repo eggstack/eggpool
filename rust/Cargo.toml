@@ -10,6 +10,14 @@ description = "Side-by-side Rust migration scaffold for EggPool"
 axum = "0.8"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
+eggress-embed = { version = "=1.0.2", default-features = false, features = [
+    "common",
+    "pproxy-compat",
+    "extended",
+    "pproxy-legacy",
+    "legacy-crypto",
+    "ssh",
+] }
 http = "1"
 http-body-util = "0.1"
 hyper = "1"

@@ -26,7 +26,7 @@ use hyper_util::{
         Client,
         connect::{Connected, Connection, HttpConnector},
     },
-    rt::{TokioExecutor, TokioTimer},
+    rt::{TokioExecutor, TokioIo, TokioTimer},
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::CertificateDer};
 use thiserror::Error;
@@ -46,6 +46,9 @@ pub enum TransportError {
     /// The provider transport configuration cannot be used.
     #[error("provider transport configuration is invalid")]
     Configuration,
+    /// The configured outbound proxy cannot be parsed or constructed.
+    #[error("provider proxy configuration is invalid")]
+    ProxyConfiguration,
     /// The request target is not a safe relative provider path.
     #[error("provider transport target is invalid")]
     InvalidTarget,
@@ -61,6 +64,18 @@ pub enum TransportError {
     /// TCP, DNS, or other connection establishment failed.
     #[error("provider connection failed")]
     Connect,
+    /// The outbound proxy connection timed out.
+    #[error("provider proxy connection timed out")]
+    ProxyConnectTimeout,
+    /// The outbound proxy connection failed.
+    #[error("provider proxy connection failed")]
+    ProxyConnect,
+    /// The outbound proxy rejected its credentials.
+    #[error("provider proxy authentication failed")]
+    ProxyAuthentication,
+    /// The outbound proxy could not connect to the requested target.
+    #[error("provider proxy target connection failed")]
+    ProxyTargetConnect,
     /// TLS verification or negotiation failed.
     #[error("provider TLS negotiation failed")]
     Tls,
@@ -196,7 +211,8 @@ impl ProviderBody {
 /// Cheap cloneable handle around one provider-scoped Hyper connection pool.
 #[derive(Clone)]
 pub struct ProviderHttpClient {
-    client: Client<AdmissionConnector<hyper_rustls::HttpsConnector<HttpConnector>>, Full<Bytes>>,
+    client:
+        Client<AdmissionConnector<hyper_rustls::HttpsConnector<ProviderTcpConnector>>, Full<Bytes>>,
     base_url: Uri,
     max_request_body_bytes: usize,
 }
@@ -214,13 +230,27 @@ impl std::fmt::Debug for ProviderHttpClient {
 impl ProviderHttpClient {
     /// Build a direct HTTP/1.1 provider client with explicit Rustls roots.
     pub fn new(config: ProviderHttpConfig) -> Result<Self, TransportError> {
+        Self::build(config, None)
+    }
+
+    /// Build an HTTP/1.1 provider client whose TCP connections use an
+    /// Eggress outbound connector.  TLS and HTTP remain owned by this client.
+    pub fn new_with_proxy(
+        config: ProviderHttpConfig,
+        proxy_url: &str,
+    ) -> Result<Self, TransportError> {
+        Self::build(config, Some(proxy_url))
+    }
+
+    fn build(config: ProviderHttpConfig, proxy_url: Option<&str>) -> Result<Self, TransportError> {
         validate_config(&config)?;
         let tls_config = build_tls_config(&config.additional_root_certificates)?;
+        let tcp = ProviderTcpConnector::new(proxy_url)?;
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
             .https_or_http()
             .enable_http1()
-            .build();
+            .wrap_connector(tcp);
         let connector = AdmissionConnector::new(
             https,
             Arc::new(Semaphore::new(config.max_connections)),
@@ -228,6 +258,7 @@ impl ProviderHttpClient {
             config.connect_timeout,
             config.read_timeout,
             config.write_timeout,
+            proxy_url.is_some_and(|url| url != "direct://"),
         );
         let mut builder = Client::builder(TokioExecutor::new());
         builder
@@ -282,6 +313,10 @@ enum Stage {
     PoolTimeout,
     ConnectTimeout,
     Connect,
+    ProxyConnectTimeout,
+    ProxyConnect,
+    ProxyAuthentication,
+    ProxyTargetConnect,
     Tls,
     WriteTimeout,
     Write,
@@ -289,10 +324,205 @@ enum Stage {
     Read,
 }
 
-#[derive(Debug)]
+trait ProviderHyperStream: Read + Write + Send + Unpin {}
+impl<T: Read + Write + Send + Unpin> ProviderHyperStream for T {}
+
+struct ProviderStream {
+    inner: Box<dyn ProviderHyperStream>,
+}
+
+impl ProviderStream {
+    fn new<T: Read + Write + Send + Unpin + 'static>(inner: T) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+}
+
+impl Connection for ProviderStream {
+    fn connected(&self) -> Connected {
+        Connected::new()
+    }
+}
+
+impl Read for ProviderStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: ReadBufCursor<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut *self.inner).poll_read(context, buffer)
+    }
+}
+
+impl Write for ProviderStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut *self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut *self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut *self.inner).poll_shutdown(context)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut *self.inner).poll_write_vectored(context, buffers)
+    }
+}
+
+/// Establishes the TCP leg either directly or through one account's Eggress
+/// connector.  It deliberately returns one stream type so the surrounding
+/// Rustls and Hyper stack is identical for both paths.
+#[derive(Clone)]
+struct ProviderTcpConnector {
+    direct: HttpConnector,
+    proxy: Option<Arc<eggress_embed::outbound::OutboundConnector>>,
+}
+
+impl ProviderTcpConnector {
+    fn new(proxy_url: Option<&str>) -> Result<Self, TransportError> {
+        let proxy = match proxy_url {
+            Some("direct://") => {
+                // Keep the explicit pproxy control form valid while using
+                // the direct provider dialer for loopback/test targets that
+                // Eggress deliberately rejects as private egress.
+                build_egress_connector("direct://")
+                    .map_err(|_| TransportError::ProxyConfiguration)?;
+                None
+            }
+            Some(proxy_url) => Some(Arc::new(
+                build_egress_connector(proxy_url)
+                    .map_err(|_| TransportError::ProxyConfiguration)?,
+            )),
+            None => None,
+        };
+        let mut direct = HttpConnector::new();
+        direct.enforce_http(false);
+        Ok(Self { direct, proxy })
+    }
+}
+
+fn build_egress_connector(
+    proxy_url: &str,
+) -> Result<eggress_embed::outbound::OutboundConnector, eggress_embed::EggressError> {
+    if !proxy_url.contains("__") {
+        return eggress_embed::outbound::OutboundConnector::from_pproxy_uri(proxy_url);
+    }
+
+    // The embed convenience constructor intentionally accepts one pproxy
+    // hop.  Full account chains are passed through the same Eggress parser by
+    // its native upstream TOML shape, without adding another proxy stack.
+    let mut upstream = toml::map::Map::new();
+    upstream.insert("id".into(), toml::Value::String("eggpool-account".into()));
+    upstream.insert("uri".into(), toml::Value::String(proxy_url.into()));
+    let mut root = toml::map::Map::new();
+    root.insert("version".into(), toml::Value::Integer(1));
+    root.insert(
+        "upstreams".into(),
+        toml::Value::Array(vec![toml::Value::Table(upstream)]),
+    );
+    let source = toml::to_string(&toml::Value::Table(root))
+        .map_err(|error| eggress_embed::EggressError::Config(error.to_string()))?;
+    eggress_embed::outbound::OutboundConnector::from_toml(&source)
+}
+
+impl Service<Uri> for ProviderTcpConnector {
+    type Response = ProviderStream;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if self.proxy.is_some() {
+            Poll::Ready(Ok(()))
+        } else {
+            self.direct
+                .poll_ready(context)
+                .map_err(|error| Box::new(error) as BoxError)
+        }
+    }
+
+    fn call(&mut self, destination: Uri) -> Self::Future {
+        let Some(proxy) = &self.proxy else {
+            let future = self.direct.call(destination);
+            return Box::pin(async move {
+                future
+                    .await
+                    .map(ProviderStream::new)
+                    .map_err(|error| Box::new(error) as BoxError)
+            });
+        };
+
+        let Some(host) = destination.host().map(str::to_owned) else {
+            return Box::pin(async {
+                Err(Box::new(TransportMarker::new(Stage::ProxyConnect)) as BoxError)
+            });
+        };
+        let port = destination.port_u16().unwrap_or_else(|| {
+            if destination.scheme().is_some_and(|s| s == &Scheme::HTTPS) {
+                443
+            } else {
+                80
+            }
+        });
+        let proxy = Arc::clone(proxy);
+        Box::pin(async move {
+            match proxy.connect_tcp(&host, port).await {
+                Ok((stream, _info)) => Ok(ProviderStream::new(TokioIo::new(stream))),
+                Err(error) => {
+                    let message = error.to_string().to_ascii_lowercase();
+                    let stage = if message.contains("timed out") || message.contains("timeout") {
+                        Stage::ProxyConnectTimeout
+                    } else if message.contains("auth")
+                        || message.contains("credential")
+                        || message.contains("password")
+                        || message.contains("407")
+                    {
+                        Stage::ProxyAuthentication
+                    } else if message.contains("target") || message.contains("destination") {
+                        Stage::ProxyTargetConnect
+                    } else {
+                        Stage::ProxyConnect
+                    };
+                    Err(Box::new(TransportMarker::new(stage)) as BoxError)
+                }
+            }
+        })
+    }
+}
+
 struct TransportMarker {
     stage: Stage,
     source: Option<BoxError>,
+}
+
+impl std::fmt::Debug for TransportMarker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TransportMarker")
+            .field("stage", &self.stage)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TransportMarker {
@@ -333,6 +563,7 @@ struct AdmissionConnector<C> {
     connect_timeout: Duration,
     read_timeout: Duration,
     write_timeout: Duration,
+    proxy_transport: bool,
 }
 
 impl<C> AdmissionConnector<C> {
@@ -343,6 +574,7 @@ impl<C> AdmissionConnector<C> {
         connect_timeout: Duration,
         read_timeout: Duration,
         write_timeout: Duration,
+        proxy_transport: bool,
     ) -> Self {
         Self {
             inner,
@@ -351,6 +583,7 @@ impl<C> AdmissionConnector<C> {
             connect_timeout,
             read_timeout,
             write_timeout,
+            proxy_transport,
         }
     }
 }
@@ -390,6 +623,7 @@ where
         let connect_timeout = self.connect_timeout;
         let read_timeout = self.read_timeout;
         let write_timeout = self.write_timeout;
+        let proxy_transport = self.proxy_transport;
         Box::pin(async move {
             let permit = match time::timeout(pool_timeout, permits.acquire_owned()).await {
                 Ok(Ok(permit)) => permit,
@@ -412,13 +646,23 @@ where
             let stream = match time::timeout(connect_timeout, connecting).await {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(error)) => {
-                    return Err(
-                        Box::new(TransportMarker::with_source(Stage::Connect, error.into()))
-                            as BoxError,
-                    );
+                    let source: BoxError = error.into();
+                    let stage = find_marker(source.as_ref()).unwrap_or_else(|| {
+                        if is_https && contains_source::<rustls::Error>(source.as_ref()) {
+                            Stage::Tls
+                        } else {
+                            Stage::Connect
+                        }
+                    });
+                    return Err(Box::new(TransportMarker::with_source(stage, source)) as BoxError);
                 }
                 Err(_) => {
-                    return Err(Box::new(TransportMarker::new(Stage::ConnectTimeout)) as BoxError);
+                    let stage = if proxy_transport {
+                        Stage::ProxyConnectTimeout
+                    } else {
+                        Stage::ConnectTimeout
+                    };
+                    return Err(Box::new(TransportMarker::new(stage)) as BoxError);
                 }
             };
             Ok(TimedConnection::new(
@@ -773,6 +1017,10 @@ fn map_stage(stage: Stage) -> TransportError {
         Stage::PoolTimeout => TransportError::PoolTimeout,
         Stage::ConnectTimeout => TransportError::ConnectTimeout,
         Stage::Connect => TransportError::Connect,
+        Stage::ProxyConnectTimeout => TransportError::ProxyConnectTimeout,
+        Stage::ProxyConnect => TransportError::ProxyConnect,
+        Stage::ProxyAuthentication => TransportError::ProxyAuthentication,
+        Stage::ProxyTargetConnect => TransportError::ProxyTargetConnect,
         Stage::Tls => TransportError::Tls,
         Stage::WriteTimeout => TransportError::WriteTimeout,
         Stage::Write => TransportError::Write,

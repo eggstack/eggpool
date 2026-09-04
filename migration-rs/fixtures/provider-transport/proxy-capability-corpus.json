@@ -202,11 +202,11 @@
       "source_claim": "Existing docs claim + composition.",
       "python_parse": "pass",
       "python_connection": "deferred: requires protocol auto-detection and a composed peer",
-      "egress_construction": "pass: pproxy URI parser supports composed protocol expressions",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_construction": "not applicable: the embed outbound API treats this listener composition as having no upstream",
+      "egress_runtime": "not applicable: not a provider outbound form",
       "required_egress_features": ["common", "pproxy-compat"],
-      "parity_class": "semantic",
-      "mandatory_for_rust_cutover": true
+      "parity_class": "documentation_drift",
+      "mandatory_for_rust_cutover": false
     }
   ]
 }
