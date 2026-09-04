@@ -92,17 +92,21 @@ Subsystem roadmap: [Routing Domain and Catalog State](subsystems/routing-domain-
 
 Port deterministic domain logic before inference dispatch. Preserve eligibility, priority tiers, fairness, claims, durable backoffs, capability filtering, quarantine, catalog/model-info identity, and bounded affinity/learned state.
 
-The implementation sequence is D001 contract/fixture freeze -> D002 account registry/catalog cache -> D003 catalog refresh/normalization/persistence -> D004 quota/claims/scoring plus D005 health/backoff/circuit/quarantine -> D006 eligibility/routing/fairness/local claims -> D007 model-router compilation/affinity -> D008 differential qualification/closure. D006 requires both D004 and D005. Only explicitly registered dependency-ready plans may move.
+Historical implementation sequence: D001 contract/fixture freeze -> D002 account registry/catalog cache -> D003 catalog refresh/normalization/persistence -> D004 quota/claims/scoring plus D005 health/backoff/circuit/quarantine -> D006 eligibility/routing/fairness/local claims -> D007 model-router compilation/affinity -> D008 differential qualification/initial closure. Independent post-D008 review reopened M5 for D009 selection-fairness and frozen routing-trace correction.
+
+D009 is now the sole dependency-ready M5 handoff. It must make configured random fairness affect the actual accepted claim path and freeze the exact accepted score/fairness/candidate snapshot on the local claim so later routing traces do not rescore after pending/active publication. D001-D008 closure records remain append-only historical evidence.
 
 M5's local selection claim stops before durable inference persistence. Semantic model-router selector calls that invoke `RequestCoordinator` remain M7 work. Optional generic external catalog polling/background scheduling remains M8 work.
 
-Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, and durable M5 effects under concurrency/restart tests.
+Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, durable M5 effects, **and accepted selection/fairness trace evidence** under concurrency/restart tests. D009 closure is required before this exit condition is considered satisfied.
 
 ## M6 — Canonical request boundary, wire codecs, transcoding, and SSE
 
 Primary class: capability/invariant
 
 Port request body limits/parsing, canonical source intent, OpenAI/Anthropic/Gemini codec behavior, reasoning controls, media/document limits, SSE framing/translation, usage extraction, and terminal evidence.
+
+Implementation handoff is blocked until accepted D009 closure re-closes M5. Research and planning may continue while D009 is open.
 
 Exit condition: non-dispatch codec fixtures and stream traces match Python's supported client/wire transformations.
 
