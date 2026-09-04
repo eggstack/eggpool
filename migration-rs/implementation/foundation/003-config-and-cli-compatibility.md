@@ -1,6 +1,6 @@
 # Foundation Milestone F003 — Configuration and CLI Compatibility Foundation
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/foundation/003-status.md)
 
 Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 

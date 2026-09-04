@@ -21,13 +21,12 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
-| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F003/F004 |
+| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F004/F005 |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | F002 closed | ready for handoff |
 | F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | F002 closed | ready for handoff |
 | F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | F002 closed; F004 interface for DB-backed pages | blocked on F004 interface |
 
@@ -37,6 +36,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|---|
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
+| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
 
 ## Blocked future work
 
@@ -44,6 +44,6 @@ Provider HTTP/Eggress, routing/quota/health, transcoding/SSE, coordinator/finali
 
 ## Closure state
 
-F001 and F002 are closed. F003 and F004 are dependency-ready. F005 is no
-longer blocked on F002, but remains blocked on the F004 read-interface needed
-for DB-backed pages.
+F001, F002, and F003 are closed. F004 is dependency-ready. F005's F003 config
+dependency is now satisfied, but it remains blocked on the F004 read-interface
+needed for DB-backed pages.
