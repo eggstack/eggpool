@@ -80,17 +80,23 @@ Implement provider/account HTTP connection pools on Hyper/Hyper-util/Rustls and 
 
 Qualify exactly the proxy URI/protocol features EggPool promises; use narrow Eggress features and fail closed for unsupported forms.
 
-The active implementation sequence is T001 contract/fixture freeze -> T002 direct Hyper/Rustls core -> T003 Eggress connector/proxy parity -> T004 provider/account client pool -> T005 differential qualification/closure. Each hard predecessor requires an accepted closure record before the next plan becomes dependency-ready.
+The completed implementation sequence is T001 contract/fixture freeze -> T002 direct Hyper/Rustls core -> T003 Eggress connector/proxy parity -> T004 provider/account client pool -> T005 differential qualification -> T006 extended proxy runtime corrective closure.
 
-Exit condition: controlled direct and proxied provider HTTP fixtures match Python transport semantics and diagnostics.
+Exit condition: controlled direct and proxied provider HTTP fixtures match Python transport semantics and diagnostics. Satisfied after T006.
 
 ## M5 — Catalog, account registry, routing, quota, health, and model-router state
 
 Primary class: capability/invariant
 
+Subsystem roadmap: [Routing Domain and Catalog State](subsystems/routing-domain-roadmap.md).
+
 Port deterministic domain logic before inference dispatch. Preserve eligibility, priority tiers, fairness, claims, durable backoffs, capability filtering, quarantine, catalog/model-info identity, and bounded affinity/learned state.
 
-Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, and durable effects under concurrency tests.
+The implementation sequence is D001 contract/fixture freeze -> D002 account registry/catalog cache -> D003 catalog refresh/normalization/persistence -> D004 quota/claims/scoring plus D005 health/backoff/circuit/quarantine -> D006 eligibility/routing/fairness/local claims -> D007 model-router compilation/affinity -> D008 differential qualification/closure. D006 requires both D004 and D005. Only explicitly registered dependency-ready plans may move.
+
+M5's local selection claim stops before durable inference persistence. Semantic model-router selector calls that invoke `RequestCoordinator` remain M7 work. Optional generic external catalog polling/background scheduling remains M8 work.
+
+Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, and durable M5 effects under concurrency/restart tests.
 
 ## M6 — Canonical request boundary, wire codecs, transcoding, and SSE
 
