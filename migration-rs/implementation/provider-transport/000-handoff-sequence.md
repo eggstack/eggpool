@@ -4,9 +4,9 @@ Status: active sequencing note
 
 Execute and close these plans in order:
 
-1. T001 — contract and fixture freeze;
-2. T002 — direct Hyper/Rustls provider HTTP core;
-3. T003 — Eggress connector and proxy parity;
+1. T001 — contract and fixture freeze (closed);
+2. T002 — direct Hyper/Rustls provider HTTP core (closed);
+3. T003 — Eggress connector and proxy parity (dependency-ready);
 4. T004 — provider/account client pool and lifecycle boundary;
 5. T005 — differential qualification and M4 closure.
 
