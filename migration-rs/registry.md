@@ -54,7 +54,7 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | capability/invariant | [`c956e89`](https://github.com/eggstack/eggpool/commit/c956e89) | [closed](closure/routing-domain/003-status.md) |
 | D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | capability/invariant | [`d649e8a`](https://github.com/eggstack/eggpool/commit/d649e8a) | [closed](closure/routing-domain/004-status.md) |
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | invariant/capability | [`d5dd16d`](https://github.com/eggstack/eggpool/commit/d5dd16d) | [closed](closure/routing-domain/005-status.md) |
-| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | implementation commit pending | [closed](closure/routing-domain/006-status.md) |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | [`b009023`](https://github.com/eggstack/eggpool/commit/b009023) | [closed](closure/routing-domain/006-status.md) |
 
 ## M5 planned sequence
 

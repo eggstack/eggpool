@@ -2,7 +2,7 @@
 
 Status: closed
 
-Implementation commit: pending first implementation commit
+Implementation commit: [`b009023`](https://github.com/eggstack/eggpool/commit/b009023)
 
 Plan: [D006 — routing eligibility, fairness, and local claims](../../implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md)
 
