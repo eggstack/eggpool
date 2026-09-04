@@ -1,6 +1,6 @@
 # M5 Routing Domain Implementation Handoffs
 
-Status: active; D001-D007 closed; D008 ready for handoff
+Status: closed after D008 qualification; D001-D008 closed
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md`
 
@@ -15,8 +15,8 @@ M5 is sequenced so policy/state parity is established before inference dispatch 
 | D005 | [Health, backoff, circuit, and quarantine](005-health-backoff-circuit-and-quarantine.md) | invariant/capability | closed; see [closure](../../closure/routing-domain/005-status.md) |
 | D006 | [Routing eligibility, fairness, and local claims](006-routing-eligibility-fairness-and-claims.md) | capability/invariant | closed; see [closure](../../closure/routing-domain/006-status.md) |
 | D007 | [Model-router registry and affinity](007-model-router-registry-and-affinity.md) | capability/invariant | closed; see [closure](../../closure/routing-domain/007-status.md) |
-| D008 | [Differential qualification and M5 closure](008-differential-qualification-and-closure.md) | invariant | dependency-ready; D001-D007 closed |
+| D008 | [Differential qualification and M5 closure](008-differential-qualification-and-closure.md) | invariant | closed; see [closure](../../closure/routing-domain/008-status.md) |
 
-D008 is the current sole dependency-ready plan. D007 is closed with an accepted closure record.
+D008 is closed with an accepted closure record. M6 planning/implementation handoff is unblocked; M7 remains blocked on M6.
 
 Every plan receives an individual closure record under `migration-rs/closure/routing-domain/` before its hard successor becomes dependency-ready.

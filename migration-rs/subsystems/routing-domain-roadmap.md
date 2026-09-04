@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: active; D001-D007 closed; D008 ready for handoff
+Status: closed after D008 qualification; D001-D008 closed
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
@@ -207,10 +207,10 @@ D006 eligibility/routing/fairness/local claims (closed; see [closure](../closure
 D007 model-router compilation + bounded affinity (closed; see [closure](../closure/routing-domain/007-status.md))
                  |
                  v
-D008 differential qualification + M5 closure (dependency-ready)
+D008 differential qualification + M5 closure (closed; see [closure](../closure/routing-domain/008-status.md))
                  |
                  v
-M6 implementation planning may become dependency-ready
+M6 implementation planning/handoff unblocked
 ```
 
 D004 and D005 may be implemented in either order once D003 is closed, but only one plan should be marked dependency-ready at a time unless the registry explicitly approves parallel handoff. D006 requires both.
@@ -261,11 +261,11 @@ Actual selector calls through the coordinator remain deferred to M7.
 
 Exit: compiled router bytes/fingerprints and affinity cache traces match Python fixtures without importing M6/M7 behavior.
 
-### D008 — M5 differential qualification and closure (dependency-ready)
+### D008 — M5 differential qualification and closure (closed)
 
 Run integrated account/catalog/quota/health/router/model-router state scenarios, concurrency/claim tests, restart hydration, corrupt-state fail-closed tests, bounded-memory checks, dependency review, and SBC-oriented local characterization.
 
-Exit: no unresolved high/medium M5 correctness gap remains and M6 may rely on stable routing-domain interfaces.
+Exit: no unresolved high/medium M5 correctness gap remains and M6 may rely on stable routing-domain interfaces. Met by D008 closure.
 
 ## 10. Verification strategy
 
@@ -314,6 +314,6 @@ This milestone is especially important for SBC deployments. The Rust design shou
 
 ## 13. Closure condition
 
-M5 closes only after D001-D008 have accepted closure evidence and an integrated deterministic snapshot can prove parity-equivalent account/catalog identity, candidate eligibility, priority/fairness ranking, local claim ownership, quota pressure, health/backoff/quarantine state, and bounded virtual-router affinity.
+M5 closed after D001-D008 accepted closure evidence and an integrated deterministic snapshot proved parity-equivalent account/catalog identity, candidate eligibility, priority/fairness ranking, local claim ownership, quota pressure, health/backoff/quarantine state, and bounded virtual-router affinity. M6 planning/implementation handoff is unblocked; M7 remains blocked on M6.
 
 M5 closure does not mean a client inference request can be dispatched. It means M6 can supply canonical request facts and M7 can consume the selected claim/transport without having to redesign the routing-domain state machine.

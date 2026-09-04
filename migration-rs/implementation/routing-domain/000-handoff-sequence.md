@@ -1,6 +1,6 @@
 # M5 Routing Domain Handoff Sequence
 
-Status: active; D001-D007 closed; D008 ready
+Status: closed after D008 qualification; D001-D008 closed
 
 Execute and close these plans in dependency order:
 
@@ -11,9 +11,9 @@ Execute and close these plans in dependency order:
 5. D005 — health, bounded backoff, circuit breaker, and quarantine (closed; see [closure](../../closure/routing-domain/005-status.md));
 6. D006 — routing eligibility, priority tiers, fairness, and local selection claims (closed; see [closure](../../closure/routing-domain/006-status.md));
 7. D007 — compiled model-router registry and bounded affinity (closed; see [closure](../../closure/routing-domain/007-status.md));
-8. D008 — integrated differential qualification and M5 closure (dependency-ready).
+8. D008 — integrated differential qualification and M5 closure (closed; see [closure](../../closure/routing-domain/008-status.md)).
 
-D004 and D005 shared D003 as a hard predecessor; both are closed, D006 and D007 are closed, and D008 is the current serial handoff. Default handoff remains serial to keep review and closure evidence small.
+D004 and D005 shared D003 as a hard predecessor; D006-D008 are now closed. M6 planning/implementation handoff is unblocked. Default handoff remains serial to keep review and closure evidence small; M7 remains blocked on M6.
 
 Do not batch D002-D006 merely because they all feed the router. Their separation exists to make incorrect catalog destruction, quota pressure, health suppression, and final selection independently observable.
 
@@ -21,4 +21,4 @@ M5 local claim ownership stops before durable inference dispatch. D006 may atomi
 
 M5 model-router work likewise stops at deterministic compiled policy and affinity state. `ModelRouterSelector`-style internal inference calls remain M7 because the Python implementation delegates them to `RequestCoordinator`.
 
-D008 must not close M5 if any predecessor has an unresolved mandatory parity gap, an unbounded learned-state map, or a concurrency path that can publish partial claim ownership.
+D008 closed after confirming no predecessor has an unresolved mandatory parity gap, an unbounded learned-state map, or a concurrency path that can publish partial claim ownership.

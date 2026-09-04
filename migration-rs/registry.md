@@ -23,13 +23,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
-| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D008 ready |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D008 qualification | D008 closed |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | D001-D007 closure | dependency-ready |
+| — | — | — | — | No M5 plan is currently dependency-ready |
 
 The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
 
@@ -56,6 +56,7 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | invariant/capability | [`d5dd16d`](https://github.com/eggstack/eggpool/commit/d5dd16d) | [closed](closure/routing-domain/005-status.md) |
 | D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | [`b009023`](https://github.com/eggstack/eggpool/commit/b009023) | [closed](closure/routing-domain/006-status.md) |
 | D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | capability/invariant | [`43ce484`](https://github.com/eggstack/eggpool/commit/43ce484) | [closed](closure/routing-domain/007-status.md) |
+| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | [`477aade`](https://github.com/eggstack/eggpool/commit/477aade) | [closed](closure/routing-domain/008-status.md) |
 
 ## M5 planned sequence
 
@@ -68,7 +69,7 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | closed |
 | D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | closed; see [closure](closure/routing-domain/006-status.md) |
 | D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | closed; see [closure](closure/routing-domain/007-status.md) |
-| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | dependency-ready |
+| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | closed; see [closure](closure/routing-domain/008-status.md) |
 
 Only the dependency-ready table authorizes implementation handoff. The planned-sequence table documents future work without marking it ready prematurely.
 
@@ -86,16 +87,16 @@ Optional generic external catalog/model-info polling is not allowed to introduce
 
 ## Future work and block state
 
-D008 is the sole dependency-ready M5 implementation plan. D001-D007 are recorded as completed below.
+D001-D008 are recorded as completed below; no M5 implementation plan remains dependency-ready.
 
-D006 is closed after D004 and D005. D007 is closed after D006. D008 is now dependency-ready because every hard M5 predecessor is closed.
+D006 is closed after D004 and D005. D007 is closed after D006. D008 is closed after integrated qualification because every M5 invariant now has accepted evidence.
 
-M6 canonical request/codec/transcoding/SSE planning may continue conceptually but M6 implementation handoff remains blocked until accepted D008 closure establishes a stable M5 routing-domain interface.
+M6 canonical request/codec/transcoding/SSE planning and implementation handoff are unblocked by accepted D008 closure and its stable M5 routing-domain interface. No M6 implementation plan is registered or promoted by this closure.
 
 M7 coordinator/finalization remains additionally blocked on M6. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006 and M4 T001-T006 are closed. M5 is active with D001-D007 closed, D008 dependency-ready, and integrated M5 closure still outstanding.
+F001-F006, M4 T001-T006, and M5 D001-D008 are closed. M6 implementation handoff is unblocked; M7 remains blocked on M6 canonical request/codec work.
 
-M5 closes only after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.
+M5 closed after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.
