@@ -5,7 +5,7 @@ Status: closed
 Recommendation: closed; D003 is dependency-ready. D004 and D005 remain
 queued behind D003, and no later plan is unblocked by D002 alone.
 
-Implementation commits: [`966ca1b`](https://github.com/eggstack/eggpool/commit/966ca1b), [`4110d23`](https://github.com/eggstack/eggpool/commit/4110d23), and [`3916c84`](https://github.com/eggstack/eggpool/commit/3916c84)
+Implementation commits: [`966ca1b`](https://github.com/eggstack/eggpool/commit/966ca1b), [`4110d23`](https://github.com/eggstack/eggpool/commit/4110d23), [`3916c84`](https://github.com/eggstack/eggpool/commit/3916c84), and [`b661705`](https://github.com/eggstack/eggpool/commit/b661705)
 
 Plan: [D002 — account registry and catalog cache/hydration](../../implementation/routing-domain/002-account-registry-and-catalog-cache.md)
 
