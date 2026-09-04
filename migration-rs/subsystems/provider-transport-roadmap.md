@@ -88,7 +88,7 @@ T005 differential qualification + M4 closure
 M5 catalog/routing/quota/health planning may become dependency-ready
 ```
 
-T003 is closed and T004 is now the dependency-ready handoff. Later plans are registered now so the complete workstream is visible, but each becomes ready only after its hard predecessor closes.
+T004 is closed and T005 is now the dependency-ready handoff. Later plans are registered now so the complete workstream is visible, but each becomes ready only after its hard predecessor closes.
 
 ## 6. Milestones
 

@@ -22,21 +22,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
-| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | active | T004 ready |
+| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | active | T005 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | T001-T003 closed | dependency-ready |
-
-## Registered queued plans
-
-These plans are part of the reviewed M4 workstream but are not dependency-ready until their hard predecessors close.
-
-| ID | Plan | Class | Hard dependency | Status |
-|---|---|---|---|---|
-| T005 | [Differential qualification and M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | T004 | queued |
+| T005 | [Differential qualification and M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | T001-T004 closed | dependency-ready |
 
 The sequence and handoff index are also recorded under `implementation/provider-transport/README.md` and `000-handoff-sequence.md`.
 
@@ -53,6 +45,7 @@ The sequence and handoff index are also recorded under `implementation/provider-
 | T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`50d7ff4`](https://github.com/eggstack/eggpool/commit/50d7ff4) | [closed](closure/provider-transport/001-status.md) |
 | T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | [`c9f448a`](https://github.com/eggstack/eggpool/commit/c9f448a) + [`2696e52`](https://github.com/eggstack/eggpool/commit/2696e52) | [closed](closure/provider-transport/002-status.md) |
 | T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | [`5b34d8b`](https://github.com/eggstack/eggpool/commit/5b34d8b) | [closed](closure/provider-transport/003-status.md) |
+| T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | [`71ef03d`](https://github.com/eggstack/eggpool/commit/71ef03d) | [closed](closure/provider-transport/004-status.md) |
 
 ## Future work and block state
 
@@ -64,4 +57,4 @@ M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9 oper
 
 F001 through F006 are closed and the migration foundation is complete. F006's implementation and state-based regressions establish a trustworthy dual-run startup boundary. M4 Provider HTTP + Eggress is now the active line of work.
 
-T003 is closed. T001 froze the real Python provider/proxy contract and Eggress feature subset, and T002 supplied the direct Hyper/Rustls core. T004 is now dependency-ready; T005 remains queued behind T004, and M5 remains blocked on M4/T005. No other future plan is safely unblocked by T003 alone.
+T004 is closed. T001 froze the real Python provider/proxy contract, T002 supplied the direct Hyper/Rustls core, and T003 supplied the Eggress connector. T005 is now dependency-ready because T001-T004 are closed. M5 remains blocked on T005/M4 closure; no other future plan is safely unblocked by T004 alone.

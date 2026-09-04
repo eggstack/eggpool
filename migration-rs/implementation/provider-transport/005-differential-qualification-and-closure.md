@@ -1,6 +1,6 @@
 # Provider Transport T005 — Differential Qualification and M4 Closure
 
-Status: queued; blocked on T004 closure
+Status: dependency-ready; T001-T004 closed
 
 Repository baseline for planning: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 
