@@ -40,4 +40,8 @@ pub enum BootstrapError {
     /// Configuration could not be loaded or validated.
     #[error("{0}")]
     Config(#[from] crate::config::ConfigError),
+
+    /// The development HTTP server could not start or shut down cleanly.
+    #[error("Rust server failed: {detail}")]
+    Server { detail: String },
 }

@@ -83,6 +83,42 @@ pub struct UsageSummary {
     pub avg_latency_ms: f64,
 }
 
+/// The stable, read-only summary shape used by the first dashboard API slice.
+/// Values intentionally mirror Python's `/api/stats/summary` fields; future
+/// dashboard pages can extend this boundary without reaching into SQL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardSummary {
+    pub total_requests: i64,
+    pub successful_requests: i64,
+    pub error_requests: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cost_microdollars: i64,
+    pub avg_latency_ms: f64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_write_tokens: i64,
+    pub total_reasoning_tokens: i64,
+    pub streamed_requests: i64,
+    pub non_streamed_requests: i64,
+    pub exact_count: i64,
+    pub derived_count: i64,
+    pub partial_count: i64,
+    pub estimated_count: i64,
+    pub unknown_count: i64,
+    pub provider_reported_count: i64,
+    pub provider_reported_cost_microdollars: i64,
+    pub estimated_cost_sum_microdollars: i64,
+    pub reservation_fallback_rows: i64,
+    pub reservation_fallback_excess_microdollars: i64,
+    pub total_bytes_received: i64,
+    pub total_bytes_emitted: i64,
+    pub total_providers: i64,
+    pub avg_ttft_ms: f64,
+    pub tokens_per_second: f64,
+    pub p50_ttft_ms: f64,
+    pub p99_ttft_ms: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct AccountRepository {
     database: Database,
@@ -378,6 +414,157 @@ impl UsageRollupRepository {
                             cost_microdollars: row.get(4)?,
                             streamed_requests: row.get(5)?,
                             avg_latency_ms: row.get(6)?,
+                        })
+                    },
+                )
+            })
+            .await
+    }
+
+    pub async fn dashboard_summary(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<DashboardSummary, DatabaseError> {
+        let start = start.to_owned();
+        let end = end.to_owned();
+        self.database
+            .call(move |connection| {
+                connection.query_row(
+                    "SELECT COUNT(*),\
+                     COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),\
+                     COALESCE(SUM(cost_microdollars), 0), COALESCE(AVG(upstream_latency_ms), 0),\
+                     COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),\
+                     COALESCE(SUM(reasoning_tokens), 0),\
+                     COALESCE(SUM(CASE WHEN streamed = 1 THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN streamed = 0 THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'exact' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'partial' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN cost_microdollars ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN cost_microdollars ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'estimated'\
+                       AND reserved_microdollars IS NOT NULL\
+                       AND cost_microdollars = reserved_microdollars\
+                       AND local_cost_microdollars IS NOT NULL\
+                       AND local_cost_microdollars > 0\
+                       AND local_cost_microdollars < cost_microdollars THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN exactness = 'estimated'\
+                       AND reserved_microdollars IS NOT NULL\
+                       AND cost_microdollars = reserved_microdollars\
+                       AND local_cost_microdollars IS NOT NULL\
+                       AND local_cost_microdollars > 0\
+                       AND local_cost_microdollars < cost_microdollars\
+                       THEN cost_microdollars - local_cost_microdollars ELSE 0 END), 0),\
+                     COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_emitted), 0),\
+                     (SELECT COUNT(DISTINCT provider_id) FROM accounts),\
+                     COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0),\
+                     CASE WHEN COALESCE(SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END), 0) > 0\
+                       THEN CAST(SUM(CASE WHEN status != 'pending' THEN output_tokens ELSE 0 END) AS REAL) * 1000.0\
+                         / SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END)\
+                       ELSE 0 END, 0, 0\
+                     FROM requests\n\
+                     WHERE started_at >= CASE ?1\n\
+                       WHEN '1h' THEN datetime('now', '-1 hour')\n\
+                       WHEN '24h' THEN datetime('now', '-24 hours')\n\
+                       WHEN '7d' THEN datetime('now', '-7 days')\n\
+                       WHEN '30d' THEN datetime('now', '-30 days')\n\
+                       ELSE ?1 END\n\
+                       AND started_at < CASE WHEN ?2 = 'now' THEN datetime('now') ELSE ?2 END",
+                    params![start, end],
+                    |row| {
+                        let total_requests: i64 = row.get(0)?;
+                        let error_requests: i64 = row.get(2)?;
+                        let input_tokens: i64 = row.get(3)?;
+                        let output_tokens: i64 = row.get(4)?;
+                        let cache_read: i64 = row.get(7)?;
+                        let cache_write: i64 = row.get(8)?;
+                        Ok(DashboardSummary {
+                            total_requests,
+                            successful_requests: row.get(1)?,
+                            error_requests,
+                            total_input_tokens: input_tokens,
+                            total_output_tokens: output_tokens,
+                            total_cost_microdollars: row.get(5)?,
+                            avg_latency_ms: row.get(6)?,
+                            total_cache_read_tokens: cache_read,
+                            total_cache_write_tokens: cache_write,
+                            total_reasoning_tokens: row.get(9)?,
+                            streamed_requests: row.get(10)?,
+                            non_streamed_requests: row.get(11)?,
+                            exact_count: row.get(12)?,
+                            derived_count: row.get(13)?,
+                            partial_count: row.get(14)?,
+                            estimated_count: row.get(15)?,
+                            unknown_count: row.get(16)?,
+                            provider_reported_count: row.get(17)?,
+                            provider_reported_cost_microdollars: row.get(18)?,
+                            estimated_cost_sum_microdollars: row.get(19)?,
+                            reservation_fallback_rows: row.get(20)?,
+                            reservation_fallback_excess_microdollars: row.get(21)?,
+                            total_bytes_received: row.get(22)?,
+                            total_bytes_emitted: row.get(23)?,
+                            total_providers: row.get(24)?,
+                            avg_ttft_ms: row.get(25)?,
+                            tokens_per_second: row.get(26)?,
+                            p50_ttft_ms: row.get(27)?,
+                            p99_ttft_ms: row.get(28)?,
+                        })
+                    },
+                )
+            })
+            .await
+    }
+
+    /// Read the compact request summary without depending on optional,
+    /// newer observability columns. The full compatibility shape is returned
+    /// with zeroes for dimensions not part of the F004 repository contract.
+    pub async fn dashboard_summary_basic(
+        &self,
+        period: &str,
+    ) -> Result<DashboardSummary, DatabaseError> {
+        let period = period.to_owned();
+        self.database
+            .call(move |connection| {
+                connection.query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_microdollars), 0), COALESCE(AVG(upstream_latency_ms), 0), COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(CASE WHEN streamed = 1 THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN streamed = 0 THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'exact' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'partial' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN cost_microdollars ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN cost_microdollars ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' AND reserved_microdollars IS NOT NULL AND cost_microdollars = reserved_microdollars AND local_cost_microdollars IS NOT NULL AND local_cost_microdollars > 0 AND local_cost_microdollars < cost_microdollars THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' AND reserved_microdollars IS NOT NULL AND cost_microdollars = reserved_microdollars AND local_cost_microdollars IS NOT NULL AND local_cost_microdollars > 0 AND local_cost_microdollars < cost_microdollars THEN cost_microdollars - local_cost_microdollars ELSE 0 END), 0), COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_emitted), 0), (SELECT COUNT(DISTINCT provider_id) FROM accounts), COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0), CASE WHEN COALESCE(SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END), 0) > 0 THEN CAST(SUM(CASE WHEN status != 'pending' THEN output_tokens ELSE 0 END) AS REAL) * 1000.0 / SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END) ELSE 0 END, 0, 0 FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '24h' THEN datetime('now', '-24 hours') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')",
+                    [period],
+                    |row| {
+                        Ok(DashboardSummary {
+                            total_requests: row.get(0)?,
+                            successful_requests: row.get(1)?,
+                            error_requests: row.get(2)?,
+                            total_input_tokens: row.get(3)?,
+                            total_output_tokens: row.get(4)?,
+                            total_cost_microdollars: row.get(5)?,
+                            avg_latency_ms: row.get(6)?,
+                            total_cache_read_tokens: row.get(7)?,
+                            total_cache_write_tokens: row.get(8)?,
+                            total_reasoning_tokens: row.get(9)?,
+                            streamed_requests: row.get(10)?,
+                            non_streamed_requests: row.get(11)?,
+                            exact_count: row.get(12)?,
+                            derived_count: row.get(13)?,
+                            partial_count: row.get(14)?,
+                            estimated_count: row.get(15)?,
+                            unknown_count: row.get(16)?,
+                            provider_reported_count: row.get(17)?,
+                            provider_reported_cost_microdollars: row.get(18)?,
+                            estimated_cost_sum_microdollars: row.get(19)?,
+                            reservation_fallback_rows: row.get(20)?,
+                            reservation_fallback_excess_microdollars: row.get(21)?,
+                            total_bytes_received: row.get(22)?,
+                            total_bytes_emitted: row.get(23)?,
+                            total_providers: row.get(24)?,
+                            avg_ttft_ms: row.get(25)?,
+                            tokens_per_second: row.get(26)?,
+                            p50_ttft_ms: row.get(27)?,
+                            p99_ttft_ms: row.get(28)?,
                         })
                     },
                 )

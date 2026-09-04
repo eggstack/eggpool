@@ -28,6 +28,14 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             println!("  Database: {}", config.database.path);
             println!("  Content digest: {digest}");
         }
+        Some(Command::Serve(_)) => {
+            let config = config::Config::from_toml(&config_path)?;
+            crate::server::run(config)
+                .await
+                .map_err(|error| BootstrapError::Server {
+                    detail: error.to_string(),
+                })?;
+        }
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());

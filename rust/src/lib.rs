@@ -1,8 +1,7 @@
 //! Side-by-side Rust implementation boundary for EggPool.
 //!
-//! F001 intentionally contains only the process, CLI, and error scaffolding
-//! needed by later migration slices. Python remains the production
-//! implementation until the migration is explicitly cut over.
+//! The migration candidate grows in bounded slices. Python remains the
+//! production implementation until the migration is explicitly cut over.
 
 #![forbid(unsafe_code)]
 
@@ -11,6 +10,7 @@ pub mod config;
 pub mod db;
 mod error;
 mod runtime;
+pub mod server;
 pub mod version;
 
 pub use cli::{Cli, Command};

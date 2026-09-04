@@ -1343,6 +1343,17 @@ impl Config {
     pub fn runtime_path(path: &str) -> PathBuf {
         expand_path(path)
     }
+
+    /// Resolve the server key using the same inline-before-environment rule as
+    /// the Python server. The value is used only by inbound authentication.
+    pub fn resolved_server_api_key(&self) -> Option<String> {
+        self.server
+            .api_key
+            .clone()
+            .or_else(|| env::var(&self.server.api_key_env).ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
 }
 
 fn validate_positive_pair(

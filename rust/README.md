@@ -31,6 +31,30 @@ copy the binary into a global/user executable directory during migration.
 Later parity work and black-box invocation conventions are tracked in the
 [`migration-rs` guide](../migration-rs/README.md).
 
+## F005 Axum read-plane server
+
+The Rust candidate now has a development-only Axum server for the first
+dashboard/read-plane slice. Build it, choose a port different from the Python
+server, and run it with an existing compatible config:
+
+```bash
+cargo build --manifest-path rust/Cargo.toml
+rust/target/debug/eggpool --config ./config.toml serve
+```
+
+The current Rust routes are `/v1/healthz`, `/v1/readyz`, `/`,
+`/api/stats/summary`, and the dashboard resources under `/static/`. The
+inference paths `/v1/chat/completions`, `/v1/messages`, and `/v1/responses`
+are explicit placeholders for a later provider milestone. Python remains the
+production server and should continue to run on its own port during migration.
+
+Copied dashboard resources are checked against the Python source tree by the
+manifest test:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml copied_asset_manifest_matches_the_frozen_python_source
+```
+
 ## F004 SQLite compatibility baseline
 
 `eggpool::db::Database` owns one `tokio-rusqlite` worker and a single
@@ -71,8 +95,9 @@ rust/target/debug/eggpool --help
 rust/target/debug/eggpool serve --help
 ```
 
-`version`, `--help`, and `check-config` are implemented in Rust. Every other
-command and option is represented by the full parser tree but currently exits
-with `not implemented in Rust candidate`; this is an explicit migration-stage
-boundary and is not a final cutover behavior. The Python `eggpool` executable
-remains the production command throughout migration.
+`version`, `--help`, `check-config`, and the development-only `serve` command
+are implemented in Rust. Other commands and options are represented by the
+full parser tree but currently exit with `not implemented in Rust candidate`;
+this is an explicit migration-stage boundary and is not a final cutover
+behavior. The Python `eggpool` executable remains the production command
+throughout migration.

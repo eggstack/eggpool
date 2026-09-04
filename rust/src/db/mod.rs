@@ -11,6 +11,6 @@ pub mod repositories;
 pub use connection::{Database, DatabaseConfig, DatabaseError, DatabaseStats};
 pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{
-    Account, AccountConfig, AccountRepository, Model, ModelRepository, Ping, PingRepository,
-    Request, RequestRepository, UsageRollupRepository, UsageSummary,
+    Account, AccountConfig, AccountRepository, DashboardSummary, Model, ModelRepository, Ping,
+    PingRepository, Request, RequestRepository, UsageRollupRepository, UsageSummary,
 };

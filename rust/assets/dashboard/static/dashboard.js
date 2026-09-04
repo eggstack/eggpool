@@ -1,0 +1,1278 @@
+(() => {
+  "use strict";
+
+  const namespace = window.EggPoolDashboard || (window.EggPoolDashboard = {});
+
+  namespace.fetchStats = async function fetchStats(path) {
+    const response = await fetch(path, {
+      cache: "no-store",
+      headers: { "x-dashboard-refresh": "1" },
+    });
+    if (!response.ok) {
+      throw new Error(
+        "stats request failed: " + response.status + " " + response.statusText
+      );
+    }
+    return await response.json();
+  };
+
+  namespace.formatDurationMs = function formatDurationMs(ms) {
+    if (ms === null || ms === undefined || Number.isNaN(Number(ms))) {
+      return "—";
+    }
+    const value = Number(ms);
+    if (value < 0) {
+      return "—";
+    }
+    if (value < 1000) {
+      return value.toFixed(0) + " ms";
+    }
+    const seconds = value / 1000;
+    if (seconds < 60) {
+      return seconds.toFixed(1) + " s";
+    }
+    const minutesTotal = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds - minutesTotal * 60);
+    if (minutesTotal < 60) {
+      return minutesTotal + "m" + secs + "s";
+    }
+    const hoursTotal = Math.floor(minutesTotal / 60);
+    const mins = minutesTotal - hoursTotal * 60;
+    if (hoursTotal < 24) {
+      return hoursTotal + "h" + mins + "m";
+    }
+    const days = Math.floor(hoursTotal / 24);
+    const hrs = hoursTotal - days * 24;
+    return days + "d" + hrs + "h";
+  };
+
+  namespace.formatAgeSeconds = function formatAgeSeconds(seconds) {
+    if (
+      seconds === null ||
+      seconds === undefined ||
+      Number.isNaN(Number(seconds))
+    ) {
+      return "—";
+    }
+    const value = Number(seconds);
+    if (value < 0) {
+      return "—";
+    }
+    if (value < 1) {
+      return "<1s";
+    }
+    if (value < 60) {
+      return value.toFixed(0) + "s";
+    }
+    const minutesTotal = Math.floor(value / 60);
+    const secs = Math.floor(value - minutesTotal * 60);
+    if (minutesTotal < 60) {
+      return minutesTotal + "m" + secs + "s";
+    }
+    const hoursTotal = Math.floor(minutesTotal / 60);
+    const mins = minutesTotal - hoursTotal * 60;
+    if (hoursTotal < 24) {
+      return hoursTotal + "h" + mins + "m";
+    }
+    const days = Math.floor(hoursTotal / 24);
+    const hrs = hoursTotal - days * 24;
+    return days + "d" + hrs + "h";
+  };
+
+  namespace.formatPercent = function formatPercent(value, fraction) {
+    if (
+      value === null ||
+      value === undefined ||
+      Number.isNaN(Number(value))
+    ) {
+      return "—";
+    }
+    const number = Number(value);
+    if (fraction === false) {
+      return number.toFixed(1) + "%";
+    }
+    return (number * 100).toFixed(1) + "%";
+  };
+
+  namespace.formatCount = function formatCount(n) {
+    if (n === null || n === undefined || Number.isNaN(Number(n))) {
+      return "—";
+    }
+    const value = Number(n);
+    const abs = Math.abs(value);
+    if (abs < 1000) {
+      return value.toFixed(0);
+    }
+    if (abs < 1_000_000) {
+      return (value / 1000).toFixed(1) + "k";
+    }
+    if (abs < 1_000_000_000) {
+      return (value / 1_000_000).toFixed(1) + "M";
+    }
+    return (value / 1_000_000_000).toFixed(1) + "B";
+  };
+
+  namespace.formatBytes = function formatBytes(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return "—";
+    }
+    const bytes = Number(value);
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let val = bytes;
+    for (let i = 0; i < units.length; i++) {
+      if (Math.abs(val) < 1000 || i === units.length - 1) {
+        if (units[i] === "B") {
+          return val.toFixed(0) + " B";
+        }
+        return val.toFixed(1) + " " + units[i];
+      }
+      val /= 1000;
+    }
+    return val.toFixed(1) + " PB";
+  };
+
+  namespace.formatMicrodollars = function formatMicrodollars(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return "—";
+    }
+    return "$" + (Number(value) / 1_000_000).toFixed(2);
+  };
+
+  namespace.formatTokens = function formatTokens(tokens) {
+    if (
+      tokens === null ||
+      tokens === undefined ||
+      Number.isNaN(Number(tokens))
+    ) {
+      return "—";
+    }
+    const value = Number(tokens);
+    const abs = Math.abs(value);
+    if (abs < 1000) {
+      return value.toFixed(0);
+    }
+    if (abs < 1_000_000) {
+      return (value / 1000).toFixed(1) + "k";
+    }
+    if (abs < 1_000_000_000) {
+      return (value / 1_000_000).toFixed(1) + "M";
+    }
+    if (abs < 1_000_000_000_000) {
+      return (value / 1_000_000_000).toFixed(1) + "B";
+    }
+    return (value / 1_000_000_000_000).toFixed(1) + "T";
+  };
+
+  namespace.formatDollarsFromMicro = function formatDollarsFromMicro(microdollars) {
+    if (
+      microdollars === null ||
+      microdollars === undefined ||
+      Number.isNaN(Number(microdollars))
+    ) {
+      return "—";
+    }
+    return "$" + (Number(microdollars) / 1_000_000).toFixed(2);
+  };
+
+  const GROUPED_TIMESERIES_PALETTE = [
+    "rgb(75, 192, 192)",
+    "rgb(255, 99, 132)",
+    "rgb(54, 162, 235)",
+    "rgb(255, 206, 86)",
+    "rgb(153, 102, 255)",
+    "rgb(255, 159, 64)",
+    "rgb(199, 199, 199)",
+    "rgb(83, 102, 89)",
+    "rgb(255, 99, 71)",
+    "rgb(144, 238, 144)",
+    "rgb(186, 85, 211)",
+    "rgb(255, 215, 0)",
+  ];
+
+  function metricValue(point, metric) {
+    if (!point) {
+      return 0;
+    }
+    switch (metric) {
+      case "tokens":
+        return Number(point.total_tokens || 0);
+      case "cost":
+        return Number(point.cost_microdollars || 0) / 1_000_000;
+      case "errors":
+        return Number(point.error_count || 0);
+      case "bytes":
+        return (
+          Number(point.bytes_received || 0) + Number(point.bytes_emitted || 0)
+        );
+      case "latency":
+        return Number(point.avg_latency_ms || 0);
+      case "ttft":
+        return Number(point.avg_ttft_ms || 0);
+      case "requests":
+      default:
+        return Number(point.request_count || 0);
+    }
+  }
+
+  function destroyChartOn(canvas) {
+    if (canvas && canvas.__eggpoolChart) {
+      try {
+        canvas.__eggpoolChart.destroy();
+      } catch (_err) {
+        /* ignore */
+      }
+      canvas.__eggpoolChart = null;
+    }
+  }
+
+  function hasChartWork() {
+    return Boolean(
+      document.querySelector("script.static-chart-data[data-chart-id]") ||
+        document.querySelector("canvas.grouped-timeseries-chart") ||
+        document.getElementById("timeseries-chart") ||
+        document.querySelector("[data-chart-endpoint]")
+    );
+  }
+
+  function whenChartReady(callback) {
+    if (!hasChartWork()) return;
+    // dashboard.js is intentionally ordered before chart.js so the data
+    // request can start while Chart.js downloads. Give that deferred asset a
+    // generous window to arrive on low-bandwidth SBC deployments.
+    const maxAttempts = 200;
+    const delayMs = 50;
+    let attempts = 0;
+    const run = function () {
+      if (typeof window.Chart !== "undefined") {
+        callback();
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        console.warn("EggPoolDashboard: Chart.js not loaded");
+        return;
+      }
+      window.setTimeout(run, delayMs);
+    };
+    run();
+  }
+
+  namespace.initGroupedTimeseriesCharts = function initGroupedTimeseriesCharts() {
+    const canvases = document.querySelectorAll(
+      "canvas.grouped-timeseries-chart"
+    );
+    if (canvases.length === 0) return;
+    if (typeof window.Chart === "undefined") {
+      console.warn("EggPoolDashboard: Chart.js not loaded");
+      return;
+    }
+    for (let i = 0; i < canvases.length; i++) {
+      const canvas = canvases[i];
+      const chartId = canvas.getAttribute("data-chart-id");
+      if (!chartId) continue;
+      const dataScript = document.querySelector(
+        'script.grouped-timeseries-data[data-chart-id="' + chartId + '"]'
+      );
+      if (!dataScript) continue;
+      let payload;
+      try {
+        payload = JSON.parse(dataScript.textContent || "{}");
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: failed to parse grouped-timeseries payload",
+          err
+        );
+        continue;
+      }
+      const metric = canvas.getAttribute("data-metric") || "requests";
+      const buckets = Array.isArray(payload.buckets) ? payload.buckets : [];
+      const series = Array.isArray(payload.series) ? payload.series : [];
+      const points = Array.isArray(payload.points) ? payload.points : [];
+      const bucketTotals = Array.isArray(payload.bucket_totals)
+        ? payload.bucket_totals
+        : [];
+
+      const pointIndex = new Map();
+      for (let p = 0; p < points.length; p++) {
+        const pt = points[p];
+        const key = String(pt.series_key || "") + "::" + String(pt.bucket || "");
+        pointIndex.set(key, pt);
+      }
+
+      const nonStackedMetric = metric === "latency" || metric === "ttft";
+      const datasets = series.map((s, idx) => {
+        const key = String(s.key || "");
+        const data = buckets.map((b) => {
+          const pt = pointIndex.get(key + "::" + String(b || ""));
+          return metricValue(pt, metric);
+        });
+        const color =
+          GROUPED_TIMESERIES_PALETTE[
+            idx % GROUPED_TIMESERIES_PALETTE.length
+          ];
+        const dataset = {
+          label: String(s.label || key || "series"),
+          data: data,
+          backgroundColor: color,
+          borderColor: color,
+        };
+        if (!nonStackedMetric) {
+          dataset.stack = "usage";
+        }
+        return dataset;
+      });
+
+      destroyChartOn(canvas);
+      const totalsByBucket = new Map();
+      for (let t = 0; t < bucketTotals.length; t++) {
+        const bt = bucketTotals[t];
+        totalsByBucket.set(String(bt.bucket || ""), bt);
+      }
+
+      const yTitle = (() => {
+        switch (metric) {
+          case "tokens":
+            return "Tokens";
+          case "cost":
+            return "Cost ($)";
+          case "errors":
+            return "Errors";
+          case "bytes":
+            return "Bytes";
+          case "latency":
+            return "Avg latency (ms)";
+          case "ttft":
+            return "Avg TTFT (ms)";
+          case "requests":
+          default:
+            return "Requests";
+        }
+      })();
+
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: "bar",
+        data: { labels: buckets, datasets: datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "bottom" },
+            tooltip: {
+              callbacks: {
+                title: function (items) {
+                  if (!items || !items.length) return "";
+                  const idx = items[0].dataIndex;
+                  return String(buckets[idx] || "");
+                },
+                label: function (item) {
+                  const label = item.dataset.label || "";
+                  const value = item.parsed && item.parsed.y;
+                  if (metric === "cost") {
+                    return (
+                      label +
+                      ": $" +
+                      (Number(value) || 0).toFixed(6)
+                    );
+                  }
+                  return (
+                    label + ": " + namespace.formatCount(Number(value) || 0)
+                  );
+                },
+                afterBody: function (items) {
+                  if (!items || !items.length) return [];
+                  const idx = items[0].dataIndex;
+                  const bucket = String(buckets[idx] || "");
+                  const total = totalsByBucket.get(bucket) || {};
+                  const lines = [
+                    "",
+                    "Bucket totals:",
+                    "  Requests: " +
+                      namespace.formatCount(total.request_count || 0),
+                    "  Errors: " +
+                      namespace.formatCount(total.error_count || 0),
+                    "  Tokens: " +
+                      namespace.formatTokens(total.total_tokens || 0),
+                    "  Cost: " +
+                      namespace.formatDollarsFromMicro(
+                        total.cost_microdollars || 0
+                      ),
+                    "  Avg latency: " +
+                      namespace.formatDurationMs(total.avg_latency_ms || 0),
+                    "  Avg TTFT: " +
+                      namespace.formatDurationMs(total.avg_ttft_ms || 0),
+                  ];
+                  return lines;
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              stacked: !nonStackedMetric,
+              title: { display: true, text: "Time" },
+            },
+            y: {
+              stacked: !nonStackedMetric,
+              beginAtZero: true,
+              title: { display: true, text: yTitle },
+            },
+          },
+        },
+      });
+    }
+  };
+
+  namespace.reinitTimeseriesChart = function reinitTimeseriesChart() {
+    const canvas = document.getElementById("timeseries-chart");
+    if (!canvas) return;
+    if (typeof window.Chart === "undefined") return;
+
+    destroyChartOn(canvas);
+
+    function periodForFetch() {
+      const fromCanvas =
+        (canvas && canvas.getAttribute("data-period")) || "";
+      const fromScript = document
+        .getElementById("timeseries-initial-data")
+        ?.getAttribute("data-period");
+      const fromUrl =
+        new URLSearchParams(window.location.search).get("period") || "";
+      return fromCanvas || fromScript || fromUrl || "24h";
+    }
+
+    function renderRows(rows) {
+      const list = Array.isArray(rows) ? rows : [];
+      const labels = list.map(function (d) {
+        return d.bucket;
+      });
+      const requests = list.map(function (d) {
+        return Number(d.request_count || 0);
+      });
+      const errors = list.map(function (d) {
+        return Number(d.error_count || 0);
+      });
+      destroyChartOn(canvas);
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: "Requests",
+              data: requests,
+              borderColor: "rgb(75, 192, 192)",
+              tension: 0.1,
+            },
+            {
+              label: "Errors",
+              data: errors,
+              borderColor: "rgb(255, 99, 132)",
+              tension: 0.1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { title: { display: true, text: "Time" } },
+            y: {
+              title: { display: true, text: "Count" },
+              beginAtZero: true,
+            },
+          },
+        },
+      });
+    }
+
+    const dataScript = document.getElementById("timeseries-initial-data");
+    let inlineRows = null;
+    if (dataScript && dataScript.textContent) {
+      try {
+        const parsed = JSON.parse(dataScript.textContent);
+        if (Array.isArray(parsed)) {
+          inlineRows = parsed;
+        }
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: failed to parse timeseries payload",
+          err
+        );
+      }
+    }
+
+    if (inlineRows !== null) {
+      renderRows(inlineRows);
+    } else {
+      const period = periodForFetch();
+      fetch("/api/timeseries?period=" + encodeURIComponent(period), {
+        cache: "no-store",
+        headers: { "x-dashboard-refresh": "1" },
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("timeseries fetch failed: " + response.status);
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          renderRows(data);
+        })
+        .catch(function (err) {
+          console.error("Failed to load timeseries:", err);
+        });
+    }
+
+    // Re-arm the in-place 60s refresh that the original inline IIFE
+    // registered. Cleared and re-registered on each reinit so successive
+    // auto-refresh ticks do not stack intervals on the same canvas.
+    // Storing the handle at the namespace scope (not on the canvas) is
+    // load-bearing: when ``#dashboard-content`` is replaced, the old
+    // canvas is detached from the DOM, so a handle attached to it is
+    // unreachable from the new canvas and the previous interval leaks.
+    if (namespace.__timeseriesRefreshHandle) {
+      window.clearInterval(namespace.__timeseriesRefreshHandle);
+      namespace.__timeseriesRefreshHandle = null;
+    }
+    namespace.__timeseriesRefreshHandle = window.setInterval(function () {
+      const period = periodForFetch();
+      fetch("/api/timeseries?period=" + encodeURIComponent(period), {
+        cache: "no-store",
+        headers: { "x-dashboard-refresh": "1" },
+      })
+        .then(function (response) {
+          if (!response.ok) {
+            throw new Error("timeseries fetch failed: " + response.status);
+          }
+          return response.json();
+        })
+        .then(function (data) {
+          if (!canvas.__eggpoolChart) return;
+          const list = Array.isArray(data) ? data : [];
+          const labels = list.map(function (d) {
+            return d.bucket;
+          });
+          const requests = list.map(function (d) {
+            return Number(d.request_count || 0);
+          });
+          const errors = list.map(function (d) {
+            return Number(d.error_count || 0);
+          });
+          canvas.__eggpoolChart.data.labels = labels;
+          canvas.__eggpoolChart.data.datasets[0].data = requests;
+          canvas.__eggpoolChart.data.datasets[1].data = errors;
+          canvas.__eggpoolChart.update();
+        })
+        .catch(function (err) {
+          console.error("Failed to refresh timeseries:", err);
+        });
+    }, 60000);
+  };
+
+  namespace.initStaticCharts = function initStaticCharts() {
+    const dataScripts = document.querySelectorAll(
+      "script.static-chart-data[data-chart-id]"
+    );
+    if (dataScripts.length === 0) return;
+    if (typeof window.Chart === "undefined") {
+      console.warn("EggPoolDashboard: Chart.js not loaded");
+      return;
+    }
+    for (let i = 0; i < dataScripts.length; i++) {
+      const script = dataScripts[i];
+      const chartId = script.getAttribute("data-chart-id");
+      if (!chartId) continue;
+      const canvas = document.getElementById(chartId);
+      if (!canvas) {
+        console.warn(
+          "EggPoolDashboard: no canvas found for static chart",
+          chartId
+        );
+        continue;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(script.textContent || "{}");
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: failed to parse static chart payload",
+          chartId,
+          err
+        );
+        continue;
+      }
+      const chartType = String(payload.type || "bar");
+      const labels = Array.isArray(payload.labels) ? payload.labels : [];
+      const datasets = Array.isArray(payload.datasets) ? payload.datasets : [];
+      const options =
+        payload.options && typeof payload.options === "object"
+          ? payload.options
+          : {};
+      if (options.animation === undefined) options.animation = false;
+      if (options.normalized === undefined) options.normalized = true;
+      destroyChartOn(canvas);
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: chartType,
+        data: { labels: labels, datasets: datasets },
+        options: options,
+      });
+    }
+  };
+
+  namespace.initChartLoadingShells = function initChartLoadingShells() {
+    var shells = document.querySelectorAll("[data-chart-endpoint]");
+    if (shells.length === 0) return;
+    if (!namespace.__chartHydrationInflight) {
+      namespace.__chartHydrationInflight = {};
+    }
+    if (!namespace.__chartHydrationHandles) {
+      namespace.__chartHydrationHandles = {};
+    }
+    if (!namespace.__chartHydrationData) {
+      namespace.__chartHydrationData = {};
+    }
+
+    function showState(shell, state, message) {
+      shell.setAttribute("data-chart-state", state);
+      var textEl = shell.querySelector("span:last-child");
+      if (textEl && message) textEl.textContent = message;
+    }
+
+    function renderIntoShell(shell, canvasId, data) {
+      // Auto-refresh replaces the shell's parent with new HTML. A response
+      // from the old shell must never insert a second canvas into the new DOM.
+      if (shell.getAttribute("data-chart-state") === "loaded") return;
+      var list = Array.isArray(data) ? data : [];
+      if (list.length === 0) {
+        showState(shell, "empty", "No data for selected period");
+        return;
+      }
+
+      // Start the data request independently of Chart.js. The latter is the
+      // largest dashboard asset, and waiting for it here makes the chart API
+      // request pay the full script-load latency before it even starts.
+      if (typeof window.Chart === "undefined") {
+        namespace.__chartHydrationData[canvasId] = data;
+        showState(shell, "ready", "Preparing chart…");
+        return;
+      }
+
+      showState(shell, "loaded", "");
+      shell.style.display = "none";
+      var panel = shell.closest(".panel") || shell.parentElement;
+      if (!panel) return;
+      var wrap = document.createElement("div");
+      wrap.className = "chart-wrap";
+      wrap.style.height = shell.style.height || "300px";
+      var canvas = document.createElement("canvas");
+      canvas.id = canvasId;
+      var periodFromShell = "";
+      var ds = shell.getAttribute("data-chart-endpoint") || "";
+      var pm = ds.match(/period=([^&]+)/);
+      if (pm) periodFromShell = decodeURIComponent(pm[1]);
+      canvas.setAttribute("data-period", periodFromShell);
+      wrap.appendChild(canvas);
+      panel.insertBefore(wrap, shell);
+      var period = periodFromShell || "24h";
+      var labels = list.map(function (d) { return d.bucket; });
+      var requests = list.map(function (d) { return Number(d.request_count || 0); });
+      var errors = list.map(function (d) { return Number(d.error_count || 0); });
+      canvas.__eggpoolChart = new window.Chart(canvas, {
+        type: "line",
+        data: {
+          labels: labels,
+          datasets: [
+            { label: "Requests", data: requests, borderColor: "rgb(75, 192, 192)", tension: 0.1 },
+            { label: "Errors", data: errors, borderColor: "rgb(255, 99, 132)", tension: 0.1 },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          normalized: true,
+          scales: {
+            x: { title: { display: true, text: "Time" } },
+            y: { title: { display: true, text: "Count" }, beginAtZero: true },
+          },
+        },
+      });
+      if (namespace.__chartHydrationHandles[canvasId]) {
+        window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+      }
+      namespace.__chartHydrationHandles[canvasId] = window.setInterval(function () {
+        var p = period;
+        fetch("/api/timeseries?period=" + encodeURIComponent(p), {
+          cache: "no-store",
+          headers: { "x-dashboard-refresh": "1" },
+        })
+          .then(function (r) { if (!r.ok) throw new Error("refresh failed"); return r.json(); })
+          .then(function (d) {
+            if (!canvas.__eggpoolChart) return;
+            var rows = Array.isArray(d) ? d : [];
+            canvas.__eggpoolChart.data.labels = rows.map(function (r) { return r.bucket; });
+            canvas.__eggpoolChart.data.datasets[0].data = rows.map(function (r) { return Number(r.request_count || 0); });
+            canvas.__eggpoolChart.data.datasets[1].data = rows.map(function (r) { return Number(r.error_count || 0); });
+            canvas.__eggpoolChart.update("none");
+          })
+          .catch(function () {});
+      }, 60000);
+    }
+
+    for (var i = 0; i < shells.length; i++) {
+      (function (shell) {
+        var canvasId = shell.getAttribute("data-chart-canvas") || "";
+        var endpoint = shell.getAttribute("data-chart-endpoint") || "";
+        if (!endpoint || !canvasId) return;
+        var currentState = shell.getAttribute("data-chart-state");
+        if (currentState === "loaded" || currentState === "empty" || currentState === "error") return;
+        if (namespace.__chartHydrationHandles[canvasId]) {
+          window.clearInterval(namespace.__chartHydrationHandles[canvasId]);
+          namespace.__chartHydrationHandles[canvasId] = null;
+        }
+        showState(shell, "loading", "Loading chart data\u2026");
+        var decoded = endpoint.replace(/&amp;/g, "&");
+        if (Object.prototype.hasOwnProperty.call(namespace.__chartHydrationData, canvasId)) {
+          var readyData = namespace.__chartHydrationData[canvasId];
+          delete namespace.__chartHydrationData[canvasId];
+          renderIntoShell(shell, canvasId, readyData);
+          return;
+        }
+        if (namespace.__chartHydrationInflight[decoded]) {
+          namespace.__chartHydrationInflight[decoded].then(
+            function (data) { renderIntoShell(shell, canvasId, data); },
+            function () { showState(shell, "error", "Chart data unavailable"); }
+          );
+          return;
+        }
+        var promise = fetch(decoded, { cache: "no-store", headers: { "x-dashboard-refresh": "1" } })
+          .then(function (response) {
+            if (!response.ok) throw new Error("chart fetch failed: " + response.status);
+            return response.json();
+          });
+        namespace.__chartHydrationInflight[decoded] = promise;
+        promise.then(
+          function (data) { renderIntoShell(shell, canvasId, data); },
+          function () { showState(shell, "error", "Chart data unavailable"); }
+        ).then(
+          function () { delete namespace.__chartHydrationInflight[decoded]; },
+          function () { delete namespace.__chartHydrationInflight[decoded]; }
+        );
+      })(shells[i]);
+    }
+  };
+
+  namespace.bootstrap = function bootstrap() {
+    // Hydrate API-backed chart shells immediately. Chart.js is independent
+    // work, so its download must not delay the data request.
+    try {
+      namespace.initChartLoadingShells();
+    } catch (err) {
+      console.error("EggPoolDashboard: initial chart hydration failed", err);
+    }
+    whenChartReady(function () {
+      try {
+        namespace.initStaticCharts();
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: initStaticCharts failed",
+          err
+        );
+      }
+      try {
+        namespace.initGroupedTimeseriesCharts();
+      } catch (err) {
+        console.error(
+          "EggPoolDashboard: initGroupedTimeseriesCharts failed",
+          err
+        );
+      }
+      try {
+        if (document.getElementById("timeseries-chart")) {
+          namespace.reinitTimeseriesChart();
+        }
+      } catch (err) {
+        console.error("EggPoolDashboard: reinitTimeseriesChart failed", err);
+      }
+      try {
+        namespace.initChartLoadingShells();
+      } catch (err) {
+        console.error("EggPoolDashboard: initChartLoadingShells failed", err);
+      }
+    });
+    try {
+      namespace.initTimeseriesControls();
+    } catch (err) {
+      console.error(
+        "EggPoolDashboard: initTimeseriesControls failed",
+        err
+      );
+    }
+    try {
+      namespace.initNavToggle();
+    } catch (err) {
+      console.error("EggPoolDashboard: initNavToggle failed", err);
+    }
+    try {
+      namespace.initUpdateCommandCopy();
+    } catch (err) {
+      console.error("EggPoolDashboard: initUpdateCommandCopy failed", err);
+    }
+    try {
+      namespace.initNumberSteppers();
+    } catch (err) {
+      console.error("EggPoolDashboard: initNumberSteppers failed", err);
+    }
+  }
+
+  function fetchGroupedTimeseries(params) {
+    const search = new URLSearchParams();
+    for (const key in params) {
+      if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+      const value = params[key];
+      if (value === null || value === undefined || value === "") continue;
+      search.set(key, String(value));
+    }
+    const url = "/api/timeseries/grouped" + (search.toString() ? "?" + search.toString() : "");
+    return fetch(url, {
+      cache: "no-store",
+      headers: { "x-dashboard-refresh": "1" },
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error(
+            "grouped timeseries fetch failed: " + response.status
+          );
+        }
+        return response.json();
+      });
+  }
+
+  function readTimeseriesParams(form) {
+    const data = new FormData(form);
+    const get = function (name) {
+      const value = data.get(name);
+      return value === null ? "" : String(value);
+    };
+    const periodSelect = document.querySelector(
+      'form[data-period-selector] select[name="period"]'
+    );
+    const period =
+      (periodSelect && periodSelect.value) ||
+      get("period") ||
+      new URLSearchParams(window.location.search).get("period") ||
+      "24h";
+    const bucketRaw = get("bucket") || "auto";
+    // "auto" is the period-aware default; let the server resolve it so
+    // the URL stays clean and operators don't have to flip buckets when
+    // they switch periods.
+    return {
+      period: period,
+      bucket: bucketRaw === "auto" ? "" : bucketRaw,
+      group_by: get("group_by") || "provider_model",
+      metric: get("metric") || "tokens",
+      limit: get("limit") || "12",
+      account: get("account") || "",
+      model: get("model") || "",
+    };
+  }
+
+  function syncTimeseriesPeriod(form) {
+    if (!form) return;
+    const periodSelect = document.querySelector(
+      'form[data-period-selector] select[name="period"]'
+    );
+    if (!periodSelect) return;
+    const periodInput = form.querySelector('input[name="period"]');
+    if (periodInput) {
+      periodInput.value = periodSelect.value;
+    }
+  }
+
+  function setChartData(chartId, payload) {
+    const script = document.querySelector(
+      'script.grouped-timeseries-data[data-chart-id="' + chartId + '"]'
+    );
+    if (script) {
+      script.textContent = JSON.stringify(payload);
+    }
+    const panel = script ? script.closest(".timeseries-chart-panel") : null;
+    const container = panel
+      ? panel.querySelector(".chart-container, .chart-container-compact")
+      : null;
+    const empty = panel ? panel.querySelector(".grouped-timeseries-empty") : null;
+    const points = payload && Array.isArray(payload.points) ? payload.points : [];
+    const buckets = payload && Array.isArray(payload.buckets) ? payload.buckets : [];
+    const hasData = points.length > 0 && buckets.length > 0;
+    if (container) {
+      container.style.display = hasData ? "" : "none";
+    }
+    const canvas = panel
+      ? panel.querySelector("canvas.grouped-timeseries-chart")
+      : null;
+    if (canvas) {
+      canvas.style.display = hasData ? "" : "none";
+    }
+    if (empty) {
+      empty.style.display = hasData ? "none" : "";
+    }
+  }
+
+  namespace.refreshGroupedTimeseriesChart = function refreshGroupedTimeseriesChart(
+    form
+  ) {
+    syncTimeseriesPeriod(form);
+    const params = readTimeseriesParams(form);
+    const canvas = document.querySelector(
+      'canvas.grouped-timeseries-chart[data-chart-id="grouped-timeseries-chart"]'
+    );
+    if (!canvas) return Promise.resolve();
+    const chartId = canvas.getAttribute("data-chart-id");
+    if (form.dataset && form.dataset.timeseriesBusy === "1") {
+      return Promise.resolve();
+    }
+    if (form.dataset) form.dataset.timeseriesBusy = "1";
+    return fetchGroupedTimeseries(params)
+      .then(function (payload) {
+        setChartData(chartId, payload || {});
+        if (typeof namespace.initGroupedTimeseriesCharts === "function") {
+          namespace.initGroupedTimeseriesCharts();
+        }
+      })
+      .catch(function (err) {
+        console.error("Failed to refresh grouped timeseries chart:", err);
+      })
+      .then(function () {
+        if (form.dataset) form.dataset.timeseriesBusy = "0";
+      });
+  };
+
+  namespace.initTimeseriesControls = function initTimeseriesControls() {
+    const forms = document.querySelectorAll("form[data-timeseries-controls]");
+    for (let i = 0; i < forms.length; i++) {
+      const form = forms[i];
+      if (form.__eggpoolTimeseriesWired) continue;
+      form.__eggpoolTimeseriesWired = true;
+      const onChange = function () {
+        namespace.refreshGroupedTimeseriesChart(form);
+      };
+      const selects = form.querySelectorAll("select");
+      for (let s = 0; s < selects.length; s++) {
+        selects[s].addEventListener("change", onChange);
+      }
+      const accountInput = form.querySelector(
+        'input[name="account"], select[name="account"]'
+      );
+      const modelInput = form.querySelector(
+        'input[name="model"], select[name="model"]'
+      );
+      if (accountInput && accountInput.tagName === "INPUT") {
+        let lastValue = accountInput.value;
+        accountInput.addEventListener("input", function () {
+          const value = accountInput.value;
+          if (value === lastValue) return;
+          lastValue = value;
+          onChange();
+        });
+      }
+      if (modelInput && modelInput.tagName === "INPUT") {
+        let lastValue = modelInput.value;
+        modelInput.addEventListener("input", function () {
+          const value = modelInput.value;
+          if (value === lastValue) return;
+          lastValue = value;
+          onChange();
+        });
+      }
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        namespace.refreshGroupedTimeseriesChart(form);
+      });
+    }
+
+    const periodForms = document.querySelectorAll(
+      "form[data-period-selector]"
+    );
+    const timeseriesForm = document.querySelector(
+      "form[data-timeseries-controls]"
+    );
+    for (let p = 0; p < periodForms.length; p++) {
+      const periodForm = periodForms[p];
+      if (periodForm.__eggpoolPeriodWired) continue;
+      periodForm.__eggpoolPeriodWired = true;
+      // The timeseries page renders three period-dependent surfaces
+      // (grouped chart, grouped detail table, aggregate per-bucket
+      // table) plus the page heading/footer period label. The dedi-
+      // cated timeseries filter form's AJAX path only refreshes the
+      // grouped chart, so on this page the top period selector must
+      // submit the form to keep every surface and the URL in sync.
+      // Sibling auxiliary GET forms that just toggle ``data-auto-submit``
+      // filters continue to use the AJAX refresh when a timeseries
+      // filter form is present (e.g. Bandwidth page) and submit the
+      // page otherwise (e.g. Accounts page).
+      const onTimeseriesPage = periodForm.classList.contains(
+        "timeseries-period-selector"
+      );
+      const select = periodForm.querySelector('select[name="period"]');
+      if (select) {
+        select.addEventListener("change", function () {
+          if (onTimeseriesPage) {
+            periodForm.submit();
+          } else if (
+            timeseriesForm
+            && typeof namespace.refreshGroupedTimeseriesChart === "function"
+          ) {
+            syncTimeseriesPeriod(timeseriesForm);
+            namespace.refreshGroupedTimeseriesChart(timeseriesForm);
+          } else {
+            periodForm.submit();
+          }
+        });
+      }
+      // Auto-submit any other `data-auto-submit` selects inside the
+      // same form (e.g. the "Show disabled accounts" toggle on the
+      // Accounts page).  Wire independently of whether the period
+      // select exists so a filter-only GET form also gets the
+      // auto-submit treatment without depending on the period select.
+      const autoSubmits = periodForm.querySelectorAll(
+        "select[data-auto-submit]"
+      );
+      for (let s = 0; s < autoSubmits.length; s++) {
+        const autoSelect = autoSubmits[s];
+        if (autoSelect === select) continue;
+        autoSelect.addEventListener("change", function () {
+          if (onTimeseriesPage) {
+            periodForm.submit();
+          } else if (
+            timeseriesForm
+            && typeof namespace.refreshGroupedTimeseriesChart === "function"
+          ) {
+            namespace.refreshGroupedTimeseriesChart(timeseriesForm);
+          } else {
+            periodForm.submit();
+          }
+        });
+      }
+    }
+  };
+
+  // Wire the themed -/+ boxes around `.number-stepper` inputs so they
+  // increment / decrement the value within the input's [min,max]
+  // bounds.  Falls through silently when the surrounding input is
+  // missing ``min``/``max`` (treated as unbounded); clamps otherwise.
+  // Re-init is idempotent via the `__eggpoolStepperWired` flag, matching
+  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // controls so the auto-refresh loop does not stack handlers.
+  namespace.initNumberSteppers = function initNumberSteppers() {
+    const steppers = document.querySelectorAll(".number-stepper");
+    for (let i = 0; i < steppers.length; i++) {
+      const stepper = steppers[i];
+      if (stepper.__eggpoolStepperWired) continue;
+      stepper.__eggpoolStepperWired = true;
+      const input = stepper.querySelector(
+        'input[data-stepper-input], input[type="number"]'
+      );
+      if (!input) continue;
+      const minAttr = input.getAttribute("min");
+      const maxAttr = input.getAttribute("max");
+      const min = minAttr !== null && minAttr !== "" ? Number(minAttr) : null;
+      const max = maxAttr !== null && maxAttr !== "" ? Number(maxAttr) : null;
+      const stepAttr = input.getAttribute("step");
+      const step =
+        stepAttr !== null && stepAttr !== "" && Number(stepAttr) > 0
+          ? Number(stepAttr)
+          : 1;
+      const buttons = stepper.querySelectorAll(
+        "button[data-stepper-action]"
+      );
+      const adjust = function (delta) {
+        const current = Number(input.value);
+        const base = Number.isFinite(current) ? current : (min !== null ? min : 0);
+        let next = base + delta;
+        if (min !== null && Number.isFinite(min) && next < min) next = min;
+        if (max !== null && Number.isFinite(max) && next > max) next = max;
+        input.value = String(next);
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      for (let b = 0; b < buttons.length; b++) {
+        const btn = buttons[b];
+        btn.addEventListener("click", function (event) {
+          event.preventDefault();
+          const action = btn.getAttribute("data-stepper-action");
+          adjust(action === "inc" ? step : -step);
+          input.focus();
+        });
+      }
+    }
+  };
+
+  // Wire the mobile burger button that toggles the page-link menu
+  // dropdown.  On viewports ≥761px the burger is hidden via CSS and
+  // the menu is always rendered inline, so the JS is a no-op there.
+  // On narrower viewports the burger is visible and the menu only
+  // shows when `.topnav-open` is set on the sibling `nav.topnav`
+  // (the burger itself is a direct child of `header.topbar`, not a
+  // descendant of `nav.topnav`, so the topbar lays burger / h1 /
+  // nav out inline on a single row on mobile).
+  //
+  // Dismissal rules:
+  // - click the burger again to close
+  // - press Escape inside the nav to close and return focus to the
+  //   burger
+  // - click any menu link to close (lets navigation proceed)
+  // - click anywhere outside both the nav and the burger to close
+  //
+  // Re-init is idempotent via the `__eggpoolNavWired` flag, matching
+  // the pattern used by `initUpdateCommandCopy` and the timeseries
+  // controls so the auto-refresh loop does not stack handlers.
+  namespace.initNavToggle = function initNavToggle() {
+    const burger = document.querySelector("header.topbar .topnav-burger");
+    const menu = document.querySelector("header.topbar .topnav-menu");
+    if (!burger || !menu) return;
+    const nav = document.querySelector("header.topbar nav.topnav");
+    if (!nav) return;
+    if (burger.__eggpoolNavWired) return;
+    burger.__eggpoolNavWired = true;
+
+    // The burger no longer renders a `data-tooltip` attribute (the
+    // hamburger glyph is self-explanatory on a phone) so we only
+    // have to swap the `aria-label` between the open and close copy
+    // for assistive tech.  Capture the original label once so we can
+    // restore it on close without re-reading it from the DOM.
+    const originalAriaLabel = burger.getAttribute("aria-label") || "";
+
+    const setOpen = function (open) {
+      if (open) {
+        nav.classList.add("topnav-open");
+        burger.setAttribute("aria-expanded", "true");
+        burger.setAttribute("aria-label", "Close page menu");
+      } else {
+        nav.classList.remove("topnav-open");
+        burger.setAttribute("aria-expanded", "false");
+        burger.setAttribute("aria-label", originalAriaLabel);
+      }
+    };
+
+    burger.addEventListener("click", function (event) {
+      event.preventDefault();
+      const expanded = burger.getAttribute("aria-expanded") === "true";
+      setOpen(!expanded);
+    });
+
+    nav.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" || event.key === "Esc") {
+        const wasOpen = burger.getAttribute("aria-expanded") === "true";
+        if (!wasOpen) return;
+        event.preventDefault();
+        setOpen(false);
+        try {
+          burger.focus();
+        } catch (_err) {
+          /* ignore */
+        }
+      }
+    });
+
+    const links = menu.querySelectorAll("a");
+    for (let i = 0; i < links.length; i++) {
+      links[i].addEventListener("click", function () {
+        setOpen(false);
+      });
+    }
+
+    document.addEventListener("click", function (event) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      // The burger button is a sibling of `<nav>`, not a descendant,
+      // so it is NOT covered by `nav.contains(target)`.  Check it
+      // explicitly — otherwise clicking the burger to open the menu
+      // would immediately re-close it via this outside-click handler.
+      if (nav.contains(target) || burger.contains(target)) return;
+      setOpen(false);
+    });
+  };
+
+  // Wire click-to-copy on every element marked with
+  // ``data-update-command``.  Each click selects the text and copies
+  // it via the async Clipboard API; falls back to the legacy
+  // ``document.execCommand("copy")`` path when the modern API is
+  // unavailable (older browsers, insecure contexts).  A short
+  // "copied!" affordance fades in next to the command for ~1.6s and
+  // also announces the success to assistive tech via the role=status
+  // sibling.
+  namespace.initUpdateCommandCopy = function initUpdateCommandCopy() {
+    const commands = document.querySelectorAll("[data-update-command]");
+    for (let i = 0; i < commands.length; i++) {
+      const el = commands[i];
+      if (el.__eggpoolCopyWired) continue;
+      el.__eggpoolCopyWired = true;
+      const handle = function (event) {
+        if (event) {
+          event.preventDefault();
+        }
+        const text = el.textContent || "";
+        const indicator =
+          el.parentElement &&
+          el.parentElement.querySelector("[data-update-copied]");
+        const flash = function (label) {
+          if (!indicator) return;
+          indicator.textContent = label;
+          indicator.classList.add("is-visible");
+          window.setTimeout(function () {
+            indicator.classList.remove("is-visible");
+            window.setTimeout(function () {
+              indicator.textContent = "";
+            }, 200);
+          }, 1400);
+        };
+        const fallback = function () {
+          try {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+            const ok = document.execCommand && document.execCommand("copy");
+            if (selection) {
+              selection.removeAllRanges();
+            }
+            flash(ok ? "copied!" : "press Ctrl+C");
+          } catch (_err) {
+            flash("press Ctrl+C");
+          }
+        };
+        if (
+          typeof navigator !== "undefined" &&
+          navigator.clipboard &&
+          typeof navigator.clipboard.writeText === "function"
+        ) {
+          navigator.clipboard.writeText(text).then(
+            function () {
+              flash("copied!");
+            },
+            function () {
+              fallback();
+            }
+          );
+        } else {
+          fallback();
+        }
+      };
+      el.addEventListener("click", handle);
+      el.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          handle(event);
+        }
+      });
+    }
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", namespace.bootstrap);
+  } else {
+    namespace.bootstrap();
+  }
+})();

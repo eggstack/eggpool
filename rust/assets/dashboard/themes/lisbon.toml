@@ -1,0 +1,42 @@
+[general]
+background = "#122437"
+border = "#1F456A"
+horizontal_rule = "#15314D"
+unread_indicator = "#8F8758"
+
+[text]
+primary = "#9BAFD3"
+secondary = "#48709D"
+tertiary = "#6083AE"
+success = "#6889B3"
+error = "#A09865"
+
+[buffer]
+action = "#C9C390"
+background = "#121921"
+background_text_input = "#111F2E"
+background_title_bar = "#16334F"
+border = "#14181C"
+border_selected = "#8B8355"
+code = "#CBD2EF"
+highlight = "#3E3A25"
+nickname = "#DEDAAC"
+selection = "#142E48"
+timestamp = "#416A97"
+topic = "#89A2C8"
+url = "#E6E5FF"
+
+  [buffer.server_messages]
+  default = "#C9C390"
+
+[buttons.primary]
+background = "#122437"
+background_hover = "#111F2E"
+background_selected = "#121A24"
+background_selected_hover = "#14181C"
+
+[buttons.secondary]
+background = "#12253A"
+background_hover = "#2A537D"
+background_selected = "#36608C"
+background_selected_hover = "#4F75A2"
