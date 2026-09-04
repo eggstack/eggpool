@@ -1,6 +1,6 @@
 # Provider Transport T003 — Eggress Connector and Proxy Parity
 
-Status: ready for handoff; T001 feature decision and T002 closed
+Status: closed; see [closure record](../../closure/provider-transport/003-status.md)
 
 Repository baseline for planning: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 

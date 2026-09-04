@@ -43,6 +43,7 @@ enum ProxyMode {
 struct ProxyFixture {
     address: SocketAddr,
     targets: Arc<Mutex<Vec<String>>>,
+    connect_headers: Arc<Mutex<Vec<String>>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
@@ -62,16 +63,19 @@ impl ProxyFixture {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy listener");
         let address = listener.local_addr().expect("proxy address");
         let targets = Arc::new(Mutex::new(Vec::new()));
+        let connect_headers = Arc::new(Mutex::new(Vec::new()));
         let target_log = Arc::clone(&targets);
+        let header_log = Arc::clone(&connect_headers);
         let thread = thread::spawn(move || {
             for _ in 0..expected_connections {
                 let (stream, _) = listener.accept().expect("proxy accept");
-                handle_proxy_connection(stream, mode, &target_log);
+                handle_proxy_connection(stream, mode, &target_log, &header_log);
             }
         });
         Self {
             address,
             targets,
+            connect_headers,
             thread: Some(thread),
         }
     }
@@ -82,6 +86,10 @@ impl ProxyFixture {
 
     fn targets(&self) -> Vec<String> {
         self.targets.lock().unwrap().clone()
+    }
+
+    fn connect_headers(&self) -> Vec<String> {
+        self.connect_headers.lock().unwrap().clone()
     }
 }
 
@@ -123,6 +131,7 @@ fn handle_proxy_connection(
     mut client: TcpStream,
     mode: ProxyMode,
     targets: &Arc<Mutex<Vec<String>>>,
+    connect_headers: &Arc<Mutex<Vec<String>>>,
 ) {
     let (host, port) = match mode {
         ProxyMode::HttpConnect { authenticated } => {
@@ -130,6 +139,13 @@ fn handle_proxy_connection(
                 return;
             };
             let text = String::from_utf8_lossy(&head);
+            connect_headers
+                .lock()
+                .unwrap()
+                .extend(text.lines().skip(1).filter_map(|line| {
+                    line.split_once(':')
+                        .map(|(name, _)| name.to_ascii_lowercase())
+                }));
             let mut first = text.lines().next().unwrap_or_default().split_whitespace();
             if first.next() != Some("CONNECT") {
                 return;
@@ -869,8 +885,13 @@ async fn authenticated_http_connect_preserves_provider_tls_verification() {
         &format!("http://{}#proxy-user:proxy-pass", proxy.uri()),
     )
     .expect("authenticated HTTP CONNECT client");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("provider-secret-marker"),
+    );
     let mut response = client
-        .send(Method::GET, "/secure", HeaderMap::new(), Bytes::new())
+        .send(Method::GET, "/secure", headers, Bytes::new())
         .await
         .expect("proxied TLS response");
     assert_eq!(
@@ -880,6 +901,12 @@ async fn authenticated_http_connect_preserves_provider_tls_verification() {
     assert_eq!(
         proxy.targets(),
         vec![format!("localhost:{}", server.port())]
+    );
+    assert!(
+        !proxy
+            .connect_headers()
+            .iter()
+            .any(|name| name == "authorization")
     );
 }
 

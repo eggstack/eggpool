@@ -1,6 +1,6 @@
 # Provider Transport T004 — Provider/Account Client Pool and Lifecycle Boundary
 
-Status: queued; blocked on T003 closure
+Status: dependency-ready; T003 closed
 
 Repository baseline for planning: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 
