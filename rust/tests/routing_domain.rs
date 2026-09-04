@@ -57,6 +57,10 @@ fn config() -> Config {
         id: "provider-a".into(),
         base_url: "https://provider-a.invalid/v1".into(),
         protocols: vec!["openai".into(), "anthropic".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
         ..Default::default()
     };
     provider.accounts.push(eggpool::config::AccountConfig {
@@ -107,6 +111,48 @@ fn account_identity_is_non_secret_and_surface_aware() {
     assert!(!debug.contains("secret-that-must-not-leak"));
     let json = serde_json::to_string(identity).expect("identity serializes");
     assert!(!json.contains("api_key"));
+}
+
+#[test]
+fn d001_account_observation_is_represented_by_the_rust_registry() {
+    let mut config = config();
+    config.providers.insert(
+        "provider-b".into(),
+        eggpool::config::ProviderConfig {
+            id: "provider-b".into(),
+            base_url: "https://provider-b.invalid/v1".into(),
+            protocols: vec!["openai".into()],
+            auth: eggpool::config::ProviderAuthConfig {
+                mode: "none".into(),
+                ..Default::default()
+            },
+            accounts: vec![eggpool::config::AccountConfig {
+                name: "account-b".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    config.validate().expect("D001-shaped config validates");
+    let rows = [
+        durable_account(1, "account-a", "provider-a", true),
+        durable_account(2, "account-b", "provider-b", true),
+        durable_account(3, "disabled-a", "provider-a", false),
+    ];
+    let registry = AccountRegistry::from_config(&config, &rows, &CredentialStore::default())
+        .expect("D001 registry builds");
+    assert_eq!(registry.enabled_snapshot().len(), 2);
+    assert_eq!(
+        registry.provider_for_account("account-a"),
+        Some("provider-a")
+    );
+    assert_eq!(
+        registry.provider_for_account("account-b"),
+        Some("provider-b")
+    );
+    assert!(registry.supports_protocol("account-a", "anthropic"));
+    assert!(!registry.supports_protocol("account-b", "anthropic"));
+    assert!(registry.supports_request_surface("account-b", RequestSurface::Responses));
 }
 
 #[test]
