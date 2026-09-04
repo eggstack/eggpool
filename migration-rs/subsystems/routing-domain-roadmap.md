@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: closed after D008 qualification; D001-D008 closed
+Status: active corrective pass after D008; D009 ready
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
@@ -25,6 +25,7 @@ M5 owns:
 - quota estimates, bounded EWMA learned state, reservation mirrors, provisional selection claims, and fair-share scoring;
 - account/model health, reason-specific bounded backoff, circuit-breaker probe ownership, and model quarantine;
 - eligibility, stable exclusion reasons, priority tiers, native-vs-transcode preference, fairness bands, and deterministic candidate ranking;
+- accepted local selection snapshots suitable for later durable routing traces;
 - compilation of virtual model-router configuration and bounded session affinity state;
 - differential fixtures that prove state snapshots, candidate sets, selections, exclusions, and local durable effects match Python.
 
@@ -77,7 +78,11 @@ A pending claim becomes visible before durable dispatch persistence so concurren
 
 `routing.router.Router` combines eligibility, quota scoring, strict priority tiers, native-protocol preference, bounded fairness, and stable diagnostics. Fairness rotation is bounded to 4,096 keys and applies only within the best-score band, not across priority tiers or materially different scores.
 
+Python random fairness shuffles the eligible near-tie band and therefore materially affects the selected account. D009 requires the Rust accepted-claim path, not only helper construction, to preserve that behavior through an injectable RNG.
+
 Eligibility is authoritative for operator disable, provider/model/catalog/protocol/capability/health/quarantine constraints. Local quota estimates are advisory by default (`score_only`) and become a hard exclusion only when explicitly configured as `hard_cap`.
+
+The accepted selection must also freeze the non-secret score/fairness/candidate evidence that caused the choice. A later routing trace may serialize that snapshot, but must not rescore after active/pending claim publication has already changed mutable routing inputs.
 
 ### Model routers
 
@@ -144,6 +149,9 @@ Long-lived routing reads should operate on in-memory state after hydration. SQLi
 - read-only health/readiness/candidate enumeration cannot consume a half-open circuit probe;
 - at most one half-open probe is owned per circuit at a time;
 - fairness does not cross strict priority tiers or the configured near-score/native-protocol band;
+- random fairness affects actual accepted selection and read-only operations consume no RNG state;
+- round-robin advances exactly once per accepted claim;
+- accepted claims retain an immutable bounded routing-decision snapshot; later trace serialization does not rescore mutable routing state;
 - fairness, EWMA, affinity, recovery-attempt, and other learned maps are explicitly bounded;
 - model quarantine is exact-key and bounded; runtime-only model-like failures cannot create terminal withdrawal without authoritative evidence;
 - model-router affinity stores hashes/derived decisions, never raw session content;
@@ -159,11 +167,11 @@ Use narrow synchronization:
 - immutable/config/catalog snapshots where practical;
 - `Mutex` only around mutations that must be atomic relative to selection;
 - read-only snapshots for diagnostics and readiness;
-- one local selection-claim critical section for candidate selection plus provisional ownership publication;
+- one local selection-claim critical section for candidate selection, final fairness choice, accepted-decision snapshot, and provisional ownership publication;
 - no SQLite await while holding the selection-claim lock;
 - no lock held across M4 network I/O.
 
-The M5 claim transaction consists only of local state: select/revalidate candidate, consume a circuit probe if needed, increment active ownership, and publish pending request/token/cost load. M7 later converts that claim into durable request/reservation/attempt state. M5 exposes explicit publish/rollback/release operations so M7 can prove cleanup; it does not rely on async work from `Drop`.
+The M5 claim transaction consists only of local state: select/revalidate candidate, apply accepted fairness choice, consume a circuit probe if needed, freeze the accepted routing snapshot, increment active ownership, and publish pending request/token/cost load. M7 later converts that claim into durable request/reservation/attempt state and persists the frozen routing trace. M5 exposes explicit publish/rollback/release operations so M7 can prove cleanup; it does not rely on async work from `Drop`.
 
 ## 6. Database policy
 
@@ -201,19 +209,22 @@ D004 quota/claims/scoring  D005 health/backoff/quarantine
        |                   |
        +---------+---------+
                  v
-D006 eligibility/routing/fairness/local claims (closed; see [closure](../closure/routing-domain/006-status.md))
+D006 eligibility/routing/fairness/local claims (historically closed)
                  |
                  v
-D007 model-router compilation + bounded affinity (closed; see [closure](../closure/routing-domain/007-status.md))
+D007 model-router compilation + bounded affinity (closed)
                  |
                  v
-D008 differential qualification + M5 closure (closed; see [closure](../closure/routing-domain/008-status.md))
+D008 integrated qualification + initial M5 closure (historically closed)
                  |
                  v
-M6 implementation planning/handoff unblocked
+D009 random-selection + frozen-trace corrective pass (READY)
+                 |
+                 v
+M6 implementation handoff re-unblocked only after D009 closure
 ```
 
-D004 and D005 may be implemented in either order once D003 is closed, but only one plan should be marked dependency-ready at a time unless the registry explicitly approves parallel handoff. D006 requires both.
+D004 and D005 shared D003 as a hard predecessor. D009 is a post-closure correction over the integrated D001-D008 implementation. Historical closure records remain append-only.
 
 ## 9. Milestones
 
@@ -247,11 +258,11 @@ Port normalized health categories, 30-minute bounded reason policies, Retry-Afte
 
 Exit: fake-clock state-machine traces and restart snapshots match Python and cannot become fail-open under corrupt/expired state.
 
-### D006 — Eligibility, priority tiers, fairness, and local selection claims
+### D006 — Eligibility, priority tiers, fairness, and local selection claims (historical closure)
 
 Port the router's stable exclusion codes, provider/model/surface/protocol/capability/quarantine/health gates, strict priority tiers, score integration, native preference, 4,096-key bounded fairness, missing-account refresh throttling, readiness checks, and the local selection-claim transaction.
 
-Exit: the same state/request-facts fixture yields parity-equivalent candidates, ranking, fairness decision, selected claim, and rollback ownership under concurrency.
+Historical exit evidence remains valid except for the random-selection and frozen-trace gaps corrected by D009.
 
 ### D007 — Model-router compiled registry and affinity state (closed)
 
@@ -261,11 +272,21 @@ Actual selector calls through the coordinator remain deferred to M7.
 
 Exit: compiled router bytes/fingerprints and affinity cache traces match Python fixtures without importing M6/M7 behavior.
 
-### D008 — M5 differential qualification and closure (closed)
+### D008 — M5 differential qualification and initial closure (historical aggregate closure)
 
 Run integrated account/catalog/quota/health/router/model-router state scenarios, concurrency/claim tests, restart hydration, corrupt-state fail-closed tests, bounded-memory checks, dependency review, and SBC-oriented local characterization.
 
-Exit: no unresolved high/medium M5 correctness gap remains and M6 may rely on stable routing-domain interfaces. Met by D008 closure.
+D008 remains historical evidence. Independent review later found two mandatory D006 selection-contract paths not exercised by its matrix; D009 supersedes the aggregate “no unresolved gap” conclusion only for those findings.
+
+### D009 — Selection fairness and frozen routing-trace correction (ready)
+
+Correct actual random fairness selection and freeze the accepted score/fairness/candidate snapshot on `SelectionClaim` so later routing traces cannot rescore post-claim state.
+
+Required evidence includes direct `select_and_claim` random-mode tests with an invocation-counting RNG, zero RNG mutation from read-only plan/readiness/trace calls, round-robin regression coverage, half-open contention, and a trace fixture where post-claim pending/active load would otherwise reorder peers.
+
+Implementation plan: [D009](../implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md).
+
+Exit: actual accepted random selection matches the controlled contract, trace evidence is frozen at accepted selection, the D008 integrated suite remains green, and no M6/M7 behavior is introduced.
 
 ## 10. Verification strategy
 
@@ -281,6 +302,8 @@ Prefer deterministic Python/Rust observations over live providers. Build fixture
 - quarantine promotion/expiry/success/reappearance/terminal evidence;
 - exact stable routing exclusions;
 - priority tiers, transcode/native preference, fairness rotation/random mode, and bounded-key eviction;
+- accepted-claim random choice through an injected counting RNG;
+- frozen routing trace versus a deliberately changed post-claim score order;
 - concurrent claim selection with no herd/stale-load window;
 - virtual-router compilation, affinity TTL/LRU/single-flight, and no raw session retention;
 - Python-created DB -> Rust hydrate -> Rust write -> Python read where the schema window permits.
@@ -293,6 +316,7 @@ This milestone is especially important for SBC deployments. The Rust design shou
 
 - keep selection DB-free after snapshot hydration;
 - avoid per-candidate allocation where a reusable vector/map snapshot suffices;
+- keep accepted trace snapshots bounded and free of catalog/request payload copies;
 - keep fairness/affinity/EWMA/recovery maps bounded at the same or tighter safe limits;
 - avoid polling/background task proliferation in M5;
 - avoid duplicate catalog metadata copies when immutable sharing is practical;
@@ -314,6 +338,8 @@ This milestone is especially important for SBC deployments. The Rust design shou
 
 ## 13. Closure condition
 
-M5 closed after D001-D008 accepted closure evidence and an integrated deterministic snapshot proved parity-equivalent account/catalog identity, candidate eligibility, priority/fairness ranking, local claim ownership, quota pressure, health/backoff/quarantine state, and bounded virtual-router affinity. M6 planning/implementation handoff is unblocked; M7 remains blocked on M6.
+M5 is currently reopened for D009. D001-D008 closure records remain accepted historical evidence, but M5 is not considered fully closed while the random-selection and frozen-trace defects remain unresolved.
 
-M5 closure does not mean a client inference request can be dispatched. It means M6 can supply canonical request facts and M7 can consume the selected claim/transport without having to redesign the routing-domain state machine.
+M5 closes after accepted D009 evidence proves actual random fairness through the claim path, zero fairness mutation from read-only operations, immutable accepted routing snapshots, stable trace serialization after claim-state mutation, and a green D008 integrated regression pass.
+
+On D009 closure, record the subsystem as `closed after D009 corrective pass` and re-unblock M6 implementation handoff. M5 closure still does not mean a client inference request can be dispatched; M6 supplies canonical request facts and M7 consumes the selected claim/transport without redesigning the routing-domain state machine.
