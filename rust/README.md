@@ -31,6 +31,30 @@ copy the binary into a global/user executable directory during migration.
 Later parity work and black-box invocation conventions are tracked in the
 [`migration-rs` guide](../migration-rs/README.md).
 
+## F004 SQLite compatibility baseline
+
+`eggpool::db::Database` owns one `tokio-rusqlite` worker and a single
+operation permit. Read calls and complete `BEGIN IMMEDIATE` transactions are
+serialized on that connection; repositories never open pooled writers. The
+database options can be built directly from the closed F003 config model with
+`DatabaseConfig::from(&config.database)`.
+
+The build script reads `src/eggpool/db/schema/*.sql` and `checksums.json`
+directly. It embeds those exact canonical files into the candidate and
+validates their SHA-256 values before applying them. Rust uses the existing
+`_migrations` ledger and accepts the historical no-extension ledger names in
+`tests/fixtures/schema/pre_phase17_v11.sql`; it does not renumber or rewrite
+migrations. A failed transaction explicitly rolls back. Rollback failure, or a
+commit failure whose rollback cannot prove the connection clean, closes
+admission and the worker; a commit failure with a verified rollback remains a
+typed, usable failure just as in the Python oracle.
+
+F004 currently exposes typed account, model, request, provider-ping, and
+usage-rollup repositories for the first read plane. Full request finalization,
+quota reservations, catalog maintenance, backups, and runtime recovery remain
+unported and belong to later milestones. Python remains the production
+implementation.
+
 ## F003 config and CLI compatibility
 
 The migration candidate resolves configuration in the same order as Python:

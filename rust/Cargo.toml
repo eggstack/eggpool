@@ -12,9 +12,10 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.8"
 thiserror = "2"
-tokio = { version = "1.44", features = ["macros", "rt"] }
+tokio = { version = "1.44", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+tokio-rusqlite = { version = "0.7.0", features = ["bundled"] }
 
 [lints.rust]
 unsafe_code = "forbid"

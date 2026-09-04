@@ -8,6 +8,7 @@
 
 mod cli;
 pub mod config;
+pub mod db;
 mod error;
 mod runtime;
 pub mod version;
