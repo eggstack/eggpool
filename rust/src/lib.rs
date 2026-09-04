@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod accounts;
+pub mod catalog;
 mod cli;
 pub mod config;
 pub mod db;

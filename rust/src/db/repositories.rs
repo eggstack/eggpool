@@ -12,6 +12,9 @@ pub struct Account {
     pub enabled: bool,
     pub weight: f64,
     pub provider_id: String,
+    pub five_hour_offset_microdollars: i64,
+    pub weekly_offset_microdollars: i64,
+    pub monthly_offset_microdollars: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +24,9 @@ pub struct AccountConfig {
     pub enabled: bool,
     pub weight: f64,
     pub provider_id: String,
+    pub five_hour_offset_microdollars: i64,
+    pub weekly_offset_microdollars: i64,
+    pub monthly_offset_microdollars: i64,
 }
 
 impl AccountConfig {
@@ -31,6 +37,9 @@ impl AccountConfig {
             enabled: true,
             weight: 1.0,
             provider_id: "opencode-go".to_owned(),
+            five_hour_offset_microdollars: 0,
+            weekly_offset_microdollars: 0,
+            monthly_offset_microdollars: 0,
         }
     }
 }
@@ -42,6 +51,52 @@ pub struct Model {
     pub protocol: String,
     pub provider_id: String,
     pub resolution_status: String,
+}
+
+/// Raw durable global catalog identity. JSON remains advisory and is parsed
+/// by the catalog boundary, not by the SQL row mapper.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogModel {
+    pub model_id: String,
+    pub display_name: Option<String>,
+    pub protocol: String,
+    pub capabilities: String,
+    pub source_metadata: String,
+    pub protocol_source: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub resolution_status: String,
+    pub provider_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderModelMetadata {
+    pub model_id: String,
+    pub provider_id: String,
+    pub display_name: Option<String>,
+    pub protocol: Option<String>,
+    pub capabilities: String,
+    pub source_metadata: String,
+    pub protocol_source: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub resolution_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountModelSupport {
+    pub account_id: i64,
+    pub model_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogRefreshState {
+    pub account_id: i64,
+    pub provider_id: String,
+    pub last_successful_refresh_at: String,
+    pub last_outcome: String,
+    pub model_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +214,19 @@ impl AccountRepository {
             .await
     }
 
+    /// Return every durable account in stable id order, including disabled rows.
+    pub async fn list_all(&self) -> Result<Vec<Account>, DatabaseError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT id, name, api_key_env, enabled, weight, provider_id\n\
+                     FROM accounts ORDER BY id",
+                )?;
+                statement.query_map([], account_from_row)?.collect()
+            })
+            .await
+    }
+
     pub async fn sync_from_config(
         &self,
         accounts: Vec<AccountConfig>,
@@ -171,7 +239,13 @@ impl AccountRepository {
                      ON CONFLICT(name) DO UPDATE SET api_key_env = excluded.api_key_env,\n\
                        enabled = excluded.enabled, weight = excluded.weight,\n\
                        provider_id = excluded.provider_id",
-                    params![account.name, account.api_key_env, account.enabled as i64, account.weight, account.provider_id],
+                    params![
+                        account.name,
+                        account.api_key_env,
+                        account.enabled as i64,
+                        account.weight,
+                        account.provider_id,
+                    ],
                 )?;
             }
             if accounts.is_empty() {
@@ -240,6 +314,69 @@ impl ModelRepository {
                     .optional()
             })
             .await
+    }
+}
+
+/// Read-plane access to the existing catalog tables. No migration is owned by
+/// this repository; all SQL targets the canonical schema-54 tables.
+#[derive(Debug, Clone)]
+pub struct CatalogRepository {
+    database: Database,
+}
+
+impl CatalogRepository {
+    pub fn new(database: &Database) -> Self {
+        Self {
+            database: database.clone(),
+        }
+    }
+
+    pub async fn list_models(&self) -> Result<Vec<CatalogModel>, DatabaseError> {
+        self.database.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT model_id, display_name, protocol, capabilities, source_metadata,\n\
+                        protocol_source, first_seen_at, last_seen_at, resolution_status, provider_id\n\
+                 FROM models ORDER BY model_id",
+            )?;
+            statement.query_map([], catalog_model_from_row)?.collect()
+        }).await
+    }
+
+    pub async fn list_provider_models(&self) -> Result<Vec<ProviderModelMetadata>, DatabaseError> {
+        self.database.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT model_id, provider_id, display_name, protocol, capabilities, source_metadata,\n\
+                        protocol_source, first_seen_at, last_seen_at, resolution_status\n\
+                 FROM provider_model_metadata ORDER BY model_id, provider_id",
+            )?;
+            statement.query_map([], provider_model_from_row)?.collect()
+        }).await
+    }
+
+    pub async fn list_account_model_support(
+        &self,
+    ) -> Result<Vec<AccountModelSupport>, DatabaseError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT account_id, model_id, enabled FROM account_models\n\
+                 ORDER BY account_id, model_id",
+                )?;
+                statement
+                    .query_map([], account_model_support_from_row)?
+                    .collect()
+            })
+            .await
+    }
+
+    pub async fn list_refresh_state(&self) -> Result<Vec<CatalogRefreshState>, DatabaseError> {
+        self.database.call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT account_id, provider_id, last_successful_refresh_at, last_outcome, model_count\n\
+                 FROM catalog_refresh_state ORDER BY account_id",
+            )?;
+            statement.query_map([], refresh_state_from_row)?.collect()
+        }).await
     }
 }
 
@@ -583,6 +720,9 @@ fn account_from_row(
         enabled: row.get::<_, i64>(3)? != 0,
         weight: row.get(4)?,
         provider_id: row.get(5)?,
+        five_hour_offset_microdollars: 0,
+        weekly_offset_microdollars: 0,
+        monthly_offset_microdollars: 0,
     })
 }
 
@@ -595,6 +735,62 @@ fn model_from_row(
         protocol: row.get(2)?,
         provider_id: row.get(3)?,
         resolution_status: row.get(4)?,
+    })
+}
+
+fn catalog_model_from_row(
+    row: &tokio_rusqlite::rusqlite::Row<'_>,
+) -> tokio_rusqlite::rusqlite::Result<CatalogModel> {
+    Ok(CatalogModel {
+        model_id: row.get(0)?,
+        display_name: row.get(1)?,
+        protocol: row.get(2)?,
+        capabilities: row.get(3)?,
+        source_metadata: row.get(4)?,
+        protocol_source: row.get(5)?,
+        first_seen_at: row.get(6)?,
+        last_seen_at: row.get(7)?,
+        resolution_status: row.get(8)?,
+        provider_id: row.get(9)?,
+    })
+}
+
+fn provider_model_from_row(
+    row: &tokio_rusqlite::rusqlite::Row<'_>,
+) -> tokio_rusqlite::rusqlite::Result<ProviderModelMetadata> {
+    Ok(ProviderModelMetadata {
+        model_id: row.get(0)?,
+        provider_id: row.get(1)?,
+        display_name: row.get(2)?,
+        protocol: row.get(3)?,
+        capabilities: row.get(4)?,
+        source_metadata: row.get(5)?,
+        protocol_source: row.get(6)?,
+        first_seen_at: row.get(7)?,
+        last_seen_at: row.get(8)?,
+        resolution_status: row.get(9)?,
+    })
+}
+
+fn account_model_support_from_row(
+    row: &tokio_rusqlite::rusqlite::Row<'_>,
+) -> tokio_rusqlite::rusqlite::Result<AccountModelSupport> {
+    Ok(AccountModelSupport {
+        account_id: row.get(0)?,
+        model_id: row.get(1)?,
+        enabled: row.get::<_, i64>(2)? != 0,
+    })
+}
+
+fn refresh_state_from_row(
+    row: &tokio_rusqlite::rusqlite::Row<'_>,
+) -> tokio_rusqlite::rusqlite::Result<CatalogRefreshState> {
+    Ok(CatalogRefreshState {
+        account_id: row.get(0)?,
+        provider_id: row.get(1)?,
+        last_successful_refresh_at: row.get(2)?,
+        last_outcome: row.get(3)?,
+        model_count: row.get(4)?,
     })
 }
 

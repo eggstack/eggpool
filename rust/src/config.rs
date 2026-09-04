@@ -1668,9 +1668,9 @@ fn validate_provider(
                 account.name
             )));
         }
-        if account.weight <= 0.0 {
+        if !account.weight.is_finite() || account.weight <= 0.0 {
             return Err(ConfigError::validation(format!(
-                "Account {:?} has non-positive weight",
+                "Account {:?} has non-positive or non-finite weight",
                 account.name
             )));
         }
