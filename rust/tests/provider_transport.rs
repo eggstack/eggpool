@@ -11,6 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "test-support")]
+use std::{
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+};
+
 use bytes::Bytes;
 use eggpool::{
     Config, db,
@@ -20,12 +26,16 @@ use eggpool::{
     },
     server,
 };
+use eggress_core::{BoxStream, TargetHost};
+use eggress_protocol_shadowsocks::{CipherMethod, compat::ssr::SsrConfig};
 use http::{HeaderMap, HeaderValue, Method};
 use rustls::{
     ServerConfig, ServerConnection,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
 use serde_json::json;
+#[cfg(feature = "test-support")]
+use tempfile::TempDir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestObservation {
@@ -76,15 +86,41 @@ impl ProxyFixture {
 
     fn start(mode: ProxyMode, expected_connections: usize) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("proxy listener");
+        listener
+            .set_nonblocking(true)
+            .expect("proxy listener nonblocking");
         let address = listener.local_addr().expect("proxy address");
         let targets = Arc::new(Mutex::new(Vec::new()));
         let connect_headers = Arc::new(Mutex::new(Vec::new()));
         let target_log = Arc::clone(&targets);
         let header_log = Arc::clone(&connect_headers);
         let thread = thread::spawn(move || {
+            let mut workers = Vec::with_capacity(expected_connections);
             for _ in 0..expected_connections {
-                let (stream, _) = listener.accept().expect("proxy accept");
-                handle_proxy_connection(stream, mode, &target_log, &header_log);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let (stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("proxy accept: {error}"),
+                    }
+                };
+                stream
+                    .set_nonblocking(false)
+                    .expect("proxy stream blocking mode");
+                let target_log = Arc::clone(&target_log);
+                let header_log = Arc::clone(&header_log);
+                workers.push(thread::spawn(move || {
+                    handle_proxy_connection(stream, mode, &target_log, &header_log);
+                }));
+            }
+            for worker in workers {
+                worker.join().expect("proxy worker");
             }
         });
         Self {
@@ -114,6 +150,377 @@ impl Drop for ProxyFixture {
             thread.join().expect("proxy thread");
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum EncryptedProxyKind {
+    Shadowsocks,
+    ShadowsocksR,
+}
+
+struct EncryptedProxyFixture {
+    address: SocketAddr,
+    targets: Arc<Mutex<Vec<String>>>,
+    handshakes: Arc<AtomicUsize>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl EncryptedProxyFixture {
+    fn start(kind: EncryptedProxyKind, password: &'static str, expected: usize) -> Self {
+        Self::start_with_delay(kind, password, expected, Duration::ZERO, false)
+    }
+
+    fn start_with_delay(
+        kind: EncryptedProxyKind,
+        password: &'static str,
+        expected: usize,
+        handshake_delay: Duration,
+        discard_first: bool,
+    ) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("encrypted proxy listener");
+        let address = listener.local_addr().expect("encrypted proxy address");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking encrypted proxy listener");
+        let listener =
+            tokio::net::TcpListener::from_std(listener).expect("tokio encrypted proxy listener");
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let handshakes = Arc::new(AtomicUsize::new(0));
+        let target_log = Arc::clone(&targets);
+        let handshake_log = Arc::clone(&handshakes);
+        let task = tokio::spawn(async move {
+            for connection_index in 0..expected {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::time::sleep(handshake_delay).await;
+                let boxed: BoxStream = Box::new(stream);
+                let accepted = match kind {
+                    EncryptedProxyKind::Shadowsocks => {
+                        eggress_protocol_shadowsocks::shadowsocks_accept(
+                            boxed,
+                            password,
+                            CipherMethod::Aes256Gcm,
+                            None,
+                        )
+                        .await
+                    }
+                    EncryptedProxyKind::ShadowsocksR => {
+                        eggress_protocol_shadowsocks::compat::ssr::ssr_accept(
+                            boxed,
+                            &SsrConfig::default(),
+                        )
+                        .await
+                    }
+                };
+                let Ok((mut proxy_stream, target)) = accepted else {
+                    continue;
+                };
+                handshake_log.fetch_add(1, Ordering::SeqCst);
+                let authority = match &target.host {
+                    TargetHost::Ip(ip) => format!("{}:{}", ip, target.port),
+                    TargetHost::Domain(host) => format!("{}:{}", host, target.port),
+                };
+                target_log.lock().unwrap().push(authority);
+                if discard_first && connection_index == 0 {
+                    continue;
+                }
+                let target_stream = match &target.host {
+                    TargetHost::Ip(ip) => tokio::net::TcpStream::connect((*ip, target.port)).await,
+                    TargetHost::Domain(host) => {
+                        tokio::net::TcpStream::connect((host.as_str(), target.port)).await
+                    }
+                };
+                let Ok(mut target_stream) = target_stream else {
+                    continue;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut proxy_stream, &mut target_stream).await;
+            }
+        });
+        Self {
+            address,
+            targets,
+            handshakes,
+            task: Some(task),
+        }
+    }
+
+    fn uri(&self, kind: EncryptedProxyKind, password: &str) -> String {
+        let scheme = match kind {
+            EncryptedProxyKind::Shadowsocks => "ss://aes-256-gcm",
+            EncryptedProxyKind::ShadowsocksR => "ssr://aes-256-cfb",
+        };
+        format!("{scheme}:{password}@127.0.0.1:{}", self.address.port())
+    }
+
+    fn targets(&self) -> Vec<String> {
+        self.targets.lock().unwrap().clone()
+    }
+
+    fn handshake_count(&self) -> usize {
+        self.handshakes.load(Ordering::SeqCst)
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for EncryptedProxyFixture {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+struct TrojanProxyFixture {
+    address: SocketAddr,
+    ca_certificate: Vec<u8>,
+    targets: Arc<Mutex<Vec<String>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[cfg(feature = "test-support")]
+impl TrojanProxyFixture {
+    async fn start(password: &'static str, expected: usize) -> Self {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("Trojan proxy listener");
+        let address = listener.local_addr().expect("Trojan proxy address");
+        let material = make_tls_material_for_names(["localhost", "127.0.0.1"]);
+        let ca_certificate = material.2.clone();
+        let acceptor = tokio_rustls::TlsAcceptor::from(server_tls_config(&material));
+        let targets = Arc::new(Mutex::new(Vec::new()));
+        let target_log = Arc::clone(&targets);
+        let task = tokio::spawn(async move {
+            for _ in 0..expected {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let Ok(stream) = acceptor.accept(stream).await else {
+                    continue;
+                };
+                let boxed: BoxStream = Box::new(stream);
+                let Ok((mut proxy_stream, accepted)) =
+                    eggress_protocol_trojan::trojan_accept(boxed, password).await
+                else {
+                    continue;
+                };
+                let target = accepted.target;
+                let authority = match &target.host {
+                    TargetHost::Ip(ip) => format!("{}:{}", ip, target.port),
+                    TargetHost::Domain(host) => format!("{}:{}", host, target.port),
+                };
+                target_log.lock().unwrap().push(authority);
+                let target_stream = match &target.host {
+                    TargetHost::Ip(ip) => tokio::net::TcpStream::connect((*ip, target.port)).await,
+                    TargetHost::Domain(host) => {
+                        tokio::net::TcpStream::connect((host.as_str(), target.port)).await
+                    }
+                };
+                let Ok(mut target_stream) = target_stream else {
+                    continue;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut proxy_stream, &mut target_stream).await;
+            }
+        });
+        Self {
+            address,
+            ca_certificate,
+            targets,
+            task: Some(task),
+        }
+    }
+
+    fn uri(&self, password: &str) -> String {
+        format!(
+            "trojan://aes-256-gcm:{password}@127.0.0.1:{}",
+            self.address.port()
+        )
+    }
+
+    fn targets(&self) -> Vec<String> {
+        self.targets.lock().unwrap().clone()
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for TrojanProxyFixture {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(feature = "test-support")]
+struct SshProxyFixture {
+    _directory: TempDir,
+    child: Child,
+    address: SocketAddr,
+    user: String,
+    private_key: PathBuf,
+    wrong_private_key: PathBuf,
+}
+
+#[cfg(feature = "test-support")]
+impl SshProxyFixture {
+    async fn start() -> Self {
+        assert!(
+            command_available("sshd"),
+            "sshd is required for SSH fixture"
+        );
+        assert!(
+            command_available("ssh-keygen"),
+            "ssh-keygen is required for SSH fixture"
+        );
+        let directory = tempfile::tempdir().expect("SSH fixture directory");
+        let host_key = directory.path().join("host_key");
+        let private_key = directory.path().join("client_key");
+        let wrong_private_key = directory.path().join("wrong_client_key");
+        run_checked(
+            Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(&host_key),
+        )
+        .expect("SSH host key");
+        run_checked(
+            Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(&private_key),
+        )
+        .expect("SSH client key");
+        run_checked(
+            Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(&wrong_private_key),
+        )
+        .expect("SSH wrong client key");
+        std::fs::copy(
+            private_key.with_extension("pub"),
+            directory.path().join("authorized_keys"),
+        )
+        .expect("SSH authorized keys");
+        let user = std::env::var("USER")
+            .ok()
+            .filter(|user| !user.is_empty())
+            .expect("SSH fixture user");
+        let port = TcpListener::bind(("127.0.0.1", 0))
+            .expect("SSH fixture port")
+            .local_addr()
+            .expect("SSH fixture address")
+            .port();
+        let config = directory.path().join("sshd_config");
+        let pid_file = directory.path().join("sshd.pid");
+        let config_text = format!(
+            "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nUsePAM no\nPermitRootLogin yes\nPubkeyAuthentication yes\nAllowTcpForwarding yes\nAllowStreamLocalForwarding yes\nGatewayPorts no\nStrictModes no\nUseDNS no\nLogLevel QUIET\n",
+            host_key.display(),
+            directory.path().join("authorized_keys").display(),
+            pid_file.display(),
+        );
+        std::fs::write(&config, config_text).expect("SSH fixture config");
+        let config_check = Command::new("/usr/sbin/sshd")
+            .args(["-t", "-f"])
+            .arg(&config)
+            .output()
+            .expect("check SSH fixture config");
+        assert!(
+            config_check.status.success(),
+            "invalid SSH fixture config: {}",
+            String::from_utf8_lossy(&config_check.stderr)
+        );
+        let child = Command::new("/usr/sbin/sshd")
+            .args(["-D", "-e", "-f"])
+            .arg(&config)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start SSH fixture");
+        let mut fixture = Self {
+            _directory: directory,
+            child,
+            address: SocketAddr::from(([127, 0, 0, 1], port)),
+            user,
+            private_key,
+            wrong_private_key,
+        };
+        assert!(
+            wait_for_process(&mut fixture.child).await,
+            "SSH fixture did not start"
+        );
+        fixture
+    }
+
+    fn uri_for_key(&self, key: &std::path::Path) -> String {
+        format!(
+            "ssh://127.0.0.1:{}#{}::{}",
+            self.address.port(),
+            self.user,
+            key.display()
+        )
+    }
+
+    fn uri(&self) -> String {
+        self.uri_for_key(&self.private_key)
+    }
+
+    fn wrong_uri(&self) -> String {
+        self.uri_for_key(&self.wrong_private_key)
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for SshProxyFixture {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(feature = "test-support")]
+fn command_available(command: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", &format!("command -v {command} >/dev/null 2>&1")])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(feature = "test-support")]
+fn run_checked(command: &mut Command) -> std::io::Result<()> {
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    let status = command.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("fixture command failed"))
+    }
+}
+
+#[cfg(feature = "test-support")]
+async fn wait_for_process(child: &mut Child) -> bool {
+    for _ in 0..100 {
+        if child
+            .try_wait()
+            .expect("check SSH fixture process")
+            .is_some()
+        {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    true
 }
 
 fn read_exact_bytes(stream: &mut TcpStream, length: usize) -> Option<Vec<u8>> {
@@ -333,15 +740,36 @@ struct FixtureServer {
 
 impl FixtureServer {
     fn http(mode: ResponseMode, expected_requests: usize) -> Self {
-        Self::start(mode, expected_requests, false)
+        Self::start(mode, expected_requests, false, Duration::from_secs(2))
+    }
+
+    fn http_with_idle_timeout(
+        mode: ResponseMode,
+        expected_requests: usize,
+        idle_timeout: Duration,
+    ) -> Self {
+        Self::start(mode, expected_requests, false, idle_timeout)
     }
 
     fn https(expected_requests: usize) -> Self {
-        Self::start(ResponseMode::Normal, expected_requests, true)
+        Self::start(
+            ResponseMode::Normal,
+            expected_requests,
+            true,
+            Duration::from_secs(2),
+        )
     }
 
-    fn start(mode: ResponseMode, expected_requests: usize, tls: bool) -> Self {
+    fn start(
+        mode: ResponseMode,
+        expected_requests: usize,
+        tls: bool,
+        idle_timeout: Duration,
+    ) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener");
+        listener
+            .set_nonblocking(true)
+            .expect("fixture listener nonblocking");
         let address = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
         let connections = Arc::new(AtomicUsize::new(0));
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -352,8 +780,24 @@ impl FixtureServer {
         let thread = thread::spawn(move || {
             let tls_config = tls_material.as_ref().map(server_tls_config);
             let mut served = 0;
+            let mut idle_deadline = Instant::now() + idle_timeout;
             while served < expected_requests {
-                let (stream, _) = listener.accept().expect("fixture accept");
+                let (stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= idle_deadline {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                idle_deadline = Instant::now() + idle_timeout;
+                stream
+                    .set_nonblocking(false)
+                    .expect("fixture stream blocking mode");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("fixture read timeout");
@@ -546,6 +990,15 @@ fn write_response(stream: &mut TestStream, mode: ResponseMode) {
 }
 
 fn make_tls_material() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    make_tls_material_for_names(["localhost"])
+}
+
+fn install_test_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+fn make_tls_material_for_names<const N: usize>(names: [&str; N]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    install_test_crypto_provider();
     let mut ca_params =
         rcgen::CertificateParams::new(vec!["provider-test-ca".to_owned()]).expect("CA parameters");
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -553,7 +1006,8 @@ fn make_tls_material() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let ca_certificate = ca_params.self_signed(&ca_key).expect("CA certificate");
     let ca_issuer = rcgen::Issuer::new(ca_params, ca_key);
     let mut leaf_params =
-        rcgen::CertificateParams::new(vec!["localhost".to_owned()]).expect("leaf parameters");
+        rcgen::CertificateParams::new(names.into_iter().map(str::to_owned).collect::<Vec<_>>())
+            .expect("leaf parameters");
     leaf_params
         .extended_key_usages
         .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
@@ -1134,6 +1588,287 @@ fn mandatory_proxy_corpus_uri_families_construct() {
             "mandatory proxy URI did not construct: {uri}"
         );
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extended_encrypted_proxies_reach_the_target_through_provider_transport() {
+    install_test_crypto_provider();
+    for kind in [
+        EncryptedProxyKind::Shadowsocks,
+        EncryptedProxyKind::ShadowsocksR,
+    ] {
+        let server = FixtureServer::http(ResponseMode::Normal, 1);
+        let mut proxy = EncryptedProxyFixture::start(kind, "ss-secret-marker", 1);
+        let client = ProviderHttpClient::new_with_proxy(
+            proxy_test_config(&server.http_url()),
+            &proxy.uri(kind, "ss-secret-marker"),
+        )
+        .expect("encrypted proxy client");
+        let mut response = client
+            .send(Method::GET, "/encrypted", HeaderMap::new(), Bytes::new())
+            .await
+            .expect("encrypted proxy response");
+        assert_eq!(response.status.as_u16(), 200);
+        assert_eq!(
+            response.body.next().await.unwrap().unwrap(),
+            Bytes::from_static(b"ok")
+        );
+        assert!(response.body.next().await.is_none());
+        drop(response);
+        drop(client);
+        proxy.shutdown().await;
+
+        assert_eq!(proxy.handshake_count(), 1);
+        assert_eq!(
+            proxy.targets(),
+            vec![format!("localhost:{}", server.port())]
+        );
+        assert_eq!(server.requests().len(), 1);
+        assert_eq!(server.requests()[0].target, "/encrypted");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extended_encrypted_proxy_auth_failure_is_redacted_and_fail_closed() {
+    install_test_crypto_provider();
+    let kind = EncryptedProxyKind::Shadowsocks;
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let mut proxy = EncryptedProxyFixture::start(kind, "right-secret-marker", 1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &proxy.uri(kind, "wrong-secret-marker"),
+    )
+    .expect("encrypted proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-bypass",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("wrong encrypted proxy secret");
+    assert!(!error.to_string().contains("right-secret-marker"));
+    assert!(!error.to_string().contains("wrong-secret-marker"));
+    assert!(server.requests().is_empty());
+    drop(client);
+    proxy.shutdown().await;
+    assert_eq!(proxy.handshake_count(), 0);
+    assert!(proxy.targets().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extended_encrypted_proxy_cancellation_recovers_through_same_client() {
+    install_test_crypto_provider();
+    let server =
+        FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
+    let mut proxy = EncryptedProxyFixture::start_with_delay(
+        EncryptedProxyKind::Shadowsocks,
+        "cancel-secret",
+        2,
+        Duration::from_millis(100),
+        true,
+    );
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &proxy.uri(EncryptedProxyKind::Shadowsocks, "cancel-secret"),
+    )
+    .expect("encrypted proxy client");
+    let cancelled_client = client.clone();
+    let pending = tokio::spawn(async move {
+        cancelled_client
+            .send(
+                Method::GET,
+                "/cancelled-encrypted",
+                HeaderMap::new(),
+                Bytes::new(),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    pending.abort();
+    let _ = pending.await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut response = client
+        .send(
+            Method::GET,
+            "/after-encrypted-cancel",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect("encrypted request after cancellation");
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests()[0].target, "/after-encrypted-cancel");
+    drop(response);
+    drop(client);
+    proxy.shutdown().await;
+    assert_eq!(proxy.handshake_count(), 2);
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn trojan_proxy_reaches_the_target_with_test_only_proxy_root() {
+    install_test_crypto_provider();
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let mut proxy = TrojanProxyFixture::start("trojan-secret-marker", 1).await;
+    let client = ProviderHttpClient::new_with_proxy_test_root(
+        proxy_test_config(&server.http_url()),
+        &proxy.uri("trojan-secret-marker"),
+        proxy.ca_certificate.clone(),
+    )
+    .expect("Trojan proxy client");
+    let mut response = client
+        .send(Method::GET, "/trojan", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("Trojan proxy response");
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert!(response.body.next().await.is_none());
+    drop(response);
+    drop(client);
+    proxy.shutdown().await;
+
+    assert_eq!(
+        proxy.targets(),
+        vec![format!("localhost:{}", server.port())]
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests()[0].target, "/trojan");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn trojan_auth_failure_is_redacted_and_cannot_fall_back_direct() {
+    install_test_crypto_provider();
+    let server =
+        FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
+    let mut proxy = TrojanProxyFixture::start("right-trojan-secret", 1).await;
+    let client = ProviderHttpClient::new_with_proxy_test_root(
+        proxy_test_config(&server.http_url()),
+        &proxy.uri("wrong-trojan-secret"),
+        proxy.ca_certificate.clone(),
+    )
+    .expect("Trojan proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-bypass-trojan",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("wrong Trojan secret");
+    assert!(!error.to_string().contains("right-trojan-secret"));
+    assert!(!error.to_string().contains("wrong-trojan-secret"));
+    assert!(server.requests().is_empty());
+    drop(client);
+    proxy.shutdown().await;
+    assert!(proxy.targets().is_empty());
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn ssh_proxy_reaches_the_target_with_the_eggress_compatibility_policy() {
+    install_test_crypto_provider();
+    let server =
+        FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
+    let proxy = SshProxyFixture::start().await;
+    let proxy_uri = proxy.uri();
+    let client =
+        ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &proxy_uri)
+            .expect("SSH proxy client");
+    let mut response = client
+        .send(Method::GET, "/ssh", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("SSH proxy response");
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests()[0].target, "/ssh");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn ssh_auth_failure_is_redacted_and_cannot_fall_back_direct() {
+    install_test_crypto_provider();
+    let server = FixtureServer::http(ResponseMode::Normal, 1);
+    let proxy = SshProxyFixture::start().await;
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &proxy.wrong_uri(),
+    )
+    .expect("SSH proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-bypass-ssh",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("wrong SSH key");
+    assert!(
+        !error
+            .to_string()
+            .contains(&proxy.wrong_private_key.display().to_string())
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
+async fn ssh_cancellation_does_not_poison_the_provider_client() {
+    install_test_crypto_provider();
+    let server =
+        FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
+    let proxy = SshProxyFixture::start().await;
+    let client =
+        ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &proxy.uri())
+            .expect("SSH proxy client");
+    let cancelled_client = client.clone();
+    let pending = tokio::spawn(async move {
+        cancelled_client
+            .send(
+                Method::GET,
+                "/cancelled-ssh",
+                HeaderMap::new(),
+                Bytes::new(),
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    pending.abort();
+    let _ = pending.await;
+
+    let mut response = client
+        .send(
+            Method::GET,
+            "/after-ssh-cancel",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect("SSH request after cancellation");
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(
+        response.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"ok")
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(server.requests()[0].target, "/after-ssh-cancel");
 }
 
 #[tokio::test(flavor = "current_thread")]

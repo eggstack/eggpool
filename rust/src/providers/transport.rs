@@ -14,6 +14,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use eggress_core::{BoxStream, TargetAddr, TargetHost};
 use http::{
     Extensions, HeaderMap, Method, Request, StatusCode, Uri,
     uri::{Authority, PathAndQuery, Scheme},
@@ -242,10 +243,38 @@ impl ProviderHttpClient {
         Self::build(config, Some(proxy_url))
     }
 
-    fn build(config: ProviderHttpConfig, proxy_url: Option<&str>) -> Result<Self, TransportError> {
+    /// Build a client with a deterministic test-only Eggress TLS root.
+    ///
+    /// Production callers must use [`Self::new_with_proxy`], which preserves
+    /// Eggress's system-root verification for proxy protocols such as Trojan.
+    #[cfg(feature = "test-support")]
+    pub fn new_with_proxy_test_root(
+        config: ProviderHttpConfig,
+        proxy_url: &str,
+        proxy_root_certificate: Vec<u8>,
+    ) -> Result<Self, TransportError> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         validate_config(&config)?;
-        let tls_config = build_tls_config(&config.additional_root_certificates)?;
+        let tcp = ProviderTcpConnector::new_with_test_root(proxy_url, proxy_root_certificate)?;
+        Self::build_with_tcp(config, tcp)
+    }
+
+    fn build(config: ProviderHttpConfig, proxy_url: Option<&str>) -> Result<Self, TransportError> {
+        // Eggress may construct its shared TLS configuration while building
+        // the proxy connector, so select the pinned provider before that
+        // construction begins.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        validate_config(&config)?;
         let tcp = ProviderTcpConnector::new(proxy_url)?;
+        Self::build_with_tcp(config, tcp)
+    }
+
+    fn build_with_tcp(
+        config: ProviderHttpConfig,
+        tcp: ProviderTcpConnector,
+    ) -> Result<Self, TransportError> {
+        let tls_config = build_tls_config(&config.additional_root_certificates)?;
+        let proxy_transport = tcp.proxy.is_some();
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
             .https_or_http()
@@ -258,7 +287,7 @@ impl ProviderHttpClient {
             config.connect_timeout,
             config.read_timeout,
             config.write_timeout,
-            proxy_url.is_some_and(|url| url != "direct://"),
+            proxy_transport,
         );
         let mut builder = Client::builder(TokioExecutor::new());
         builder
@@ -399,10 +428,56 @@ impl Write for ProviderStream {
 /// Establishes the TCP leg either directly or through one account's Eggress
 /// connector.  It deliberately returns one stream type so the surrounding
 /// Rustls and Hyper stack is identical for both paths.
+type ProxyConnectFuture = Pin<Box<dyn Future<Output = Result<BoxStream, BoxError>> + Send>>;
+
+trait ProxyDialer: Send + Sync {
+    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture;
+}
+
+#[derive(Clone)]
+struct EgressProxyDialer {
+    connector: Arc<eggress_embed::outbound::OutboundConnector>,
+}
+
+impl ProxyDialer for EgressProxyDialer {
+    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture {
+        let connector = Arc::clone(&self.connector);
+        Box::pin(async move {
+            connector
+                .connect_tcp(&host, port)
+                .await
+                .map(|(stream, _)| stream)
+                .map_err(|error| Box::new(error) as BoxError)
+        })
+    }
+}
+
+struct ChainEgressProxyDialer {
+    executor: Arc<eggress_core::chain::ChainExecutor>,
+    chain: Arc<Vec<eggress_uri::ProxyHopSpec>>,
+}
+
+impl ProxyDialer for ChainEgressProxyDialer {
+    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture {
+        let executor = Arc::clone(&self.executor);
+        let chain = Arc::clone(&self.chain);
+        Box::pin(async move {
+            let host = host
+                .parse()
+                .map(TargetHost::Ip)
+                .unwrap_or_else(|_| TargetHost::Domain(host));
+            executor
+                .execute(&chain, &TargetAddr { host, port })
+                .await
+                .map_err(|error| Box::new(error) as BoxError)
+        })
+    }
+}
+
 #[derive(Clone)]
 struct ProviderTcpConnector {
     direct: HttpConnector,
-    proxy: Option<Arc<eggress_embed::outbound::OutboundConnector>>,
+    proxy: Option<Arc<dyn ProxyDialer>>,
 }
 
 impl ProviderTcpConnector {
@@ -416,16 +491,78 @@ impl ProviderTcpConnector {
                     .map_err(|_| TransportError::ProxyConfiguration)?;
                 None
             }
-            Some(proxy_url) => Some(Arc::new(
-                build_egress_connector(proxy_url)
-                    .map_err(|_| TransportError::ProxyConfiguration)?,
-            )),
+            Some(proxy_url) if proxy_uses_ssh(proxy_url) => {
+                Some(Arc::new(build_chain_egress_dialer(proxy_url, None)?) as Arc<dyn ProxyDialer>)
+            }
+            Some(proxy_url) => Some(Arc::new(EgressProxyDialer {
+                connector: Arc::new(
+                    build_egress_connector(proxy_url)
+                        .map_err(|_| TransportError::ProxyConfiguration)?,
+                ),
+            }) as Arc<dyn ProxyDialer>),
             None => None,
         };
         let mut direct = HttpConnector::new();
         direct.enforce_http(false);
         Ok(Self { direct, proxy })
     }
+
+    #[cfg(feature = "test-support")]
+    fn new_with_test_root(
+        proxy_url: &str,
+        proxy_root_certificate: Vec<u8>,
+    ) -> Result<Self, TransportError> {
+        let proxy_roots = if proxy_root_certificate.is_empty() {
+            Vec::new()
+        } else {
+            vec![proxy_root_certificate]
+        };
+        let tls_config = Arc::new(build_tls_config(&proxy_roots)?);
+        let dialer = build_chain_egress_dialer(proxy_url, Some(&tls_config))?;
+        let mut direct = HttpConnector::new();
+        direct.enforce_http(false);
+        Ok(Self {
+            direct,
+            proxy: Some(Arc::new(dialer)),
+        })
+    }
+}
+
+fn proxy_uses_ssh(proxy_url: &str) -> bool {
+    proxy_url.split("__").any(|hop| {
+        hop.split_once("://")
+            .is_some_and(|(scheme, _)| scheme.split('+').any(|protocol| protocol == "ssh"))
+    })
+}
+
+fn build_chain_egress_dialer(
+    proxy_url: &str,
+    tls_config: Option<&Arc<ClientConfig>>,
+) -> Result<ChainEgressProxyDialer, TransportError> {
+    let parsed = eggress_pproxy_compat::uri::parse_pproxy_chain(proxy_url)
+        .map_err(|_| TransportError::ProxyConfiguration)?;
+    let output = eggress_pproxy_compat::translate_from_uris(
+        &eggress_pproxy_compat::PproxyArgs::default_args(),
+        &[],
+        &[parsed],
+    )
+    .map_err(|_| TransportError::ProxyConfiguration)?;
+    let config: eggress_config::model::ConfigFile =
+        toml::from_str(&output.toml).map_err(|_| TransportError::ProxyConfiguration)?;
+    let runtime = eggress_config::compile::compile_config(&config)
+        .map_err(|_| TransportError::ProxyConfiguration)?;
+    let chain = runtime
+        .upstreams
+        .into_iter()
+        .next()
+        .map(|upstream| upstream.chain.hops)
+        .ok_or(TransportError::ProxyConfiguration)?;
+    let ssh_sessions = Some(Arc::new(eggress_transport_ssh::SshSessionCache::new()));
+    let executor = eggress_server::build_chain_executor(tls_config, None, ssh_sessions);
+    Ok(ChainEgressProxyDialer {
+        executor: Arc::new(executor),
+        chain: Arc::new(chain),
+    })
 }
 
 fn build_egress_connector(
@@ -492,9 +629,11 @@ impl Service<Uri> for ProviderTcpConnector {
         });
         let proxy = Arc::clone(proxy);
         Box::pin(async move {
-            match proxy.connect_tcp(&host, port).await {
-                Ok((stream, _info)) => Ok(ProviderStream::new(TokioIo::new(stream))),
-                Err(error) => {
+            proxy
+                .connect(host, port)
+                .await
+                .map(|stream| ProviderStream::new(TokioIo::new(stream)))
+                .map_err(|error| {
                     let message = error.to_string().to_ascii_lowercase();
                     let stage = if message.contains("timed out") || message.contains("timeout") {
                         Stage::ProxyConnectTimeout
@@ -509,9 +648,8 @@ impl Service<Uri> for ProviderTcpConnector {
                     } else {
                         Stage::ProxyConnect
                     };
-                    Err(Box::new(TransportMarker::new(stage)) as BoxError)
-                }
-            }
+                    Box::new(TransportMarker::with_source(stage, error)) as BoxError
+                })
         })
     }
 }

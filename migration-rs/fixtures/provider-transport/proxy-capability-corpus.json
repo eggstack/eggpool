@@ -35,7 +35,7 @@
       "python_parse": "pass",
       "python_connection": "pass: local HTTP/1.1 fixture",
       "egress_construction": "pass: from_pproxy_uri API and upstream unit test",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 direct ProviderHttpClient runtime",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -47,7 +47,7 @@
       "python_parse": "pass",
       "python_connection": "pass: HTTP CONNECT fixture records target authority",
       "egress_construction": "pass: pproxy compatibility parser/tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 ProviderHttpClient through HTTP CONNECT",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -59,7 +59,7 @@
       "python_parse": "pass",
       "python_connection": "pass: authenticated HTTP CONNECT fixture",
       "egress_construction": "pass: pproxy compatibility parser/tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 authenticated HTTP CONNECT through ProviderHttpClient",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -71,7 +71,7 @@
       "python_parse": "pass",
       "python_connection": "pass: pproxy SOCKS4 CONNECT path against local fixture",
       "egress_construction": "pass: pproxy compatibility parser/tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 ProviderHttpClient through SOCKS4",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -83,7 +83,7 @@
       "python_parse": "pass",
       "python_connection": "pass: local SOCKS5 CONNECT fixture",
       "egress_construction": "pass: pproxy compatibility parser/tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 ProviderHttpClient through SOCKS5",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -95,7 +95,7 @@
       "python_parse": "pass",
       "python_connection": "pass: authenticated SOCKS5 fixture",
       "egress_construction": "pass: pproxy compatibility parser/tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 authenticated SOCKS5 through ProviderHttpClient",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -143,7 +143,7 @@
       "python_parse": "pass",
       "python_connection": "deferred: requires two coordinated local proxies; parser evidence captured",
       "egress_construction": "pass: chain parser and translation tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T005 ProviderHttpClient through HTTP-to-SOCKS5 chain",
       "required_egress_features": ["common", "pproxy-compat"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -155,7 +155,7 @@
       "python_parse": "pass",
       "python_connection": "deferred: requires a Shadowsocks peer; no live provider or external proxy",
       "egress_construction": "pass: extended Shadowsocks compatibility tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T006 Shadowsocks AEAD local peer through ProviderHttpClient",
       "required_egress_features": ["extended"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -167,7 +167,7 @@
       "python_parse": "pass",
       "python_connection": "deferred: requires an SSR peer; no live provider or external proxy",
       "egress_construction": "pass: pproxy-legacy plus legacy-crypto translation tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T006 SSR legacy local peer through ProviderHttpClient; frozen URI has no SSR credential-negotiation field",
       "required_egress_features": ["pproxy-legacy", "legacy-crypto"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -179,7 +179,7 @@
       "python_parse": "pass",
       "python_connection": "deferred: requires a Trojan TLS peer; no live provider or external proxy",
       "egress_construction": "pass: extended Trojan compatibility tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T006 Trojan TLS local peer through ProviderHttpClient with test-only proxy root",
       "required_egress_features": ["extended"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true
@@ -191,7 +191,7 @@
       "python_parse": "pass",
       "python_connection": "deferred: optional asyncssh and SSH peer are not fixture dependencies",
       "egress_construction": "pass: ssh feature source/API and compatibility tests",
-      "egress_runtime": "deferred: T003 connector runtime",
+      "egress_runtime": "pass: T006 SSH local peer through production ProviderHttpClient path; Eggress chain executor supplies session cache",
       "required_egress_features": ["ssh"],
       "parity_class": "semantic",
       "mandatory_for_rust_cutover": true

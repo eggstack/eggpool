@@ -46,15 +46,19 @@ The direct client disables ambient proxy behavior by construction. Additional
 DER roots are available only as an explicit constructor setting for
 deterministic test CAs.
 
-T005 qualification is complete. The transport boundary has no implicit
+T006 extended proxy qualification is complete. The transport boundary has no implicit
 request retry: coordinator-owned retry/failover remains downstream, and
 response bodies are still consumed incrementally. Run the neutral provider
 transport qualification tests with:
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test provider_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --features test-support --test provider_transport -- --test-threads=1
 ```
 
+The feature-enabled command runs deterministic local Shadowsocks, SSR, Trojan,
+and OpenSSH peers. The Trojan CA override is test-only; SSH uses the same
+production `ProviderHttpClient::new_with_proxy` path as configured accounts.
 This is transport-only evidence; it does not claim provider inference
 dispatch, routing, codecs, or production Rust cutover.
 

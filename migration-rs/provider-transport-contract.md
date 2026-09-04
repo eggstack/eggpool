@@ -1,6 +1,6 @@
 # Provider Transport Contract — T001
 
-Status: frozen for T002/T003 handoff
+Status: frozen; T006 runtime qualification complete
 
 Plan: [T001 — contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md)
 
@@ -119,8 +119,10 @@ The current Python product has executable evidence for `direct://`, HTTP
 CONNECT, fragment-authenticated HTTP CONNECT, SOCKS4, SOCKS5,
 fragment-authenticated SOCKS5, `__` chain parsing, modern Shadowsocks and
 Trojan construction, SSR construction with a legacy cipher, and optional SSH
-construction.  The local HTTP CONNECT and SOCKS5 fixtures prove target
-authority/domain observations and never retain credentials or body bytes.
+construction. The Rust T005/T006 fixtures additionally prove target traversal
+for every mandatory row through the actual `ProviderHttpClient` path. The local
+HTTP CONNECT and SOCKS5 fixtures prove target authority/domain observations and
+never retain credentials or body bytes.
 
 `socks5://` sends a domain target to the proxy when the target is a hostname;
 this is the DNS-through-proxy contract.  The Rust connector must not replace
@@ -171,6 +173,19 @@ verification is disabled.  Refused connections use an explicitly closed
 loopback endpoint.  Write backpressure and long connect stalls remain
 deferred until T002/T003 can exercise them without timing-dependent tests.
 
+The Rust T006 fixtures in `rust/tests/provider_transport.rs` add bounded local
+Shadowsocks AEAD, SSR legacy, Trojan TLS, and OpenSSH peers. They record only
+target authority, handshake success, and target HTTP observations. Trojan uses
+the test-only `new_with_proxy_test_root` constructor so its synthetic CA is not
+added to production trust roots. SSH uses `ProviderHttpClient::new_with_proxy`;
+Eggress 1.0.2's convenience constructor omits the SSH session cache, so the
+production adapter selects Eggress's public chain executor for SSH-bearing
+chains and supplies that cache. Eggress's compatibility policy intentionally
+does not verify SSH host keys; this remains a visible compatibility decision.
+The frozen SSR row has no password-negotiation field in its selected form, so
+its runtime evidence covers framing, target authority, and relay success; wrong
+secret coverage is applied where the protocol/auth form permits it.
+
 ## Stable transport error observations
 
 Tests use `TransportErrorObservation` rather than comparing HTTPX class names
@@ -189,7 +204,7 @@ identity when present, direct-versus-proxied evidence, or secret exposure.
 
 ## Eggress decision for T003
 
-Use this exact starting dependency proposal:
+Use this exact dependency proposal:
 
 ```toml
 eggress-embed = { version = "=1.0.2", default-features = false, features = [
@@ -208,13 +223,13 @@ Feature justification is explicit:
 - `ssh`: documented optional SSH upstream.
 
 `operations`, `reverse`, and `quic` are rejected for M4 provider TCP
-transport.  No Eggress production dependency was added in T001.  The lean
-feature set was compiled against the inspected release and the upstream
-compatibility/parser tests provide construction evidence; actual Eggress
-connector traffic, TLS-over-proxy, and all mandatory runtime rows are T003
-work.  If T003 finds a mandatory Python form that this feature set cannot
-execute, it must stop and create a corrective plan or ADR rather than drop the
-row or fall back to direct networking.
+transport. The Rust adapter keeps this feature set and no unrelated Eggress
+features. For SSH-bearing chains it uses Eggress's public
+`build_chain_executor` primitive with a session cache because
+`OutboundConnector::from_toml` in Eggress 1.0.2 constructs its executor with
+`None` for that cache. This is a narrow integration correction, not a second
+proxy implementation. If a future Eggress release changes that constructor
+contract, re-run the T006 runtime rows before simplifying the adapter.
 
 ## Exact versus semantic parity handoff
 
