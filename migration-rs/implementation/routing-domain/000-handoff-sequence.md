@@ -1,12 +1,12 @@
 # M5 Routing Domain Handoff Sequence
 
-Status: active; D001 closed; D002 ready
+Status: active; D001-D002 closed; D003 ready
 
 Execute and close these plans in dependency order:
 
 1. D001 — contract and deterministic fixture freeze (closed);
-2. D002 — account registry and catalog cache/hydration (ready);
-3. D003 — catalog refresh, normalization, and persistence;
+2. D002 — account registry and catalog cache/hydration (closed);
+3. D003 — catalog refresh, normalization, and persistence (ready);
 4. D004 — quota, pending/reserved claims, and fair-share scoring;
 5. D005 — health, bounded backoff, circuit breaker, and quarantine;
 6. D006 — routing eligibility, priority tiers, fairness, and local selection claims;

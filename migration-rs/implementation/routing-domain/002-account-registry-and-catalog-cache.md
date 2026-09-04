@@ -1,6 +1,6 @@
 # D002 — Account Registry and Catalog Cache/Hydration
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/routing-domain/002-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d002--account-registry-and-catalog-cachehydration`
 
