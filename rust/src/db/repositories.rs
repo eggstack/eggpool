@@ -755,6 +755,93 @@ pub struct UsageRollupRepository {
     database: Database,
 }
 
+/// One account's persisted 5h/7d/30d usage values for routing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageWindowSnapshot {
+    pub cost_5h: i64,
+    pub cost_7d: i64,
+    pub cost_30d: i64,
+    pub request_count_5h: i64,
+    pub request_count_7d: i64,
+    pub request_count_30d: i64,
+    pub token_count_5h: i64,
+    pub token_count_7d: i64,
+    pub token_count_30d: i64,
+}
+
+/// Read-only usage window aggregation used by quota hydration.
+#[derive(Debug, Clone)]
+pub struct UsageWindowRepository {
+    database: Database,
+}
+
+impl UsageWindowRepository {
+    pub fn new(database: &Database) -> Self {
+        Self {
+            database: database.clone(),
+        }
+    }
+
+    /// Fetch every account's three horizons in one bounded SQL read.
+    pub async fn get_all_usage_windows(
+        &self,
+        now_iso: &str,
+    ) -> Result<BTreeMap<i64, UsageWindowSnapshot>, DatabaseError> {
+        let now_iso = now_iso.to_owned();
+        self.database
+            .call(move |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT account_id,\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?1, '-5 hours') THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?2, '-7 days') THEN CAST(cost_microdollars AS REAL) ELSE 0 END), 0),\
+                     COALESCE(SUM(CAST(cost_microdollars AS REAL)), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?3, '-5 hours') THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?4, '-7 days') THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?5, '-30 days') THEN 1 ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?6, '-5 hours') THEN CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) AS REAL) ELSE 0 END), 0),\
+                     COALESCE(SUM(CASE WHEN started_at >= datetime(?7, '-7 days') THEN CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) AS REAL) ELSE 0 END), 0),\
+                     COALESCE(SUM(CAST(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) AS REAL)), 0)\
+                     FROM requests \
+                     WHERE status != 'pending' \
+                       AND started_at >= datetime(?8, '-30 days')\
+                     GROUP BY account_id",
+                )?;
+                let rows = statement.query_map(
+                    params![
+                        &now_iso, &now_iso, &now_iso, &now_iso,
+                        &now_iso, &now_iso, &now_iso, &now_iso,
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            UsageWindowSnapshot {
+                                cost_5h: clamp_sqlite_aggregate(row.get::<_, f64>(1)?),
+                                cost_7d: clamp_sqlite_aggregate(row.get::<_, f64>(2)?),
+                                cost_30d: clamp_sqlite_aggregate(row.get::<_, f64>(3)?),
+                                request_count_5h: clamp_sqlite_aggregate(row.get::<_, f64>(4)?),
+                                request_count_7d: clamp_sqlite_aggregate(row.get::<_, f64>(5)?),
+                                request_count_30d: clamp_sqlite_aggregate(row.get::<_, f64>(6)?),
+                                token_count_5h: clamp_sqlite_aggregate(row.get::<_, f64>(7)?),
+                                token_count_7d: clamp_sqlite_aggregate(row.get::<_, f64>(8)?),
+                                token_count_30d: clamp_sqlite_aggregate(row.get::<_, f64>(9)?),
+                            },
+                        ))
+                    },
+                )?;
+                rows.collect()
+            })
+            .await
+    }
+}
+
+fn clamp_sqlite_aggregate(value: f64) -> i64 {
+    if !value.is_finite() || value <= 0.0 {
+        0
+    } else {
+        value.min(i64::MAX as f64) as i64
+    }
+}
+
 impl UsageRollupRepository {
     pub fn new(database: &Database) -> Self {
         Self {

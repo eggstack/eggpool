@@ -15,5 +15,5 @@ pub use repositories::{
     CatalogModelWrite, CatalogPersistenceBatch, CatalogPingWrite, CatalogRefreshState,
     CatalogRefreshWrite, CatalogRepository, DashboardSummary, Model, ModelRepository, Ping,
     PingRepository, ProviderModelMetadata, ProviderModelWrite, Request, RequestRepository,
-    UsageRollupRepository, UsageSummary,
+    UsageRollupRepository, UsageSummary, UsageWindowRepository, UsageWindowSnapshot,
 };
