@@ -23,13 +23,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
-| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D001 ready |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D002 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| D001 | [Routing-domain contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | invariant/infrastructure | F001-F006 + M4 T001-T006 closed | ready for handoff |
+| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | capability/invariant | D001 closure | ready for handoff |
 
 The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
 
@@ -49,13 +49,14 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | [`71ef03d`](https://github.com/eggstack/eggpool/commit/71ef03d) | [closed](closure/provider-transport/004-status.md) |
 | T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | [`c89e645`](https://github.com/eggstack/eggpool/commit/c89e645) | [historical closure](closure/provider-transport/005-status.md) |
 | T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | [`4b3a95a`](https://github.com/eggstack/eggpool/commit/4b3a95a) | [closed](closure/provider-transport/006-status.md) |
+| D001 | [Routing-domain contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`40be1bf`](https://github.com/eggstack/eggpool/commit/40be1bf) | [closed](closure/routing-domain/001-status.md) |
 
 ## M5 planned sequence
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| D001 | [Contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | ready for handoff |
-| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | queued behind D001 closure |
+| D001 | [Contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | closed |
+| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | ready for handoff |
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | queued behind D002 closure |
 | D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | queued behind D003 closure |
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | queued behind D003 closure; D004/D005 share predecessor |
@@ -79,7 +80,7 @@ Optional generic external catalog/model-info polling is not allowed to introduce
 
 ## Future work and block state
 
-D001 is the sole dependency-ready M5 implementation plan. D002-D008 are fully authored but remain gated by their predecessor closure records.
+D002 is the sole dependency-ready M5 implementation plan. D003-D008 are fully authored but remain gated by their predecessor closure records. D001 is recorded as completed below.
 
 D004 and D005 can theoretically proceed in parallel after D003, but default handoff is serial unless the registry is explicitly changed to authorize both.
 
@@ -89,6 +90,6 @@ M7 coordinator/finalization remains additionally blocked on M6. M8 runtime gener
 
 ## Closure state
 
-F001-F006 and M4 T001-T006 are closed. M5 is active with D001 ready for handoff and D002-D008 registered behind explicit closure gates.
+F001-F006 and M4 T001-T006 are closed. M5 is active with D001 closed, D002 ready for handoff, and D003-D008 registered behind explicit closure gates.
 
 M5 closes only after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.

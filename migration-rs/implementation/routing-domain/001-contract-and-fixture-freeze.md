@@ -1,6 +1,8 @@
 # D001 — Routing-Domain Contract and Deterministic Fixture Freeze
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/routing-domain/001-status.md)
+
+Frozen contract: [routing-domain contract](../../routing-domain-contract.md)
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
