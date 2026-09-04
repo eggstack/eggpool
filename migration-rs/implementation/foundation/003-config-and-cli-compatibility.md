@@ -1,6 +1,6 @@
 # Foundation Milestone F003 — Configuration and CLI Compatibility Foundation
 
-Status: blocked on F001/F002 closure
+Status: blocked on F002 closure
 
 Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 

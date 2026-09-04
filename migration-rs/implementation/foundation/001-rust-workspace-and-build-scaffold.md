@@ -1,8 +1,8 @@
 # Foundation Milestone F001 — Rust Workspace and Build Scaffold
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/foundation/001-status.md)
 
-Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
+Repository baseline: `13cdffee0852a2d344051c4f51454350f0745e75`
 
 Source roadmap: `migration-rs/subsystems/foundation-roadmap.md#F001`
 
@@ -128,3 +128,9 @@ Commit SHA, manifest/dependency summary, exact verification command outputs, pro
 ## 16. Handoff notes
 
 Prefer the smallest coherent scaffold. Do not create a Cargo workspace with many empty crates as anticipatory architecture.
+
+## 17. Closure
+
+F001 was implemented in commit `573e081f` and formally closed with the
+requirement-to-evidence record at
+`migration-rs/closure/foundation/001-status.md`.

@@ -1,6 +1,6 @@
 # Foundation Milestone F002 — Contract Inventory and Differential Oracle Harness
 
-Status: ready after F001 interface exists
+Status: ready for handoff
 
 Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
@@ -18,7 +18,9 @@ Build the reusable black-box compatibility harness and reviewed contract invento
 
 ## 2. Readiness
 
-Hard dependency: F001 must provide a stable explicit Rust executable path and test invocation convention. Python is already runnable and remains the oracle.
+Hard dependency: F001 is closed and provides a stable explicit Rust executable
+path and test invocation convention. Python remains runnable and remains the
+oracle.
 
 ## 3. Current oracle evidence
 

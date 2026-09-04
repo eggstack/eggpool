@@ -21,17 +21,22 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
-| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F001 |
+| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F002 |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | none | ready for handoff |
-| F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | F001 interface | ready after F001 interface exists |
-| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | F001, F002 | blocked on F001/F002 closure |
-| F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | F001, F002 | blocked on F001/F002 closure |
-| F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | F001, F002; F004 interface for DB-backed pages | blocked on dependencies |
+| F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | F001 closed | ready for handoff |
+| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | F002 | blocked on F002 closure |
+| F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | F002 | blocked on F002 closure |
+| F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | F002; F004 interface for DB-backed pages | blocked on F002 closure and dependencies |
+
+## Completed implementation plans
+
+| ID | Plan | Class | Implementation commit | Closure |
+|---|---|---|---|---|
+| F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 
 ## Blocked future work
 
@@ -39,4 +44,5 @@ Provider HTTP/Eggress, routing/quota/health, transcoding/SSE, coordinator/finali
 
 ## Closure state
 
-No Rust migration milestone is closed yet.
+F001 is closed. F002 is the next dependency-ready handoff; F003, F004, and
+F005 remain blocked until their stated dependencies close.
