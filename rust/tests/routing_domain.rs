@@ -213,6 +213,30 @@ fn cache_updates_are_non_destructive_until_authorized_withdrawal() {
 }
 
 #[test]
+fn static_protocol_and_capability_facts_survive_weaker_live_metadata() {
+    let mut cache = ModelCatalogCache::default();
+    cache.set_account_provider("account-a", "provider-a");
+    let mut static_model = ModelInput::new("static-model");
+    static_model.protocol = Some("anthropic".into());
+    static_model.protocol_source = Some("static_config".into());
+    static_model.resolution_status = ProtocolResolutionStatus::Resolved;
+    static_model.capabilities.supports_tools = Some(true);
+    cache
+        .update_from_account("account-a", "provider-a", &[static_model], false, false)
+        .expect("static update");
+    let mut weaker_live = ModelInput::new("static-model");
+    weaker_live.resolution_status = ProtocolResolutionStatus::Unresolved;
+    cache
+        .update_from_account("account-a", "provider-a", &[weaker_live], false, false)
+        .expect("live update");
+    let row = cache
+        .get_provider_model("static-model", "provider-a")
+        .expect("provider row");
+    assert_eq!(row.protocol.as_deref(), Some("anthropic"));
+    assert_eq!(row.capabilities.supports_tools, Some(true));
+}
+
+#[test]
 fn provider_and_global_limit_overrides_use_per_field_precedence() {
     let mut config = config();
     config.model_overrides.insert(
@@ -287,6 +311,7 @@ async fn schema54_seed_hydrates_catalog_and_durable_freshness() {
         "durable"
     );
     assert!(cache.account_model_is_fresh("account-a", 1, 1_000_000_000));
+    assert!(!cache.account_model_is_fresh("account-a", 1, 2_000_000_000));
     assert!(
         cache
             .get_provider_capabilities("shared-model", "provider-a")
@@ -296,6 +321,34 @@ async fn schema54_seed_hydrates_catalog_and_durable_freshness() {
     );
     let snapshot = cache.snapshot();
     assert_eq!(snapshot.model_ids.len(), 2);
+    database.close().await.expect("database closes");
+    fs::remove_file(path).expect("temporary database removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_durable_refresh_rows_use_legacy_model_timestamp_fallback() {
+    let (database, path) = database("legacy-freshness").await;
+    database
+        .call(|connection| {
+            connection.execute_batch(include_str!(
+                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+            ))?;
+            connection.execute("DELETE FROM catalog_refresh_state", [])
+        })
+        .await
+        .expect("seed applies");
+    let mut cache = ModelCatalogCache::default();
+    cache
+        .hydrate_from_db(&database)
+        .await
+        .expect("legacy state hydrates");
+    assert_eq!(
+        cache
+            .freshness("account-a")
+            .expect("legacy freshness")
+            .source,
+        "legacy_model_timestamp"
+    );
     database.close().await.expect("database closes");
     fs::remove_file(path).expect("temporary database removed");
 }
