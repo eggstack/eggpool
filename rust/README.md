@@ -44,8 +44,20 @@ buffer complete responses or inject provider credentials.
 
 The direct client disables ambient proxy behavior by construction. Additional
 DER roots are available only as an explicit constructor setting for
-deterministic test CAs. Proxied accounts, Eggress, provider client topology,
-and inference dispatch remain downstream migration work.
+deterministic test CAs.
+
+## T004 provider/account client pool
+
+`eggpool::providers::ProviderClientPool` builds one direct Hyper/Rustls client
+per configured provider and one dedicated Eggress-backed client for each
+configured account with a resolved proxy. Direct accounts fall back to the
+provider client; a configured proxy never falls back to direct transport.
+The pool is immutable after construction, exposes a credential-free topology
+snapshot, and is stored in the server application state. Pool construction is
+generation-candidate work and fails closed before the server is exposed. The
+server drops the pool after graceful shutdown, releasing direct and proxied
+Hyper connection pools; routing, credentials, retries, and generation swaps
+remain downstream work.
 
 ## F005 Axum read-plane server
 

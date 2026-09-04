@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     io::{Read, Write},
     net::{Shutdown, SocketAddr},
     net::{TcpListener, TcpStream},
@@ -11,12 +12,20 @@ use std::{
 };
 
 use bytes::Bytes;
-use eggpool::providers::{ProviderHttpClient, ProviderHttpConfig, TransportError};
+use eggpool::{
+    Config, db,
+    providers::{
+        ProviderClientPool, ProviderClientPoolError, ProviderHttpClient, ProviderHttpConfig,
+        TransportError,
+    },
+    server,
+};
 use http::{HeaderMap, HeaderValue, Method};
 use rustls::{
     ServerConfig, ServerConnection,
     pki_types::{CertificateDer, PrivateKeyDer},
 };
+use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestObservation {
@@ -805,6 +814,226 @@ fn proxy_test_config(base_url: &str) -> ProviderHttpConfig {
     config.write_timeout = Duration::from_secs(2);
     config.pool_timeout = Duration::from_secs(1);
     config
+}
+
+fn provider_config(
+    id: &str,
+    base_url: &str,
+    accounts: Vec<eggpool::config::AccountConfig>,
+) -> eggpool::config::ProviderConfig {
+    eggpool::config::ProviderConfig {
+        id: id.to_owned(),
+        base_url: base_url.to_owned(),
+        accounts,
+        ..Default::default()
+    }
+}
+
+fn config_with_providers(providers: Vec<eggpool::config::ProviderConfig>) -> Config {
+    Config {
+        providers: providers
+            .into_iter()
+            .map(|provider| (provider.id.clone(), provider))
+            .collect::<BTreeMap<_, _>>(),
+        ..Config::default()
+    }
+}
+
+#[test]
+fn provider_client_pool_builds_empty_and_provider_topologies() {
+    let empty = ProviderClientPool::from_config(&Config::default()).expect("empty pool");
+    assert_eq!(empty.providers(), Vec::<String>::new());
+    assert_eq!(
+        serde_json::to_value(empty.snapshot()).expect("snapshot JSON"),
+        json!({
+            "build_count": 0,
+            "providers": {},
+            "account_client_count": 0,
+            "account_clients": [],
+        })
+    );
+
+    let config = config_with_providers(vec![
+        provider_config("alpha", "http://alpha.example", Vec::new()),
+        provider_config("beta", "https://beta.example", Vec::new()),
+    ]);
+    let pool = ProviderClientPool::from_config(&config).expect("provider pool");
+    assert_eq!(pool.providers(), vec!["alpha", "beta"]);
+    assert!(pool.get_client("alpha", None).is_ok());
+    assert_eq!(pool.snapshot().build_count, 2);
+}
+
+#[test]
+fn provider_client_pool_uses_direct_fallback_and_dedicated_proxy_clients() {
+    let mut direct = eggpool::config::AccountConfig {
+        name: "direct".to_owned(),
+        ..Default::default()
+    };
+    direct.api_key_env = "DIRECT_KEY".to_owned();
+    let proxied = eggpool::config::AccountConfig {
+        name: "proxied".to_owned(),
+        proxy_url: Some("direct://".to_owned()),
+        ..Default::default()
+    };
+    let config = config_with_providers(vec![provider_config(
+        "provider",
+        "http://provider.example",
+        vec![direct, proxied],
+    )]);
+    let pool = ProviderClientPool::from_config(&config).expect("provider pool");
+    let provider_client = pool.get_client("provider", None).expect("provider client");
+    assert_eq!(
+        pool.get_client("provider", Some("direct"))
+            .expect("direct fallback")
+            .base_url(),
+        provider_client.base_url()
+    );
+    assert!(pool.get_client("provider", Some("proxied")).is_ok());
+    assert_eq!(
+        serde_json::to_value(pool.snapshot()).expect("snapshot JSON"),
+        json!({
+            "build_count": 2,
+            "providers": {"provider": 2},
+            "account_client_count": 1,
+            "account_clients": [{"provider_id": "provider", "account_name": "proxied"}],
+        })
+    );
+    assert_eq!(pool.snapshot().build_count, 2);
+    assert_eq!(pool.snapshot().build_count, 2);
+}
+
+#[test]
+fn provider_client_pool_fails_closed_for_missing_and_malformed_clients() {
+    let pool = ProviderClientPool::default();
+    assert_eq!(
+        pool.get_client("missing", None)
+            .expect_err("missing provider"),
+        ProviderClientPoolError::ProviderNotFound {
+            provider_id: "missing".to_owned(),
+        }
+    );
+
+    let marker = "t004-proxy-secret-marker";
+    let config = config_with_providers(vec![provider_config(
+        "provider",
+        "http://provider.example",
+        vec![eggpool::config::AccountConfig {
+            name: "proxied".to_owned(),
+            proxy_url: Some(format!("not-a-proxy://{marker}")),
+            ..Default::default()
+        }],
+    )]);
+    let error = ProviderClientPool::from_config(&config).expect_err("malformed proxy");
+    assert!(matches!(
+        error,
+        ProviderClientPoolError::AccountTransport {
+            kind: TransportError::ProxyConfiguration,
+            ..
+        }
+    ));
+    assert!(!error.to_string().contains(marker));
+    assert!(!format!("{error:?}").contains(marker));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proxied_accounts_keep_separate_pools_even_with_identical_proxy_uris() {
+    let server = FixtureServer::http(ResponseMode::Normal, 2);
+    let proxy = ProxyFixture::http_connect(false, 2);
+    let proxy_url = format!("http://{}", proxy.uri());
+    let config = config_with_providers(vec![provider_config(
+        "provider",
+        &server.http_url(),
+        vec![
+            eggpool::config::AccountConfig {
+                name: "first".to_owned(),
+                proxy_url: Some(proxy_url.clone()),
+                ..Default::default()
+            },
+            eggpool::config::AccountConfig {
+                name: "second".to_owned(),
+                proxy_url: Some(proxy_url),
+                ..Default::default()
+            },
+        ],
+    )]);
+    let pool = ProviderClientPool::from_config(&config).expect("provider pool");
+    let first = pool
+        .get_client("provider", Some("first"))
+        .expect("first client");
+    let second = pool
+        .get_client("provider", Some("second"))
+        .expect("second client");
+    let mut first_response = first
+        .send(Method::GET, "/first", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("first response");
+    assert!(first_response.body.next().await.is_some());
+    let mut second_response = second
+        .send(Method::GET, "/second", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("second response");
+    assert!(second_response.body.next().await.is_some());
+    drop(first_response);
+    drop(second_response);
+    drop(pool);
+
+    assert_eq!(server.connections.load(Ordering::SeqCst), 2);
+    assert_eq!(proxy.targets().len(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_pool_build_after_bind_closes_database_and_releases_listener() {
+    let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve port");
+    let port = reserved.local_addr().expect("reserved address").port();
+    drop(reserved);
+    let marker = "t004-server-proxy-secret-marker";
+    let database_path = std::env::temp_dir().join(format!(
+        "eggpool-t004-{}-{port}.sqlite3",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&database_path);
+
+    let config = Config {
+        server: eggpool::config::ServerConfig {
+            port,
+            ..Default::default()
+        },
+        database: eggpool::config::DatabaseConfig {
+            path: database_path.to_string_lossy().into_owned(),
+            ..Default::default()
+        },
+        providers: [(
+            "provider".to_owned(),
+            provider_config(
+                "provider",
+                "http://provider.example",
+                vec![eggpool::config::AccountConfig {
+                    name: "broken".to_owned(),
+                    proxy_url: Some(format!("not-a-proxy://{marker}")),
+                    ..Default::default()
+                }],
+            ),
+        )]
+        .into_iter()
+        .collect(),
+        ..Config::default()
+    };
+    let error = server::run(config)
+        .await
+        .expect_err("pool construction failure");
+    assert!(matches!(error, server::ServerError::ProviderPool(_)));
+    assert!(!error.to_string().contains(marker));
+
+    let reusable = TcpListener::bind(("127.0.0.1", port)).expect("listener was released");
+    drop(reusable);
+    let database = db::Database::open(db::DatabaseConfig {
+        path: database_path.to_string_lossy().into_owned(),
+        ..Default::default()
+    })
+    .await
+    .expect("database was closed cleanly");
+    database.close().await.expect("database close");
+    std::fs::remove_file(database_path).expect("test database cleanup");
 }
 
 #[test]

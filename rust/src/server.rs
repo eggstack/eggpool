@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::{Config, db};
+use crate::{Config, db, providers::ProviderClientPool};
 
 const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
@@ -91,6 +91,8 @@ pub enum ServerError {
     Bind(#[from] std::io::Error),
     #[error("invalid server API key configuration")]
     InvalidApiKey,
+    #[error("provider client pool construction failed: {0}")]
+    ProviderPool(#[from] crate::providers::ProviderClientPoolError),
     #[error("server signal handler failed: {0}")]
     Signal(std::io::Error),
 }
@@ -99,6 +101,7 @@ pub enum ServerError {
 pub struct AppState {
     pub config: Config,
     pub database: db::Database,
+    pub client_pool: ProviderClientPool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,9 +135,16 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
         let _ = database.close().await;
         return Err(error);
     }
+    let client_pool = match ProviderClientPool::from_config(&config) {
+        Ok(pool) => pool,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
 
     tracing::info!(address, "Rust development server listening");
-    let result = serve_listener(config, database.clone(), listener).await;
+    let result = serve_listener(config, database.clone(), client_pool, listener).await;
     let close_result = database.close().await;
     result.and(close_result.map_err(ServerError::Database))
 }
@@ -143,9 +153,14 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
 pub async fn serve_listener(
     config: Config,
     database: db::Database,
+    client_pool: ProviderClientPool,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let app = build_router(AppState { config, database });
+    let app = build_router(AppState {
+        config,
+        database,
+        client_pool,
+    });
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
