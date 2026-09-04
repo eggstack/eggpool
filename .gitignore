@@ -69,3 +69,6 @@ Thumbs.db
 /var/
 *.log
 bugs.md
+
+# Rust migration build artifacts
+/rust/target/
