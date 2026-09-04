@@ -385,16 +385,38 @@ fn candidate_for_account(
             return None;
         }
     }
+    let provider_model =
+        catalog.get_provider_model(&facts.canonical_model_id, &identity.provider_id);
     if let Some(quarantine) = quarantine {
-        let upstream_protocol = facts.requested_protocol.as_deref().unwrap_or("openai");
-        if quarantine.is_model_quarantined_for(
+        let upstream_model_id = provider_model.map(|model| model.model_id.as_str());
+        let upstream_protocol = provider_model
+            .and_then(|model| model.protocol.as_deref())
+            .or(facts.requested_protocol.as_deref())
+            .unwrap_or("openai");
+        let exact_upstream = upstream_model_id.is_some_and(|upstream_model_id| {
+            quarantine.is_model_quarantined_for(
+                &identity.provider_id,
+                &identity.account_name,
+                &facts.canonical_model_id,
+                Some(upstream_model_id),
+                upstream_protocol,
+                facts.now as f64,
+            )
+        });
+        // Before M7 selects and freezes a concrete upstream model, durable
+        // catalog/quarantine state may intentionally use a NULL upstream
+        // identity.  Honor that canonical-only key as well; otherwise a
+        // pre-dispatch routing check could bypass an exact persisted
+        // provider/account/model/protocol quarantine.
+        let canonical_only = quarantine.is_model_quarantined_for(
             &identity.provider_id,
             &identity.account_name,
             &facts.canonical_model_id,
-            Some(&facts.canonical_model_id),
+            None,
             upstream_protocol,
             facts.now as f64,
-        ) {
+        );
+        if exact_upstream || canonical_only {
             exclude("model_quarantined");
             return None;
         }
@@ -409,8 +431,6 @@ fn candidate_for_account(
             return None;
         }
     }
-    let provider_model =
-        catalog.get_provider_model(&facts.canonical_model_id, &identity.provider_id);
     if let Some(requirement) = &facts.thinking {
         if requirement.requested && !requirement.explicit_disable {
             if let Some(entry) = provider_model {

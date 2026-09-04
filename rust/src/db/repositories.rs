@@ -382,7 +382,7 @@ impl CatalogRepository {
         self.database.call(|connection| {
             let mut statement = connection.prepare(
                 "SELECT model_id, display_name, protocol, capabilities, source_metadata,\n\
-                        protocol_source, first_seen_at, last_seen_at, resolution_status, provider_id\n\
+                        protocol_source, CAST(first_seen_at AS TEXT), CAST(last_seen_at AS TEXT), resolution_status, provider_id\n\
                  FROM models ORDER BY model_id",
             )?;
             statement.query_map([], catalog_model_from_row)?.collect()
@@ -392,8 +392,8 @@ impl CatalogRepository {
     pub async fn list_provider_models(&self) -> Result<Vec<ProviderModelMetadata>, DatabaseError> {
         self.database.call(|connection| {
             let mut statement = connection.prepare(
-                "SELECT model_id, provider_id, display_name, protocol, capabilities, source_metadata,\n\
-                        protocol_source, first_seen_at, last_seen_at, resolution_status\n\
+                    "SELECT model_id, provider_id, display_name, protocol, capabilities, source_metadata,\n\
+                        protocol_source, CAST(first_seen_at AS TEXT), CAST(last_seen_at AS TEXT), resolution_status\n\
                  FROM provider_model_metadata ORDER BY model_id, provider_id",
             )?;
             statement.query_map([], provider_model_from_row)?.collect()
@@ -419,7 +419,7 @@ impl CatalogRepository {
     pub async fn list_refresh_state(&self) -> Result<Vec<CatalogRefreshState>, DatabaseError> {
         self.database.call(|connection| {
             let mut statement = connection.prepare(
-                "SELECT account_id, provider_id, last_successful_refresh_at, last_outcome, model_count\n\
+                "SELECT account_id, provider_id, CAST(last_successful_refresh_at AS TEXT), last_outcome, model_count\n\
                  FROM catalog_refresh_state ORDER BY account_id",
             )?;
             statement.query_map([], refresh_state_from_row)?.collect()

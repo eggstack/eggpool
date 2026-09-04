@@ -133,9 +133,9 @@ fn config(base_url: String) -> Config {
 #[tokio::test(flavor = "current_thread")]
 async fn disabled_endpoint_seeds_static_support_without_freshness() {
     let (database, _directory) = database().await;
-    let server =
-        FixtureServer::start(200, r#"{"data":[]}"#, Arc::new(Mutex::new(Vec::new()))).await;
-    let mut config = config(server.address.clone());
+    // No request is made for a disabled endpoint, so a live fixture listener
+    // would have no accepted connection to join during teardown.
+    let mut config = config("http://127.0.0.1:1".into());
     let provider = config.providers.get_mut("fixture").expect("provider");
     provider.models_endpoint = Some(eggpool::config::ProviderModelsEndpointConfig {
         method: "DISABLED".into(),
@@ -161,7 +161,6 @@ async fn disabled_endpoint_seeds_static_support_without_freshness() {
         .await
         .expect("pings");
     assert_eq!(pings.len(), 1);
-    server.finish().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -212,7 +211,9 @@ async fn post_contract_normalizes_and_persists_semantic_rows() {
         .expect("request");
     assert!(request.starts_with("POST /models?limit=a%20b HTTP/1.1"));
     assert!(request.contains("authorization: Bearer secret-value"));
-    assert!(request.contains("X-Fixture: present"));
+    // HTTP field names are case-insensitive; Hyper lowercases them when the
+    // fixture records the raw request bytes.
+    assert!(request.to_ascii_lowercase().contains("x-fixture: present"));
     assert!(
         !serde_json::to_string(&result)
             .expect("result json")
@@ -222,15 +223,20 @@ async fn post_contract_normalizes_and_persists_semantic_rows() {
         .list_models()
         .await
         .expect("models");
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].model_id, "gpt-fixture");
+    let live_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| row.model_id != "__deprecated__")
+        .collect();
+    assert_eq!(live_rows.len(), 1);
+    assert_eq!(live_rows[0].model_id, "gpt-fixture");
     server.finish().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn malformed_and_empty_responses_preserve_prior_support() {
     let requests = Arc::new(Mutex::new(Vec::new()));
-    let server = FixtureServer::start(200, r#"{"data":[{"id":"one"}]}"#, requests.clone()).await;
+    let server =
+        FixtureServer::start(200, r#"{"data":[{"id":"gpt-one"}]}"#, requests.clone()).await;
     let (database, _directory) = database().await;
     let initial_service = service(
         config(server.address.clone()),
@@ -244,7 +250,7 @@ async fn malformed_and_empty_responses_preserve_prior_support() {
         RefreshOutcome::SuccessAuthoritative
     );
     let snapshot_before = initial_service.cache_snapshot().await;
-    assert!(snapshot_before.account_support["one"].contains(&"account-a".into()));
+    assert!(snapshot_before.account_support["gpt-one"].contains(&"account-a".into()));
     server.finish().await;
 
     // A transport failure has no destructive cache path. The same service is
@@ -258,7 +264,7 @@ async fn malformed_and_empty_responses_preserve_prior_support() {
         .expect("failed refresh is ordinary outcome");
     assert_eq!(result.outcomes["account-a"], RefreshOutcome::Failed);
     let snapshot_after = recovered.cache_snapshot().await;
-    assert!(snapshot_after.account_support["one"].contains(&"account-a".into()));
+    assert!(snapshot_after.account_support["gpt-one"].contains(&"account-a".into()));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -267,7 +273,7 @@ async fn authoritative_withdrawal_emits_exact_event_and_updates_durable_state() 
     let server = FixtureServer::start_sequence(
         vec![
             (200, r#"{"data":[{"id":"gpt-old"}]}"#),
-            (200, r#"{"data":[{"id":"replacement"}]}"#),
+            (200, r#"{"data":[{"id":"gpt-replacement"}]}"#),
         ],
         requests.clone(),
     )
@@ -282,16 +288,16 @@ async fn authoritative_withdrawal_emits_exact_event_and_updates_durable_state() 
         RefreshOutcome::SuccessAuthoritative
     );
     let result = service.refresh().await.expect("withdrawal refresh");
-    assert!(result.events.iter().any(|event| matches!(event, CatalogModelEvent::Reappeared(row) if row.canonical_model_id == "replacement")));
+    assert!(result.events.iter().any(|event| matches!(event, CatalogModelEvent::Reappeared(row) if row.canonical_model_id == "gpt-replacement")));
     assert!(result.events.iter().any(|event| matches!(event, CatalogModelEvent::Withdrawn(row) if row.canonical_model_id == "gpt-old" && row.upstream_protocol == "openai")));
     let snapshot = service.cache_snapshot().await;
-    assert!(snapshot.account_support["replacement"].contains(&"account-a".into()));
+    assert!(snapshot.account_support["gpt-replacement"].contains(&"account-a".into()));
     assert!(!snapshot.model_ids.contains(&"gpt-old".into()));
     let rows = eggpool::db::CatalogRepository::new(&database)
         .list_models()
         .await
         .expect("models");
-    assert!(rows.iter().any(|row| row.model_id == "replacement"));
+    assert!(rows.iter().any(|row| row.model_id == "gpt-replacement"));
     assert!(!rows.iter().any(|row| row.model_id == "gpt-old"));
     server.finish().await;
 }

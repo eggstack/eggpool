@@ -405,6 +405,10 @@ impl CatalogService {
             authoritative,
             allow_withdrawals,
         )?;
+        // A destructive account update can remove the final provider/model
+        // reference.  Keep the global cache projection aligned with the
+        // provider rows before persistence and result diffing.
+        state.cache.prune_unused();
         emit_model_events(
             &state.cache,
             &fetch.account_name,

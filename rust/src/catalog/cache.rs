@@ -481,6 +481,14 @@ impl ModelCatalogCache {
         if !self.account_providers.contains_key(account_name) {
             return Err(CatalogCacheError::UnknownAccountName(account_name.into()));
         }
+        // Validate the complete observation before changing any support or
+        // provider metadata.  An authoritative response is allowed to
+        // withdraw support only after it has been established as a valid
+        // catalog observation; malformed input must remain non-destructive
+        // just like failed/partial/empty refreshes.
+        for model in models {
+            validate_model_input(model)?;
+        }
         self.account_providers
             .insert(account_name.into(), provider_id.into());
         let now = unix_now();
@@ -528,7 +536,6 @@ impl ModelCatalogCache {
         let mut added = 0;
         let mut updated = 0;
         for model in models {
-            validate_model_input(model)?;
             let key = (model.model_id.clone(), provider_id.into());
             let merged = self.merge_provider_input(model, provider_id, now, destructive);
             self.provider_models.insert(key.clone(), merged.clone());

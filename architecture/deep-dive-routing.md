@@ -235,7 +235,10 @@ Accounts excluded when:
 Transient upstream exclusions are self-healing: quota, rate-limit, server,
 transport, protocol, and runtime model-absence suppression expires within at
 most 1,800 seconds. A runtime model absence is scoped to the exact
-account/model/protocol identity and cannot disable the whole account.
+account/model/protocol identity and cannot disable the whole account. Before
+M7 freezes a concrete upstream model, routing checks both the known upstream
+identity and the canonical-only durable quarantine key, so a schema-54 row
+with a NULL upstream model cannot be bypassed by pre-dispatch selection.
 Authentication failure and authoritative catalog withdrawal are separate
 terminal gates; they recover only through corrected credentials/operator action
 or authoritative model reappearance.
