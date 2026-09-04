@@ -23,13 +23,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
-| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D008 qualification | D008 closed |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | **active corrective pass after D008** | **D009 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| — | — | — | — | No M5 plan is currently dependency-ready |
+| D009 | [Selection fairness and frozen routing-trace correction](implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md) | invariant/corrective | D001-D008 implemented/closed; independent post-closure review | **ready for handoff** |
 
 The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
 
@@ -54,9 +54,11 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | capability/invariant | [`c956e89`](https://github.com/eggstack/eggpool/commit/c956e89) | [closed](closure/routing-domain/003-status.md) |
 | D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | capability/invariant | [`d649e8a`](https://github.com/eggstack/eggpool/commit/d649e8a) | [closed](closure/routing-domain/004-status.md) |
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | invariant/capability | [`d5dd16d`](https://github.com/eggstack/eggpool/commit/d5dd16d) | [closed](closure/routing-domain/005-status.md) |
-| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | [`b009023`](https://github.com/eggstack/eggpool/commit/b009023) | [closed](closure/routing-domain/006-status.md) |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | [`b009023`](https://github.com/eggstack/eggpool/commit/b009023) | [historical closure](closure/routing-domain/006-status.md) |
 | D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | capability/invariant | [`43ce484`](https://github.com/eggstack/eggpool/commit/43ce484) | [closed](closure/routing-domain/007-status.md) |
-| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | [`477aade`](https://github.com/eggstack/eggpool/commit/477aade) | [closed](closure/routing-domain/008-status.md) |
+| D008 | [Differential qualification and initial M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | [`477aade`](https://github.com/eggstack/eggpool/commit/477aade) | [historical aggregate closure](closure/routing-domain/008-status.md) |
+
+D009 is not listed as completed until a new `closure/routing-domain/009-status.md` is accepted.
 
 ## M5 planned sequence
 
@@ -67,11 +69,21 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | closed; see [closure](closure/routing-domain/003-status.md) |
 | D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | closed; see [closure](closure/routing-domain/004-status.md) |
 | D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | closed |
-| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | closed; see [closure](closure/routing-domain/006-status.md) |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | historical closure; D009 corrects uncovered selection evidence |
 | D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | closed; see [closure](closure/routing-domain/007-status.md) |
-| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | closed; see [closure](closure/routing-domain/008-status.md) |
+| D008 | [Differential qualification and initial M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | historical aggregate closure; superseded for D009 findings only |
+| D009 | [Selection fairness and frozen routing-trace correction](implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md) | **ready for handoff** |
 
-Only the dependency-ready table authorizes implementation handoff. The planned-sequence table documents future work without marking it ready prematurely.
+Only the dependency-ready table authorizes implementation handoff. The planned-sequence table documents historical and future work without weakening closure gates.
+
+## D009 independent-review findings
+
+Two mandatory M5 selection-contract defects were found after D008:
+
+1. Rust `RoutingRouter::select_and_claim` invokes fairness ordering in non-committing mode. For `FairnessMode::Random`, that mode returns identity order rather than invoking `FairnessRandom::choose_index`, so configured random fairness does not currently affect actual accepted selection. Existing D006 routing-claim tests are round-robin focused and did not exercise this branch.
+2. Rust `SelectionClaim` does not retain the accepted score/fairness candidate snapshot. `RoutingRouter::trace_for` rebuilds a plan after claim publication; active/pending load can already have changed scores/order, allowing trace evidence to describe a state that did not produce the selected account.
+
+D009 fixes these together because both belong to the same accepted-selection boundary. No broad M5 redesign is authorized.
 
 ## M5 boundary decisions
 
@@ -79,24 +91,22 @@ M5 consumes the closed M4 `ProviderClientPool`/`ProviderHttpClient` only for rou
 
 The deprecated Python in-memory `ReservationManager` is not a Rust production target. M5 preserves the SQLite reservation representation plus bounded quota estimator mirrors and provisional local selection claims.
 
-D006 owns a local atomic selection-claim transition (selection/revalidation, circuit probe, active ownership, pending quota load) so concurrent selectors cannot route from the same stale state. Durable inference request/reservation/attempt publication, retry/failover, compensation, and finalization remain M7.
+D006/D009 own the local atomic selection-claim transition (selection/revalidation, fairness decision, circuit probe, active ownership, pending quota load, frozen accepted-decision snapshot). Durable inference request/reservation/attempt publication, retry/failover, compensation, and finalization remain M7.
 
-Python `ModelRouterSelector` calls `RequestCoordinator`; therefore D007 ports compiled virtual-router policy and bounded affinity/single-flight state only. Real semantic selector inference is M7. M6 will later adapt canonical requests into D006/D007's request-independent routing/affinity DTOs.
+Python `ModelRouterSelector` calls `RequestCoordinator`; therefore D007 ports compiled virtual-router policy and bounded affinity/single-flight state only. Real semantic selector inference is M7. M6 will later adapt canonical requests into the M5 request-independent routing/affinity DTOs.
 
 Optional generic external catalog/model-info polling is not allowed to introduce a second HTTP stack in M5; deterministic resolver logic may use fixtures/persisted metadata, while periodic generic outbound lifecycle remains M8.
 
 ## Future work and block state
 
-D001-D008 are recorded as completed below; no M5 implementation plan remains dependency-ready.
+D009 is the sole dependency-ready implementation plan.
 
-D006 is closed after D004 and D005. D007 is closed after D006. D008 is closed after integrated qualification because every M5 invariant now has accepted evidence.
-
-M6 canonical request/codec/transcoding/SSE planning and implementation handoff are unblocked by accepted D008 closure and its stable M5 routing-domain interface. No M6 implementation plan is registered or promoted by this closure.
+M6 canonical request/codec/transcoding/SSE research and planning may continue, but **M6 implementation handoff is blocked until accepted D009 closure** re-establishes a stable M5 routing-domain interface.
 
 M7 coordinator/finalization remains additionally blocked on M6. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, and M5 D001-D008 are closed. M6 implementation handoff is unblocked; M7 remains blocked on M6 canonical request/codec work.
+F001-F006 and M4 T001-T006 are closed. M5 D001-D008 retain their historical closure records, but M5 is reopened for D009 and is not currently considered fully closed.
 
-M5 closed after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.
+On accepted D009 closure, mark M5 `closed after D009 corrective pass`, move D009 to the completed table, and re-unblock M6 implementation handoff. If D009 discovers a separate material issue outside its defined selection boundary, create another bounded corrective plan rather than expanding D009 opportunistically.
