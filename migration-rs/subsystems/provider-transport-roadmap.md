@@ -1,6 +1,6 @@
 # Provider Transport Subsystem Roadmap
 
-Status: corrective pass active after T005 post-closure review
+Status: closed after T006 corrective pass
 
 Repository baseline: `1ae7539bbda741ebcac660d535d6e58e6360eae6`
 
@@ -84,15 +84,15 @@ T004 provider/account client pool (closed)
 T005 differential qualification + initial M4 closure (closed historically)
       |
       v
-T006 extended proxy runtime interoperability corrective closure (ready)
+T006 extended proxy runtime interoperability corrective closure (closed)
       |
       v
-M5 implementation planning may become dependency-ready
+M5 implementation planning is unblocked
 ```
 
-T001-T005 have closure records and remain useful evidence. Independent post-T005 review found that the mandatory `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` rows were construction-qualified only even though T001/T003 require runtime evidence or an approved supported-difference decision. No ADR currently grants that waiver. M4 is therefore reopened only for T006.
+T001-T005 have closure records and remain useful evidence. Independent post-T005 review found that the mandatory `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` rows were construction-qualified only; T006 supplies the required deterministic runtime evidence and closes that gap.
 
-M5 research/roadmap drafting may proceed, but no M5 implementation handoff is dependency-ready until T006 closes.
+M5 research/roadmap drafting and implementation planning are unblocked by T006. No nonexistent M5 implementation plan is marked dependency-ready.
 
 ## 6. Milestones
 
@@ -134,13 +134,13 @@ Closure: [T004](../closure/provider-transport/004-status.md).
 
 Class: invariant
 
-Qualified direct HTTP/TLS, pooling, timeout/cancellation, CONNECT/SOCKS, fail-closed proxy behavior, redaction, no automatic Hyper retry, and dependency footprint. It transparently recorded construction-only qualification for Shadowsocks/SSR/Trojan/SSH.
+Qualified direct HTTP/TLS, pooling, timeout/cancellation, CONNECT/SOCKS, fail-closed proxy behavior, redaction, no automatic Hyper retry, and dependency footprint. It transparently recorded the extended-family fixture gap that T006 subsequently closed.
 
 Post-closure review determined that this known fixture limitation conflicts with the frozen mandatory runtime criterion. T005 remains valid evidence for all covered rows but no longer represents final M4 closure by itself.
 
 Closure: [T005](../closure/provider-transport/005-status.md).
 
-### T006 — Extended proxy runtime interoperability closure (ready for handoff)
+### T006 — Extended proxy runtime interoperability closure (closed)
 
 Class: invariant/corrective
 
@@ -150,11 +150,11 @@ Required current rows: Shadowsocks AEAD, SSR legacy path, Trojan, and SSH, subje
 
 Implementation plan: [T006](../implementation/provider-transport/006-extended-proxy-runtime-qualification.md).
 
-Exit: every mandatory extended row has real runtime evidence or an explicit accepted ADR supported-difference decision; full T005 gates remain green; no unresolved high/medium M4 correctness issue remains.
+Closure: [T006](../closure/provider-transport/006-status.md). Every mandatory extended row has real runtime evidence; full T005 gates remain green; no unresolved high/medium M4 correctness issue remains.
 
 ## 7. Eggress feature policy
 
-Current selected production feature set remains pinned and narrow: `common`, `pproxy-compat`, `extended`, `pproxy-legacy`, `legacy-crypto`, and `ssh` with `default-features = false`. T006 must prove the runtime need for the extended/legacy/SSH features already justified by T001 rather than expanding the feature set.
+Current selected production feature set remains pinned and narrow: `common`, `pproxy-compat`, `extended`, `pproxy-legacy`, `legacy-crypto`, and `ssh` with `default-features = false`. T006 proved the runtime need for the extended/legacy/SSH features already justified by T001 without expanding the feature set.
 
 `operations`, `reverse`, and `quic` remain outside provider TCP transport. No Reqwest or second TLS stack is permitted.
 
@@ -185,6 +185,6 @@ No broad load farm, browser matrix, live provider, or external proxy service is 
 
 ## 11. Subsystem closure condition
 
-M4 may be declared fully closed only after T006 has accepted closure evidence. At that point T001-T006 together must prove that direct and all mandatory proxied provider transport paths are runtime-qualified (or explicitly approved differences), fail closed, preserve streaming/pooling/timeout/cancellation semantics, and retain the narrow dependency posture required for local/SBC deployment.
+M4 is closed after accepted T006 evidence. T001-T006 together prove that direct and all mandatory proxied provider transport paths are runtime-qualified, fail closed, preserve streaming/pooling/timeout/cancellation semantics, and retain the narrow dependency posture required for local/SBC deployment.
 
 Closing M4 still does not mean inference dispatch works; it means the transport beneath M5-M7 is stable enough to become a hard dependency.

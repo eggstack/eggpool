@@ -22,13 +22,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
-| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | corrective pass active | T006 ready |
+| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | T001-T005 historical closure evidence; post-T005 review | ready for handoff |
+| (none) | No additional plan is dependency-ready from T006 alone. | — | — | — |
 
 The provider-transport sequence and status are also recorded under `implementation/provider-transport/README.md` and `000-handoff-sequence.md`.
 
@@ -47,6 +47,7 @@ The provider-transport sequence and status are also recorded under `implementati
 | T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | [`5b34d8b`](https://github.com/eggstack/eggpool/commit/5b34d8b) | [historical closure](closure/provider-transport/003-status.md) |
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | [`71ef03d`](https://github.com/eggstack/eggpool/commit/71ef03d) | [closed](closure/provider-transport/004-status.md) |
 | T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | [`c89e645`](https://github.com/eggstack/eggpool/commit/c89e645) | [historical closure](closure/provider-transport/005-status.md) |
+| T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | [`4b3a95a`](https://github.com/eggstack/eggpool/commit/4b3a95a) | [closed](closure/provider-transport/006-status.md) |
 
 ## Post-T005 review finding
 
@@ -54,16 +55,16 @@ Independent review of the implementation and closure evidence found no defect in
 
 It did find one acceptance-evidence gap: T001/T003 require mandatory proxy corpus rows to have runtime evidence or an approved supported-difference decision, while `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` were closed with construction-only evidence because deterministic protocol peers were not bundled. T005 records this limitation explicitly, but no accepted ADR converts those mandatory rows to construction-only qualification.
 
-T006 is the bounded corrective handoff. Historical T003/T005 closure records are retained unchanged for traceability; M4's aggregate closure state is reopened until T006 resolves the gap.
+T006 was the bounded corrective handoff. Historical T003/T005 closure records are retained unchanged for traceability; T006 resolves the mandatory extended-family runtime-evidence gap.
 
 ## Future work and block state
 
-M5 catalog/account-registry/routing/quota/health roadmap research may proceed, but M5 implementation handoffs remain blocked on T006 closure. M5 must not treat the provider transport as a fully closed hard dependency until the mandatory extended proxy runtime rows are qualified or explicitly approved as supported differences.
+M5 catalog/account-registry/routing/quota/health roadmap research and implementation planning are unblocked by T006 closure. No M5 implementation plan exists yet, so no nonexistent plan is marked dependency-ready; once one is authored it must still satisfy its own planning gates.
 
 M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 Python retirement remain sequenced by `002-long-term-roadmap.md` and intentionally lack dependency-ready implementation handoffs.
 
 ## Closure state
 
-F001-F006 remain closed and the migration foundation is complete. T001-T005 retain their individual closure evidence, but M4 is reopened for one corrective qualification milestone, T006.
+F001-F006 remain closed and the migration foundation is complete. T001-T005 retain their individual closure evidence, and T006 closes the M4 corrective qualification milestone.
 
-T006 is now the only dependency-ready implementation plan. On accepted T006 closure, the registry should move it to completed, mark M4 closed after corrective pass, and explicitly unblock the M5 implementation planning sequence.
+T006 is completed. M4 is closed after corrective pass, and M5 planning/implementation handoff work is explicitly unblocked. M6-M12 remain sequenced behind their independent hard dependencies and are not marked dependency-ready by this closure.

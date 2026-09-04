@@ -1,6 +1,6 @@
 # Provider Transport T006 — Extended Proxy Runtime Interoperability Closure
 
-Status: ready for handoff
+Status: closed; see [T006 closure record](../../closure/provider-transport/006-status.md)
 
 Repository baseline: `1ae7539bbda741ebcac660d535d6e58e6360eae6`
 
@@ -22,7 +22,10 @@ Do not reopen the already-qualified direct HTTP/TLS core, HTTP CONNECT/SOCKS beh
 
 T001 froze a compatibility corpus so a working Python proxy form could not disappear silently during migration. T003 then required every mandatory T001 row to be passing or covered by an approved supported-difference decision and called for runtime protocol-family cases. T005 correctly recorded that `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` had Rust construction qualification only.
 
-That limitation is transparent, but transparency is not the same as satisfying the frozen acceptance criteria. No accepted ADR currently reclassifies these mandatory rows as construction-only. M4 therefore remains functionally strong but is not fully closed against its own contract until this evidence gap is resolved.
+That limitation was transparent, but transparency was not sufficient for the
+frozen acceptance criteria. T006 resolves the gap with deterministic runtime
+peers and the production Eggress adapter path; no supported-difference ADR was
+needed.
 
 ## 3. Scope
 
@@ -252,4 +255,7 @@ On successful T006 closure:
 - move T006 from dependency-ready to completed in the registry;
 - explicitly re-unblock M5 planning/implementation handoff work.
 
-Until then, M5 implementation plans must remain blocked. M5 roadmap research may continue, but it must not rely on M4 being fully closed.
+These actions are recorded in the T006 closure record. M5 roadmap research and
+implementation planning are now unblocked; no nonexistent M5 implementation
+plan is marked dependency-ready. M6-M12 remain sequenced behind their own
+independent hard dependencies.

@@ -170,3 +170,10 @@ M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9
 operational lifecycle, M10 qualification, M11 cutover, and M12 Python
 retirement remain sequenced behind their independent hard dependencies. T005
 does not unblock those milestones directly.
+
+## Post-T006 review note
+
+T006 subsequently supplied deterministic runtime peers for the four extended
+proxy families that this historical record listed as construction-only. The
+historical T005 result and matrix remain unchanged; the corrected aggregate M4
+status and current corpus are recorded in [T006 closure](006-status.md).
