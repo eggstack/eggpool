@@ -1,6 +1,6 @@
 # D008 — Differential Qualification and M5 Closure
 
-Status: queued behind D001-D007 closure
+Status: dependency-ready; D001-D007 closed
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d008--m5-differential-qualification-and-closure`
 

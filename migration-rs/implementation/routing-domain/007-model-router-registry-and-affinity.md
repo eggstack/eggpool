@@ -1,6 +1,6 @@
 # D007 — Model-Router Registry and Affinity State
 
-Status: dependency-ready; D006 closed
+Status: closed; see [closure record](../../closure/routing-domain/007-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d007--model-router-compiled-registry-and-affinity-state`
 

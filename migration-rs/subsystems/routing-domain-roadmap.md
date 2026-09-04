@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: active; D001-D006 closed; D007 ready for handoff
+Status: active; D001-D007 closed; D008 ready for handoff
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
@@ -204,10 +204,10 @@ D004 quota/claims/scoring  D005 health/backoff/quarantine
 D006 eligibility/routing/fairness/local claims (closed; see [closure](../closure/routing-domain/006-status.md))
                  |
                  v
-D007 model-router compilation + bounded affinity (dependency-ready)
+D007 model-router compilation + bounded affinity (closed; see [closure](../closure/routing-domain/007-status.md))
                  |
                  v
-D008 differential qualification + M5 closure
+D008 differential qualification + M5 closure (dependency-ready)
                  |
                  v
 M6 implementation planning may become dependency-ready
@@ -253,7 +253,7 @@ Port the router's stable exclusion codes, provider/model/surface/protocol/capabi
 
 Exit: the same state/request-facts fixture yields parity-equivalent candidates, ranking, fairness decision, selected claim, and rollback ownership under concurrency.
 
-### D007 — Model-router compiled registry and affinity state
+### D007 — Model-router compiled registry and affinity state (closed)
 
 Port deterministic virtual-router compilation/fingerprinting/static policy, exact virtual lookup, explicit/automatic session identity framing, TTL/LRU affinity, keyed single-flight, and aggregate stats without retaining raw content.
 
@@ -261,7 +261,7 @@ Actual selector calls through the coordinator remain deferred to M7.
 
 Exit: compiled router bytes/fingerprints and affinity cache traces match Python fixtures without importing M6/M7 behavior.
 
-### D008 — M5 differential qualification and closure
+### D008 — M5 differential qualification and closure (dependency-ready)
 
 Run integrated account/catalog/quota/health/router/model-router state scenarios, concurrency/claim tests, restart hydration, corrupt-state fail-closed tests, bounded-memory checks, dependency review, and SBC-oriented local characterization.
 
