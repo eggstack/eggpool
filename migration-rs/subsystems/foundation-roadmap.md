@@ -1,6 +1,6 @@
 # Migration Foundation Subsystem Roadmap
 
-Status: active
+Status: closed
 
 Canonical source:
 
@@ -83,13 +83,18 @@ Open existing DBs, reuse migrations/checksums, establish serialized transactions
 
 Exit: Python-created fixtures are readable by Rust and Rust fixture writes remain compatible with Python within the declared rollback boundary.
 
-### F005 — Axum SSR shell and static asset parity baseline (dependency-ready)
+### F005 — Axum SSR shell and static asset parity baseline (closed)
 
 Class: capability
 
 Establish inbound server/auth/body-limit middleware, health/readiness, static assets, dashboard route skeleton, renderer utilities/escaping, and enough read-only endpoints/pages to verify the dashboard can be mirrored without redesign.
 
 Exit: selected dashboard pages/static resources and health/readiness work from Rust and pass DOM/static/API differential checks.
+
+Closure: [F005 closure record](../closure/foundation/005-status.md). The
+selected read-plane slice, static-resource guard, and operational evidence
+are complete; provider dispatch and the remaining dashboard are explicitly
+deferred to later subsystem roadmaps.
 
 ## 6. Risks
 
