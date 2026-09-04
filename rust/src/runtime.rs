@@ -1,4 +1,4 @@
-use crate::{BootstrapError, Cli, Command, config, version::PACKAGE_VERSION};
+use crate::{BootstrapError, Cli, Command, cli::ServeArgs, config, version::PACKAGE_VERSION};
 
 /// Initialize process-local diagnostics and dispatch the migration candidate.
 pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
@@ -28,7 +28,8 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             println!("  Database: {}", config.database.path);
             println!("  Content digest: {digest}");
         }
-        Some(Command::Serve(_)) => {
+        Some(Command::Serve(args)) => {
+            validate_serve_args(&args)?;
             let config = config::Config::from_toml(&config_path)?;
             crate::server::run(config)
                 .await
@@ -48,5 +49,29 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_serve_args(args: &ServeArgs) -> Result<(), BootstrapError> {
+    if args.as_root {
+        return Err(BootstrapError::ServeUnsupported {
+            detail: "serve --as-root: root-gated startup is deferred until the Rust lifecycle milestone",
+        });
+    }
+    if args.log_file.is_some() {
+        return Err(BootstrapError::ServeUnsupported {
+            detail: "serve --log-file: daemon log routing is deferred until the Rust lifecycle milestone",
+        });
+    }
+    if args.quiet {
+        return Err(BootstrapError::ServeUnsupported {
+            detail: "serve --quiet: daemon output suppression is deferred until the Rust lifecycle milestone",
+        });
+    }
+    if !args.verbose {
+        return Err(BootstrapError::ServeUnsupported {
+            detail: "serve: deferred daemon mode is not available; use 'serve --verbose' for the Rust foreground candidate",
+        });
+    }
     Ok(())
 }

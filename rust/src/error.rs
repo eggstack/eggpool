@@ -44,4 +44,9 @@ pub enum BootstrapError {
     /// The development HTTP server could not start or shut down cleanly.
     #[error("Rust server failed: {detail}")]
     Server { detail: String },
+
+    /// A parsed serve option belongs to a migration-stage runtime that is not
+    /// implemented by the Rust candidate yet.
+    #[error("{detail}")]
+    ServeUnsupported { detail: &'static str },
 }

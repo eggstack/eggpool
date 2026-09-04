@@ -39,7 +39,7 @@ server, and run it with an existing compatible config:
 
 ```bash
 cargo build --manifest-path rust/Cargo.toml
-rust/target/debug/eggpool --config ./config.toml serve
+rust/target/debug/eggpool --config ./config.toml serve --verbose
 ```
 
 The current Rust routes are `/v1/healthz`, `/v1/readyz`, `/`,
@@ -47,6 +47,13 @@ The current Rust routes are `/v1/healthz`, `/v1/readyz`, `/`,
 inference paths `/v1/chat/completions`, `/v1/messages`, and `/v1/responses`
 are explicit placeholders for a later provider milestone. Python remains the
 production server and should continue to run on its own port during migration.
+The explicit `serve --verbose` form is the only supported Rust invocation at
+this stage. Plain `serve` (Python's daemon mode), `--log-file`, `--quiet`, and
+`--as-root` are parsed for CLI compatibility but fail explicitly because daemon
+and root-gated lifecycle behavior belongs to the later runtime milestone.
+Choose separate writable database paths for Python and Rust, or copy a source
+fixture once and give each candidate its own writable copy; do not run both
+implementations against the same writable SQLite file.
 
 Copied dashboard resources are checked against the Python source tree by the
 manifest test:
@@ -64,7 +71,7 @@ database options can be built directly from the closed F003 config model with
 `DatabaseConfig::from(&config.database)`.
 
 The build script reads `src/eggpool/db/schema/*.sql` and `checksums.json`
-directly. It embeds those exact canonical files into the candidate and
+through a structural JSON parser. It embeds those exact canonical files and
 validates their SHA-256 values before applying them. Rust uses the existing
 `_migrations` ledger and accepts the historical no-extension ledger names in
 `tests/fixtures/schema/pre_phase17_v11.sql`; it does not renumber or rewrite

@@ -71,6 +71,16 @@ rust/
 
 The initial Cargo package is non-published and produces an `eggpool` binary under `rust/target/...`. It MUST NOT overwrite or uninstall the Python EggPool executable during migration. Black-box tests invoke the Python and Rust implementations by explicit executable path.
 
+## Safe dual-run workflow
+
+Run the Python oracle and Rust candidate on different ports and with distinct
+writable SQLite paths. The migration harness's implementation-specific roots
+make this the default for paired configurations. When comparing one prepared
+database state, create one source fixture and copy it to separate paths before
+starting either implementation. Do not let concurrent Python and Rust server
+processes write the same SQLite file; parity comes from equivalent inputs and
+post-run observations, not from shared-writer races.
+
 ## Baseline
 
 The migration planning baseline is EggPool `main` at `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c` (`docs: close Plan 167`, 2026-09-03).

@@ -110,6 +110,15 @@ struct PeriodQuery {
 /// Start the development server using the configured address and database.
 pub async fn run(config: Config) -> Result<(), ServerError> {
     validate_server_key(&config)?;
+    if config.server.threads != 1 {
+        tracing::warn!(
+            configured_threads = config.server.threads,
+            "server.threads is accepted for config compatibility; the Rust candidate remains single-threaded until the runtime milestone"
+        );
+    }
+    let address = format!("{}:{}", config.server.host, config.server.port);
+    let listener = TcpListener::bind(&address).await?;
+
     let mut database_config = db::DatabaseConfig::from(&config.database);
     database_config.path = Config::runtime_path(&config.database.path)
         .to_string_lossy()
@@ -119,10 +128,11 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
         let _ = database.close().await;
         return Err(error.into());
     }
-    sync_accounts(&config, &database).await?;
+    if let Err(error) = sync_accounts(&config, &database).await {
+        let _ = database.close().await;
+        return Err(error);
+    }
 
-    let address = format!("{}:{}", config.server.host, config.server.port);
-    let listener = TcpListener::bind(&address).await?;
     tracing::info!(address, "Rust development server listening");
     let result = serve_listener(config, database.clone(), listener).await;
     let close_result = database.close().await;

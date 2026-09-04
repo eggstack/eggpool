@@ -17,6 +17,7 @@ from tests.migration_rs.harness import (
     StubHttpServer,
     allocate_tcp_port,
     assert_distinct_implementations,
+    capture_startup_state,
     compare_observations,
     isolated_environment,
     normalize_observation,
@@ -35,6 +36,7 @@ __all__ = [
     "allocate_tcp_port",
     "assert_distinct_implementations",
     "compare_observations",
+    "capture_startup_state",
     "isolated_environment",
     "normalize_observation",
 ]

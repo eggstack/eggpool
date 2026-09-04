@@ -62,8 +62,9 @@ def test_health_is_identical_for_python_and_rust() -> None:
     with isolated_environment() as environment:
         for launcher in (PythonLauncher(), rust):
             port = allocate_tcp_port()
-            config_root = environment.root / launcher.identity.implementation.value
-            config_root.mkdir()
+            config_root = environment.implementation_root(
+                launcher.identity.implementation
+            )
             config = _write_config(config_root, port)
             with launcher.spawn(
                 ["--config", str(config), "serve", "--verbose"],
@@ -188,12 +189,12 @@ def test_rust_bind_failure_is_reported_without_a_second_listener() -> None:
         first_config = _write_config(first_root, port)
         second_config = _write_config(second_root, port)
         with rust.spawn(
-            ["--config", str(first_config), "serve"],
+            ["--config", str(first_config), "serve", "--verbose"],
             environment=environment,
         ) as _first:
             wait_for_tcp("127.0.0.1", port)
             second = rust.run(
-                ["--config", str(second_config), "serve"],
+                ["--config", str(second_config), "serve", "--verbose"],
                 environment=environment,
                 timeout=5,
             )

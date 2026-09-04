@@ -105,6 +105,18 @@ class IsolatedEnvironment:
             inherited.update(overrides)
         return inherited
 
+    def implementation_root(self, implementation: Implementation) -> Path:
+        """Return a private root for one implementation's writable state."""
+        root = self.root / implementation.value
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def database_path(
+        self, implementation: Implementation, filename: str = "usage.sqlite3"
+    ) -> Path:
+        """Return a writable DB path that cannot collide across implementations."""
+        return self.implementation_root(implementation) / filename
+
     def __enter__(self) -> Self:
         return self
 
@@ -719,6 +731,29 @@ def capture_database(
             tuple(row_counts),
             tuple(sorted(checksums.items())),
         )
+    finally:
+        connection.close()
+
+
+def capture_startup_state(
+    database_path: Path,
+) -> dict[str, tuple[tuple[Any, ...], ...]]:
+    """Capture startup-owned durable rows without exposing request contents."""
+    connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+    try:
+        return {
+            "migrations": tuple(
+                connection.execute(
+                    "SELECT version, name, applied_at FROM _migrations ORDER BY version"
+                )
+            ),
+            "accounts": tuple(
+                connection.execute(
+                    "SELECT id, name, api_key_env, enabled, weight, provider_id "
+                    "FROM accounts ORDER BY id"
+                )
+            ),
+        }
     finally:
         connection.close()
 

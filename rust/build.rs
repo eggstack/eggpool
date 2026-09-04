@@ -1,12 +1,14 @@
 use std::{collections::BTreeMap, env, fs, path::PathBuf, process};
 
+mod build_support;
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let schema_dir = manifest_dir.join("../src/eggpool/db/schema");
     let checksum_path = schema_dir.join("checksums.json");
     println!("cargo:rerun-if-changed={}", checksum_path.display());
 
-    let checksums = parse_checksums(
+    let checksums = build_support::parse_checksums(
         &fs::read_to_string(&checksum_path)
             .unwrap_or_else(|error| panic!("cannot read canonical migration checksums: {error}")),
     );
@@ -58,26 +60,4 @@ fn main() {
         eprintln!("cannot write generated migration inventory: {error}");
         process::exit(1);
     });
-}
-
-fn parse_checksums(manifest: &str) -> BTreeMap<String, String> {
-    let mut checksums = BTreeMap::new();
-    for line in manifest.lines() {
-        let pieces: Vec<_> = line.split('"').collect();
-        if pieces.len() < 4 || !pieces[1].ends_with(".sql") {
-            continue;
-        }
-        let name = pieces[1].to_owned();
-        let checksum = pieces[3].to_owned();
-        if checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            panic!("invalid SHA-256 checksum for canonical migration: {name}");
-        }
-        if checksums.insert(name.clone(), checksum).is_some() {
-            panic!("duplicate canonical migration checksum: {name}");
-        }
-    }
-    if checksums.is_empty() {
-        panic!("canonical migration checksum manifest is empty or malformed");
-    }
-    checksums
 }
