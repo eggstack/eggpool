@@ -1,6 +1,6 @@
 # Provider Transport T001 — Contract and Fixture Freeze
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/provider-transport/001-status.md)
 
 Repository baseline: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 

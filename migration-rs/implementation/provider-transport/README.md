@@ -8,8 +8,8 @@ The M4 Provider HTTP + Eggress workstream is intentionally sequenced so later im
 
 | ID | Plan | Class | Dependency state |
 |---|---|---|---|
-| T001 | [Contract and fixture freeze](001-contract-and-fixture-freeze.md) | invariant/infrastructure | ready; F001-F006 closed |
-| T002 | [Direct Hyper/Rustls provider HTTP core](002-direct-hyper-rustls-core.md) | infrastructure | queued behind T001 |
+| T001 | [Contract and fixture freeze](001-contract-and-fixture-freeze.md) | invariant/infrastructure | closed; [closure record](../../closure/provider-transport/001-status.md) |
+| T002 | [Direct Hyper/Rustls provider HTTP core](002-direct-hyper-rustls-core.md) | infrastructure | ready; T001 closed |
 | T003 | [Eggress connector and proxy parity](003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | queued behind T002 and T001 feature decision |
 | T004 | [Provider/account client pool and lifecycle](004-provider-account-client-pool.md) | capability/invariant | queued behind T003 |
 | T005 | [Differential qualification and M4 closure](005-differential-qualification-and-closure.md) | invariant | queued behind T004 |

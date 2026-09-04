@@ -88,7 +88,7 @@ T005 differential qualification + M4 closure
 M5 catalog/routing/quota/health planning may become dependency-ready
 ```
 
-T001 is the only initial dependency-ready handoff. Later plans are registered now so the complete workstream is visible, but each becomes ready only after its hard predecessor closes.
+T002 is the current dependency-ready handoff after T001 closure. Later plans are registered now so the complete workstream is visible, but each becomes ready only after its hard predecessor closes.
 
 ## 6. Milestones
 

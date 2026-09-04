@@ -22,13 +22,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
-| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | active | T001 ready |
+| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | active | T002 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | F001-F006 closed | ready for handoff |
+| T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | T001 closed | ready for handoff |
 
 ## Registered queued plans
 
@@ -36,7 +36,6 @@ These plans are part of the reviewed M4 workstream but are not dependency-ready 
 
 | ID | Plan | Class | Hard dependency | Status |
 |---|---|---|---|---|
-| T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | T001 | queued |
 | T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | T002 plus T001 Eggress feature decision | queued |
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | T003 | queued |
 | T005 | [Differential qualification and M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | T004 | queued |
@@ -53,6 +52,7 @@ The sequence and handoff index are also recorded under `implementation/provider-
 | F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | [`9cc9fc4`](https://github.com/eggstack/eggpool/commit/9cc9fc4) | [closed](closure/foundation/004-status.md) |
 | F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | [`9d272b8`](https://github.com/eggstack/eggpool/commit/9d272b8) | [closed](closure/foundation/005-status.md) |
 | F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | [`df902b5`](https://github.com/eggstack/eggpool/commit/df902b5) | [closed](closure/foundation/006-status.md) |
+| T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`50d7ff4`](https://github.com/eggstack/eggpool/commit/50d7ff4) | [closed](closure/provider-transport/001-status.md) |
 
 ## Future work and block state
 
@@ -64,4 +64,4 @@ M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9 oper
 
 F001 through F006 are closed and the migration foundation is complete. F006's implementation and state-based regressions establish a trustworthy dual-run startup boundary. M4 Provider HTTP + Eggress is now the active line of work.
 
-T001 is the only dependency-ready M4 plan. It must freeze the real Python provider/proxy contract and Eggress feature subset before transport dependencies are added. T002-T005 are registered in dependency order so the complete line of work is visible without allowing later implementation to bypass closure evidence.
+T002 is the dependency-ready M4 plan. T001 froze the real Python provider/proxy contract and Eggress feature subset before transport dependencies are added. T003-T005 remain registered in dependency order so later implementation cannot bypass closure evidence.

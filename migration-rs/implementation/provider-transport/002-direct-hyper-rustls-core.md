@@ -1,6 +1,6 @@
 # Provider Transport T002 — Direct Hyper/Rustls Provider HTTP Core
 
-Status: queued; blocked on T001 closure
+Status: ready for handoff; T001 closed
 
 Repository baseline for planning: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 
