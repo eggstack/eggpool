@@ -23,14 +23,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D001 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| (none) | No additional plan is dependency-ready from T006 alone. | — | — | — |
+| D001 | [Routing-domain contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | invariant/infrastructure | F001-F006 + M4 T001-T006 closed | ready for handoff |
 
-The provider-transport sequence and status are also recorded under `implementation/provider-transport/README.md` and `000-handoff-sequence.md`.
+The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
 
 ## Completed implementation plans
 
@@ -49,22 +50,45 @@ The provider-transport sequence and status are also recorded under `implementati
 | T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | [`c89e645`](https://github.com/eggstack/eggpool/commit/c89e645) | [historical closure](closure/provider-transport/005-status.md) |
 | T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | [`4b3a95a`](https://github.com/eggstack/eggpool/commit/4b3a95a) | [closed](closure/provider-transport/006-status.md) |
 
-## Post-T005 review finding
+## M5 planned sequence
 
-Independent review of the implementation and closure evidence found no defect in the direct Hyper/Rustls core, common HTTP/SOCKS Eggress paths, provider/account pool topology, timeout/cancellation ownership, fail-closed behavior, or dependency footprint.
+| ID | Plan | Dependency state |
+|---|---|---|
+| D001 | [Contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | ready for handoff |
+| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | queued behind D001 closure |
+| D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | queued behind D002 closure |
+| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | queued behind D003 closure |
+| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | queued behind D003 closure; D004/D005 share predecessor |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | queued behind D004 + D005 closure |
+| D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | queued behind D006 closure for serial handoff |
+| D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | queued behind D001-D007 closure |
 
-It did find one acceptance-evidence gap: T001/T003 require mandatory proxy corpus rows to have runtime evidence or an approved supported-difference decision, while `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` were closed with construction-only evidence because deterministic protocol peers were not bundled. T005 records this limitation explicitly, but no accepted ADR converts those mandatory rows to construction-only qualification.
+Only the dependency-ready table authorizes implementation handoff. The planned-sequence table documents future work without marking it ready prematurely.
 
-T006 was the bounded corrective handoff. Historical T003/T005 closure records are retained unchanged for traceability; T006 resolves the mandatory extended-family runtime-evidence gap.
+## M5 boundary decisions
+
+M5 consumes the closed M4 `ProviderClientPool`/`ProviderHttpClient` only for routing-essential provider catalog discovery. It does not reopen HTTP/TLS/proxy design.
+
+The deprecated Python in-memory `ReservationManager` is not a Rust production target. M5 preserves the SQLite reservation representation plus bounded quota estimator mirrors and provisional local selection claims.
+
+D006 owns a local atomic selection-claim transition (selection/revalidation, circuit probe, active ownership, pending quota load) so concurrent selectors cannot route from the same stale state. Durable inference request/reservation/attempt publication, retry/failover, compensation, and finalization remain M7.
+
+Python `ModelRouterSelector` calls `RequestCoordinator`; therefore D007 ports compiled virtual-router policy and bounded affinity/single-flight state only. Real semantic selector inference is M7. M6 will later adapt canonical requests into D006/D007's request-independent routing/affinity DTOs.
+
+Optional generic external catalog/model-info polling is not allowed to introduce a second HTTP stack in M5; deterministic resolver logic may use fixtures/persisted metadata, while periodic generic outbound lifecycle remains M8.
 
 ## Future work and block state
 
-M5 catalog/account-registry/routing/quota/health roadmap research and implementation planning are unblocked by T006 closure. No M5 implementation plan exists yet, so no nonexistent plan is marked dependency-ready; once one is authored it must still satisfy its own planning gates.
+D001 is the sole dependency-ready M5 implementation plan. D002-D008 are fully authored but remain gated by their predecessor closure records.
 
-M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 Python retirement remain sequenced by `002-long-term-roadmap.md` and intentionally lack dependency-ready implementation handoffs.
+D004 and D005 can theoretically proceed in parallel after D003, but default handoff is serial unless the registry is explicitly changed to authorize both.
+
+M6 canonical request/codec/transcoding/SSE planning may continue conceptually but M6 implementation handoff remains blocked until accepted D008 closure establishes a stable M5 routing-domain interface.
+
+M7 coordinator/finalization remains additionally blocked on M6. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006 remain closed and the migration foundation is complete. T001-T005 retain their individual closure evidence, and T006 closes the M4 corrective qualification milestone.
+F001-F006 and M4 T001-T006 are closed. M5 is active with D001 ready for handoff and D002-D008 registered behind explicit closure gates.
 
-T006 is completed. M4 is closed after corrective pass, and M5 planning/implementation handoff work is explicitly unblocked. M6-M12 remain sequenced behind their independent hard dependencies and are not marked dependency-ready by this closure.
+M5 closes only after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.
