@@ -21,22 +21,22 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
-| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F002 |
+| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | active | F003/F004 |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | F001 closed | ready for handoff |
-| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | F002 | blocked on F002 closure |
-| F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | F002 | blocked on F002 closure |
-| F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | F002; F004 interface for DB-backed pages | blocked on F002 closure and dependencies |
+| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | F002 closed | ready for handoff |
+| F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | F002 closed | ready for handoff |
+| F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | F002 closed; F004 interface for DB-backed pages | blocked on F004 interface |
 
 ## Completed implementation plans
 
 | ID | Plan | Class | Implementation commit | Closure |
 |---|---|---|---|---|
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
+| F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
 
 ## Blocked future work
 
@@ -44,5 +44,6 @@ Provider HTTP/Eggress, routing/quota/health, transcoding/SSE, coordinator/finali
 
 ## Closure state
 
-F001 is closed. F002 is the next dependency-ready handoff; F003, F004, and
-F005 remain blocked until their stated dependencies close.
+F001 and F002 are closed. F003 and F004 are dependency-ready. F005 is no
+longer blocked on F002, but remains blocked on the F004 read-interface needed
+for DB-backed pages.

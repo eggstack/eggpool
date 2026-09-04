@@ -173,7 +173,7 @@ than create a second schema source.
 | `0036`–`0047` | model-info lifecycle, thinking/cache/canonical segmentation, compression controls, rollup normalization |
 | `0048`–`0054` | cost repairs, model-info evidence, routing retention, quarantine, catalog refresh, final quarantine identity fix |
 
-Current non-SQLite system tables observed after migration are:
+Current non-SQLite tables observed after migration are:
 
 ```text
 _migrations, account_backoffs, account_events, account_models, accounts,
