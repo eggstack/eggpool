@@ -17,3 +17,8 @@ pub use repositories::{
     PingRepository, ProviderModelMetadata, ProviderModelWrite, Request, RequestRepository,
     UsageRollupRepository, UsageSummary, UsageWindowRepository, UsageWindowSnapshot,
 };
+
+pub use crate::health::{
+    AccountBackoffRecord, AccountBackoffRepository, AccountBackoffRepositoryError,
+    ModelQuarantineRecord, ModelQuarantineRepository, ModelQuarantineRepositoryError,
+};

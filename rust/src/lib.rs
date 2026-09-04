@@ -11,6 +11,7 @@ mod cli;
 pub mod config;
 pub mod db;
 mod error;
+pub mod health;
 pub mod providers;
 pub mod quota;
 mod runtime;
