@@ -23,13 +23,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
-| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D004 ready |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | active | D005 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | capability/invariant | D003 closure | ready for handoff |
+| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | invariant/capability | D003 + D004 closure | ready for handoff |
 
 The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
 
@@ -52,6 +52,7 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D001 | [Routing-domain contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`40be1bf`](https://github.com/eggstack/eggpool/commit/40be1bf) | [closed](closure/routing-domain/001-status.md) |
 | D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | capability/invariant | [`966ca1b`](https://github.com/eggstack/eggpool/commit/966ca1b) + [`4110d23`](https://github.com/eggstack/eggpool/commit/4110d23) + [`3916c84`](https://github.com/eggstack/eggpool/commit/3916c84) + [`b661705`](https://github.com/eggstack/eggpool/commit/b661705) | [closed](closure/routing-domain/002-status.md) |
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | capability/invariant | [`c956e89`](https://github.com/eggstack/eggpool/commit/c956e89) | [closed](closure/routing-domain/003-status.md) |
+| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | capability/invariant | [`d649e8a`](https://github.com/eggstack/eggpool/commit/d649e8a) | [closed](closure/routing-domain/004-status.md) |
 
 ## M5 planned sequence
 
@@ -60,9 +61,9 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D001 | [Contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | closed |
 | D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | closed |
 | D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | closed; see [closure](closure/routing-domain/003-status.md) |
-| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | ready for handoff |
-| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | queued; D004 is the current handoff |
-| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | queued behind D004 + D005 closure |
+| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | closed; see [closure](closure/routing-domain/004-status.md) |
+| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | ready for handoff |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | queued behind D005 closure |
 | D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | queued behind D006 closure for serial handoff |
 | D008 | [Differential qualification and M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | queued behind D001-D007 closure |
 
@@ -82,9 +83,9 @@ Optional generic external catalog/model-info polling is not allowed to introduce
 
 ## Future work and block state
 
-D004 is the sole dependency-ready M5 implementation plan. D005-D008 remain gated by their predecessor closure records. D001-D003 are recorded as completed below.
+D005 is the sole dependency-ready M5 implementation plan. D006-D008 remain gated by their predecessor closure records. D001-D004 are recorded as completed below.
 
-D005 can theoretically proceed in parallel with D004, but default handoff is serial unless the registry is explicitly changed to authorize both. D006 remains blocked on both D004 and D005.
+D005 was the next serial handoff after D004 and is now dependency-ready. D006 remains blocked on D005; D007 and D008 retain their stated predecessor gates.
 
 M6 canonical request/codec/transcoding/SSE planning may continue conceptually but M6 implementation handoff remains blocked until accepted D008 closure establishes a stable M5 routing-domain interface.
 
@@ -92,6 +93,6 @@ M7 coordinator/finalization remains additionally blocked on M6. M8 runtime gener
 
 ## Closure state
 
-F001-F006 and M4 T001-T006 are closed. M5 is active with D001-D003 closed, D004 ready for handoff, and D005-D008 registered behind explicit closure gates.
+F001-F006 and M4 T001-T006 are closed. M5 is active with D001-D004 closed, D005 ready for handoff, and D006-D008 registered behind explicit closure gates.
 
 M5 closes only after D008 integrated qualification. If post-closure review finds a material M5 gap, add a bounded corrective plan rather than weakening or rewriting historical contract/closure evidence.
