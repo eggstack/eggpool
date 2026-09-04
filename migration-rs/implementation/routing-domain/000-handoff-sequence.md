@@ -1,6 +1,6 @@
 # M5 Routing Domain Handoff Sequence
 
-Status: active; D001-D004 closed; D005 ready
+Status: active; D001-D005 closed; D006 ready
 
 Execute and close these plans in dependency order:
 
@@ -8,12 +8,12 @@ Execute and close these plans in dependency order:
 2. D002 — account registry and catalog cache/hydration (closed);
 3. D003 — catalog refresh, normalization, and persistence (closed; see [closure](../../closure/routing-domain/003-status.md));
 4. D004 — quota, pending/reserved claims, and fair-share scoring (closed; see [closure](../../closure/routing-domain/004-status.md));
-5. D005 — health, bounded backoff, circuit breaker, and quarantine (ready);
-6. D006 — routing eligibility, priority tiers, fairness, and local selection claims;
+5. D005 — health, bounded backoff, circuit breaker, and quarantine (closed; see [closure](../../closure/routing-domain/005-status.md));
+6. D006 — routing eligibility, priority tiers, fairness, and local selection claims (ready);
 7. D007 — compiled model-router registry and bounded affinity;
 8. D008 — integrated differential qualification and M5 closure.
 
-D004 and D005 shared D003 as a hard predecessor; D004 is closed and D005 is the current serial handoff. Default handoff remains serial to keep review and closure evidence small.
+D004 and D005 shared D003 as a hard predecessor; both are closed and D006 is the current serial handoff. Default handoff remains serial to keep review and closure evidence small.
 
 Do not batch D002-D006 merely because they all feed the router. Their separation exists to make incorrect catalog destruction, quota pressure, health suppression, and final selection independently observable.
 

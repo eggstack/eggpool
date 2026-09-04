@@ -1,6 +1,6 @@
 # D005 — Health, Backoff, Circuit Breaker, and Quarantine
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/routing-domain/005-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d005--health-backoff-circuit-breaker-and-model-quarantine`
 

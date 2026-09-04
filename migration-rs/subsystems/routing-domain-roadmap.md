@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: active; D001-D004 closed; D005 ready for handoff
+Status: active; D001-D005 closed; D006 ready for handoff
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 

@@ -1,6 +1,6 @@
 # M5 Routing Domain Implementation Handoffs
 
-Status: active; D001-D004 closed; D005 ready for handoff
+Status: active; D001-D005 closed; D006 ready for handoff
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md`
 
@@ -12,11 +12,11 @@ M5 is sequenced so policy/state parity is established before inference dispatch 
 | D002 | [Account registry and catalog cache/hydration](002-account-registry-and-catalog-cache.md) | capability/invariant | closed; see [closure](../../closure/routing-domain/002-status.md) |
 | D003 | [Catalog refresh, normalization, and persistence](003-catalog-refresh-normalization-and-persistence.md) | capability/invariant | closed; see [closure](../../closure/routing-domain/003-status.md) |
 | D004 | [Quota, claims, and fair-share scoring](004-quota-claims-and-fair-scoring.md) | capability/invariant | closed; see [closure](../../closure/routing-domain/004-status.md) |
-| D005 | [Health, backoff, circuit, and quarantine](005-health-backoff-circuit-and-quarantine.md) | invariant/capability | ready for handoff |
-| D006 | [Routing eligibility, fairness, and local claims](006-routing-eligibility-fairness-and-claims.md) | capability/invariant | queued behind D005 closure |
+| D005 | [Health, backoff, circuit, and quarantine](005-health-backoff-circuit-and-quarantine.md) | invariant/capability | closed; see [closure](../../closure/routing-domain/005-status.md) |
+| D006 | [Routing eligibility, fairness, and local claims](006-routing-eligibility-fairness-and-claims.md) | capability/invariant | dependency-ready; D005 closed |
 | D007 | [Model-router registry and affinity](007-model-router-registry-and-affinity.md) | capability/invariant | queued behind D006 closure for serial handoff |
 | D008 | [Differential qualification and M5 closure](008-differential-qualification-and-closure.md) | invariant | queued behind D001-D007 closure |
 
-D005 is the current sole dependency-ready plan. D006 remains queued until D005 closes; D007 and D008 remain behind their stated predecessors.
+D006 is the current sole dependency-ready plan. D007 and D008 remain behind their stated predecessors.
 
 Every plan receives an individual closure record under `migration-rs/closure/routing-domain/` before its hard successor becomes dependency-ready.
