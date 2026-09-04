@@ -31,4 +31,13 @@ pub enum BootstrapError {
     /// The scaffold could not write its deterministic help output.
     #[error("Rust bootstrap output failed: {source}")]
     Output { source: io::Error },
+
+    /// A command is represented by the migration parser but belongs to a later
+    /// Rust milestone. This is deliberately distinct from a successful no-op.
+    #[error("{command}: not implemented in Rust candidate")]
+    NotImplemented { command: String },
+
+    /// Configuration could not be loaded or validated.
+    #[error("{0}")]
+    Config(#[from] crate::config::ConfigError),
 }

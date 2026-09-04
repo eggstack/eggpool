@@ -30,3 +30,25 @@ The build output is confined to `rust/target/`. Do not use `cargo install` or
 copy the binary into a global/user executable directory during migration.
 Later parity work and black-box invocation conventions are tracked in the
 [`migration-rs` guide](../migration-rs/README.md).
+
+## F003 config and CLI compatibility
+
+The migration candidate resolves configuration in the same order as Python:
+an explicit `--config` path, `$EGGPOOL_CONFIG`, the XDG user config path when
+it exists, and finally `./config.toml`. It validates the supported TOML shape,
+defaults, legacy flat accounts, provider/auth/proxy forms, wire surfaces,
+model routers, and cross-field safety rules without printing credential values.
+
+Useful migration-only probes are:
+
+```bash
+rust/target/debug/eggpool --config ./config.toml check-config
+rust/target/debug/eggpool --help
+rust/target/debug/eggpool serve --help
+```
+
+`version`, `--help`, and `check-config` are implemented in Rust. Every other
+command and option is represented by the full parser tree but currently exits
+with `not implemented in Rust candidate`; this is an explicit migration-stage
+boundary and is not a final cutover behavior. The Python `eggpool` executable
+remains the production command throughout migration.

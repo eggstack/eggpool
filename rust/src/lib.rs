@@ -7,11 +7,13 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+pub mod config;
 mod error;
 mod runtime;
 pub mod version;
 
 pub use cli::{Cli, Command};
+pub use config::{AppConfig, Config, ConfigError};
 pub use error::{AppError, BootstrapError};
 
 /// Run the migration candidate with an explicit argument iterator.
