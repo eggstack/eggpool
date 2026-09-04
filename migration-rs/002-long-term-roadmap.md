@@ -74,9 +74,13 @@ Exit condition: the existing dashboard surfaces can be exercised against Rust wi
 
 Primary class: infrastructure/capability
 
+Subsystem roadmap: [Provider Transport](subsystems/provider-transport-roadmap.md).
+
 Implement provider/account HTTP connection pools on Hyper/Hyper-util/Rustls and an Eggress-backed connector for per-account pproxy-style outbound URIs.
 
 Qualify exactly the proxy URI/protocol features EggPool promises; use narrow Eggress features and fail closed for unsupported forms.
+
+The active implementation sequence is T001 contract/fixture freeze -> T002 direct Hyper/Rustls core -> T003 Eggress connector/proxy parity -> T004 provider/account client pool -> T005 differential qualification/closure. Each hard predecessor requires an accepted closure record before the next plan becomes dependency-ready.
 
 Exit condition: controlled direct and proxied provider HTTP fixtures match Python transport semantics and diagnostics.
 
