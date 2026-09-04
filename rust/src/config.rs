@@ -49,7 +49,7 @@ pub enum ConfigError {
 }
 
 impl ConfigError {
-    fn validation(detail: impl Into<String>) -> Self {
+    pub(crate) fn validation(detail: impl Into<String>) -> Self {
         Self::Validation {
             detail: detail.into(),
         }
@@ -1136,6 +1136,15 @@ pub struct Config {
 pub type AppConfig = Config;
 
 impl Config {
+    /// Compile the optional virtual-router registry before publishing a
+    /// configuration candidate.  Compilation is structural only and never
+    /// queries catalog/provider state.
+    pub fn compile_model_router_registry(
+        &self,
+    ) -> Result<crate::model_router::ModelRouterRegistry, ConfigError> {
+        crate::model_router::ModelRouterRegistry::from_config(&self.model_routers)
+    }
+
     /// Resolve an account's explicit outbound proxy using the Python
     /// precedence contract.  Environment values are trimmed at the boundary;
     /// inline values are retained exactly and are validated by the transport
@@ -1822,56 +1831,7 @@ fn validate_path(value: &str) -> Result<(), ConfigError> {
 fn validate_model_routers(
     routers: &BTreeMap<String, ModelRouterConfig>,
 ) -> Result<(), ConfigError> {
-    for (virtual_id, router) in routers {
-        if virtual_id.trim().is_empty()
-            || virtual_id.contains('/')
-            || virtual_id.len() > 128
-            || router.routes.is_empty()
-        {
-            return Err(ConfigError::validation(
-                "invalid model router virtual ID or empty routes",
-            ));
-        }
-        if router.selector_model.trim().is_empty()
-            || router.default_model.trim().is_empty()
-            || router.selector_model.len() > 128
-            || router.default_model.len() > 128
-        {
-            return Err(ConfigError::validation(
-                "invalid model router model reference",
-            ));
-        }
-        if routers.contains_key(&router.selector_model)
-            || router
-                .routes
-                .values()
-                .any(|r| routers.contains_key(&r.model))
-        {
-            return Err(ConfigError::validation(
-                "model routers cannot target virtual models",
-            ));
-        }
-        if !router
-            .routes
-            .values()
-            .any(|r| r.model == router.default_model)
-        {
-            return Err(ConfigError::validation(
-                "model router default_model must match a route model",
-            ));
-        }
-        for (label, route) in &router.routes {
-            if label.trim().is_empty()
-                || label.len() > 128
-                || route.model.trim().is_empty()
-                || route.description.trim().is_empty()
-                || route.description.len() > 512
-            {
-                return Err(ConfigError::validation("invalid model router route"));
-            }
-        }
-    }
-    Ok(())
+    crate::model_router::validate_model_router_mapping(routers)
 }
 
 pub fn resolve_config_path(cli_value: Option<&Path>) -> PathBuf {
