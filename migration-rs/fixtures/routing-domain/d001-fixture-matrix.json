@@ -1,0 +1,90 @@
+{
+  "schema_version": "m5-routing-domain-d001/v1",
+  "purpose": "representative deterministic cases for D002-D008",
+  "cases": {
+    "accounts": [
+      "direct_and_proxied_accounts",
+      "two_providers_and_protocol_sets",
+      "enabled_and_disabled_accounts",
+      "none_auth_without_key",
+      "missing_enabled_required_credential_rejected",
+      "weights_priorities_and_quota_offsets"
+    ],
+    "catalog": [
+      "static_only_provider",
+      "authoritative_non_empty_refresh",
+      "partial_invalid_empty_and_failed_preserve_support",
+      "stale_and_fresh_durable_refresh_state",
+      "shared_model_sibling_accounts",
+      "provider_specific_protocol_rows",
+      "capability_and_limit_overrides",
+      "authoritative_withdrawal",
+      "model_reappearance"
+    ],
+    "quota": [
+      "default_and_explicit_request_token_capacities",
+      "weights_and_positive_negative_offsets",
+      "exact_capacity_boundary",
+      "above_capacity_score_only",
+      "hard_cap_exclusion",
+      "pending_claim_and_reserved_claim",
+      "pending_to_reserved_conversion",
+      "ownership_underflow_rejection",
+      "malformed_non_finite_state"
+    ],
+    "health": [
+      "all_failure_categories",
+      "status_402_408_409_422_429_and_5xx_edges",
+      "exact_terminal_auth_vocabulary",
+      "context_limit_without_suppression",
+      "quota_and_rate_cooldowns_without_breaker_advance",
+      "generic_transient_breaker_advance",
+      "model_scoped_unavailable",
+      "retry_after_zero_finite_too_large_and_invalid",
+      "nonterminal_1800_second_cap",
+      "operator_disable_and_auth_terminal_reset",
+      "success_does_not_clear_operator_or_auth_state"
+    ],
+    "circuit_and_quarantine": [
+      "closed_open_half_open_closed",
+      "one_half_open_probe",
+      "explicit_probe_release",
+      "stale_probe_recovery",
+      "suspected_to_quarantined",
+      "quarantine_expiry_and_exact_key_success_clear",
+      "catalog_reappearance",
+      "terminal_withdrawal",
+      "newer_runtime_state_wins_hydration"
+    ],
+    "routing": [
+      "disabled_no_provider_no_model",
+      "stale_no_protocol_protocol_mismatch_no_surface",
+      "thinking_and_quarantine_health_exclusions",
+      "strict_priority_tiers",
+      "score_ordering_and_native_transcode_preference",
+      "fairness_off_round_robin_and_seeded_random",
+      "fairness_key_scopes_and_epsilon_boundary",
+      "bounded_4096_key_eviction",
+      "missing_account_refresh_throttle",
+      "local_claim_publish_and_rollback"
+    ],
+    "model_router": [
+      "disabled_and_empty_registry",
+      "deterministic_route_sort_and_fingerprint",
+      "description_normalization",
+      "explicit_session_header_valid_invalid_oversized_and_control",
+      "ttl_hit_miss_expiry_and_lru_eviction",
+      "concurrent_single_flight",
+      "config_fingerprint_invalidation",
+      "bounded_automatic_role_text_identity_framing",
+      "raw_content_not_retained",
+      "semantic_selector_dispatch_deferred_to_M7"
+    ]
+  },
+  "secret_markers_forbidden": [
+    "FIXTURE_API_KEY",
+    "proxy-password",
+    "api_key",
+    "Authorization: Bearer"
+  ]
+}

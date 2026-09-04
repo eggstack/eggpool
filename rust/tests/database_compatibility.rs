@@ -7,7 +7,8 @@ use std::{
 };
 
 use eggpool::db::{
-    AccountConfig, AccountRepository, Database, DatabaseConfig, MigrationRunner, RequestRepository,
+    AccountConfig, AccountRepository, Database, DatabaseConfig, MigrationRunner, ModelRepository,
+    RequestRepository,
 };
 
 fn temporary_database_path(label: &str) -> PathBuf {
@@ -155,6 +156,67 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         "('success', 3, 2)"
     );
     fs::remove_file(&path).expect("temporary database removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn routing_domain_schema54_seed_opens_and_preserves_owned_state() {
+    let path = temporary_database_path("routing-domain-seed");
+    let database = open_database(&path).await;
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("schema 54 migrations apply");
+    database
+        .call(|connection| {
+            connection.execute_batch(include_str!(
+                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+            ))
+        })
+        .await
+        .expect("D001 schema-54 seed applies");
+
+    let counts = database
+        .call(|connection| {
+            Ok((
+                connection.query_row("SELECT COUNT(*) FROM accounts", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row(
+                    "SELECT COUNT(*) FROM provider_model_metadata",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                connection.query_row("SELECT COUNT(*) FROM catalog_refresh_state", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row("SELECT COUNT(*) FROM account_backoffs", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row("SELECT COUNT(*) FROM model_quarantine", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .await
+        .expect("routing-domain rows are readable");
+    assert_eq!(counts, (3, 3, 2, 2, 2));
+
+    let account = AccountRepository::new(&database)
+        .get_by_name("account-a")
+        .await
+        .expect("seed account query succeeds")
+        .expect("seed account exists");
+    assert_eq!(account.provider_id, "provider-a");
+    assert_eq!(account.weight, 2.0);
+    let model = ModelRepository::new(&database)
+        .get("shared-model", "provider-a")
+        .await
+        .expect("seed model query succeeds")
+        .expect("seed model exists");
+    assert_eq!(model.protocol, "openai");
+
+    database.close().await.expect("database closes");
+    std::fs::remove_file(&path).expect("temporary database removed");
 }
 
 #[tokio::test(flavor = "current_thread")]

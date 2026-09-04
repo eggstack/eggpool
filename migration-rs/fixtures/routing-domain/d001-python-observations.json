@@ -1,0 +1,431 @@
+{
+  "accounts": [
+    {
+      "account_id": 1,
+      "account_name": "account-a",
+      "enabled": true,
+      "has_usable_credentials": true,
+      "priority": 10,
+      "provider_id": "provider-a",
+      "quota_offsets": {
+        "five_hour": 0,
+        "monthly": 0,
+        "weekly": -11
+      },
+      "supported_protocols": [
+        "anthropic",
+        "openai"
+      ],
+      "supported_request_surfaces": [
+        "chat_completions",
+        "responses"
+      ],
+      "validation_outcome": "valid",
+      "weight": 2.0
+    },
+    {
+      "account_id": 2,
+      "account_name": "account-b",
+      "enabled": true,
+      "has_usable_credentials": true,
+      "priority": 5,
+      "provider_id": "provider-b",
+      "quota_offsets": {
+        "five_hour": 0,
+        "monthly": 0,
+        "weekly": 0
+      },
+      "supported_protocols": [
+        "openai"
+      ],
+      "supported_request_surfaces": [
+        "chat_completions",
+        "responses"
+      ],
+      "validation_outcome": "valid",
+      "weight": 1.0
+    },
+    {
+      "account_id": 3,
+      "account_name": "disabled-a",
+      "enabled": false,
+      "has_usable_credentials": true,
+      "priority": 10,
+      "provider_id": "provider-a",
+      "quota_offsets": {
+        "five_hour": 0,
+        "monthly": 0,
+        "weekly": 0
+      },
+      "supported_protocols": [
+        "anthropic",
+        "openai"
+      ],
+      "supported_request_surfaces": [
+        "chat_completions",
+        "responses"
+      ],
+      "validation_outcome": "valid",
+      "weight": 1.0
+    }
+  ],
+  "catalog": {
+    "account_provider": {
+      "account-a": "provider-a",
+      "account-b": "provider-b"
+    },
+    "account_support": {
+      "shared-model": [
+        "account-a",
+        "account-b"
+      ],
+      "withdrawn-model": []
+    },
+    "freshness": {
+      "account-a": {
+        "age_s": 0.0,
+        "status": "fresh"
+      },
+      "account-b": {
+        "age_s": 0.0,
+        "status": "fresh"
+      }
+    },
+    "global_model_ids": [
+      "shared-model",
+      "withdrawn-model"
+    ],
+    "provider_model_rows": [
+      {
+        "capabilities": {
+          "supports_tools": true
+        },
+        "effective_limits": {
+          "context_tokens": 8192,
+          "enforce": true
+        },
+        "model_id": "shared-model",
+        "protocol": "openai",
+        "protocol_source": "config",
+        "provider_id": "provider-a"
+      },
+      {
+        "capabilities": {
+          "supports_tools": true
+        },
+        "effective_limits": {
+          "context_tokens": 8192,
+          "enforce": true
+        },
+        "model_id": "shared-model",
+        "protocol": "anthropic",
+        "protocol_source": "config",
+        "provider_id": "provider-b"
+      }
+    ],
+    "refresh_outcomes": [
+      "success_authoritative",
+      "success_authoritative",
+      "success_partial_preserve",
+      "success_authoritative_withdraw"
+    ],
+    "support_decisions": [
+      {
+        "account": "account-a",
+        "added": "withdrawn-model",
+        "preserved_by_partial": true,
+        "withdrawn": 1
+      },
+      {
+        "account": "account-a",
+        "partial_preserved_support": 2
+      }
+    ]
+  },
+  "clocks": {
+    "monotonic": 5000.0,
+    "wall_epoch": 10000.0
+  },
+  "health": {
+    "accounts": [
+      {
+        "account": "account-a",
+        "healthy_read_only": true,
+        "model_disabled": false,
+        "state": "healthy"
+      },
+      {
+        "account": "account-b",
+        "healthy_read_only": true,
+        "model_disabled": false,
+        "state": "rate_limited"
+      }
+    ],
+    "circuits": [
+      {
+        "can_request_without_mutation": true,
+        "probe_acquired": true,
+        "state_after_release": "half_open",
+        "state_before_probe": "open"
+      }
+    ],
+    "failures": [
+      {
+        "category": "authentication_failed",
+        "error_class": "auth_failed",
+        "status_code": 401
+      },
+      {
+        "category": "quota_exhausted",
+        "error_class": "anything",
+        "status_code": 402
+      },
+      {
+        "category": "connect_timeout",
+        "error_class": "timeout",
+        "status_code": 408
+      },
+      {
+        "category": "unknown",
+        "error_class": "conflict",
+        "status_code": 409
+      },
+      {
+        "category": "unknown",
+        "error_class": "unprocessable",
+        "status_code": 422
+      },
+      {
+        "category": "rate_limited",
+        "error_class": "rate_limited",
+        "status_code": 429
+      },
+      {
+        "category": "upstream_server_error",
+        "error_class": "server",
+        "status_code": 500
+      },
+      {
+        "category": "connection_failure",
+        "deterministic_delay_s": 30.0,
+        "observed_delay_s_bounded": true
+      }
+    ],
+    "quarantine": [
+      {
+        "account": "account-a",
+        "expiry_kind": "bounded",
+        "model": "model-x",
+        "observation_count": 2,
+        "protocol": "openai",
+        "provenance": "runtime_http",
+        "state": "quarantined"
+      },
+      {
+        "account": "account-a",
+        "expiry_kind": "bounded",
+        "model": "model-x",
+        "observation_count": 2,
+        "protocol": "openai",
+        "provenance": "runtime_http",
+        "state": "quarantined"
+      },
+      {
+        "expired_is_quarantined": false
+      },
+      {
+        "account": "account-a",
+        "expiry_kind": "terminal",
+        "model": "model-terminal",
+        "observation_count": 1,
+        "protocol": "openai",
+        "provenance": "provider_catalog",
+        "state": "terminal_withdrawn"
+      }
+    ]
+  },
+  "model_router": {
+    "affinity_key_digest": "d6440983c454c2e5999fdb66bbe9cf5f89a8f5847d6c9578ef14afd26eee122c",
+    "affinity_ttl_s": 60.0,
+    "cache_outcome": "miss_then_hit",
+    "cache_stats": {
+      "evictions": 0,
+      "expirations": 0,
+      "hits": 1,
+      "misses": 1,
+      "single_flight_joins": 0,
+      "single_flight_leaders": 1
+    },
+    "config_fingerprint": "70c26421aa06f8d476e158e3a9f477526d5dc80eccb8634bd5a16e12329c0f8a",
+    "default_model": "model-default",
+    "max_input_bytes": 256,
+    "route_ids": [
+      {
+        "description": "Default path",
+        "label": "a-default",
+        "model": "model-default",
+        "route_id": "0"
+      },
+      {
+        "description": "Fast path",
+        "label": "z-fast",
+        "model": "model-fast",
+        "route_id": "1"
+      }
+    ],
+    "selected_concrete_model": "model-default",
+    "selector_model": "selector-model",
+    "static_policy_base64": "bW9kZWwtcm91dGVyL3YxfGNob29zZSBpZDtyZXBseSBpZCBvbmx5fDA9RGVmYXVsdCBwYXRofDE9RmFzdCBwYXRo",
+    "static_policy_digest": "2cd8ec6bb67f351b4ae27fa83afe73ccd50ac89c3d6d2e03580541d2b12fac9f",
+    "static_policy_length": 66,
+    "sticky": true,
+    "virtual_model": "virtual-route"
+  },
+  "parity": {
+    "candidate_order": "exact",
+    "container_representation": "semantic",
+    "identity": "exact",
+    "persisted_semantics": "exact",
+    "reason_codes": "exact",
+    "request_persistence": "deferred:M7",
+    "selector_dispatch": "deferred:M7",
+    "wall_clock_age": "semantic"
+  },
+  "quota": {
+    "accounts": [
+      {
+        "account": "account-a",
+        "capacity": {
+          "requests_5h": 20,
+          "tokens_5h": 2000
+        },
+        "remaining_capacity": 0.44999999999999996,
+        "reserved": {
+          "cost": {
+            "account-a": 0
+          },
+          "requests": {
+            "account-a": [
+              1,
+              50
+            ]
+          }
+        },
+        "within_limits": true
+      },
+      {
+        "account": "account-b",
+        "capacity": {
+          "requests_5h": 20,
+          "tokens_5h": 2000
+        },
+        "remaining_capacity": 0.95,
+        "reserved": {
+          "cost": {
+            "account-b": 0
+          },
+          "requests": {
+            "account-b": [
+              0,
+              0
+            ]
+          }
+        },
+        "within_limits": true
+      }
+    ],
+    "score_components": [
+      {
+        "account": "account-a",
+        "eligible": true,
+        "final_score": 0.3378125,
+        "quota_score": 0.3378125,
+        "request_counts": [
+          10,
+          20,
+          30
+        ],
+        "token_counts": [
+          1000,
+          2000,
+          3000
+        ],
+        "weight": 2.0
+      },
+      {
+        "account": "account-b",
+        "eligible": true,
+        "final_score": 0.16075,
+        "quota_score": 0.16075,
+        "request_counts": [
+          1,
+          2,
+          3
+        ],
+        "token_counts": [
+          100,
+          200,
+          300
+        ],
+        "weight": 1.0
+      }
+    ]
+  },
+  "routing": {
+    "claim": {
+      "active_request_delta": 1,
+      "durable_persistence": "deferred:M7",
+      "ownership_token": "local-fixture-claim-1",
+      "pending_request_delta": 1,
+      "pending_token_delta": 128
+    },
+    "eligible_candidates": [
+      "account-a",
+      "account-b"
+    ],
+    "exclusions": [],
+    "fairness": {
+      "applied": true,
+      "candidate_count": 2,
+      "key": "provider=provider-a|model=route-model|protocol=openai|tier=10",
+      "mode": "round_robin",
+      "reason": "ok",
+      "scope": "provider_model_protocol",
+      "selected_account_name": "account-a",
+      "selected_index": 0
+    },
+    "native_vs_transcode": [
+      {
+        "account": "account-a",
+        "native": true
+      },
+      {
+        "account": "account-b",
+        "native": true
+      }
+    ],
+    "ordered_ranking": [
+      "account-a",
+      "account-b"
+    ],
+    "request_surface": "chat_completions",
+    "requested_model": "route-model",
+    "requested_protocol": "openai",
+    "requested_provider": null,
+    "score_components": [
+      {
+        "account": "account-a",
+        "final_score": 0.00042176190476190476,
+        "requires_transcode": false
+      },
+      {
+        "account": "account-b",
+        "final_score": 0.00042176190476190476,
+        "requires_transcode": false
+      }
+    ],
+    "selected_account": "account-a",
+    "tier": 10
+  },
+  "schema_version": "m5-routing-domain-d001/v1"
+}
