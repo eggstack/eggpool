@@ -493,9 +493,6 @@ async fn sync_accounts(config: &Config, database: &db::Database) -> Result<(), S
                     enabled: account.enabled,
                     weight: account.weight,
                     provider_id: provider_id.clone(),
-                    five_hour_offset_microdollars: account.five_hour_offset_microdollars,
-                    weekly_offset_microdollars: account.weekly_offset_microdollars,
-                    monthly_offset_microdollars: account.monthly_offset_microdollars,
                 })
         })
         .collect();

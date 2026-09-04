@@ -45,9 +45,6 @@ fn durable_account(id: i64, name: &str, provider_id: &str, enabled: bool) -> Acc
         enabled,
         weight: 1.0,
         provider_id: provider_id.into(),
-        five_hour_offset_microdollars: 0,
-        weekly_offset_microdollars: 0,
-        monthly_offset_microdollars: 0,
     }
 }
 

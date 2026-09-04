@@ -12,9 +12,6 @@ pub struct Account {
     pub enabled: bool,
     pub weight: f64,
     pub provider_id: String,
-    pub five_hour_offset_microdollars: i64,
-    pub weekly_offset_microdollars: i64,
-    pub monthly_offset_microdollars: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,9 +21,6 @@ pub struct AccountConfig {
     pub enabled: bool,
     pub weight: f64,
     pub provider_id: String,
-    pub five_hour_offset_microdollars: i64,
-    pub weekly_offset_microdollars: i64,
-    pub monthly_offset_microdollars: i64,
 }
 
 impl AccountConfig {
@@ -37,9 +31,6 @@ impl AccountConfig {
             enabled: true,
             weight: 1.0,
             provider_id: "opencode-go".to_owned(),
-            five_hour_offset_microdollars: 0,
-            weekly_offset_microdollars: 0,
-            monthly_offset_microdollars: 0,
         }
     }
 }
@@ -720,9 +711,6 @@ fn account_from_row(
         enabled: row.get::<_, i64>(3)? != 0,
         weight: row.get(4)?,
         provider_id: row.get(5)?,
-        five_hour_offset_microdollars: 0,
-        weekly_offset_microdollars: 0,
-        monthly_offset_microdollars: 0,
     })
 }
 
