@@ -1,6 +1,6 @@
 # Provider Transport T005 — Differential Qualification and M4 Closure
 
-Status: dependency-ready; T001-T004 closed
+Status: closed; see [closure record](../../closure/provider-transport/005-status.md)
 
 Repository baseline for planning: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 

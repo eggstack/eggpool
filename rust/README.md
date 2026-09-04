@@ -46,6 +46,18 @@ The direct client disables ambient proxy behavior by construction. Additional
 DER roots are available only as an explicit constructor setting for
 deterministic test CAs.
 
+T005 qualification is complete. The transport boundary has no implicit
+request retry: coordinator-owned retry/failover remains downstream, and
+response bodies are still consumed incrementally. Run the neutral provider
+transport qualification tests with:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test provider_transport -- --test-threads=1
+```
+
+This is transport-only evidence; it does not claim provider inference
+dispatch, routing, codecs, or production Rust cutover.
+
 ## T004 provider/account client pool
 
 `eggpool::providers::ProviderClientPool` builds one direct Hyper/Rustls client

@@ -1,6 +1,6 @@
 # Provider Transport Subsystem Roadmap
 
-Status: active
+Status: closed after T005 qualification
 
 Repository baseline: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
 
@@ -88,7 +88,9 @@ T005 differential qualification + M4 closure
 M5 catalog/routing/quota/health planning may become dependency-ready
 ```
 
-T004 is closed and T005 is now the dependency-ready handoff. Later plans are registered now so the complete workstream is visible, but each becomes ready only after its hard predecessor closes.
+T001-T005 are closed with accepted closure records. M5 planning is now
+unblocked against the stable transport handoff; no downstream implementation
+plan is being created as part of M4 closure.
 
 ## 6. Milestones
 
@@ -130,7 +132,7 @@ Class: invariant
 
 Run the complete direct/proxied transport differential matrix, concurrency/cancellation/timeout cases, proxy feature and redaction checks, and dependency/resource review. Record supported differences explicitly and close M4 only if no unresolved mandatory contract gaps remain.
 
-Exit: M4's long-term roadmap exit condition is satisfied and M5 may be planned against a stable provider transport interface.
+Exit: satisfied by the [T005 closure record](../closure/provider-transport/005-status.md); M5 may be planned against the stable provider transport interface.
 
 ## 7. Eggress feature policy
 
@@ -172,4 +174,9 @@ No broad browser, load farm, or live-provider matrix is required for M4 closure.
 
 ## 11. Subsystem closure condition
 
-M4 closes only after T001-T005 have individual closure evidence and the Rust candidate can construct and exercise provider/account direct and required proxied HTTP clients against deterministic fixtures with parity-equivalent timeout, isolation, pooling, redaction, and failure behavior. Closing M4 does not mean inference dispatch works; it means the transport beneath later routing/codec/coordinator work is stable.
+M4 is closed: T001-T005 have individual closure evidence and the Rust
+candidate constructs and exercises provider/account direct and required
+proxied HTTP clients against deterministic fixtures with parity-equivalent
+timeout, isolation, pooling, redaction, and failure behavior. Closing M4 does
+not mean inference dispatch works; it means the transport beneath later
+routing/codec/coordinator work is stable.

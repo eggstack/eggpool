@@ -1,6 +1,6 @@
 # Provider Transport Implementation Handoffs
 
-Status: active workstream
+Status: closed; M4 provider transport complete
 
 Source roadmap: `migration-rs/subsystems/provider-transport-roadmap.md`
 
@@ -12,6 +12,8 @@ The M4 Provider HTTP + Eggress workstream is intentionally sequenced so later im
 | T002 | [Direct Hyper/Rustls provider HTTP core](002-direct-hyper-rustls-core.md) | infrastructure | closed; [closure record](../../closure/provider-transport/002-status.md) |
 | T003 | [Eggress connector and proxy parity](003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | closed; [closure record](../../closure/provider-transport/003-status.md) |
 | T004 | [Provider/account client pool and lifecycle](004-provider-account-client-pool.md) | capability/invariant | closed; [closure record](../../closure/provider-transport/004-status.md) |
-| T005 | [Differential qualification and M4 closure](005-differential-qualification-and-closure.md) | invariant | dependency-ready; T001-T004 closed |
+| T005 | [Differential qualification and M4 closure](005-differential-qualification-and-closure.md) | invariant | closed; see [closure record](../../closure/provider-transport/005-status.md) |
 
-Only the first plan whose hard dependencies are closed should be treated as dependency-ready. Each implementation milestone requires its own closure record before the next plan advances.
+T001-T005 are closed with individual closure records. M5 planning is unblocked
+by the stable transport handoff; no M5 implementation plan is registered in
+this workstream yet.
