@@ -31,6 +31,22 @@ copy the binary into a global/user executable directory during migration.
 Later parity work and black-box invocation conventions are tracked in the
 [`migration-rs` guide](../migration-rs/README.md).
 
+## T002 direct provider transport
+
+`eggpool::providers::ProviderHttpClient` is the migration transport boundary
+for direct provider HTTP/HTTPS. It uses one cheap-to-clone Hyper HTTP/1.1
+client per future provider scope, Rustls with explicit Mozilla webpki roots,
+and a connection-lifetime semaphore that bounds physical connections while
+idle sockets remain in the pool. Pool wait, connect, write, read, TLS, and
+protocol failures are exposed as stable `TransportError` categories. Bodies
+are consumed incrementally through `ProviderBody::next`; transport does not
+buffer complete responses or inject provider credentials.
+
+The direct client disables ambient proxy behavior by construction. Additional
+DER roots are available only as an explicit constructor setting for
+deterministic test CAs. Proxied accounts, Eggress, provider client topology,
+and inference dispatch remain downstream migration work.
+
 ## F005 Axum read-plane server
 
 The Rust candidate now has a development-only Axum server for the first

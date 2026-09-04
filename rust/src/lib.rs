@@ -9,6 +9,7 @@ mod cli;
 pub mod config;
 pub mod db;
 mod error;
+pub mod providers;
 mod runtime;
 pub mod server;
 pub mod version;
