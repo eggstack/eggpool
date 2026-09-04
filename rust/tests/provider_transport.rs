@@ -484,6 +484,40 @@ async fn cancellation_during_pool_wait_releases_no_permit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn refused_connection_is_classified_as_connect_failure() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("closed-port fixture");
+    let port = listener.local_addr().expect("closed-port address").port();
+    drop(listener);
+    let client = make_client(&format!("http://127.0.0.1:{port}"));
+    assert_eq!(
+        client
+            .send(Method::GET, "/refused", HeaderMap::new(), Bytes::new())
+            .await
+            .expect_err("connection refusal"),
+        TransportError::Connect
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_body_bound_is_enforced_before_connection() {
+    let mut config = ProviderHttpConfig::new("http://127.0.0.1:1").expect("provider config");
+    config.max_request_body_bytes = 4;
+    let client = ProviderHttpClient::new(config).expect("provider client");
+    assert_eq!(
+        client
+            .send(
+                Method::POST,
+                "/too-large",
+                HeaderMap::new(),
+                Bytes::from_static(b"12345")
+            )
+            .await
+            .expect_err("request body bound"),
+        TransportError::RequestBodyTooLarge
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn direct_https_uses_hostname_verified_explicit_test_root() {
     let server = FixtureServer::https(1);
     let mut config = ProviderHttpConfig::new(&server.https_url()).expect("provider config");
