@@ -1,6 +1,6 @@
 # D003 — Catalog Refresh, Normalization, and Persistence
 
-Status: queued behind D002 closure
+Status: closed; see [closure record](../../closure/routing-domain/003-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d003--catalog-refresh-normalization-and-persistence`
 

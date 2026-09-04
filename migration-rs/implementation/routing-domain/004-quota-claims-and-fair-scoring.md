@@ -1,6 +1,6 @@
 # D004 — Quota, Claims, and Fair-Share Scoring
 
-Status: queued behind D003 closure
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md#d004--quota-reservation-mirrors-claims-and-fair-share-scoring`
 
