@@ -1,6 +1,6 @@
 # Foundation Milestone F005 — Axum SSR Shell and Static-Asset Parity Baseline
 
-Status: blocked on F004 interface
+Status: ready for handoff
 
 Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 

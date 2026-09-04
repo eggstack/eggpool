@@ -75,7 +75,7 @@ Port config parsing/defaults/validation/path resolution and the complete CLI par
 
 Exit: the supported config corpus and CLI parser contract pass differential gates.
 
-### F004 — SQLite schema and repository compatibility baseline
+### F004 — SQLite schema and repository compatibility baseline (closed)
 
 Class: invariant/infrastructure
 
@@ -83,7 +83,7 @@ Open existing DBs, reuse migrations/checksums, establish serialized transactions
 
 Exit: Python-created fixtures are readable by Rust and Rust fixture writes remain compatible with Python within the declared rollback boundary.
 
-### F005 — Axum SSR shell and static asset parity baseline
+### F005 — Axum SSR shell and static asset parity baseline (dependency-ready)
 
 Class: capability
 

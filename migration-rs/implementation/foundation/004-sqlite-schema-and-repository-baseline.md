@@ -1,6 +1,6 @@
 # Foundation Milestone F004 — SQLite Schema and Repository Compatibility Baseline
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/foundation/004-status.md)
 
 Repository baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
