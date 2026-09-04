@@ -76,7 +76,9 @@ You can combine schemes with `+` (e.g. `http+socks5://`).
 
 ### Authentication in URIs
 
-Use the `#` fragment for username/password:
+Use the `#` fragment for username/password.  pproxy 2.7.9 treats URI
+userinfo before `@` as encrypted-protocol `cipher:key` data, so HTTP and
+SOCKS credentials must not be written as `user:password@host`:
 
 ```
 http://proxy.example.com:3128#username:password
@@ -115,7 +117,7 @@ proxy = "residential"
 Then in your environment:
 
 ```bash
-export RESIDENTIAL_PROXY_URL="http://user:password@proxy.example.com:3128"
+export RESIDENTIAL_PROXY_URL="http://proxy.example.com:3128#user:password"
 ```
 
 ### Shadowsocks Proxy
@@ -225,7 +227,9 @@ normal strict validation.
 
 1. Verify the proxy is running and reachable from the EggPool host
 2. Check that the proxy URI scheme matches the proxy server's protocol
-3. For SOCKS5, ensure DNS resolution is configured correctly (use `socks5h://` if the proxy resolves DNS)
+3. For SOCKS5, ensure DNS resolution is configured correctly.  EggPool's
+   pproxy path sends domain targets through the SOCKS5 proxy; `socks5h://` is
+   not a supported EggPool URI.
 
 ### Authentication Errors
 

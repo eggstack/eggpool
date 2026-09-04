@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "oracle": {
+    "package": "pproxy",
+    "version": "2.7.9",
+    "source": "uv optional proxy extra; src/eggpool/providers/pproxy_transport.py"
+  },
+  "egress": {
+    "package": "eggress-embed",
+    "version": "1.0.2",
+    "release_tag": "v1.0.2",
+    "commit": "e76c8d480f411802ac5592e04655a07212be98b5",
+    "construction_api": "eggress_embed::outbound::OutboundConnector::from_pproxy_uri",
+    "compatibility_matrix": "docs/parity/PPROXY_PRACTICAL_COMPATIBILITY_MATRIX.md"
+  },
+  "egress_feature_decision": {
+    "dependency": "eggress-embed = { version = \"=1.0.2\", default-features = false, features = [\"common\", \"pproxy-compat\", \"extended\", \"pproxy-legacy\", \"legacy-crypto\", \"ssh\"] }",
+    "enabled_features": [
+      "common",
+      "pproxy-compat",
+      "extended",
+      "pproxy-legacy",
+      "legacy-crypto",
+      "ssh"
+    ],
+    "rejected_features": ["operations", "reverse", "quic"],
+    "rationale": "common covers direct/HTTP/SOCKS TCP; pproxy-compat is required by from_pproxy_uri; extended covers documented Shadowsocks/Trojan; pproxy-legacy and legacy-crypto retain documented SSR with the Python cipher surface; ssh retains the documented optional SSH upstream. Listener operations, reverse control channels, and QUIC are outside EggPool provider TCP transport.",
+    "verification": "Lean egress-embed feature build and upstream parser/differential test corpus completed at the recorded commit; EggPool runtime use remains T003 scope."
+  },
+  "rows": [
+    {
+      "id": "direct",
+      "uri": "direct://",
+      "source_claim": "Required reference transport in the Python adapter tests.",
+      "python_parse": "pass",
+      "python_connection": "pass: local HTTP/1.1 fixture",
+      "egress_construction": "pass: from_pproxy_uri API and upstream unit test",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "http-connect",
+      "uri": "http://127.0.0.1:PORT",
+      "source_claim": "Documented HTTP CONNECT proxy.",
+      "python_parse": "pass",
+      "python_connection": "pass: HTTP CONNECT fixture records target authority",
+      "egress_construction": "pass: pproxy compatibility parser/tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "http-connect-auth-fragment",
+      "uri": "http://127.0.0.1:PORT#proxy-user:proxy-pass",
+      "source_claim": "Documented fragment authentication form.",
+      "python_parse": "pass",
+      "python_connection": "pass: authenticated HTTP CONNECT fixture",
+      "egress_construction": "pass: pproxy compatibility parser/tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "socks4",
+      "uri": "socks4://127.0.0.1:PORT",
+      "source_claim": "Documented SOCKS4 proxy.",
+      "python_parse": "pass",
+      "python_connection": "pass: pproxy SOCKS4 CONNECT path against local fixture",
+      "egress_construction": "pass: pproxy compatibility parser/tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "socks5",
+      "uri": "socks5://127.0.0.1:PORT",
+      "source_claim": "Documented SOCKS5 proxy with proxy-side DNS for domain targets.",
+      "python_parse": "pass",
+      "python_connection": "pass: local SOCKS5 CONNECT fixture",
+      "egress_construction": "pass: pproxy compatibility parser/tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "socks5-auth-fragment",
+      "uri": "socks5://127.0.0.1:PORT#proxy-user:proxy-pass",
+      "source_claim": "Documented SOCKS5 username/password authentication.",
+      "python_parse": "pass",
+      "python_connection": "pass: authenticated SOCKS5 fixture",
+      "egress_construction": "pass: pproxy compatibility parser/tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "http-connect-userinfo-auth",
+      "uri": "http://proxy-user:proxy-pass@127.0.0.1:PORT",
+      "source_claim": "Existing docs example; not the pproxy auth syntax.",
+      "python_parse": "fail: ArgumentTypeError because pproxy treats userinfo as cipher:key",
+      "python_connection": "not applicable",
+      "egress_construction": "not mandatory; Eggress accepts its own compatible URI grammar",
+      "egress_runtime": "not applicable",
+      "required_egress_features": [],
+      "parity_class": "documentation_drift",
+      "mandatory_for_rust_cutover": false
+    },
+    {
+      "id": "socks4a",
+      "uri": "socks4a://127.0.0.1:PORT",
+      "source_claim": "Existing docs table lists SOCKS4/4a.",
+      "python_parse": "fail: TypeError from pproxy 2.7.9 standalone parser",
+      "python_connection": "not applicable",
+      "egress_construction": "pass: Eggress parser supports the form",
+      "egress_runtime": "not mandatory; no Python product behavior to preserve",
+      "required_egress_features": [],
+      "parity_class": "documentation_drift",
+      "mandatory_for_rust_cutover": false
+    },
+    {
+      "id": "socks5h",
+      "uri": "socks5h://127.0.0.1:PORT",
+      "source_claim": "Troubleshooting text suggests socks5h for DNS behavior.",
+      "python_parse": "fail: TypeError from pproxy 2.7.9 standalone parser",
+      "python_connection": "not applicable",
+      "egress_construction": "not mandatory; URI is not part of the Python product contract",
+      "egress_runtime": "not applicable",
+      "required_egress_features": [],
+      "parity_class": "documentation_drift",
+      "mandatory_for_rust_cutover": false
+    },
+    {
+      "id": "http-socks5-chain",
+      "uri": "http://127.0.0.1:PORT__socks5://127.0.0.1:PORT",
+      "source_claim": "Documented pproxy __ multi-hop composition.",
+      "python_parse": "pass",
+      "python_connection": "deferred: requires two coordinated local proxies; parser evidence captured",
+      "egress_construction": "pass: chain parser and translation tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "shadowsocks-aead",
+      "uri": "ss://aes-256-gcm:synthetic-key@127.0.0.1:PORT",
+      "source_claim": "Documented Shadowsocks form with a modern AEAD cipher.",
+      "python_parse": "pass",
+      "python_connection": "deferred: requires a Shadowsocks peer; no live provider or external proxy",
+      "egress_construction": "pass: extended Shadowsocks compatibility tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["extended"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "ssr-legacy-cipher",
+      "uri": "ssr://aes-256-cfb:synthetic-key@127.0.0.1:PORT",
+      "source_claim": "Documented SSR form; pproxy 2.7.9 accepts legacy cipher methods.",
+      "python_parse": "pass",
+      "python_connection": "deferred: requires an SSR peer; no live provider or external proxy",
+      "egress_construction": "pass: pproxy-legacy plus legacy-crypto translation tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["pproxy-legacy", "legacy-crypto"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "trojan",
+      "uri": "trojan://aes-256-gcm:synthetic-key@127.0.0.1:PORT",
+      "source_claim": "Documented Trojan upstream form, using the current pproxy cipher:key parser shape.",
+      "python_parse": "pass",
+      "python_connection": "deferred: requires a Trojan TLS peer; no live provider or external proxy",
+      "egress_construction": "pass: extended Trojan compatibility tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["extended"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "ssh",
+      "uri": "ssh://aes-256-cfb:synthetic-key@127.0.0.1:PORT",
+      "source_claim": "Documented optional SSH upstream; Python runtime additionally requires asyncssh.",
+      "python_parse": "pass",
+      "python_connection": "deferred: optional asyncssh and SSH peer are not fixture dependencies",
+      "egress_construction": "pass: ssh feature source/API and compatibility tests",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["ssh"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    },
+    {
+      "id": "http-plus-socks5",
+      "uri": "http+socks5://127.0.0.1:PORT",
+      "source_claim": "Existing docs claim + composition.",
+      "python_parse": "pass",
+      "python_connection": "deferred: requires protocol auto-detection and a composed peer",
+      "egress_construction": "pass: pproxy URI parser supports composed protocol expressions",
+      "egress_runtime": "deferred: T003 connector runtime",
+      "required_egress_features": ["common", "pproxy-compat"],
+      "parity_class": "semantic",
+      "mandatory_for_rust_cutover": true
+    }
+  ]
+}

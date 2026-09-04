@@ -170,6 +170,10 @@ def _build_client(
     )
     return httpx.AsyncClient(
         base_url=cfg.base_url,
+        # Provider traffic is account/provider scoped.  Ambient proxy
+        # variables belong to explicit account proxy configuration and must
+        # not silently redirect a direct provider client.
+        trust_env=False,
         timeout=httpx.Timeout(
             connect=cfg.connect_timeout_s,
             read=cfg.stream_timeouts.transport_read_timeout(cfg.read_timeout_s),
