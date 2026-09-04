@@ -22,15 +22,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Subsystem | Roadmap | Status | Current milestone |
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
-| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T005 qualification | T005 closed |
+| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | corrective pass active | T006 ready |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| _none_ | — | — | — | — |
+| T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | T001-T005 historical closure evidence; post-T005 review | ready for handoff |
 
-The sequence and handoff index are also recorded under `implementation/provider-transport/README.md` and `000-handoff-sequence.md`.
+The provider-transport sequence and status are also recorded under `implementation/provider-transport/README.md` and `000-handoff-sequence.md`.
 
 ## Completed implementation plans
 
@@ -44,27 +44,26 @@ The sequence and handoff index are also recorded under `implementation/provider-
 | F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | [`df902b5`](https://github.com/eggstack/eggpool/commit/df902b5) | [closed](closure/foundation/006-status.md) |
 | T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`50d7ff4`](https://github.com/eggstack/eggpool/commit/50d7ff4) | [closed](closure/provider-transport/001-status.md) |
 | T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | [`c9f448a`](https://github.com/eggstack/eggpool/commit/c9f448a) + [`2696e52`](https://github.com/eggstack/eggpool/commit/2696e52) | [closed](closure/provider-transport/002-status.md) |
-| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | [`5b34d8b`](https://github.com/eggstack/eggpool/commit/5b34d8b) | [closed](closure/provider-transport/003-status.md) |
+| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | [`5b34d8b`](https://github.com/eggstack/eggpool/commit/5b34d8b) | [historical closure](closure/provider-transport/003-status.md) |
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | [`71ef03d`](https://github.com/eggstack/eggpool/commit/71ef03d) | [closed](closure/provider-transport/004-status.md) |
-| T005 | [Differential qualification and M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | [`c89e645`](https://github.com/eggstack/eggpool/commit/c89e645) | [closed](closure/provider-transport/005-status.md) |
+| T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | [`c89e645`](https://github.com/eggstack/eggpool/commit/c89e645) | [historical closure](closure/provider-transport/005-status.md) |
+
+## Post-T005 review finding
+
+Independent review of the implementation and closure evidence found no defect in the direct Hyper/Rustls core, common HTTP/SOCKS Eggress paths, provider/account pool topology, timeout/cancellation ownership, fail-closed behavior, or dependency footprint.
+
+It did find one acceptance-evidence gap: T001/T003 require mandatory proxy corpus rows to have runtime evidence or an approved supported-difference decision, while `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` were closed with construction-only evidence because deterministic protocol peers were not bundled. T005 records this limitation explicitly, but no accepted ADR converts those mandatory rows to construction-only qualification.
+
+T006 is the bounded corrective handoff. Historical T003/T005 closure records are retained unchanged for traceability; M4's aggregate closure state is reopened until T006 resolves the gap.
 
 ## Future work and block state
 
-M5 catalog/account registry/routing/quota/health planning is unblocked by the
-accepted T005 closure and stable provider-client/error handoff. No M5
-implementation handoff is currently registered, so there is no dependency-
-ready M5 plan to move. M5 must continue to use the neutral transport boundary
-without reopening TCP/TLS/proxy design.
+M5 catalog/account-registry/routing/quota/health roadmap research may proceed, but M5 implementation handoffs remain blocked on T006 closure. M5 must not treat the provider transport as a fully closed hard dependency until the mandatory extended proxy runtime rows are qualified or explicitly approved as supported differences.
 
 M6 transcoding/SSE, M7 coordinator/finalization, M8 runtime generations, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 Python retirement remain sequenced by `002-long-term-roadmap.md` and intentionally lack dependency-ready implementation handoffs.
 
 ## Closure state
 
-F001 through F006 are closed and the migration foundation is complete. F006's implementation and state-based regressions establish a trustworthy dual-run startup boundary. M4 Provider HTTP + Eggress is closed after T005 qualification.
+F001-F006 remain closed and the migration foundation is complete. T001-T005 retain their individual closure evidence, but M4 is reopened for one corrective qualification milestone, T006.
 
-T001-T005 are closed. T001 froze the real Python provider/proxy contract,
-T002 supplied the direct Hyper/Rustls core, T003 supplied the Eggress
-connector, T004 supplied provider/account pool topology, and T005 completed
-differential qualification and M4 closure. M5 planning is the only future
-workstream newly unblocked by this closure; M6+ remain sequenced behind their
-independent hard dependencies.
+T006 is now the only dependency-ready implementation plan. On accepted T006 closure, the registry should move it to completed, mark M4 closed after corrective pass, and explicitly unblock the M5 implementation planning sequence.

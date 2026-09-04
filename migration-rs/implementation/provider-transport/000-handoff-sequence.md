@@ -1,18 +1,19 @@
 # M4 Provider Transport Handoff Sequence
 
-Status: complete; M4 provider transport closed
+Status: corrective pass active
 
-Execute and close these plans in order:
+Historical sequence:
 
 1. T001 — contract and fixture freeze (closed);
 2. T002 — direct Hyper/Rustls provider HTTP core (closed);
-3. T003 — Eggress connector and proxy parity (closed);
+3. T003 — Eggress connector and proxy parity (historically closed);
 4. T004 — provider/account client pool and lifecycle boundary (closed);
-5. T005 — differential qualification and M4 closure (closed; see the [closure record](../../closure/provider-transport/005-status.md)).
+5. T005 — differential qualification and initial M4 closure (historically closed).
 
-Do not batch T002-T004 into one implementation commit merely because all plans are written. The separation exists so direct HTTP/TLS behavior can be qualified before Eggress, proxy behavior can be qualified before pool topology, and the pool can be qualified before M4 closure.
+Post-T005 independent review identified one bounded acceptance-evidence gap: mandatory Shadowsocks/SSR/Trojan/SSH corpus rows have construction evidence but no deterministic runtime peer evidence, despite the T001/T003 requirement for runtime qualification or an approved supported-difference decision.
 
-M4's hard sequence is complete. M5 planning may now proceed against the
-stable transport handoff. If a later qualification finds a material transport
-regression, insert a bounded corrective plan rather than weakening the frozen
-contract.
+6. T006 — [extended proxy runtime interoperability closure](006-extended-proxy-runtime-qualification.md) (ready for handoff).
+
+T006 does not reopen the direct HTTP/TLS, common CONNECT/SOCKS, provider-pool, timeout, cancellation, or dependency work unless its runtime tests expose a regression. It exists to complete mandatory extended proxy interoperability evidence and re-run the T005 closure matrix.
+
+M5 implementation planning remains blocked until T006 has an accepted closure record. If T006 discovers an Eggress defect, correct/qualify Eggress or create an explicit ADR supported-difference decision; do not weaken the frozen EggPool contract silently.

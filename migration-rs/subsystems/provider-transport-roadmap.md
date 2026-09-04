@@ -1,8 +1,8 @@
 # Provider Transport Subsystem Roadmap
 
-Status: closed after T005 qualification
+Status: corrective pass active after T005 post-closure review
 
-Repository baseline: `13a6a557a07a41a5df5c5f044c8282c7ce8edf73`
+Repository baseline: `1ae7539bbda741ebcac660d535d6e58e6360eae6`
 
 Canonical source:
 
@@ -26,26 +26,24 @@ The Python oracle separates provider traffic from generic outbound networking. `
 
 The pproxy integration is deliberately below HTTP/TLS semantics: `PProxyNetworkBackend.connect_tcp()` delegates TCP establishment to `pproxy.Connection(...).tcp_connect(host, port)`, after which httpcore/HTTPX owns TLS, HTTP framing, response streaming, pooling, and timeout/error mapping.
 
-The public proxy contract is broader than the minimum common case. Configuration supports named proxies, inline `proxy_url`, and `proxy_url_env`; documentation claims pproxy-style HTTP, SOCKS4/4a, SOCKS5, Shadowsocks, SSR, SSH, Trojan, authentication, and composition. The implementation work must determine which documented forms actually work in the Python oracle before selecting Eggress features. It may not silently narrow a working user-visible contract.
+The public proxy contract is broader than HTTP/SOCKS. T001 froze mandatory rows covering working/documented provider-proxy behavior and selected Eggress features accordingly. A mandatory working Python form may not disappear silently during migration.
 
 ## 3. Rust target boundary
 
 The Rust implementation uses Hyper/hyper-util for provider HTTP pooling and protocol handling, Rustls for TLS, and Eggress only for proxied TCP establishment. It does not start an Eggress listener and does not embed Python.
 
-The intended layering is:
-
 ```text
 ProviderClientPool
   -> ProviderHttpClient
        -> Hyper/hyper-util connection pool
-            -> timeout/connection-limit connector wrapper
+            -> admission/timeout connector wrapper
                  -> direct TCP connector
                  OR
                  -> Eggress OutboundConnector
             -> Rustls for HTTPS
 ```
 
-The same HTTP/TLS layer must sit above direct and Eggress-backed TCP streams so proxying does not create a second HTTP implementation.
+The same HTTP/TLS layer sits above direct and Eggress-backed TCP streams so proxying does not create a second HTTP implementation.
 
 ## 4. Invariants
 
@@ -54,14 +52,15 @@ The same HTTP/TLS layer must sit above direct and Eggress-backed TCP streams so 
 - one provider client exists per provider generation; only proxied accounts get a dedicated account client;
 - direct accounts on the same provider reuse the provider client;
 - proxy configuration is account-scoped exactly as today;
-- unsupported or malformed proxy expressions fail closed and never fall back to direct;
+- unsupported, malformed, or failed proxy expressions fail closed and never fall back to direct;
 - proxy/API credentials are absent from logs, errors, snapshots, and fixtures;
-- ambient process proxy environment variables must not silently redirect direct provider clients;
-- HTTP protocol behavior is not upgraded opportunistically during migration; HTTP/1.1 remains the compatibility baseline unless oracle evidence requires otherwise;
-- redirects remain disabled unless the Python provider client contract says otherwise;
-- response bodies remain stream-capable for later M6/M7 work even when M4 tests use finite bodies;
-- connection limits and timeouts remain bounded; cancellation must release any connection/permit ownership;
-- Eggress is used with `default-features = false`; enabled features are justified by the EggPool-specific compatibility corpus rather than Eggress's broad default feature set;
+- ambient proxy environment variables do not redirect direct provider clients;
+- HTTP/1.1 remains the migration compatibility baseline unless oracle evidence requires otherwise;
+- redirects remain disabled according to the frozen provider contract;
+- response bodies remain stream-capable for later M6/M7 work;
+- connection limits/timeouts are bounded and cancellation releases connection/admission ownership;
+- Eggress uses `default-features = false`; enabled features are justified by the EggPool-specific compatibility corpus;
+- mandatory proxy corpus rows require runtime evidence unless an accepted ADR explicitly approves a supported difference;
 - no provider routing, retry, codec, or finalization semantics are added in this subsystem.
 
 ## 5. Dependency graph
@@ -70,113 +69,122 @@ The same HTTP/TLS layer must sit above direct and Eggress-backed TCP streams so 
 F001-F006 closed
       |
       v
-T001 transport contract + fixture freeze
+T001 transport contract + fixture freeze (closed)
       |
       v
-T002 direct Hyper/Rustls provider core
+T002 direct Hyper/Rustls provider core (closed)
       |
       v
-T003 Eggress connector + proxy parity
+T003 Eggress connector + proxy parity (closed historically)
       |
       v
-T004 provider/account client pool
+T004 provider/account client pool (closed)
       |
       v
-T005 differential qualification + M4 closure
+T005 differential qualification + initial M4 closure (closed historically)
       |
       v
-M5 catalog/routing/quota/health planning may become dependency-ready
+T006 extended proxy runtime interoperability corrective closure (ready)
+      |
+      v
+M5 implementation planning may become dependency-ready
 ```
 
-T001-T005 are closed with accepted closure records. M5 planning is now
-unblocked against the stable transport handoff; no downstream implementation
-plan is being created as part of M4 closure.
+T001-T005 have closure records and remain useful evidence. Independent post-T005 review found that the mandatory `shadowsocks-aead`, `ssr-legacy-cipher`, `trojan`, and `ssh` rows were construction-qualified only even though T001/T003 require runtime evidence or an approved supported-difference decision. No ADR currently grants that waiver. M4 is therefore reopened only for T006.
+
+M5 research/roadmap drafting may proceed, but no M5 implementation handoff is dependency-ready until T006 closes.
 
 ## 6. Milestones
 
-### T001 — Provider transport contract and fixture freeze
+### T001 — Provider transport contract and fixture freeze (closed)
 
 Class: invariant/infrastructure
 
-Freeze the Python transport behavior that Rust must match. Build the EggPool-specific proxy capability corpus, classify exact versus semantic parity, extend local HTTP/proxy fixtures, and determine the narrow Eggress feature set required by proven contract behavior.
+Froze direct/provider/account/proxy transport behavior, the EggPool-specific proxy capability corpus, exact-vs-semantic parity classes, deterministic fixtures, and the narrow Eggress feature set.
 
-Exit: the direct/provider/account/proxy transport contract is reviewable and executable without live providers, and there is a recorded feature decision for Eggress.
+Closure: [T001](../closure/provider-transport/001-status.md).
 
-### T002 — Direct Hyper/Rustls provider HTTP core
+### T002 — Direct Hyper/Rustls provider HTTP core (closed)
 
 Class: infrastructure
 
-Implement the direct provider HTTP client using Hyper/hyper-util/Rustls with bounded connection reuse, provider timeout policy, streaming response ownership, cancellation cleanup, and a transport error taxonomy suitable for later coordinator classification.
+Implemented direct provider HTTP using Hyper/hyper-util/Rustls with bounded connection reuse, provider timeout policy, streaming response ownership, cancellation cleanup, and stable transport errors.
 
-Exit: direct HTTP and HTTPS local fixtures satisfy the T001 contract and demonstrate connection reuse/limits/timeouts without Reqwest or provider routing.
+Closure: [T002](../closure/provider-transport/002-status.md).
 
-### T003 — Eggress connector and proxy parity
+### T003 — Eggress connector and proxy parity (historically closed)
 
 Class: infrastructure/capability
 
-Add the narrow `eggress-embed` dependency, exact proxy configuration resolution, an Eggress-backed custom Hyper connector, fail-closed construction/runtime behavior, redacted diagnostics, and the proxy protocol corpus selected by T001.
+Added the narrow `eggress-embed` dependency, proxy resolution, Eggress-backed custom connector, fail-closed construction/runtime behavior, redacted diagnostics, and common HTTP/SOCKS runtime qualification.
 
-Exit: controlled proxied TCP/HTTP/HTTPS fixtures match the Python pproxy transport boundary for the required proxy forms and never bypass a configured proxy.
+Post-closure review: construction-only evidence for mandatory extended protocol families is insufficient under T001/T003 and is corrected by T006. The T003 closure record remains historical evidence rather than being rewritten.
 
-### T004 — Provider/account client pool and lifecycle boundary
+Closure: [T003](../closure/provider-transport/003-status.md).
+
+### T004 — Provider/account client pool and lifecycle boundary (closed)
 
 Class: capability/invariant
 
-Port `ProviderClientPool` semantics around the T002/T003 clients: one default client per provider, account-specific clients only where proxying requires them, direct-account fallback, stable diagnostics, deterministic close/drop behavior, and migration-stage integration into Rust process state without adding dispatch.
+Ported one default client per provider plus dedicated proxied-account clients, direct fallback only for non-proxied accounts, stable diagnostics, immutable topology, and bounded lifecycle ownership.
 
-Exit: configuration produces the same provider/account transport topology as Python and lifecycle tests show clients/connections do not grow with request count or leak across shutdown.
+Closure: [T004](../closure/provider-transport/004-status.md).
 
-### T005 — Provider transport differential qualification and closure
+### T005 — Provider transport differential qualification and initial M4 closure (historically closed)
 
 Class: invariant
 
-Run the complete direct/proxied transport differential matrix, concurrency/cancellation/timeout cases, proxy feature and redaction checks, and dependency/resource review. Record supported differences explicitly and close M4 only if no unresolved mandatory contract gaps remain.
+Qualified direct HTTP/TLS, pooling, timeout/cancellation, CONNECT/SOCKS, fail-closed proxy behavior, redaction, no automatic Hyper retry, and dependency footprint. It transparently recorded construction-only qualification for Shadowsocks/SSR/Trojan/SSH.
 
-Exit: satisfied by the [T005 closure record](../closure/provider-transport/005-status.md); M5 may be planned against the stable provider transport interface.
+Post-closure review determined that this known fixture limitation conflicts with the frozen mandatory runtime criterion. T005 remains valid evidence for all covered rows but no longer represents final M4 closure by itself.
+
+Closure: [T005](../closure/provider-transport/005-status.md).
+
+### T006 — Extended proxy runtime interoperability closure (ready for handoff)
+
+Class: invariant/corrective
+
+Add bounded deterministic runtime peers or equivalent interoperability fixtures for every T001 mandatory extended proxy family, exercise them through EggPool's actual `ProviderHttpClient`/Eggress transport path, prove fail-closed/redaction/cancellation semantics, and re-run the T005 closure matrix.
+
+Required current rows: Shadowsocks AEAD, SSR legacy path, Trojan, and SSH, subject to revalidation against the frozen T001 corpus.
+
+Implementation plan: [T006](../implementation/provider-transport/006-extended-proxy-runtime-qualification.md).
+
+Exit: every mandatory extended row has real runtime evidence or an explicit accepted ADR supported-difference decision; full T005 gates remain green; no unresolved high/medium M4 correctness issue remains.
 
 ## 7. Eggress feature policy
 
-T001 owns the final decision. The expected starting map is:
+Current selected production feature set remains pinned and narrow: `common`, `pproxy-compat`, `extended`, `pproxy-legacy`, `legacy-crypto`, and `ssh` with `default-features = false`. T006 must prove the runtime need for the extended/legacy/SSH features already justified by T001 rather than expanding the feature set.
 
-- `common` + `pproxy-compat` for direct/HTTP/SOCKS compatibility;
-- `extended` only if the EggPool contract requires currently working Shadowsocks/Trojan forms;
-- `pproxy-legacy` only if currently working SSR behavior is part of the contract;
-- `ssh` only if currently working SSH proxy behavior is part of the contract;
-- `legacy-crypto` only for specifically proven legacy methods that EggPool must retain;
-- no `operations`, `reverse`, or `quic` for provider TCP transport.
+`operations`, `reverse`, and `quic` remain outside provider TCP transport. No Reqwest or second TLS stack is permitted.
 
-Do not use Eggress `full` merely because EggPool documentation lists multiple schemes.
+If an Eggress defect prevents a mandatory row, correct/qualify Eggress first or approve an explicit supported difference. Do not add a second production proxy implementation inside EggPool.
 
 ## 8. Failure, cancellation, and resource semantics
 
-Transport construction failures are local/configuration failures and must happen before a request is handed to a provider. Connect/read/write/pool timeout categories must remain distinguishable enough for the later coordinator to reproduce Python failure classification. A dropped/cancelled request must not permanently consume a connection-limit permit or leave an Eggress stream alive. Closing a client pool must bound shutdown and release idle connections.
+Transport construction failures are local/configuration failures and happen before provider handoff. Connect/read/write/pool and proxy handshake failures remain distinguishable enough for later policy. A dropped/cancelled request must not permanently consume an admission permit or leave a live proxy stream. Closing/dropping pools must release idle connections boundedly.
 
-M4 does not decide retryability or account suppression. It supplies stable transport evidence/errors to M7/M5 rather than embedding policy into the connector.
+M4 does not decide retryability or account suppression. It supplies stable transport evidence/errors to later M5/M7 logic.
 
 ## 9. Verification strategy
 
-Use deterministic loopback fixtures and the existing migration oracle harness. Prefer paired Python/Rust observations over live provider traffic. Required classes include direct HTTP, direct HTTPS, keepalive reuse, connection limit pressure, connect/read/write/pool timeout behavior, early close, malformed response framing where practical, configured proxy success/failure, authenticated proxy behavior, DNS target behavior, proxy chain behavior selected by T001, cancellation, secret redaction, and unsupported-form fail-closed behavior.
+Use deterministic loopback fixtures and the migration oracle harness. T006 extends existing common-proxy tests with real extended-family peers rather than live provider/proxy dependencies. Required observations include actual proxy traversal, target authority, authentication result, target HTTP request/response, failure stage, direct-vs-proxy identity, secret absence, cancellation cleanup, and subsequent client recovery.
 
-No broad browser, load farm, or live-provider matrix is required for M4 closure.
+No broad load farm, browser matrix, live provider, or external proxy service is required.
 
 ## 10. Non-goals
 
-- no `/v1/chat/completions`, `/v1/messages`, or `/v1/responses` dispatch;
-- no model discovery/catalog refresh policy;
-- no provider auth/header/wire-surface construction beyond neutral transport test requests;
-- no account routing, quotas, backoffs, health scoring, fairness, or model routers;
-- no canonical OpenAI/Anthropic/Gemini transcoding or SSE translation;
+- no inference route implementation;
+- no model catalog/routing/quota/health work;
+- no provider auth/wire codecs/SSE;
 - no retry/failover/finalization;
-- no global update/pricing/background HTTP manager;
-- no runtime generation/rehash implementation;
-- no Python pproxy removal from the production Python package yet;
-- no Eggress listener, UDP provider transport, transparent proxying, reverse proxy mode, or system proxy mutation.
+- no global outbound manager;
+- no runtime generation/rehash work;
+- no Python pproxy removal;
+- no Eggress listener, UDP provider transport, reverse proxy, transparent proxying, or system proxy mutation.
 
 ## 11. Subsystem closure condition
 
-M4 is closed: T001-T005 have individual closure evidence and the Rust
-candidate constructs and exercises provider/account direct and required
-proxied HTTP clients against deterministic fixtures with parity-equivalent
-timeout, isolation, pooling, redaction, and failure behavior. Closing M4 does
-not mean inference dispatch works; it means the transport beneath later
-routing/codec/coordinator work is stable.
+M4 may be declared fully closed only after T006 has accepted closure evidence. At that point T001-T006 together must prove that direct and all mandatory proxied provider transport paths are runtime-qualified (or explicitly approved differences), fail closed, preserve streaming/pooling/timeout/cancellation semantics, and retain the narrow dependency posture required for local/SBC deployment.
+
+Closing M4 still does not mean inference dispatch works; it means the transport beneath M5-M7 is stable enough to become a hard dependency.
