@@ -1,7 +1,7 @@
 # Phase 7 — Active-Generation State Authority
 
 Date: 2026-07-19
-Status: implemented
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–6.
 
@@ -210,3 +210,54 @@ Assert rehash comparisons and status output use the active digest after multiple
 - **Static audit command**: `TestAppStateAuditEnforcementPhase7` in `tests/unit/test_runtime_manager.py` verifies helpers exist and readiness uses active generation.
 - **Concurrent-publication tests**: `TestConcurrentPublicationReads` and `TestPublicationCoherence` in `tests/unit/test_runtime_manager.py`.
 - **Compatibility mirror**: `mirror_generation_on_app_state()` in `app.py` marked deprecated with docstring. Called at startup and after reload publication. Removal pending full migration of remaining consumers.
+
+## Closure evidence
+
+The implementation landed in `101b0a7f` with the readiness, retirement
+diagnostics, deprecation, and scenario-test gap-fill in `8eb679d1`.
+
+The runtime manager now owns the active-generation pointer, immutable metadata
+and bounded snapshots, retirement diagnostics, lease-acceptance state, and
+shutdown state. Readiness checks the manager rather than startup mirrors, and
+the migrated stats, model-info, backoff, dashboard, model-list, and runtime
+diagnostic paths resolve generation-owned services from the active generation.
+Reload comparison and publication diagnostics likewise use the manager's active
+generation state. The remaining `app.state` generation fields are maintained by
+one synchronous, deprecated compatibility-mirror function at startup and
+committed publication; they are not used as the authority for active-generation
+decisions.
+
+Focused verification passed:
+
+```text
+uv run pytest tests/unit/test_runtime_manager.py \
+  tests/integration/reload/test_stale_app_state.py \
+  tests/integration/test_transcoding_dashboard.py \
+  -q --tb=short --maxfail=1
+109 passed in 6.84s
+```
+
+The focused suite covers immutable metadata and snapshots, complete old/new
+publication observations, retirement safety, manager-unavailable behavior,
+config-digest continuity, the app-state audit, and migrated dashboard/API
+consumers.
+
+The before-push gate also passed:
+
+```text
+uv run ruff format --check src/ tests/ scripts/  # 728 files already formatted
+uv run ruff check src/ tests/ scripts/           # All checks passed
+uv run pyright src/ scripts/                     # 0 errors, 0 warnings
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed in 0.66s
+```
+
+## Dependency review
+
+Phase 8 (`plans/009-phase-08-dispatch-writer-restoration.md`) is unblocked:
+its Phase 7 prerequisite is now formally complete, and the plan is already in
+the repository's `implementation handoff` state. Phase 11
+(`plans/012-phase-11-reload-diagnostics.md`) is also unblocked with respect to
+Phases 1–7 and remains in that same handoff state. Phase 9 still coordinates
+with Phase 8, while Phase 10 and Phase 12 retain their later prerequisites, so
+their statuses do not change. No other future-plan status required updating.
