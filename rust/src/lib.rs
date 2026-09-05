@@ -15,10 +15,12 @@ pub mod health;
 pub mod model_router;
 pub mod providers;
 pub mod quota;
+pub mod request;
 pub mod routing;
 mod runtime;
 pub mod server;
 pub mod version;
+pub mod wire;
 
 pub use cli::{Cli, Command};
 pub use config::{AppConfig, Config, ConfigError};

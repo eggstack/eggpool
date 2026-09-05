@@ -382,10 +382,20 @@ pub fn session_identity_from_header(value: Option<&str>) -> Option<SessionIdenti
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ConversationTextFragment {
     pub role: String,
     pub text: String,
+}
+
+impl fmt::Debug for ConversationTextFragment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConversationTextFragment")
+            .field("role", &self.role)
+            .field("text_bytes", &self.text.len())
+            .finish()
+    }
 }
 
 impl ConversationTextFragment {
@@ -397,10 +407,23 @@ impl ConversationTextFragment {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ConversationPrefix {
     pub system_developer: Vec<ConversationTextFragment>,
     pub first_user_text: Option<String>,
+}
+
+impl fmt::Debug for ConversationPrefix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConversationPrefix")
+            .field("system_developer", &self.system_developer)
+            .field(
+                "first_user_text_bytes",
+                &self.first_user_text.as_ref().map(String::len),
+            )
+            .finish()
+    }
 }
 
 impl ConversationPrefix {
