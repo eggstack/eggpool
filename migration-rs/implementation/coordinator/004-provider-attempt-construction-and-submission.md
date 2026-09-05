@@ -60,4 +60,4 @@ C004 closes when a persisted selected attempt can issue exactly one correctly fo
 
 ## Closure
 
-Create `migration-rs/closure/coordinator/004-status.md`. Accepted closure promotes C005.
+Accepted closure: [C004 status record](../../closure/coordinator/004-status.md). C005 is complete in the same implementation sequence.

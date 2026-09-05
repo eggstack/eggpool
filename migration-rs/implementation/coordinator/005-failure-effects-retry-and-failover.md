@@ -56,4 +56,4 @@ C005 closes when all retry/failover actions are bounded and differential, no pos
 
 ## Closure
 
-Create `migration-rs/closure/coordinator/005-status.md`. Accepted closure promotes C006.
+Accepted closure: [C005 status record](../../closure/coordinator/005-status.md). C006 is complete in the same implementation sequence.

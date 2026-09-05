@@ -59,4 +59,4 @@ C003 closes when candidate order/learning/suppression and negotiation concurrenc
 
 ## Closure
 
-Create `migration-rs/closure/coordinator/003-status.md`. Accepted closure promotes C004.
+Accepted closure: [C003 status record](../../closure/coordinator/003-status.md). C004 is complete in the same implementation sequence.

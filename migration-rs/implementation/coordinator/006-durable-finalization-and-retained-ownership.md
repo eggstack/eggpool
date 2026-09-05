@@ -68,4 +68,4 @@ C006 closes when terminal correctness no longer depends on the client task reach
 
 ## Closure
 
-Create `migration-rs/closure/coordinator/006-status.md`. Accepted closure promotes C007.
+Accepted closure: [C006 status record](../../closure/coordinator/006-status.md). C007 is dependency-ready.

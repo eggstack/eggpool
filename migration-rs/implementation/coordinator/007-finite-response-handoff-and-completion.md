@@ -1,6 +1,6 @@
 # C007 — Finite Response Handoff and Completion
 
-Status: planned; blocked on C006 accepted closure
+Status: ready for handoff; C006 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
