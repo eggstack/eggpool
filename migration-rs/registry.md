@@ -23,13 +23,16 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
-| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | M5 closed; M6 implementation handoff unblocked |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W001 ready** |
 
 ## Dependency-ready implementation plans
 
-No implementation plan is currently registered as dependency-ready. M6 implementation handoff is unblocked and awaits its own planning review.
+| ID | Plan | Class | Dependencies | Status |
+|---|---|---|---|---|
+| W001 | [Canonical wire contract and deterministic fixture freeze](implementation/canonical-wire/001-contract-and-fixture-freeze.md) | invariant/infrastructure | F001-F006, T001-T006, D001-D009 closed | **ready for handoff** |
 
-The M5 sequence and status are also recorded under `implementation/routing-domain/README.md` and `000-handoff-sequence.md`.
+The M6 sequence and dependency state are also recorded under `implementation/canonical-wire/README.md` and `000-handoff-sequence.md`.
 
 ## Completed implementation plans
 
@@ -57,55 +60,49 @@ The M5 sequence and status are also recorded under `implementation/routing-domai
 | D008 | [Differential qualification and initial M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | [`477aade`](https://github.com/eggstack/eggpool/commit/477aade) | [historical aggregate closure](closure/routing-domain/008-status.md) |
 | D009 | [Selection fairness and frozen routing-trace correction](implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md) | invariant/corrective | [`1557d59`](https://github.com/eggstack/eggpool/commit/1557d59) | [closed](closure/routing-domain/009-status.md) |
 
-D009 is recorded as completed with its accepted `closure/routing-domain/009-status.md` record.
+## M5 closure state
 
-## M5 planned sequence
+D009 resolved the two post-D008 accepted-selection findings: configured random fairness now affects the actual accepted claim, and each accepted claim retains a frozen pre-publication selection snapshot used by routing traces. D001-D008 closure records remain append-only historical evidence. M5 is closed after D009.
+
+## M6 planned sequence
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| D001 | [Contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | closed |
-| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | closed |
-| D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | closed; see [closure](closure/routing-domain/003-status.md) |
-| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | closed; see [closure](closure/routing-domain/004-status.md) |
-| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | closed |
-| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | historical closure; D009 corrects uncovered selection evidence |
-| D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | closed; see [closure](closure/routing-domain/007-status.md) |
-| D008 | [Differential qualification and initial M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | historical aggregate closure; superseded for D009 findings only |
-| D009 | [Selection fairness and frozen routing-trace correction](implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md) | closed; see [closure](closure/routing-domain/009-status.md) |
+| W001 | [Contract and deterministic fixture freeze](implementation/canonical-wire/001-contract-and-fixture-freeze.md) | **ready for handoff** |
+| W002 | [Canonical IR, request admission, limits, and M5 fact bridge](implementation/canonical-wire/002-canonical-ir-request-admission-and-limits.md) | planned; blocked on W001 closure |
+| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | planned; blocked on W002 closure |
+| W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | planned; blocked on W003 closure |
+| W005 | [OpenAI Responses and Gemini generateContent codecs](implementation/canonical-wire/005-openai-responses-gemini-codecs.md) | planned; blocked on W004 closure by default serial handoff |
+| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | planned; blocked on W004/W005 closure |
+| W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | planned; blocked on W006 closure |
+| W008 | [SSE, canonical stream events, usage, and terminal evidence](implementation/canonical-wire/008-sse-stream-events-usage-and-terminal-evidence.md) | planned; blocked on W007 closure |
+| W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | planned; blocked on W008 closure |
+| W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | planned; blocked on W009 closure |
 
-Only the dependency-ready table authorizes implementation handoff. The planned-sequence table documents historical and future work without weakening closure gates.
+Only the dependency-ready table authorizes implementation handoff. Successors move only after accepted closure evidence for their hard predecessors.
 
-## D009 independent-review findings (resolved)
+## M6 boundary decisions
 
-Two mandatory M5 selection-contract defects were found after D008 and resolved by D009:
+M6 consumes the closed M5 request-independent routing/affinity DTOs through pure adapters; it does not call account selection, mutate claims, or perform semantic model-router selector inference.
 
-1. Rust `RoutingRouter::select_and_claim` invoked fairness ordering in non-committing mode. For `FairnessMode::Random`, that mode returned identity order rather than invoking `FairnessRandom::choose_index`, so configured random fairness did not affect actual accepted selection. Existing D006 routing-claim tests were round-robin focused and did not exercise this branch.
-2. Rust `SelectionClaim` did not retain the accepted score/fairness candidate snapshot. `RoutingRouter::trace_for` rebuilt a plan after claim publication; active/pending load could already have changed scores/order, allowing trace evidence to describe a state that did not produce the selected account.
+M6 owns static wire-profile identity and deterministic codec/adaptation behavior. Python `wire.resolver` runtime negotiation state—learned preference, rejected wire candidates, alternate-wire retry, and negotiation handles—is M7 because it is inseparable from durable attempt/retry ownership.
 
-D009 fixes these together because both belong to the same accepted-selection boundary. No broad M5 redesign is authorized.
+M6 does not submit provider HTTP requests. The M4 transport remains a closed dependency for M7. M6 produces bounded encoded request bodies and consumes finite/stream provider bytes supplied by its caller.
 
-## M5 boundary decisions
+SSE framing, canonical events, usage extraction, and terminal evidence are M6. Timeout/cancellation policy, downstream response handoff, retry legality, health effects, and finalization are M7.
 
-M5 consumes the closed M4 `ProviderClientPool`/`ProviderHttpClient` only for routing-essential provider catalog discovery. It does not reopen HTTP/TLS/proxy design.
-
-The deprecated Python in-memory `ReservationManager` is not a Rust production target. M5 preserves the SQLite reservation representation plus bounded quota estimator mirrors and provisional local selection claims.
-
-D006/D009 own the local atomic selection-claim transition (selection/revalidation, fairness decision, circuit probe, active ownership, pending quota load, frozen accepted-decision snapshot). Durable inference request/reservation/attempt publication, retry/failover, compensation, and finalization remain M7.
-
-Python `ModelRouterSelector` calls `RequestCoordinator`; therefore D007 ports compiled virtual-router policy and bounded affinity/single-flight state only. Real semantic selector inference is M7. M6 will later adapt canonical requests into the M5 request-independent routing/affinity DTOs.
-
-Optional generic external catalog/model-info polling is not allowed to introduce a second HTTP stack in M5; deterministic resolver logic may use fixtures/persisted metadata, while periodic generic outbound lifecycle remains M8.
+No new database schema is planned for M6.
 
 ## Future work and block state
 
-D009 was the sole dependency-ready implementation plan and is now complete.
+W001 is the sole dependency-ready M6 plan. W002-W010 are planned but blocked in sequence.
 
-M6 canonical request/codec/transcoding/SSE research and planning may continue, and **M6 implementation handoff is unblocked** because D009 re-established a stable M5 routing-domain interface. No M6 implementation plan is registered yet; its own planning review must establish that handoff.
+M7 coordinator/retry/finalization research may proceed conceptually, but **M7 implementation handoff remains blocked until accepted W010 closure** establishes the selected-profile codec runtime as stable.
 
-M7 coordinator/finalization remains additionally blocked on M6. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
+M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification/SBC characterization, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006 and M4 T001-T006 are closed. M5 D001-D008 retain their historical closure records, D009 is closed with its own record, and M5 is closed after the D009 corrective pass.
+F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W001. No M7 implementation plan is dependency-ready.
 
-If a separate material issue outside D009's defined selection boundary is discovered, create another bounded corrective plan rather than expanding D009 opportunistically.
+If a later review finds a material gap in a closed M6 plan, create a bounded corrective plan and update aggregate state rather than rewriting historical closure evidence.
