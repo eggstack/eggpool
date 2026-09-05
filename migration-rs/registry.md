@@ -24,15 +24,12 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
-| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **corrective pass active** | **W012 dependency-ready** |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **closed after W012 corrective pass** | **W012 closed** |
 
 ## Dependency-ready implementation plans
 
-| ID | Plan | Class | Dependencies | Status |
-|---|---|---|---|---|
-| W012 | [Cross-surface differential requalification and M6 re-closure](implementation/canonical-wire/012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | W011 accepted closure | **dependency-ready** |
-
-W012 is dependency-ready after accepted W011 closure. M7 remains blocked until W012 re-closes aggregate M6 and M7 then passes its own planning review.
+None. W012 is closed after its accepted closure record. M7 is eligible for its
+own planning review, but no M7 implementation plan is promoted automatically.
 
 The M6 sequence and dependency state are also recorded under `implementation/canonical-wire/README.md` and `000-handoff-sequence.md`.
 
@@ -51,6 +48,7 @@ The M6 sequence and dependency state are also recorded under `implementation/can
 | W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | capability/invariant | [`0acbccb`](https://github.com/eggstack/eggpool/commit/0acbccb) | [closed](closure/canonical-wire/009-status.md) |
 | W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | invariant | [`77e4dde`](https://github.com/eggstack/eggpool/commit/77e4ddeffb2b37b593725e329b57a311ec217e52) | [historical aggregate closure](closure/canonical-wire/010-status.md) |
 | W011 | [SSE EOF UTF-8 finalization correction](implementation/canonical-wire/011-sse-eof-utf8-correction.md) | invariant/corrective | [`35cdd04`](https://github.com/eggstack/eggpool/commit/35cdd04) | [closed](closure/canonical-wire/011-status.md) |
+| W012 | [Cross-surface differential requalification and M6 re-closure](implementation/canonical-wire/012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | [`1e0bb712`](https://github.com/eggstack/eggpool/commit/1e0bb712e9e45cc529d872dc73682a3742b6583b) | [closed](closure/canonical-wire/012-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
@@ -92,7 +90,7 @@ D009 resolved the two post-D008 accepted-selection findings: configured random f
 | W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | closed; see [closure](closure/canonical-wire/009-status.md) |
 | W010 | [Differential qualification and initial M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | historical aggregate closure; superseded for W011/W012 findings only |
 | W011 | [SSE EOF UTF-8 finalization correction](implementation/canonical-wire/011-sse-eof-utf8-correction.md) | closed; see [closure](closure/canonical-wire/011-status.md) |
-| W012 | [Cross-surface differential requalification and M6 re-closure](implementation/canonical-wire/012-cross-surface-differential-requalification-and-m6-reclosure.md) | **dependency-ready; W011 closure accepted** |
+| W012 | [Cross-surface differential requalification and M6 re-closure](implementation/canonical-wire/012-cross-surface-differential-requalification-and-m6-reclosure.md) | **closed; see closure** |
 
 Only the dependency-ready table authorizes implementation handoff. Successors move only after accepted closure evidence for their hard predecessors.
 
@@ -119,12 +117,12 @@ No new database schema is planned for M6.
 
 ## Future work and block state
 
-W001-W010 retain historical closure records. W011 is closed and W012 is the sole dependency-ready implementation plan. M6 is not closed for successor handoff until accepted W012 closure evidence re-establishes its exit condition.
+W001-W010 retain historical closure records. W011 and W012 are closed with accepted closure records. M6 is closed for successor handoff after the W011/W012 corrective pass.
 
-M7 coordinator/retry/finalization planning and implementation handoff remain blocked on W012 aggregate M6 re-closure. After W012, M7 still requires its own planning review; no M7 plan is promoted automatically. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification/SBC characterization, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
+M7 coordinator/retry/finalization work is eligible for its own planning review now that M6 is closed, but no M7 plan is promoted automatically. M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification/SBC characterization, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 W001-W010 retain append-only historical closures, W011 is closed, and aggregate M6 state remains reopened for W012. W012 is dependency-ready; M7 is blocked on W012 re-closure.
+F001-F006, M4 T001-T006, M5 D001-D009, and M6 W011-W012 are closed. M6 W001-W010 retain append-only historical closures, and aggregate M6 is closed after the W011/W012 corrective pass. M7 is eligible for its own planning review; no later implementation plan is automatically unblocked.
 
 If W011/W012 reveal a separate material defect outside their defined boundaries, create another bounded corrective plan rather than expanding them opportunistically.

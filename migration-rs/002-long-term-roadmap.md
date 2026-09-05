@@ -116,11 +116,11 @@ Post-W010 review reopened aggregate M6 for two bounded correctness/qualification
 
 W010 remains append-only historical closure evidence. Its aggregate conclusion is superseded only for the W011/W012 findings: Rust can silently drop an incomplete UTF-8 suffix at SSE EOF, and the W010 15-pair cross-surface assertions do not compare the complete semantic fields/client encodings required by the plan even though the Python oracle exposes richer transformation observations.
 
-Only the registry's dependency-ready table authorizes implementation. W011 is closed; W012 is the current dependency-ready corrective plan after accepted W011 closure.
+Only the registry's dependency-ready table authorizes implementation. W011 and W012 are closed corrective plans with accepted closure records.
 
 M6 deliberately does **not** port Python `wire.resolver` runtime negotiation state. Learned/preferred wire selection, rejected-wire candidates, alternate-wire retry, provider HTTP submission, response handoff, cancellation/timeouts, failure effects, and durable finalization remain M7 because they depend on attempt ownership.
 
-Exit condition: non-dispatch request/finite/stream transformations across all supported client/profile pairs match Python under explicit exact-vs-semantic rules, resource/security bounds are explicit, invalid UTF-8 and malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. M6 is not closed for successor handoff until accepted W011 and W012 closure re-establish this condition.
+Exit condition: non-dispatch request/finite/stream transformations across all supported client/profile pairs match Python under explicit exact-vs-semantic rules, resource/security bounds are explicit, invalid UTF-8 and malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. Satisfied after accepted W011 and W012 closure.
 
 ## M7 — Coordinator, retry/failover, and durable finalization
 
@@ -130,7 +130,7 @@ This is the highest-risk migration milestone. Port request persistence, account 
 
 M7 consumes the closed M4 provider transport, M5 local selection/claim state, and M6 selected-profile codec runtime. It owns the dynamic wire negotiation/retry lifecycle deliberately excluded from M6.
 
-M7 planning/implementation handoff remains blocked while W012 corrective work is open. Accepted W012 closure may make M7 eligible for its own planning review; it does not promote M7 automatically.
+M7 planning/implementation handoff is now eligible for its own planning review. This closure does not promote a M7 implementation plan automatically; M7 remains unplanned until that review is accepted.
 
 Exit condition: the failure-mode corpus proves parity for success, retry, rejection, cancellation, partial stream, premature EOF, malformed provider behavior, and crash-recovery ownership.
 

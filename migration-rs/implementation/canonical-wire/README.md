@@ -1,6 +1,6 @@
 # M6 Canonical Wire Implementation Handoffs
 
-Status: corrective pass active; W012 dependency-ready
+Status: closed after W012 corrective pass
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md`
 
@@ -21,10 +21,10 @@ W001-W010 retain their historical closure records. Post-W010 review found a conc
 | W009 | [Selected-profile codec runtime boundary](009-selected-profile-codec-runtime-boundary.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/009-status.md) |
 | W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | historical aggregate closure; superseded for W011/W012 findings only |
 | W011 | [SSE EOF UTF-8 finalization correction](011-sse-eof-utf8-correction.md) | invariant/corrective | closed; see [closure](../../closure/canonical-wire/011-status.md) |
-| W012 | [Cross-surface differential requalification and M6 re-closure](012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | **dependency-ready; W011 closure accepted** |
+| W012 | [Cross-surface differential requalification and M6 re-closure](012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | **closed; see [closure](../../closure/canonical-wire/012-status.md)** |
 
-Only the registry's dependency-ready table authorizes implementation. W012 is the sole dependency-ready plan after accepted W011 closure.
+Only the registry's dependency-ready table authorizes implementation. W012 is closed after its accepted closure record; no M6 implementation plan remains dependency-ready.
 
 Every active plan must receive an accepted closure record under `migration-rs/closure/canonical-wire/` before its hard successor is promoted. Historical closure records are append-only.
 
-M6 stops at a pure selected-profile codec runtime. Dynamic wire negotiation, DB-backed preference, alternate-wire retry, provider submission, durable attempts, response handoff, cancellation, timeout policy, and finalization remain M7. M7 is blocked until W012 re-closes aggregate M6 and then still requires its own planning review before implementation handoff.
+M6 stops at a pure selected-profile codec runtime. Dynamic wire negotiation, DB-backed preference, alternate-wire retry, provider submission, durable attempts, response handoff, cancellation, timeout policy, and finalization remain M7. M7 is eligible for its own planning review now that W012 has re-closed aggregate M6; no M7 implementation handoff is promoted automatically.

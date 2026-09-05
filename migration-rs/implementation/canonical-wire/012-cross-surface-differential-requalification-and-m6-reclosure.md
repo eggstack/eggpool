@@ -1,6 +1,6 @@
 # W012 — Cross-Surface Differential Requalification and M6 Re-Closure
 
-Status: dependency-ready; W011 closure accepted
+Status: closed; see [closure record](../../closure/canonical-wire/012-status.md)
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w012--cross-surface-differential-requalification-and-m6-re-closure`
 
@@ -9,6 +9,8 @@ Primary class: invariant/corrective
 Repository baseline at planning: `fb36054278817de63b5c516c82202184c9200be7`
 
 Hard dependency: W011 accepted closure.
+
+Implementation commit: [`1e0bb712`](https://github.com/eggstack/eggpool/commit/1e0bb712e9e45cc529d872dc73682a3742b6583b)
 
 ## 1. Objective
 
