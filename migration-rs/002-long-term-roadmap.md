@@ -116,7 +116,7 @@ Only the registry's dependency-ready table authorizes implementation. W001 is in
 
 M6 deliberately does **not** port Python `wire.resolver` runtime negotiation state. Learned/preferred wire selection, rejected-wire candidates, alternate-wire retry, provider HTTP submission, response handoff, cancellation/timeouts, failure effects, and durable finalization remain M7 because they depend on attempt ownership.
 
-Exit condition: non-dispatch finite/stream codec fixtures across all supported profiles match Python semantically, resource/security bounds are explicit, malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. W010 closure is required before M7 implementation handoff can become dependency-ready.
+Exit condition: non-dispatch finite/stream codec fixtures across all supported profiles match Python semantically, resource/security bounds are explicit, malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. Satisfied by accepted W010 closure. M7 implementation handoff is now eligible for its own planning review, but is not promoted automatically.
 
 ## M7 — Coordinator, retry/failover, and durable finalization
 

@@ -24,13 +24,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
-| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W010 ready** |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **closed** | **W010 closed** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | invariant | W009 closed | **ready for handoff** |
+| — | None. M7 requires its own planning review before implementation handoff. | — | W010 closed | — |
 
 The M6 sequence and dependency state are also recorded under `implementation/canonical-wire/README.md` and `000-handoff-sequence.md`.
 
@@ -47,6 +47,7 @@ The M6 sequence and dependency state are also recorded under `implementation/can
 | W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | capability/invariant | [`b11bf5b`](https://github.com/eggstack/eggpool/commit/b11bf5b) | [closed](closure/canonical-wire/007-status.md) |
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](implementation/canonical-wire/008-sse-stream-events-usage-and-terminal-evidence.md) | capability/invariant | [`6cf01595`](https://github.com/eggstack/eggpool/commit/6cf015954f2b676b5f01a4e08a107bbbab84961e) | [closed](closure/canonical-wire/008-status.md) |
 | W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | capability/invariant | [`0acbccb`](https://github.com/eggstack/eggpool/commit/0acbccb) | [closed](closure/canonical-wire/009-status.md) |
+| W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | invariant | [`77e4dde`](https://github.com/eggstack/eggpool/commit/77e4ddeffb2b37b593725e329b57a311ec217e52) | [closed](closure/canonical-wire/010-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
@@ -86,7 +87,7 @@ D009 resolved the two post-D008 accepted-selection findings: configured random f
 | W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | closed; see [closure](closure/canonical-wire/007-status.md) |
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](implementation/canonical-wire/008-sse-stream-events-usage-and-terminal-evidence.md) | closed; see [closure](closure/canonical-wire/008-status.md) |
 | W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | closed; see [closure](closure/canonical-wire/009-status.md) |
-| W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | **dependency-ready; W009 closure accepted** |
+| W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | closed; see [closure](closure/canonical-wire/010-status.md) |
 
 Only the dependency-ready table authorizes implementation handoff. Successors move only after accepted closure evidence for their hard predecessors.
 
@@ -104,14 +105,22 @@ No new database schema is planned for M6.
 
 ## Future work and block state
 
-W010 is the sole dependency-ready M6 plan. W001-W009 are closed; W010 is promoted after accepted W009 closure.
+W001-W010 are closed and M6 is closed after accepted W010 evidence. No
+implementation plan is dependency-ready. M7 coordinator/retry/finalization
+planning is now eligible for its own planning review, but M7 implementation
+handoff remains unpromoted until that review accepts a bounded plan. M8 runtime
+generations/background lifecycle, M9 operational lifecycle, M10
+qualification/SBC characterization, M11 cutover, and M12 retirement remain
+sequenced by `002-long-term-roadmap.md`.
 
-M7 coordinator/retry/finalization research may proceed conceptually, but **M7 implementation handoff remains blocked until accepted W010 closure** establishes the selected-profile codec runtime as stable.
-
-M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 qualification/SBC characterization, M11 cutover, and M12 retirement remain sequenced by `002-long-term-roadmap.md`.
+M7 now has the accepted W010 prerequisite, but no future implementation plan
+can be unblocked automatically because the planning process requires its own
+planning review.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W010. No M7 implementation plan is dependency-ready; M7 remains blocked on accepted W010 closure.
+F001-F006, M4 T001-T006, M5 D001-D009, and M6 W001-W010 are closed. No M7
+implementation plan is dependency-ready; M7 is eligible for planning review
+but remains unpromoted until that review.
 
 If a later review finds a material gap in a closed M6 plan, create a bounded corrective plan and update aggregate state rather than rewriting historical closure evidence.

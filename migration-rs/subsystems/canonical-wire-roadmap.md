@@ -1,6 +1,6 @@
 # M6 Canonical Request, Wire Codec, Transcoding, and SSE Roadmap
 
-Status: active; W010 dependency-ready
+Status: closed after W010
 
 Repository baseline: `e096ed177f94b64b23a82852d6ec1bebc8782316`
 
@@ -23,11 +23,11 @@ M5 D001-D009 closed
  -> W007 multimodal/documents/cache/provider adaptation (**closed**)
  -> W008 SSE/events/usage/terminal evidence (**closed**)
  -> W009 selected-profile runtime facade (**closed**)
- -> W010 integrated M6 qualification/closure (**dependency-ready**)
- -> M7 may become dependency-ready through its own planning review
+ -> W010 integrated M6 qualification/closure (**closed**)
+ -> M7 planning/implementation handoff may undergo its own planning review
 ```
 
-Only one plan is registered dependency-ready at a time. W004/W005 are conceptually parallel after W003 but the default handoff stayed serial. W009 is now closed and W010 is promoted.
+Only one plan is registered dependency-ready at a time. W004/W005 are conceptually parallel after W003 but the default handoff stayed serial. W009 and W010 are now closed.
 
 ## Core invariants
 
@@ -47,4 +47,4 @@ W001 freezes the oracle; W002 establishes the canonical semantic boundary; W003 
 
 Use deterministic fixtures for all four surfaces/profiles, roles/content/tools/reasoning/structured output/media/documents/cache controls, finite errors, usage/cache counters, SSE framing/chunk splits, and terminal evidence. No live paid provider or broad CI matrix is required.
 
-M6 closes only after W001-W010 have accepted closure evidence and integrated oracle results show parity-equivalent canonical semantics, adaptation decisions, client bytes/events, usage, warnings/errors, and terminal evidence. M6 closure means M7 can rely on transformation semantics; it does not mean Rust inference dispatch exists.
+M6 closes only after W001-W010 have accepted closure evidence and integrated oracle results show parity-equivalent canonical semantics, adaptation decisions, client bytes/events, usage, warnings/errors, and terminal evidence. W010 is closed with accepted evidence in `closure/canonical-wire/010-status.md`. M6 closure means M7 can rely on transformation semantics; it does not mean Rust inference dispatch exists. M7 remains unpromoted until its own planning review.

@@ -1,6 +1,6 @@
 # M6 Canonical Wire Handoff Sequence
 
-Status: active; W010 dependency-ready
+Status: closed after W010; M6 closed
 
 Execute and close these plans in dependency order:
 
@@ -13,10 +13,12 @@ Execute and close these plans in dependency order:
 7. W007 — multimodal, documents, cache controls, and provider-sensitive pure adaptation (**closed; W006 closed**);
 8. W008 — SSE framing, canonical stream events, usage, and terminal evidence (**closed; W007 closed**);
 9. W009 — selected-profile codec runtime boundary (**closed; W008 closed; see closure**);
-10. W010 — integrated differential qualification and M6 closure (**dependency-ready; W009 closed**).
+10. W010 — integrated differential qualification and M6 closure (**closed; see closure**).
 
 W004 and W005 are independent provider-family implementation slices after W003, but they are not simultaneously dependency-ready unless the registry explicitly authorizes parallel work. Keeping them serial reduces churn in the canonical codec contract.
 
 Boundary rule: M6 may accept a caller-selected static wire profile and produce/consume request/response/stream bytes. It may not choose a different profile because an attempt failed. Dynamic wire rejection, negotiation handles, learned preference, provider submission, retry, failure effects, response handoff, and durable attempt/finalization state are M7.
 
-M7 implementation may not be promoted dependency-ready until W010 has accepted closure evidence.
+W010 is closed and M6 is complete. M7 planning/implementation handoff may now
+undergo its own planning review, but no M7 implementation plan is promoted
+automatically by this closure.

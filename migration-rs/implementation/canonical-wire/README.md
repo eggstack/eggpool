@@ -1,6 +1,6 @@
 # M6 Canonical Wire Implementation Handoffs
 
-Status: active; W010 ready for handoff
+Status: closed after W010; M6 closed
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md`
 
@@ -17,10 +17,10 @@ M6 is intentionally split so the behavioral oracle and canonical semantic bounda
 | W007 | [Multimodal, documents, cache controls, and provider adaptation](007-multimodal-documents-cache-and-provider-adaptation.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/007-status.md) |
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](008-sse-stream-events-usage-and-terminal-evidence.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/008-status.md) |
 | W009 | [Selected-profile codec runtime boundary](009-selected-profile-codec-runtime-boundary.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/009-status.md) |
-| W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | **dependency-ready; W009 closure accepted** |
+| W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | closed; see [closure](../../closure/canonical-wire/010-status.md) |
 
-Only the registry's dependency-ready table authorizes implementation. W004 and W005 could technically proceed in parallel after W003, but serial promotion is the default to keep behavioral review small and avoid simultaneous changes to the canonical codec contract.
+Only the registry's dependency-ready table authorizes implementation. W004 and W005 could technically proceed in parallel after W003, but serial promotion is the default to keep behavioral review small and avoid simultaneous changes to the canonical codec contract. There is no dependency-ready M6 plan after W010 closure.
 
 Every plan must receive an accepted closure record under `migration-rs/closure/canonical-wire/` before its hard successor is promoted.
 
-M6 stops at a pure selected-profile codec runtime. Dynamic wire negotiation, DB-backed preference, alternate-wire retry, provider submission, durable attempts, response handoff, cancellation, timeout policy, and finalization remain M7.
+M6 stops at a pure selected-profile codec runtime. Dynamic wire negotiation, DB-backed preference, alternate-wire retry, provider submission, durable attempts, response handoff, cancellation, timeout policy, and finalization remain M7. M6 is closed by W010; M7 requires its own planning review before implementation handoff.
