@@ -1,6 +1,6 @@
 # W010 — Differential Qualification and M6 Closure
 
-Status: planned; blocked on W009 closure
+Status: dependency-ready; W009 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w010--differential-qualification-and-m6-closure`
 

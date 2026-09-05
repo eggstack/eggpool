@@ -1,6 +1,6 @@
 # M6 Canonical Wire Handoff Sequence
 
-Status: active; W009 dependency-ready
+Status: active; W010 dependency-ready
 
 Execute and close these plans in dependency order:
 
@@ -12,8 +12,8 @@ Execute and close these plans in dependency order:
 6. W006 — reasoning, tools, structured output, and loss policy (**closed; W004/W005 closed**);
 7. W007 — multimodal, documents, cache controls, and provider-sensitive pure adaptation (**closed; W006 closed**);
 8. W008 — SSE framing, canonical stream events, usage, and terminal evidence (**closed; W007 closed**);
-9. W009 — selected-profile codec runtime boundary (**dependency-ready; W008 closed**);
-10. W010 — integrated differential qualification and M6 closure (blocked on W009).
+9. W009 — selected-profile codec runtime boundary (**closed; W008 closed; see closure**);
+10. W010 — integrated differential qualification and M6 closure (**dependency-ready; W009 closed**).
 
 W004 and W005 are independent provider-family implementation slices after W003, but they are not simultaneously dependency-ready unless the registry explicitly authorizes parallel work. Keeping them serial reduces churn in the canonical codec contract.
 

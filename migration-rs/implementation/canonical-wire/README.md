@@ -1,6 +1,6 @@
 # M6 Canonical Wire Implementation Handoffs
 
-Status: active; W009 ready for handoff
+Status: active; W010 ready for handoff
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md`
 
@@ -16,8 +16,8 @@ M6 is intentionally split so the behavioral oracle and canonical semantic bounda
 | W006 | [Reasoning, tools, structured output, and loss policy](006-reasoning-tools-structured-output-and-loss-policy.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/006-status.md) |
 | W007 | [Multimodal, documents, cache controls, and provider adaptation](007-multimodal-documents-cache-and-provider-adaptation.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/007-status.md) |
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](008-sse-stream-events-usage-and-terminal-evidence.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/008-status.md) |
-| W009 | [Selected-profile codec runtime boundary](009-selected-profile-codec-runtime-boundary.md) | capability/invariant | **dependency-ready; W008 closure accepted** |
-| W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | planned; blocked on W009 closure |
+| W009 | [Selected-profile codec runtime boundary](009-selected-profile-codec-runtime-boundary.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/009-status.md) |
+| W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | **dependency-ready; W009 closure accepted** |
 
 Only the registry's dependency-ready table authorizes implementation. W004 and W005 could technically proceed in parallel after W003, but serial promotion is the default to keep behavioral review small and avoid simultaneous changes to the canonical codec contract.
 
