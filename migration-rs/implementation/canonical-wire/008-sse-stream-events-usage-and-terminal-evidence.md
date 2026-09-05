@@ -1,6 +1,6 @@
 # W008 — SSE, Canonical Stream Events, Usage, and Terminal Evidence
 
-Status: planned; blocked on W007 closure
+Status: dependency-ready; W007 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w008--sse-framing-canonical-stream-events-usage-and-terminal-evidence`
 

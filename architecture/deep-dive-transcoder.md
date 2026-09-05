@@ -180,6 +180,18 @@ loss warnings when the target provider cannot represent the source form.
 Tool-result media is preserved when the target supports `non_text_tool_result`;
 otherwise it is flattened to text with a `media_tool_result_flattened` warning.
 
+The side-by-side Rust canonical-wire boundary carries the same bounded finite
+media semantics: inline base64/data URIs, external references, image detail
+hints, PDF/document forms, and provider file identities remain typed canonical
+media rather than being textified. Admission enforces count, aggregate,
+encoded-size, reference-length, MIME, and marker bounds before adaptation.
+Cache-control and prompt-breakpoint markers retain semantic placement when the
+selected target can represent them, or produce the shared explicit loss
+outcome otherwise. Response image and document parts decode back into
+canonical output media. No URL is fetched, no file is uploaded or read, and
+media bytes are redacted from Debug output; streaming, usage, and terminal
+evidence remain W008 responsibilities.
+
 When the configured cross-protocol `loss_policy = "reject"` fires (typically
 for a selected provider that cannot represent a protected cache-control
 field), the transcoder raises `TranscodeLossError`. The coordinator's
