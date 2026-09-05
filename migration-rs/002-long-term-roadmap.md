@@ -98,23 +98,33 @@ D009 made configured random fairness affect the actual accepted claim path and f
 
 M5's local selection claim stops before durable inference persistence. Semantic model-router selector calls that invoke `RequestCoordinator` remain M7 work. Optional generic external catalog polling/background scheduling remains M8 work.
 
-Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, durable M5 effects, **and accepted selection/fairness trace evidence** under concurrency/restart tests. D009 closure is required before this exit condition is considered satisfied.
+Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, durable M5 effects, and accepted selection/fairness trace evidence under concurrency/restart tests. Satisfied after D009.
 
 ## M6 — Canonical request boundary, wire codecs, transcoding, and SSE
 
 Primary class: capability/invariant
 
-Port request body limits/parsing, canonical source intent, OpenAI/Anthropic/Gemini codec behavior, reasoning controls, media/document limits, SSE framing/translation, usage extraction, and terminal evidence.
+Subsystem roadmap: [Canonical Request and Wire Codec Runtime](subsystems/canonical-wire-roadmap.md).
 
-Implementation handoff is unblocked after accepted D009 closure re-closed M5. Research and planning may continue; no M6 implementation plan is registered yet.
+Port the deterministic semantic transformation layer while keeping inference orchestration out of scope: bounded request admission, canonical source intent/IR, static wire-profile registry, OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, Gemini generateContent, reasoning/tools/structured-output loss policy, multimodal/documents/cache controls, SSE framing/event conversion, normalized usage, terminal evidence, and one caller-selected-profile runtime facade for M7.
 
-Exit condition: non-dispatch codec fixtures and stream traces match Python's supported client/wire transformations.
+Planned implementation sequence:
+
+W001 contract/fixture freeze -> W002 canonical IR/admission/limits/M5 bridge -> W003 static wire profiles/codec contract -> W004 OpenAI Chat + Anthropic codecs -> W005 OpenAI Responses + Gemini codecs -> W006 reasoning/tools/structured-output/loss policy -> W007 multimodal/documents/cache/provider adaptation -> W008 SSE/events/usage/terminal evidence -> W009 selected-profile runtime facade -> W010 integrated differential qualification/closure.
+
+Only the registry's dependency-ready table authorizes implementation. W001 is initially the sole ready plan; successors require closure evidence.
+
+M6 deliberately does **not** port Python `wire.resolver` runtime negotiation state. Learned/preferred wire selection, rejected-wire candidates, alternate-wire retry, provider HTTP submission, response handoff, cancellation/timeouts, failure effects, and durable finalization remain M7 because they depend on attempt ownership.
+
+Exit condition: non-dispatch finite/stream codec fixtures across all supported profiles match Python semantically, resource/security bounds are explicit, malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. W010 closure is required before M7 implementation handoff can become dependency-ready.
 
 ## M7 — Coordinator, retry/failover, and durable finalization
 
 Primary class: invariant/capability
 
 This is the highest-risk migration milestone. Port request persistence, account claim ownership, upstream submission, failure classification/effects, bounded retry, alternate-wire negotiation, downstream handoff, streaming ownership, cancellation, retained finalization, and terminal cleanup.
+
+M7 consumes the closed M4 provider transport, M5 local selection/claim state, and M6 selected-profile codec runtime. It owns the dynamic wire negotiation/retry lifecycle deliberately excluded from M6.
 
 Exit condition: the failure-mode corpus proves parity for success, retry, rejection, cancellation, partial stream, premature EOF, malformed provider behavior, and crash-recovery ownership.
 
