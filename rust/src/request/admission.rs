@@ -239,6 +239,7 @@ fn canonical_request_from_object(
     let metadata = decode_metadata(object.get("metadata"))?;
     let parallel_tool_calls = optional_bool(object, "parallel_tool_calls")?;
     validate_media_limits(&messages)?;
+    validate_tool_identity(&tools, &messages)?;
     Ok(CanonicalRequest {
         model,
         client_surface: surface,
@@ -397,10 +398,37 @@ fn decode_message_array(
                     _ => {}
                 }
             }
+            let tool_call_id = string_value(object.get("tool_call_id"))?;
+            if role == CanonicalRole::Tool {
+                let Some(call_id) = tool_call_id.as_deref() else {
+                    return Err(AdmissionError::InvalidField {
+                        field: "messages[].tool_call_id",
+                    });
+                };
+                let mut converted = Vec::with_capacity(content.len());
+                for block in content {
+                    if block.kind == CanonicalBlockKind::Text {
+                        converted.push(CanonicalContentBlock {
+                            kind: CanonicalBlockKind::ToolResult,
+                            text: block.text,
+                            media: None,
+                            call_id: Some(call_id.to_owned()),
+                            name: None,
+                            arguments: None,
+                            tool_input: None,
+                            is_error: false,
+                            signature: None,
+                        });
+                    } else {
+                        converted.push(block);
+                    }
+                }
+                content = converted;
+            }
             Ok(CanonicalMessage {
                 role,
                 content,
-                tool_call_id: string_value(object.get("tool_call_id"))?,
+                tool_call_id,
                 name: string_value(object.get("name"))?,
                 refusal: string_value(object.get("refusal"))?,
             })
@@ -792,6 +820,56 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<CanonicalTool>, AdmissionEr
             })
         })
         .collect()
+}
+
+fn validate_tool_identity(
+    tools: &[CanonicalTool],
+    messages: &[CanonicalMessage],
+) -> Result<(), AdmissionError> {
+    let mut names = BTreeSet::new();
+    for tool in tools {
+        if tool.name.trim().is_empty() || !names.insert(tool.name.clone()) {
+            return Err(AdmissionError::InvalidField {
+                field: "tools.name",
+            });
+        }
+    }
+    let mut calls = BTreeSet::new();
+    for message in messages {
+        for block in &message.content {
+            match block.kind {
+                CanonicalBlockKind::ToolCall => {
+                    let Some(call_id) = block.call_id.as_deref() else {
+                        return Err(AdmissionError::InvalidField {
+                            field: "tool_call.id",
+                        });
+                    };
+                    if call_id.trim().is_empty() || !calls.insert(call_id.to_owned()) {
+                        return Err(AdmissionError::InvalidField {
+                            field: "tool_call.id",
+                        });
+                    }
+                    if block.name.as_deref().is_none_or(str::is_empty) {
+                        return Err(AdmissionError::InvalidField {
+                            field: "tool_call.name",
+                        });
+                    }
+                }
+                CanonicalBlockKind::ToolResult
+                    if block
+                        .call_id
+                        .as_deref()
+                        .is_none_or(|call_id| call_id.trim().is_empty()) =>
+                {
+                    return Err(AdmissionError::InvalidField {
+                        field: "tool_result.call_id",
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn decode_tool_choice(

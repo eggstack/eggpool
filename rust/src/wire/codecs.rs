@@ -7,9 +7,10 @@
 
 use serde_json::{Map, Value, json};
 
+use super::adaptation::{client_wire_surface, notice, request_notices};
 use super::codec::{
-    AdaptationNotice, CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload,
-    StreamAdapterKind, WireCodec, WireCodecId,
+    CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload, StreamAdapterKind, WireCodec,
+    WireCodecId,
 };
 use super::ir::{
     CacheCounterStatus, CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage,
@@ -194,7 +195,7 @@ fn map_admission_error(error: AdmissionError, source: ClientSurface) -> CodecErr
         | AdmissionError::TopLevelNotObject
         | AdmissionError::InvalidModel => (CodecReasonCode::MalformedSourceRequest, None),
     };
-    codec_error(reason, field, client_wire_surface(source), None)
+    codec_error(reason, field, Some(client_wire_surface(source)), None)
 }
 
 fn ensure_profile(
@@ -227,6 +228,7 @@ fn expected_family(surface: WireSurface) -> super::registry::CodecFamily {
 
 fn encode_openai_request(request: &CanonicalRequest) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::OpenaiChatCompletions)?;
+    let notices = request_notices(request, WireSurface::OpenaiChatCompletions)?;
     let mut out = Map::new();
     out.insert("model".into(), Value::String(request.model.clone()));
     out.insert(
@@ -267,11 +269,18 @@ fn encode_openai_request(request: &CanonicalRequest) -> Result<CodecOutput<Value
             Value::String(request.reasoning.effort.clone().unwrap_or_default()),
         );
     }
-    Ok(CodecOutput::new(Value::Object(out)))
+    if request.reasoning.explicit_disable {
+        out.insert("reasoning_effort".into(), Value::String("none".into()));
+    }
+    Ok(CodecOutput {
+        value: Value::Object(out),
+        notices,
+    })
 }
 
 fn encode_anthropic_request(request: &CanonicalRequest) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::AnthropicMessages)?;
+    let notices = request_notices(request, WireSurface::AnthropicMessages)?;
     let mut out = Map::new();
     out.insert("model".into(), Value::String(request.model.clone()));
 
@@ -347,31 +356,8 @@ fn encode_anthropic_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
         }
         _ => {}
     }
-    let mut notices = Vec::new();
-    if request.response_format.is_some() {
-        notices.push(adaptation_notice(
-            "response_format",
-            request.client_surface,
-            WireSurface::AnthropicMessages,
-        ));
-    }
     if request.parallel_tool_calls.is_some() {
         out.remove("parallel_tool_calls");
-        notices.push(adaptation_notice(
-            "parallel_tool_calls",
-            request.client_surface,
-            WireSurface::AnthropicMessages,
-        ));
-    }
-    if request.reasoning.effort.is_some()
-        && request.reasoning.budget_tokens.is_none()
-        && request.reasoning.requested == Some(true)
-    {
-        notices.push(adaptation_notice(
-            "reasoning_effort",
-            request.client_surface,
-            WireSurface::AnthropicMessages,
-        ));
     }
     Ok(CodecOutput {
         value: Value::Object(out),
@@ -612,7 +598,7 @@ fn validate_request_blocks(
                 return Err(codec_error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("content"),
-                    client_wire_surface(request.client_surface),
+                    Some(client_wire_surface(request.client_surface)),
                     Some(target),
                 ));
             }
@@ -621,7 +607,7 @@ fn validate_request_blocks(
                     return Err(codec_error(
                         CodecReasonCode::MalformedSourceRequest,
                         Some("tool_call"),
-                        client_wire_surface(request.client_surface),
+                        Some(client_wire_surface(request.client_surface)),
                         Some(target),
                     ));
                 }
@@ -632,7 +618,7 @@ fn validate_request_blocks(
                     return Err(codec_error(
                         CodecReasonCode::MalformedSourceRequest,
                         Some("tool_call.arguments"),
-                        client_wire_surface(request.client_surface),
+                        Some(client_wire_surface(request.client_surface)),
                         Some(target),
                     ));
                 }
@@ -983,12 +969,12 @@ pub(crate) fn encode_anthropic_response(
                 "text": block.text.clone().unwrap_or_default(),
             })),
             CanonicalBlockKind::Refusal => {
-                notices.push(AdaptationNotice {
-                    reason: CodecReasonCode::UnsupportedSemanticFeature,
-                    field: Some("output.refusal".into()),
-                    source_surface: None,
-                    target_surface: Some(WireSurface::AnthropicMessages),
-                });
+                notices.push(notice(
+                    "refusal_not_representable",
+                    "output.refusal",
+                    None,
+                    Some(WireSurface::AnthropicMessages),
+                ));
                 content.push(json!({
                     "type": "text",
                     "text": block.text.clone().unwrap_or_default(),
@@ -1386,27 +1372,6 @@ fn codec_error(
         field: field.map(ToOwned::to_owned),
         source_surface,
         target_surface,
-    }
-}
-
-fn adaptation_notice(
-    field: &str,
-    source_surface: ClientSurface,
-    target_surface: WireSurface,
-) -> AdaptationNotice {
-    AdaptationNotice {
-        reason: CodecReasonCode::UnsupportedSemanticFeature,
-        field: Some(field.into()),
-        source_surface: client_wire_surface(source_surface),
-        target_surface: Some(target_surface),
-    }
-}
-
-fn client_wire_surface(surface: ClientSurface) -> Option<WireSurface> {
-    match surface {
-        ClientSurface::ChatCompletions => Some(WireSurface::OpenaiChatCompletions),
-        ClientSurface::Messages => Some(WireSurface::AnthropicMessages),
-        ClientSurface::Responses => Some(WireSurface::OpenaiResponses),
     }
 }
 

@@ -99,6 +99,20 @@ encoding, response/event decoding, and client response/event encoding.
 selected-profile request/response/stream bridge. Same-surface native traffic
 can still use the low-copy byte path when no semantic adaptation is needed.
 
+The side-by-side Rust candidate implements the same boundary in
+`rust/src/wire/ir.rs`, `rust/src/wire/adaptation.rs`, and the finite codec
+modules. `AdaptationPolicy` is the single pure W006 loss decision point:
+`warn` returns bounded structural notices, while `reject` returns a typed
+`LossRejected` codec error before any provider work. Notices carry stable codes,
+affected fields, and source/target surfaces only; they never carry request
+content or schemas. Reasoning capability status is an explicit caller/M5
+input, not something a codec infers from provider errors or network state.
+Tool IDs are validated at admission, mixed-content ordering is preserved where
+the target grammar permits it, and providers without native IDs receive a
+repeatable compatibility identity rather than a random ID. The Rust boundary
+also preserves structured-output intent as a formal constraint; it does not
+replace an unsupported schema with a prompt instruction.
+
 ### `transcoder/static_headers.py`
 
 Protocol-required static headers for cross-protocol transcoding (e.g. `anthropic-version` for Anthropic upstreams).

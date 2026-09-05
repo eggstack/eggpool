@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::adaptation::{AdaptationPolicy, apply_adaptation_policy};
 use super::registry::{CodecFamily, ConfiguredWireProfile, WireSurface};
 use crate::wire::ir::{
     CanonicalEvent, CanonicalRequest, CanonicalResponse, ClientSurface, ProviderErrorEvidence,
@@ -80,13 +81,40 @@ pub enum CodecReasonCode {
     ResourceLimitViolation,
 }
 
+/// Stable semantic code for a non-fatal adaptation notice.
+///
+/// The code is deliberately a string rather than a provider error message:
+/// callers can aggregate it safely without retaining prompts, schemas, or
+/// provider payloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdaptationCode(pub String);
+
 /// A bounded semantic adaptation notice.  It contains no body or credential.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdaptationNotice {
+    pub code: AdaptationCode,
     pub reason: CodecReasonCode,
     pub field: Option<String>,
     pub source_surface: Option<WireSurface>,
     pub target_surface: Option<WireSurface>,
+}
+
+impl AdaptationNotice {
+    pub fn new(
+        code: impl Into<String>,
+        reason: CodecReasonCode,
+        field: Option<impl Into<String>>,
+        source_surface: Option<WireSurface>,
+        target_surface: Option<WireSurface>,
+    ) -> Self {
+        Self {
+            code: AdaptationCode(code.into()),
+            reason,
+            field: field.map(Into::into),
+            source_surface,
+            target_surface,
+        }
+    }
 }
 
 /// Typed codec failure with stable reason and optional structural field.
@@ -187,6 +215,16 @@ pub trait WireCodec {
         profile: &ConfiguredWireProfile,
     ) -> Result<CodecOutput<Value>, CodecError>;
 
+    /// Apply the shared W006 loss policy to request adaptation notices.
+    fn encode_request_with_policy(
+        &self,
+        request: &CanonicalRequest,
+        profile: &ConfiguredWireProfile,
+        policy: &AdaptationPolicy,
+    ) -> Result<CodecOutput<Value>, CodecError> {
+        apply_adaptation_policy(self.encode_request(request, profile)?, policy)
+    }
+
     fn decode_response(
         &self,
         payload: &Value,
@@ -198,6 +236,16 @@ pub trait WireCodec {
         response: &CanonicalResponse,
         client_surface: ClientSurface,
     ) -> Result<CodecOutput<Value>, CodecError>;
+
+    /// Apply the shared W006 loss policy to response adaptation notices.
+    fn encode_response_with_policy(
+        &self,
+        response: &CanonicalResponse,
+        client_surface: ClientSurface,
+        policy: &AdaptationPolicy,
+    ) -> Result<CodecOutput<Value>, CodecError> {
+        apply_adaptation_policy(self.encode_response(response, client_surface)?, policy)
+    }
 
     fn stream_adapter(&self) -> StreamAdapterKind;
 

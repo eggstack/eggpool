@@ -4,11 +4,14 @@
 //! semantic bridge. They do not own SSE framing, transport, retries,
 //! negotiation, or request lifecycle state.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 
+use super::adaptation::{client_wire_surface, notice, request_notices, stable_tool_call_id};
 use super::codec::{
-    AdaptationNotice, CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload,
-    StreamAdapterKind, WireCodec, WireCodecId,
+    CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload, StreamAdapterKind, WireCodec,
+    WireCodecId,
 };
 use super::codecs::{encode_anthropic_response, encode_openai_response};
 use super::ir::{
@@ -241,6 +244,7 @@ fn expected_family(surface: WireSurface) -> CodecFamily {
 
 fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::OpenaiResponses)?;
+    let mut notices = request_notices(request, WireSurface::OpenaiResponses)?;
     let mut out = Map::new();
     out.insert("model".into(), Value::String(request.model.clone()));
     out.insert("input".into(), Value::Array(Vec::new()));
@@ -254,31 +258,40 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
         if message.role == CanonicalRole::System {
             continue;
         }
-        let tool_results: Vec<&CanonicalContentBlock> = message
-            .content
-            .iter()
-            .filter(|block| block.kind == CanonicalBlockKind::ToolResult)
-            .collect();
-        if !tool_results.is_empty() {
-            for block in tool_results {
-                input.push(json!({"type":"function_call_output", "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(), "output":block.text.clone().unwrap_or_default()}));
+        let mut message_blocks = Vec::new();
+        let flush_message = |input: &mut Vec<Value>, blocks: &mut Vec<&CanonicalContentBlock>| {
+            if !blocks.is_empty() {
+                input.push(json!({
+                    "type": "message",
+                    "role": message.role.as_str(),
+                    "content": responses_content(blocks.as_slice(), message.role),
+                }));
+                blocks.clear();
             }
-            continue;
+        };
+        for block in &message.content {
+            match block.kind {
+                CanonicalBlockKind::ToolCall => {
+                    flush_message(input, &mut message_blocks);
+                    input.push(json!({
+                        "type":"function_call",
+                        "call_id":block.call_id.clone().unwrap_or_default(),
+                        "name":block.name.clone().unwrap_or_default(),
+                        "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())
+                    }));
+                }
+                CanonicalBlockKind::ToolResult => {
+                    flush_message(input, &mut message_blocks);
+                    input.push(json!({
+                        "type":"function_call_output",
+                        "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
+                        "output":block.text.clone().unwrap_or_default()
+                    }));
+                }
+                _ => message_blocks.push(block),
+            }
         }
-        for block in message
-            .content
-            .iter()
-            .filter(|block| block.kind == CanonicalBlockKind::ToolCall)
-        {
-            input.push(json!({"type":"function_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())}));
-        }
-        if message
-            .content
-            .iter()
-            .any(|block| block.kind != CanonicalBlockKind::ToolCall)
-        {
-            input.push(json!({"type":"message", "role":message.role.as_str(), "content":responses_content(&message.content, message.role)}));
-        }
+        flush_message(input, &mut message_blocks);
     }
     if let Some(system) = request
         .messages
@@ -300,7 +313,6 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
             json!({"format":Value::Object(format.clone())}),
         );
     }
-    let mut notices = Vec::new();
     if !request.metadata.is_empty() {
         if request.client_surface == ClientSurface::Responses {
             return Err(error(
@@ -310,9 +322,14 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                 Some(WireSurface::OpenaiResponses),
             ));
         }
-        notices.push(notice(request, "metadata", WireSurface::OpenaiResponses));
+        notices.push(notice(
+            "metadata_not_representable",
+            "metadata",
+            Some(client_wire_surface(request.client_surface)),
+            Some(WireSurface::OpenaiResponses),
+        ));
     }
-    if let Some(reasoning) = reasoning_for_responses(request, &mut notices) {
+    if let Some(reasoning) = reasoning_for_responses(request) {
         out.insert("reasoning".into(), reasoning);
     }
     Ok(CodecOutput {
@@ -321,7 +338,7 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
     })
 }
 
-fn responses_content(blocks: &[CanonicalContentBlock], role: CanonicalRole) -> Vec<Value> {
+fn responses_content(blocks: &[&CanonicalContentBlock], role: CanonicalRole) -> Vec<Value> {
     let content_type = if role == CanonicalRole::Assistant {
         "output_text"
     } else {
@@ -366,12 +383,9 @@ fn openai_response_tool_choice(choice: &CanonicalToolChoice) -> Value {
     }
 }
 
-fn reasoning_for_responses(
-    request: &CanonicalRequest,
-    notices: &mut Vec<AdaptationNotice>,
-) -> Option<Value> {
+fn reasoning_for_responses(request: &CanonicalRequest) -> Option<Value> {
     if request.reasoning.requested == Some(false) {
-        return Some(json!({"enabled":false}));
+        return Some(json!({"effort":"none"}));
     }
     if request.reasoning.requested != Some(true) {
         return None;
@@ -381,9 +395,6 @@ fn reasoning_for_responses(
             return Some(json!({"effort":effort}));
         }
     }
-    if request.reasoning.effort.is_some() || request.reasoning.budget_tokens.is_some() {
-        notices.push(notice(request, "reasoning", WireSurface::OpenaiResponses));
-    }
     None
 }
 
@@ -391,6 +402,7 @@ fn encode_interactions_request(
     request: &CanonicalRequest,
 ) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::GeminiInteractions)?;
+    let notices = request_notices(request, WireSurface::GeminiInteractions)?;
     let mut out = Map::new();
     out.insert("model".into(), Value::String(request.model.clone()));
     out.insert("input".into(), gemini_input(request)?);
@@ -415,11 +427,6 @@ fn encode_interactions_request(
     if let Some(format) = &request.response_format {
         out.insert("response_format".into(), Value::Object(format.clone()));
     }
-    let notices = if request.metadata.is_empty() {
-        Vec::new()
-    } else {
-        vec![notice(request, "metadata", WireSurface::GeminiInteractions)]
-    };
     Ok(CodecOutput {
         value: Value::Object(out),
         notices,
@@ -430,7 +437,8 @@ fn encode_generate_content_request(
     request: &CanonicalRequest,
 ) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::GeminiGenerateContent)?;
-    let contents: Result<Vec<Value>, CodecError> = request.messages.iter().filter(|message| message.role != CanonicalRole::System).map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content)?}))).collect();
+    let notices = request_notices(request, WireSurface::GeminiGenerateContent)?;
+    let contents: Result<Vec<Value>, CodecError> = request.messages.iter().filter(|message| message.role != CanonicalRole::System).map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content, false)?}))).collect();
     let mut out = Map::new();
     out.insert("contents".into(), Value::Array(contents?));
     if let Some(system) = request
@@ -444,7 +452,6 @@ fn encode_generate_content_request(
         );
     }
     let mut generation = Map::new();
-    let mut notices = Vec::new();
     add_generation_controls(&mut generation, request, true);
     if let Some(format) = &request.response_format {
         if matches!(
@@ -463,12 +470,6 @@ fn encode_generate_content_request(
             {
                 generation.insert("responseSchema".into(), Value::Object(schema.clone()));
             }
-        } else {
-            notices.push(notice(
-                request,
-                "response_format",
-                WireSurface::GeminiGenerateContent,
-            ));
         }
     }
     if request.reasoning.requested == Some(false) {
@@ -477,14 +478,6 @@ fn encode_generate_content_request(
         if let Some(budget) = request.reasoning.budget_tokens {
             generation.insert("thinkingConfig".into(), json!({"thinkingBudget":budget}));
         }
-    } else if request.reasoning.effort.is_some()
-        || request.reasoning.mode == ReasoningMode::Adaptive
-    {
-        notices.push(notice(
-            request,
-            "reasoning",
-            WireSurface::GeminiGenerateContent,
-        ));
     }
     if !generation.is_empty() {
         out.insert("generationConfig".into(), Value::Object(generation));
@@ -511,13 +504,6 @@ fn encode_generate_content_request(
             }
         }
         out.insert("toolConfig".into(), json!({"functionCallingConfig":config}));
-    }
-    if !request.metadata.is_empty() {
-        notices.push(notice(
-            request,
-            "metadata",
-            WireSurface::GeminiGenerateContent,
-        ));
     }
     Ok(CodecOutput {
         value: Value::Object(out),
@@ -639,10 +625,13 @@ fn gemini_input(request: &CanonicalRequest) -> Result<Value, CodecError> {
             messages[0].content[0].text.clone().unwrap_or_default(),
         ));
     }
-    Ok(Value::Array(messages.into_iter().map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content)?}))).collect::<Result<Vec<_>, CodecError>>()?))
+    Ok(Value::Array(messages.into_iter().map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content, true)?}))).collect::<Result<Vec<_>, CodecError>>()?))
 }
 
-fn gemini_parts(blocks: &[CanonicalContentBlock]) -> Result<Vec<Value>, CodecError> {
+fn gemini_parts(
+    blocks: &[CanonicalContentBlock],
+    preserve_call_ids: bool,
+) -> Result<Vec<Value>, CodecError> {
     blocks.iter().map(|block| match block.kind {
         CanonicalBlockKind::Text => Ok(json!({"text":block.text.clone().unwrap_or_default()})),
         CanonicalBlockKind::Reasoning => Ok(json!({"text":block.text.clone().unwrap_or_default(), "thought":true})),
@@ -652,8 +641,33 @@ fn gemini_parts(blocks: &[CanonicalContentBlock]) -> Result<Vec<Value>, CodecErr
             else if let Some(uri) = &media.uri { Ok(json!({"file_data":{"mime_type":media.media_type.clone().unwrap_or_else(||"application/octet-stream".into()), "file_uri":uri}})) }
             else { Err(error(CodecReasonCode::UnsupportedSemanticFeature, Some("content.image"), None, Some(WireSurface::GeminiGenerateContent))) }
         }
-        CanonicalBlockKind::ToolCall => Ok(json!({"functionCall":{"name":block.name.clone().unwrap_or_default(), "args":tool_args(block)?}})),
-        CanonicalBlockKind::ToolResult => Ok(json!({"functionResponse":{"name":block.name.clone().unwrap_or_default(), "response":{"result":block.text.clone().unwrap_or_default()}}})),
+        CanonicalBlockKind::ToolCall => {
+            let mut call = Map::new();
+            call.insert(
+                "name".into(),
+                Value::String(block.name.clone().unwrap_or_default()),
+            );
+            call.insert("args".into(), tool_args(block)?);
+            if preserve_call_ids {
+                if let Some(call_id) = &block.call_id {
+                    call.insert("id".into(), Value::String(call_id.clone()));
+                }
+            }
+            Ok(json!({"functionCall":call}))
+        }
+        CanonicalBlockKind::ToolResult => {
+            let mut response = Map::new();
+            response.insert(
+                "result".into(),
+                Value::String(block.text.clone().unwrap_or_default()),
+            );
+            if preserve_call_ids {
+                if let Some(call_id) = &block.call_id {
+                    response.insert("id".into(), Value::String(call_id.clone()));
+                }
+            }
+            Ok(json!({"functionResponse":{"name":block.name.clone().unwrap_or_default(), "response":response}}))
+        }
         CanonicalBlockKind::Refusal => Ok(json!({"text":block.text.clone().unwrap_or_default()})),
         CanonicalBlockKind::Document | CanonicalBlockKind::Audio => Err(error(CodecReasonCode::UnsupportedSemanticFeature, Some("content"), None, Some(WireSurface::GeminiGenerateContent))),
     }).collect()
@@ -841,6 +855,8 @@ fn decode_interactions_response(
         .and_then(Value::as_array)
         .ok_or_else(|| response_error("steps"))?;
     let mut output = Vec::new();
+    let mut tool_ids = BTreeMap::new();
+    let mut call_ordinal = 0;
     for raw_step in steps {
         let step = raw_step
             .as_object()
@@ -866,13 +882,31 @@ fn decode_interactions_response(
                     ));
                 }
             }
-            Some("function_call") => output.push(CanonicalOutputBlock {
-                kind: CanonicalBlockKind::ToolCall,
-                text: None,
-                call_id: optional_string(step, "id")?,
-                name: optional_string(step, "name")?,
-                arguments: Some(json_text(step.get("arguments"))),
-            }),
+            Some("function_call") => {
+                let name = optional_string(step, "name")?.unwrap_or_default();
+                let arguments = json_text(step.get("arguments"));
+                let call_id = optional_string(step, "id")?
+                    .unwrap_or_else(|| stable_tool_call_id(&name, &arguments, call_ordinal));
+                call_ordinal += 1;
+                tool_ids.insert(name.clone(), call_id.clone());
+                output.push(CanonicalOutputBlock {
+                    kind: CanonicalBlockKind::ToolCall,
+                    text: None,
+                    call_id: Some(call_id),
+                    name: Some(name),
+                    arguments: Some(arguments),
+                });
+            }
+            Some("function_response") => {
+                let name = optional_string(step, "name")?.unwrap_or_default();
+                output.push(CanonicalOutputBlock {
+                    kind: CanonicalBlockKind::ToolResult,
+                    text: Some(json_text(step.get("response"))),
+                    call_id: tool_ids.get(&name).cloned(),
+                    name: Some(name),
+                    arguments: None,
+                });
+            }
             Some(_) => return Err(unsupported("steps[].type", WireSurface::GeminiInteractions)),
             None => return Err(response_error("steps[].type")),
         }
@@ -923,6 +957,8 @@ fn decode_generate_content_response(
         ));
     }
     let mut output = Vec::new();
+    let mut tool_ids = BTreeMap::new();
+    let mut call_ordinal = 0;
     if let Some(content) = candidate.get("content") {
         let content = content
             .as_object()
@@ -958,12 +994,17 @@ fn decode_generate_content_response(
                 if !args.is_object() {
                     return Err(response_error("parts[].functionCall.args"));
                 }
+                let name = required_string(call, "name", "parts[].functionCall.name")?;
+                let arguments = compact_value(args);
+                let call_id = stable_tool_call_id(&name, &arguments, call_ordinal);
+                call_ordinal += 1;
+                tool_ids.insert(name.clone(), call_id.clone());
                 output.push(CanonicalOutputBlock {
                     kind: CanonicalBlockKind::ToolCall,
                     text: None,
-                    call_id: None,
-                    name: Some(required_string(call, "name", "parts[].functionCall.name")?),
-                    arguments: Some(compact_value(args)),
+                    call_id: Some(call_id),
+                    name: Some(name),
+                    arguments: Some(arguments),
                 });
             }
             if let Some(result) = part.get("functionResponse") {
@@ -979,7 +1020,12 @@ fn decode_generate_content_response(
                     text: Some(compact_value(
                         response.get("result").unwrap_or(&Value::Null),
                     )),
-                    call_id: None,
+                    call_id: optional_string(result, "id")?.or_else(|| {
+                        result
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .and_then(|name| tool_ids.get(name).cloned())
+                    }),
                     name: optional_string(result, "name")?,
                     arguments: None,
                 });
@@ -1271,21 +1317,6 @@ fn error(
         field: field.map(ToOwned::to_owned),
         source_surface: source,
         target_surface: target,
-    }
-}
-fn notice(request: &CanonicalRequest, field: &str, target: WireSurface) -> AdaptationNotice {
-    AdaptationNotice {
-        reason: CodecReasonCode::UnsupportedSemanticFeature,
-        field: Some(field.into()),
-        source_surface: Some(client_wire_surface(request.client_surface)),
-        target_surface: Some(target),
-    }
-}
-fn client_wire_surface(surface: ClientSurface) -> WireSurface {
-    match surface {
-        ClientSurface::ChatCompletions => WireSurface::OpenaiChatCompletions,
-        ClientSurface::Responses => WireSurface::OpenaiResponses,
-        ClientSurface::Messages => WireSurface::AnthropicMessages,
     }
 }
 fn text_output(kind: CanonicalBlockKind, text: String) -> CanonicalOutputBlock {
