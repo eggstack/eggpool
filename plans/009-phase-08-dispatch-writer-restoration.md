@@ -1,7 +1,7 @@
 # Phase 8 — Dispatch Writer Restoration and Persistence Parity
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: not applicable — DispatchPersistenceWriter removed by Plan 091 (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1, 5, 6, and 7.
 
@@ -195,3 +195,52 @@ Use generous non-flaky thresholds but require evidence that batching is active, 
 ## Handoff evidence
 
 Provide focused selection and equivalence tests, runtime diagnostic output, before/after transaction and latency metrics, queue-pressure results, and confirmation that writer ownership remains process-level across generation retirement.
+
+## Closure record
+
+Plan 009 is not applicable and is closed without restoring the dispatch writer.
+Plan 091's evidence-based disposition removed `DispatchPersistenceWriter` and
+its configuration, queue, metrics, repository, coordinator mode, and tests in
+implementation commit `8564e4ecdb2c48d58a9b6bdd096e14ae13c37ffa`. Plan 092
+then reconciled the parent SBC roadmap and confirmed that direct transactional
+dispatch persistence remains canonical. The prior synthetic batching result
+was not treated as intended-load evidence: it used in-memory SQLite, neither
+shipped profile enabled the writer, and no supported feature required it.
+
+The current implementation therefore satisfies the applicable persistence
+contract through the direct path: `RequestCoordinator` commits the request,
+reservation, and attempt bundle in one owned database transaction before
+upstream dispatch, and failed persistence releases provisional claim ownership.
+The generation factory supplies no writer dependency, configuration rejects
+the removed `dispatch_writer` section, and the active architecture documents
+that no process-owned batching writer is supported. Reintroducing the writer
+would contradict the later Plan 091/092 product decision.
+
+Current verification:
+
+```text
+uv run pytest tests/unit/test_config_validation_extended.py \
+  tests/unit/test_generation_factory.py \
+  tests/unit/test_coordinator_claim_lock_scope.py \
+  tests/unit/test_request_coordinator_cleanup.py \
+  tests/integration/test_database_transaction_contract.py \
+  tests/integration/test_readiness_probe.py \
+  -q --tb=short --maxfail=1
+79 passed in 6.05s
+```
+
+The Plan 091/092 closure records retain the decision evidence and their
+focused, smoke, configuration, lint, and type-check results; no new benchmark
+or writer-specific test suite is appropriate for this not-applicable plan.
+
+## Dependency review
+
+Phase 9 (`plans/010-phase-09-readiness-sqlite-contention.md`) is unblocked:
+its Phase 1 prerequisite and coordination points with completed Phase 7 and
+the now-closed, not-applicable Phase 8 are satisfied. Its status was already
+`implementation handoff`, so no transition was required. Phase 11
+(`plans/012-phase-11-reload-diagnostics.md`) was already unblocked by Phases
+1–7 and likewise needs no status change. Phase 10 remains coordinated with
+Phase 11, and Phase 12 remains gated on the remaining later phases; their
+statuses therefore do not change. No other future-plan status required
+updating.

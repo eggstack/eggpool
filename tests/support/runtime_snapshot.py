@@ -18,7 +18,6 @@ Required by plan 002-phase-01-correctness-baseline.md §4:
 - active account/model backoffs in memory and persistence
 - process-supervisor task specifications and running task IDs
 - routing-trace writer configuration
-- dispatch-writer existence, enabled selection, queue state, worker identity
 - open provider client pools, outbound managers, DNS backends, closeable fakes
 - active and retiring generation counts
 - active lease counts
