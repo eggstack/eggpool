@@ -388,6 +388,12 @@ fn decode_content(
     role: CanonicalRole,
     surface: ClientSurface,
 ) -> Result<Vec<CanonicalContentBlock>, AdmissionError> {
+    // OpenAI assistant messages commonly use `content: null` when the
+    // message carries tool calls.  It is an explicit empty content value, not
+    // a malformed content shape.
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
     if let Some(text) = value.as_str() {
         return Ok(vec![CanonicalContentBlock::text(text)]);
     }

@@ -1,6 +1,7 @@
 //! Canonical, provider-independent wire semantics.
 
 pub mod codec;
+pub mod codecs;
 pub mod ir;
 pub mod registry;
 
@@ -9,6 +10,7 @@ pub use codec::{
     DecodedProviderPayload, StreamAdapterKind, WireCodec, WireCodecId, builtin_codec,
     compatibility_path,
 };
+pub use codecs::{AnthropicMessagesCodec, OpenAiChatCodec, builtin_codec_instance};
 pub use registry::{
     CodecFamily, ConfiguredWireProfile, WireHint, WireProfileDefinition, WireProfileId,
     WireProfileRegistry, WireRegistryError, WireSurface, WireSurfaceName,
