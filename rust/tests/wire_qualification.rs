@@ -7,9 +7,8 @@ use eggpool::wire::ir::{
 };
 use eggpool::wire::{
     ConfiguredWireProfile, DecodedProviderPayload, FiniteResponseOutcome, LossPolicy, SseDecoder,
-    StreamTerminalOutcome, TerminalEvidence, WireCodec, WireCodecId, WireProfileDefinition,
-    WireProfileFlags, WireRuntime, WireRuntimeContext, WireRuntimeError, WireSurface,
-    builtin_codec_instance,
+    StreamTerminalOutcome, TerminalEvidence, WireCodecId, WireProfileDefinition, WireProfileFlags,
+    WireRuntime, WireRuntimeContext, WireRuntimeError, WireSurface, builtin_codec_instance,
 };
 use serde_json::{Value, json};
 
