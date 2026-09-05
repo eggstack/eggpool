@@ -1,6 +1,7 @@
 use eggpool::wire::ir::ClientSurface;
 use eggpool::wire::{
-    AnthropicMessagesCodec, ConfiguredWireProfile, DecodedProviderPayload, OpenAiChatCodec,
+    AnthropicMessagesCodec, ConfiguredWireProfile, DecodedProviderPayload,
+    GeminiGenerateContentCodec, GeminiInteractionsCodec, OpenAiChatCodec, OpenAiResponsesCodec,
     WireCodec, WireCodecId, WireProfileDefinition, WireSurface, builtin_codec_instance,
 };
 use serde_json::{Value, json};
@@ -347,6 +348,243 @@ fn unsupported_media_and_invalid_tool_arguments_fail_explicitly() {
         malformed
             .expect_err("invalid arguments must not become empty input")
             .reason,
+        eggpool::wire::CodecReasonCode::MalformedProviderResponse
+    );
+}
+
+#[test]
+fn responses_codec_preserves_native_items_controls_and_usage() {
+    let codec = OpenAiResponsesCodec;
+    let input = json!({
+        "model": "model-a",
+        "instructions": "Be concise.",
+        "input": [
+            {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "Call lookup."}
+            ]},
+            {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{\"q\":\"egg\"}"},
+            {"type": "function_call_output", "call_id": "call-1", "output": "result"}
+        ],
+        "stream": false,
+        "max_output_tokens": 0,
+        "reasoning": {"effort": "low"},
+        "text": {"format": {"type": "json_schema"}}
+    });
+    let decoded = codec
+        .decode_client_request(&input, ClientSurface::Responses)
+        .expect("Responses input should decode")
+        .value;
+    assert_eq!(decoded.messages.len(), 4);
+    assert_eq!(
+        decoded.messages[2].content[0].call_id.as_deref(),
+        Some("call-1")
+    );
+    assert_eq!(
+        decoded.messages[3].role,
+        eggpool::wire::ir::CanonicalRole::Tool
+    );
+    let encoded = codec
+        .encode_request(
+            &decoded,
+            &profile(WireSurface::OpenaiResponses, WireCodecId::OpenaiResponses),
+        )
+        .expect("Responses request should encode")
+        .value;
+    assert_eq!(encoded["instructions"], "Be concise.");
+    assert_eq!(encoded["input"][1]["type"], "function_call");
+    assert_eq!(encoded["input"][2]["type"], "function_call_output");
+    assert_eq!(encoded["max_output_tokens"], 0);
+
+    let decoded_response = codec
+        .decode_response(
+            &json!({
+                "id": "resp-1", "model": "model-a", "status": "completed",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "done"}]},
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "briefly"}]},
+                    {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"}
+                ],
+                "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3}
+            }),
+            200,
+        )
+        .expect("Responses response should decode")
+        .value;
+    let DecodedProviderPayload::Response(response) = decoded_response else {
+        panic!("expected response")
+    };
+    assert_eq!(response.output.len(), 3);
+    assert_eq!(response.output[2].call_id.as_deref(), Some("call-1"));
+    assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(3));
+    let rendered = codec
+        .encode_response(&response, ClientSurface::Responses)
+        .expect("Responses response should encode")
+        .value;
+    assert_eq!(rendered["output"][1]["type"], "reasoning");
+}
+
+#[test]
+fn generate_content_codec_maps_parts_tools_reasoning_and_schema() {
+    let codec = GeminiGenerateContentCodec;
+    let request = OpenAiChatCodec
+        .decode_client_request(
+            &json!({
+                "model": "model-a",
+                "messages": [
+                    {"role": "system", "content": "Be concise."},
+                    {"role": "user", "content": "Call lookup."},
+                    {"role": "assistant", "content": null, "tool_calls": [{
+                        "id": "call-1", "type": "function", "function": {
+                            "name": "lookup", "arguments": "{\"q\":\"egg\"}"
+                        }
+                    }]}
+                ],
+                "max_tokens": 256,
+                "temperature": 0.2,
+                "top_p": 0.5,
+                "stop": ["DONE"],
+                "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}}
+            }),
+            ClientSurface::ChatCompletions,
+        )
+        .expect("source request should decode")
+        .value;
+    let encoded = codec
+        .encode_request(
+            &request,
+            &profile(
+                WireSurface::GeminiGenerateContent,
+                WireCodecId::GeminiGenerateContent,
+            ),
+        )
+        .expect("generateContent request should encode")
+        .value;
+    assert_eq!(
+        encoded["systemInstruction"]["parts"][0]["text"],
+        "Be concise."
+    );
+    assert_eq!(encoded["contents"][1]["role"], "model");
+    assert_eq!(encoded["generationConfig"]["maxOutputTokens"], 256);
+    assert_eq!(
+        encoded["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+    assert_eq!(
+        encoded["contents"][1]["parts"][0]["functionCall"]["name"],
+        "lookup"
+    );
+
+    let decoded = codec
+        .decode_response(
+            &json!({
+                "responseId": "resp-1", "modelVersion": "gemini-test",
+                "candidates": [{"content": {"role": "model", "parts": [
+                    {"text": "done"}, {"text": "thinking", "thought": true},
+                    {"functionCall": {"name": "lookup", "args": {"ok": true}}}
+                ]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3}
+            }),
+            200,
+        )
+        .expect("generateContent response should decode")
+        .value;
+    let DecodedProviderPayload::Response(response) = decoded else {
+        panic!("expected response")
+    };
+    assert_eq!(
+        response.output[1].kind,
+        eggpool::wire::ir::CanonicalBlockKind::Reasoning
+    );
+    assert_eq!(
+        response.output[2].kind,
+        eggpool::wire::ir::CanonicalBlockKind::ToolCall
+    );
+    let native = codec
+        .encode_native_response(&response)
+        .expect("native generateContent response should encode")
+        .value;
+    assert_eq!(
+        native["candidates"][0]["content"]["parts"][2]["functionCall"]["name"],
+        "lookup"
+    );
+}
+
+#[test]
+fn gemini_interactions_and_all_profiles_have_concrete_dispatch() {
+    let interactions = GeminiInteractionsCodec;
+    let request = OpenAiChatCodec
+        .decode_client_request(
+            &json!({"model": "model-a", "messages": [{"role": "user", "content": "hello"}]}),
+            ClientSurface::ChatCompletions,
+        )
+        .expect("source request should decode")
+        .value;
+    let encoded = interactions
+        .encode_request(
+            &request,
+            &profile(
+                WireSurface::GeminiInteractions,
+                WireCodecId::GeminiInteractions,
+            ),
+        )
+        .expect("Interactions request should encode")
+        .value;
+    assert_eq!(encoded["input"], "hello");
+    let response = interactions
+        .decode_response(
+            &json!({"interaction": {"id": "int-1", "model": "model-a", "status": "completed", "steps": [{"type": "model_output", "content": [{"text": "done"}]}], "usage": {"total_input_tokens": 1, "total_output_tokens": 1, "total_tokens": 2}}}),
+            200,
+        )
+        .expect("Interactions response should decode")
+        .value;
+    let DecodedProviderPayload::Response(response) = response else {
+        panic!("expected response")
+    };
+    assert_eq!(response.output[0].text.as_deref(), Some("done"));
+    assert_eq!(
+        interactions
+            .encode_native_response(&response)
+            .unwrap()
+            .value["object"],
+        "interaction"
+    );
+
+    for id in [
+        WireCodecId::OpenaiResponses,
+        WireCodecId::GeminiInteractions,
+        WireCodecId::GeminiGenerateContent,
+    ] {
+        assert_eq!(builtin_codec_instance(id).unwrap().codec_id(), id);
+    }
+}
+
+#[test]
+fn provider_errors_and_blocked_gemini_responses_never_become_success() {
+    let responses = OpenAiResponsesCodec;
+    let error = responses
+        .decode_response(
+            &json!({"error": {"type": "invalid_request_error", "message": "bad"}}),
+            400,
+        )
+        .expect("provider error should be evidence")
+        .value;
+    assert!(matches!(error, DecodedProviderPayload::Error(_)));
+
+    let gemini = GeminiGenerateContentCodec;
+    let blocked = gemini.decode_response(
+        &json!({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}),
+        200,
+    );
+    assert_eq!(
+        blocked.unwrap_err().reason,
+        eggpool::wire::CodecReasonCode::UnsupportedSemanticFeature
+    );
+    let malformed = gemini.decode_response(
+        &json!({"candidates": [{"content": {"parts": [{"functionCall": {"args": {}}}]}}]}),
+        200,
+    );
+    assert_eq!(
+        malformed.unwrap_err().reason,
         eggpool::wire::CodecReasonCode::MalformedProviderResponse
     );
 }

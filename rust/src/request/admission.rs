@@ -279,19 +279,34 @@ fn decode_messages(
     surface: ClientSurface,
 ) -> Result<Vec<CanonicalMessage>, AdmissionError> {
     if surface == ClientSurface::Responses {
+        let mut messages = Vec::new();
+        if let Some(instructions) = object.get("instructions") {
+            messages.push(CanonicalMessage {
+                role: CanonicalRole::System,
+                content: vec![CanonicalContentBlock::text(instructions.as_str().ok_or(
+                    AdmissionError::InvalidField {
+                        field: "instructions",
+                    },
+                )?)],
+                tool_call_id: None,
+                name: None,
+                refusal: None,
+            });
+        }
         if let Some(input) = object.get("input") {
             if let Some(text) = input.as_str() {
-                return Ok(vec![CanonicalMessage {
+                messages.push(CanonicalMessage {
                     role: CanonicalRole::User,
                     content: vec![CanonicalContentBlock::text(text)],
                     tool_call_id: None,
                     name: None,
                     refusal: None,
-                }]);
+                });
+                return Ok(messages);
             }
-            return decode_message_array(input, protocol, surface);
+            messages.extend(decode_message_array(input, protocol, surface)?);
         }
-        return Ok(Vec::new());
+        return Ok(messages);
     }
     let mut messages = Vec::new();
     if protocol == "anthropic" {
@@ -329,6 +344,34 @@ fn decode_message_array(
             let object = item.as_object().ok_or(AdmissionError::InvalidField {
                 field: "messages[]",
             })?;
+            if surface == ClientSurface::Responses {
+                match object.get("type").and_then(Value::as_str) {
+                    Some("function_call") => {
+                        return Ok(CanonicalMessage {
+                            role: CanonicalRole::Assistant,
+                            content: vec![decode_response_function_call(object)?],
+                            tool_call_id: None,
+                            name: None,
+                            refusal: None,
+                        });
+                    }
+                    Some("function_call_output") => {
+                        return Ok(CanonicalMessage {
+                            role: CanonicalRole::Tool,
+                            content: vec![decode_response_function_output(object)?],
+                            tool_call_id: None,
+                            name: None,
+                            refusal: None,
+                        });
+                    }
+                    Some("message") | None => {}
+                    Some(_) => {
+                        return Err(AdmissionError::UnsupportedContent {
+                            kind: "input item".into(),
+                        });
+                    }
+                }
+            }
             let role = decode_role(object.get("role"), protocol)?;
             let content_value = object
                 .get("content")

@@ -38,13 +38,19 @@ pub fn builtin_codec_instance(id: WireCodecId) -> Option<Box<dyn WireCodec>> {
     match id {
         WireCodecId::OpenaiChat => Some(Box::new(OpenAiChatCodec)),
         WireCodecId::AnthropicMessages => Some(Box::new(AnthropicMessagesCodec)),
-        WireCodecId::OpenaiResponses
-        | WireCodecId::OpenaiResponsesSse
+        WireCodecId::OpenaiResponses => {
+            Some(Box::new(super::additional_codecs::OpenAiResponsesCodec))
+        }
+        WireCodecId::GeminiInteractions => {
+            Some(Box::new(super::additional_codecs::GeminiInteractionsCodec))
+        }
+        WireCodecId::GeminiGenerateContent => Some(Box::new(
+            super::additional_codecs::GeminiGenerateContentCodec,
+        )),
+        WireCodecId::OpenaiResponsesSse
         | WireCodecId::OpenaiChatSse
         | WireCodecId::AnthropicMessagesSse
-        | WireCodecId::GeminiInteractions
         | WireCodecId::GeminiInteractionsSse
-        | WireCodecId::GeminiGenerateContent
         | WireCodecId::GeminiGenerateContentSse => None,
     }
 }
@@ -887,7 +893,9 @@ fn decode_anthropic_response(
     )))
 }
 
-fn encode_openai_response(response: &CanonicalResponse) -> Result<CodecOutput<Value>, CodecError> {
+pub(crate) fn encode_openai_response(
+    response: &CanonicalResponse,
+) -> Result<CodecOutput<Value>, CodecError> {
     validate_output_blocks(response, WireSurface::OpenaiChatCompletions)?;
     let mut message = Map::new();
     message.insert("role".into(), Value::String("assistant".into()));
@@ -963,7 +971,7 @@ fn encode_openai_response(response: &CanonicalResponse) -> Result<CodecOutput<Va
     Ok(CodecOutput::new(Value::Object(out)))
 }
 
-fn encode_anthropic_response(
+pub(crate) fn encode_anthropic_response(
     response: &CanonicalResponse,
 ) -> Result<CodecOutput<Value>, CodecError> {
     let mut content = Vec::new();
