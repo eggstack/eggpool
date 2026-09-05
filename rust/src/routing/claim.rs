@@ -145,6 +145,7 @@ impl SelectionSnapshot {
 #[derive(Debug, Clone)]
 struct OwnedClaim {
     state: ClaimState,
+    quota_released: bool,
 }
 
 #[derive(Debug, Default)]
@@ -329,6 +330,35 @@ impl SelectionClaim {
         prune_terminal_claims(&mut book);
         Ok(ClaimTransition::Released)
     }
+
+    /// Release the converted quota reservation independently of active-count
+    /// ownership.  C006 calls this after durable terminal convergence; the
+    /// separate bit keeps duplicate finalization from subtracting twice.
+    pub fn release_quota_reservation(&self) -> Result<ClaimTransition, ClaimError> {
+        let mut book = self.book.lock().expect("claim lock");
+        let claim = book
+            .claims
+            .get(&self.id)
+            .ok_or_else(|| ClaimError::UnknownAccount {
+                account_name: self.account_name.clone(),
+            })?;
+        if claim.quota_released
+            || matches!(claim.state, ClaimState::Pending | ClaimState::RolledBack)
+        {
+            return Ok(ClaimTransition::AlreadyTransitioned);
+        }
+        self.estimator.remove_reservation(
+            &self.account_name,
+            1,
+            self.projected_tokens,
+            self.projected_cost_microdollars,
+        )?;
+        book.claims
+            .get_mut(&self.id)
+            .expect("claim exists")
+            .quota_released = true;
+        Ok(ClaimTransition::Released)
+    }
 }
 
 fn decrement_active(book: &mut ClaimBook, account_name: &str) -> Result<(), ClaimError> {
@@ -374,6 +404,7 @@ pub(crate) fn publish(
         id,
         OwnedClaim {
             state: ClaimState::Pending,
+            quota_released: false,
         },
     );
     state.terminal_order.push_back(id);

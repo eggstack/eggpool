@@ -596,7 +596,9 @@ impl PublicationService {
     ) -> Result<(), PublicationError> {
         self.compensate_durable(&interruption.identity).await?;
         let transition = if interruption.receipt.pending_load_converted {
-            interruption.claim.release_active_claim()?
+            let transition = interruption.claim.release_active_claim()?;
+            interruption.claim.release_quota_reservation()?;
+            transition
         } else {
             interruption.claim.rollback_claim()?
         };
