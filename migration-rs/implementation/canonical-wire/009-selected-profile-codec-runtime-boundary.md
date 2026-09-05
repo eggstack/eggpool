@@ -1,6 +1,6 @@
 # W009 — Selected-Profile Codec Runtime Boundary
 
-Status: planned; blocked on W008 closure
+Status: dependency-ready; W008 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w009--selected-profile-codec-runtime-boundary`
 

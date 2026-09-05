@@ -113,6 +113,19 @@ repeatable compatibility identity rather than a random ID. The Rust boundary
 also preserves structured-output intent as a formal constraint; it does not
 replace an unsupported schema with a prompt instruction.
 
+W008 completes the Rust streaming boundary in `rust/src/wire/stream.rs`.
+`SseDecoder` performs byte-oriented, UTF-8-aware, LF/CRLF framing with a
+64 KiB record bound and no complete-stream buffering. `StreamEventDecoder`
+maps the five provider stream families into bounded `CanonicalEvent` values,
+merges usage while preserving missing/unknown/zero distinctions, and returns
+typed terminal evidence. Native success evidence is required: Chat
+`[DONE]`, Responses completion, Anthropic `message_stop`, or the appropriate
+Gemini completion status/finish reason. EOF never synthesizes success.
+`encode_client_event()` emits the public Chat, Responses, and Messages SSE
+grammars. The decoder owns neither transport reads nor timeout, cancellation,
+retry, downstream handoff, health, persistence, or finalization policy; those
+remain caller/M7 responsibilities.
+
 ### `transcoder/static_headers.py`
 
 Protocol-required static headers for cross-protocol transcoding (e.g. `anthropic-version` for Anthropic upstreams).

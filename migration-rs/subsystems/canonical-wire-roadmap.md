@@ -1,6 +1,6 @@
 # M6 Canonical Request, Wire Codec, Transcoding, and SSE Roadmap
 
-Status: active; W008 dependency-ready
+Status: active; W009 dependency-ready
 
 Repository baseline: `e096ed177f94b64b23a82852d6ec1bebc8782316`
 
@@ -21,13 +21,13 @@ M5 D001-D009 closed
  -> W005 Responses + Gemini codecs (**closed**)
  -> W006 reasoning/tools/structured/loss policy (**closed**)
  -> W007 multimodal/documents/cache/provider adaptation (**closed**)
- -> W008 SSE/events/usage/terminal evidence (**dependency-ready**)
- -> W009 selected-profile runtime facade
+ -> W008 SSE/events/usage/terminal evidence (**closed**)
+ -> W009 selected-profile runtime facade (**dependency-ready**)
  -> W010 integrated M6 qualification/closure
  -> M7 may become dependency-ready through its own planning review
 ```
 
-Only one plan is registered dependency-ready at a time. W004/W005 are conceptually parallel after W003 but the default handoff stayed serial. W007 is now closed and W008 is promoted.
+Only one plan is registered dependency-ready at a time. W004/W005 are conceptually parallel after W003 but the default handoff stayed serial. W008 is now closed and W009 is promoted.
 
 ## Core invariants
 
