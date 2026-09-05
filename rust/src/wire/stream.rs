@@ -145,7 +145,7 @@ impl SseDecoder {
             });
         }
         self.finished = true;
-        let tail = self.decode_utf8(&[]);
+        let tail = self.decode_utf8_final();
         let mut frames = Vec::new();
         for character in tail.chars() {
             if self.pending_cr {
@@ -196,6 +196,14 @@ impl SseDecoder {
 
     fn decode_utf8(&mut self, bytes: &[u8]) -> String {
         self.utf8_pending.extend_from_slice(bytes);
+        self.decode_utf8_pending(false)
+    }
+
+    fn decode_utf8_final(&mut self) -> String {
+        self.decode_utf8_pending(true)
+    }
+
+    fn decode_utf8_pending(&mut self, final_chunk: bool) -> String {
         let mut output = String::new();
         loop {
             match std::str::from_utf8(&self.utf8_pending) {
@@ -213,6 +221,11 @@ impl SseDecoder {
                         output.push('\u{fffd}');
                         self.invalid_utf8_replacements += 1;
                         self.utf8_pending.drain(..valid + length);
+                    } else if final_chunk {
+                        output.push('\u{fffd}');
+                        self.invalid_utf8_replacements += 1;
+                        self.utf8_pending.clear();
+                        break;
                     } else {
                         let remainder = self.utf8_pending.split_off(valid);
                         self.utf8_pending = remainder;

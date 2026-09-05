@@ -38,6 +38,7 @@ from eggpool.wire.types import ResolvedAuthShape, WireProfile
 
 FIXTURE_DIR = Path(__file__).parents[2] / "migration-rs" / "fixtures" / "canonical-wire"
 MATRIX_PATH = FIXTURE_DIR / "w001-fixture-matrix.json"
+W011_SSE_UTF8_PATH = FIXTURE_DIR / "w011-sse-utf8-observations.json"
 
 PUBLIC_SURFACES = ("chat_completions", "responses", "messages")
 WIRE_PROFILES = (
@@ -619,6 +620,125 @@ def _oversized_unterminated() -> dict[str, Any]:
     }
 
 
+def _sse_utf8_frame(frame: DecodedSSEFrame) -> dict[str, Any]:
+    return {
+        "event": frame.frame.event,
+        "data": frame.frame.data,
+        "fields": [list(field) for field in frame.frame.fields or ()],
+        "is_comment_only": frame.frame.is_comment_only,
+    }
+
+
+def _sse_utf8_observe(
+    raw: bytes,
+    *,
+    chunks: list[bytes],
+    profile_name: str | None = None,
+) -> dict[str, Any]:
+    decoder = SSEDecoder()
+    frames: list[DecodedSSEFrame] = []
+    for chunk in chunks:
+        frames.extend(decoder.feed(chunk))
+    eof = decoder.finish()
+    frames.extend(eof.frames)
+    result: dict[str, Any] = {
+        "frames": [_sse_utf8_frame(frame) for frame in frames],
+        "frame_count": len(frames),
+        "invalid_utf8_replacements": eof.invalid_utf8_replacements,
+        "incomplete_frame": eof.incomplete_frame,
+        "discarded_frame_count": eof.discarded_frame_count,
+    }
+    if profile_name is not None:
+        observer = IncrementalSSEObserver(
+            "openai",
+            request_surface="chat_completions",
+            wire_surface=profile_name,
+        )
+        for chunk in chunks:
+            observer.observe(chunk)
+        observer.finish()
+        snapshot = observer.completion_snapshot
+        result["observer"] = {
+            "error_count": observer.error_count,
+            "parser_error_count": snapshot.parser_error_count,
+            "saw_payload": snapshot.saw_payload,
+            "saw_terminal_event": snapshot.saw_terminal_event,
+            "terminal_kind": snapshot.terminal_kind,
+        }
+    return result
+
+
+def _sse_utf8_case(
+    name: str,
+    raw: bytes,
+    *,
+    profile_name: str | None = None,
+    split_mode: str = "one_byte",
+) -> dict[str, Any]:
+    if split_mode == "every_split_point":
+        chunks = [raw]
+    else:
+        chunks = [raw[index : index + 1] for index in range(len(raw))]
+    expected = _sse_utf8_observe(raw, chunks=chunks, profile_name=profile_name)
+    return {
+        "name": name,
+        "input_hex": raw.hex(),
+        "feed_modes": ["whole", "one_byte"]
+        if split_mode == "one_byte"
+        else ["whole", "every_split_point", "one_byte"],
+        "expected": expected,
+    }
+
+
+def build_w011_sse_utf8_observations() -> dict[str, Any]:
+    """Build bounded Python-oracle cases for W011 UTF-8 EOF finalization."""
+    cases = [
+        _sse_utf8_case(
+            "valid_2_byte_scalar_lf",
+            b"data: \xc3\xa9\n\n",
+            split_mode="every_split_point",
+        ),
+        _sse_utf8_case(
+            "valid_3_byte_scalar_crlf",
+            b"data: \xe4\xb8\x96\r\n\r\n",
+            split_mode="every_split_point",
+        ),
+        _sse_utf8_case(
+            "valid_4_byte_scalar_lf",
+            b"data: \xf0\x9f\x8c\x8d\n\n",
+            split_mode="every_split_point",
+        ),
+        _sse_utf8_case("eof_incomplete_2_prefix_1", b"data: \xc3"),
+        _sse_utf8_case("eof_incomplete_3_prefix_1", b"data: \xe4"),
+        _sse_utf8_case("eof_incomplete_3_prefix_2", b"data: \xe4\xb8"),
+        _sse_utf8_case("eof_incomplete_4_prefix_1", b"data: \xf0"),
+        _sse_utf8_case("eof_incomplete_4_prefix_2", b"data: \xf0\x9f"),
+        _sse_utf8_case("eof_incomplete_4_prefix_3", b"data: \xf0\x9f\x8c"),
+        _sse_utf8_case("invalid_continuation_after_prefix", b"data: \xc3A\n\n"),
+        _sse_utf8_case("invalid_standalone_before_newline", b"data: \xff\n\n"),
+        _sse_utf8_case("invalid_standalone_before_eof", b"data: \xff"),
+        _sse_utf8_case(
+            "invalid_data_line",
+            b'data: {"choices":[]}\xff\n\n',
+            profile_name="openai_chat_completions",
+        ),
+        _sse_utf8_case(
+            "truncated_data_line_after_json_prefix",
+            b'data: {"choices":[]}\xe2',
+            profile_name="openai_chat_completions",
+        ),
+        _sse_utf8_case("invalid_comment_before_newline", b": ignored \xff\n\n"),
+        _sse_utf8_case("truncated_comment_at_eof", b": ignored \xe2"),
+    ]
+    return {
+        "schema_version": "m6-canonical-wire-w011-sse-utf8/v1",
+        "purpose": (
+            "Bounded Python oracle for invalid and truncated UTF-8 SSE finalization."
+        ),
+        "cases": cases,
+    }
+
+
 def _usage_observations() -> dict[str, Any]:
     cases = {
         "openai_reported_cache": (
@@ -727,6 +847,8 @@ __all__ = [
     "MATRIX_PATH",
     "PUBLIC_SURFACES",
     "WIRE_PROFILES",
+    "W011_SSE_UTF8_PATH",
     "build_observation_bundle",
+    "build_w011_sse_utf8_observations",
     "observation_json",
 ]

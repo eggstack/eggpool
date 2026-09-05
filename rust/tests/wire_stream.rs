@@ -5,6 +5,9 @@ use eggpool::wire::{
 };
 use serde_json::{Value, json};
 
+const W011_SSE_UTF8_OBSERVATIONS: &str =
+    include_str!("../../migration-rs/fixtures/canonical-wire/w011-sse-utf8-observations.json");
+
 fn fixture(profile: StreamAdapterKind) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut record = |event: Option<&str>, value: Value| {
@@ -89,6 +92,85 @@ fn fixture(profile: StreamAdapterKind) -> Vec<u8> {
     bytes
 }
 
+fn hex_bytes(value: &str) -> Vec<u8> {
+    assert_eq!(value.len() % 2, 0);
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16).expect("hex digit");
+            let low = (pair[1] as char).to_digit(16).expect("hex digit");
+            ((high << 4) | low) as u8
+        })
+        .collect()
+}
+
+fn frame_projection(frames: &[eggpool::wire::SseFrame]) -> Value {
+    json!(
+        frames
+            .iter()
+            .map(|frame| {
+                json!({
+                        "event": frame.event,
+                    "data": frame.data,
+                    "fields": frame.fields,
+                    "is_comment_only": frame.is_comment_only,
+                })
+            })
+            .collect::<Vec<_>>()
+    )
+}
+
+fn assert_sse_observation(input: &[u8], expected: &Value, mode: &str) {
+    let mut decoder = SseDecoder::default();
+    let mut frames = Vec::new();
+    match mode {
+        "whole" => frames.extend(decoder.feed(input).expect("whole feed")),
+        "one_byte" => {
+            for byte in input {
+                frames.extend(decoder.feed(std::slice::from_ref(byte)).expect("one byte"));
+            }
+        }
+        "every_split_point" => {
+            for split in 1..input.len() {
+                let mut split_decoder = SseDecoder::default();
+                let mut split_frames = split_decoder.feed(&input[..split]).expect("split prefix");
+                split_frames.extend(split_decoder.feed(&input[split..]).expect("split suffix"));
+                let split_result = split_decoder.finish().expect("split EOF");
+                split_frames.extend(split_result.frames);
+                assert_eq!(
+                    frame_projection(&split_frames),
+                    expected["frames"],
+                    "split point {split}"
+                );
+                assert_eq!(
+                    split_result.invalid_utf8_replacements,
+                    expected["invalid_utf8_replacements"].as_u64().unwrap() as usize,
+                    "split point {split} replacement count"
+                );
+            }
+            return;
+        }
+        other => panic!("unknown W011 feed mode: {other}"),
+    }
+    let result = decoder.finish().expect("EOF");
+    frames.extend(result.frames);
+    assert_eq!(frame_projection(&frames), expected["frames"]);
+    assert_eq!(
+        frames.len(),
+        expected["frame_count"].as_u64().unwrap() as usize
+    );
+    assert_eq!(
+        result.invalid_utf8_replacements,
+        expected["invalid_utf8_replacements"].as_u64().unwrap() as usize
+    );
+    assert_eq!(result.incomplete_frame, expected["incomplete_frame"]);
+    assert_eq!(
+        result.discarded_frame_count,
+        expected["discarded_frame_count"].as_u64().unwrap() as usize
+    );
+}
+
 #[test]
 fn sse_framing_is_chunk_boundary_independent_for_lf_crlf_multiline_and_utf8() {
     let source = b": comment\r\nevent: fixture\r\nid: id-1\r\ndata: first\r\ndata: second \xF0\x9F\x8C\x8D\r\n\r\n";
@@ -110,6 +192,120 @@ fn sse_framing_is_chunk_boundary_independent_for_lf_crlf_multiline_and_utf8() {
             .iter()
             .any(|(name, value)| name == "id" && value == "id-1")
     );
+}
+
+#[test]
+fn python_w011_utf8_observations_match_rust_for_all_feed_modes() {
+    let observations: Value =
+        serde_json::from_str(W011_SSE_UTF8_OBSERVATIONS).expect("W011 observations");
+    for case in observations["cases"].as_array().expect("cases") {
+        let input = hex_bytes(case["input_hex"].as_str().expect("input hex"));
+        let expected = &case["expected"];
+        for mode in case["feed_modes"].as_array().expect("feed modes") {
+            assert_sse_observation(&input, expected, mode.as_str().expect("feed mode string"));
+        }
+    }
+}
+
+#[test]
+fn eof_flushes_incomplete_utf8_as_one_replacement_in_the_final_frame() {
+    for prefix in [
+        &[0xC3][..],
+        &[0xE4][..],
+        &[0xE4, 0xB8][..],
+        &[0xF0][..],
+        &[0xF0, 0x9F][..],
+        &[0xF0, 0x9F, 0x8C][..],
+    ] {
+        let mut input = b"data: ".to_vec();
+        input.extend_from_slice(prefix);
+        let mut decoder = SseDecoder::default();
+        assert!(decoder.feed(&input).unwrap().is_empty());
+        let result = decoder.finish().unwrap();
+        assert_eq!(result.invalid_utf8_replacements, 1);
+        assert_eq!(result.frames.len(), 1);
+        assert_eq!(result.frames[0].data, "�");
+    }
+}
+
+#[test]
+fn completed_split_utf8_scalars_are_emitted_once_without_replacements() {
+    for scalar in ["é", "世", "🌍"] {
+        let input = format!("data: {scalar}\n\n").into_bytes();
+        let expected = SseDecoder::default()
+            .feed(&input)
+            .expect("whole scalar")
+            .into_iter()
+            .map(|frame| frame.data)
+            .collect::<Vec<_>>();
+        for split in 1..input.len() {
+            let mut decoder = SseDecoder::default();
+            let mut frames = decoder.feed(&input[..split]).unwrap();
+            frames.extend(decoder.feed(&input[split..]).unwrap());
+            frames.extend(decoder.finish().unwrap().frames);
+            assert_eq!(
+                frames.iter().map(|frame| &frame.data).collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
+            assert_eq!(frames.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn invalid_utf8_replacements_preserve_sse_framing_and_count() {
+    let cases = [
+        (b"data: \xC3A\n\n".as_slice(), "�A", 1),
+        (b"data: \xFF\n\n".as_slice(), "�", 1),
+        (b": ignored \xE2".as_slice(), "", 1),
+    ];
+    for (input, expected_data, replacements) in cases {
+        let mut decoder = SseDecoder::default();
+        let frames = decoder.feed(input).unwrap();
+        let result = decoder.finish().unwrap();
+        let mut all_frames = frames;
+        all_frames.extend(result.frames);
+        assert_eq!(result.invalid_utf8_replacements, replacements);
+        assert_eq!(all_frames.len(), 1);
+        if expected_data.is_empty() {
+            assert!(all_frames[0].is_comment_only);
+        } else {
+            assert_eq!(all_frames[0].data, expected_data);
+        }
+    }
+}
+
+#[test]
+fn replacement_in_final_provider_data_is_a_typed_malformed_event() {
+    for (input, fails_at_eof) in [
+        (b"data: {\"choices\":[]}\xFF\n\n".as_slice(), false),
+        (b"data: {\"choices\":[]}\xE2".as_slice(), true),
+    ] {
+        for one_byte in [false, true] {
+            let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+            let mut push_error = None;
+            if one_byte {
+                for byte in input {
+                    if let Err(error) = decoder.push(std::slice::from_ref(byte)) {
+                        push_error = Some(error);
+                        break;
+                    }
+                }
+            } else {
+                push_error = decoder.push(input).err();
+            }
+            if fails_at_eof {
+                assert!(push_error.is_none());
+                push_error = decoder.finish().err();
+            }
+            assert!(matches!(
+                push_error,
+                Some(eggpool::wire::StreamError::MalformedEvent(
+                    eggpool::wire::CodecReasonCode::MalformedProviderEvent
+                ))
+            ));
+        }
+    }
 }
 
 #[test]
