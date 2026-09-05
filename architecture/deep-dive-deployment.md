@@ -118,7 +118,7 @@ API key storage. Never committed.
 ## Live Reload
 
 `eggpool rehash` applies supported changes without restart:
-- Control socket at `<runtime_dir>/eggpool.sock` (`control_socket_path()` → `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → `$XDG_RUNTIME_DIR/eggpool` → `/tmp/eggpool-<UID>.runtime`)
+- Control socket at `<runtime_dir>/eggpool.sock` (`control_socket_path()` → `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → suitable `$XDG_RUNTIME_DIR/eggpool` → private state/runtime fallback → UID-scoped `/tmp` fallback). The server requires the runtime directory to be an owner-only `0o700` directory and the socket to be an owner-only `0o600` socket.
 - LIVE fields: provider/account/routing families, transcoder, cache, subset of models, retention durations
 - RESTART_REQUIRED: everything else
 - JSON output pinned at 9 keys

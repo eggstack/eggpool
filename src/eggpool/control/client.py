@@ -12,11 +12,12 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from eggpool import jsonx
 from eggpool.control.server import (
     COMMAND_TIMEOUT_S,
+    MAX_REQUEST_SIZE,
     PROTOCOL_VERSION,
     ControlRequest,
     ControlResponse,
@@ -90,7 +91,9 @@ class ControlClient:
         """Open a connection, send a request, and read the response."""
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(self._socket_path)),
+                asyncio.open_unix_connection(
+                    str(self._socket_path), limit=MAX_REQUEST_SIZE + 1
+                ),
                 timeout=self._timeout_s,
             )
         except TimeoutError as exc:
@@ -110,7 +113,7 @@ class ControlClient:
                 "validated_digest": request.validated_digest,
             }
             writer.write(jsonx.dumps_bytes(payload) + b"\n")
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), timeout=self._timeout_s)
 
             raw_line = await asyncio.wait_for(
                 reader.readline(),
@@ -151,21 +154,27 @@ def _to_str_list(value: object) -> list[str]:
 def _parse_response(raw_line: bytes) -> ControlResponse:
     """Parse and validate a raw response line from the server."""
     try:
-        payload: dict[str, object] = jsonx.loads(raw_line)
+        raw_payload = jsonx.loads(raw_line)
     except Exception as exc:
         raise ControlClientProtocolError(f"invalid JSON response: {exc}") from exc
+
+    if not isinstance(raw_payload, dict):
+        raise ControlClientProtocolError("response must be a JSON object")
+    payload = cast("dict[str, object]", raw_payload)
 
     proto = payload.get("protocol_version")
     if proto != PROTOCOL_VERSION:
         raise ControlClientProtocolError(f"unsupported protocol version: {proto}")
 
-    gen_raw = payload.get("generation")
-    gen_val = int(gen_raw) if gen_raw is not None else None  # type: ignore[arg-type]
-
     try:
+        request_id = payload.get("request_id")
+        if not isinstance(request_id, str):
+            raise ValueError("response request_id must be a string")
+        gen_raw = payload.get("generation")
+        gen_val = int(gen_raw) if gen_raw is not None else None  # type: ignore[arg-type]
         return ControlResponse(
             protocol_version=int(proto),  # type: ignore[arg-type]
-            request_id=str(payload.get("request_id", "")),
+            request_id=request_id,
             ok=bool(payload.get("ok", False)),
             stage=str(payload.get("stage", "")),
             generation=gen_val,

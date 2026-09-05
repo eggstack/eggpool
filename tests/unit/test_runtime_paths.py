@@ -16,6 +16,7 @@ from eggpool.runtime_paths import (
     default_pid_file,
     is_process_running,
     read_pid_file,
+    runtime_dir,
     state_dir,
 )
 
@@ -47,6 +48,31 @@ def test_state_dir_creates_missing_parent(
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     result = state_dir()
     assert result.is_dir()
+
+
+def test_runtime_dir_honors_private_xdg_runtime_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    xdg = tmp_path / "runtime"
+    xdg.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(xdg))
+    monkeypatch.delenv("EGGPOOL_RUNTIME_DIR", raising=False)
+    assert runtime_dir() == xdg / "eggpool"
+
+
+def test_runtime_dir_falls_back_from_unsafe_xdg_parent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    xdg = tmp_path / "runtime"
+    xdg.mkdir(mode=0o755)
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(xdg))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.delenv("EGGPOOL_RUNTIME_DIR", raising=False)
+    result = runtime_dir()
+    assert result == state / "eggpool" / "runtime"
+    assert result.is_dir()
+    assert result.stat().st_mode & 0o077 == 0
 
 
 def test_default_pid_file_honors_env_var(

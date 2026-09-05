@@ -49,21 +49,48 @@ def runtime_dir() -> Path:
 
     Resolution order:
     1. ``$EGGPOOL_RUNTIME_DIR`` (explicit override)
-    2. ``$XDG_RUNTIME_DIR/eggpool`` (XDG compliant)
-    3. ``/tmp/eggpool-<UID>.runtime`` (UID-scoped fallback)
+    2. ``$XDG_RUNTIME_DIR/eggpool`` when the XDG parent is a private
+       directory owned by the current user
+    3. ``$XDG_STATE_HOME/eggpool/runtime`` (or the equivalent home-relative
+       state path) as a private fallback
+    4. ``/tmp/eggpool-<UID>.runtime`` as a last-resort UID-scoped fallback
+
+    The control server performs the authoritative ownership and permission
+    checks before binding. This resolver keeps the client and server on the
+    same deterministic path while avoiding an unsuitable XDG runtime parent.
     """
     explicit = os.environ.get("EGGPOOL_RUNTIME_DIR")
     if explicit:
         return Path(explicit)
 
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg_runtime:
+    if xdg_runtime and _private_runtime_parent(Path(xdg_runtime)):
         return Path(xdg_runtime) / "eggpool"
 
-    fallback = Path(f"/tmp/eggpool-{os.getuid()}.runtime")
+    fallback = state_dir() / "runtime"
     with contextlib.suppress(OSError):
         os.makedirs(fallback, mode=0o700, exist_ok=True)
-    return fallback
+    if _private_runtime_parent(fallback):
+        return fallback
+
+    last_resort = Path(f"/tmp/eggpool-{os.getuid()}.runtime")
+    with contextlib.suppress(OSError):
+        os.makedirs(last_resort, mode=0o700, exist_ok=True)
+    return last_resort
+
+
+def _private_runtime_parent(path: Path) -> bool:
+    """Return whether *path* is a suitable private runtime parent."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (
+        Path(path).is_dir()
+        and not path.is_symlink()
+        and info.st_uid == os.geteuid()
+        and (info.st_mode & 0o077) == 0
+    )
 
 
 def default_pid_file() -> Path:

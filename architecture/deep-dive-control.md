@@ -25,12 +25,13 @@ Unix-domain socket server (~617 lines) implementing a single-shot newline-delimi
 
 **Wire format:**
 ```json
-// Request (one JSON object per line)
+// Request (one JSON object per connection)
 {
   "protocol_version": 1,
   "request_id": "<uuid>",
   "command": "reload_config",
-  "validated_digest": "<sha-256>"
+  "validated_digest": "<sha-256>",
+  "params": {}
 }
 
 // Response (one JSON object per line)
@@ -49,9 +50,22 @@ Unix-domain socket server (~617 lines) implementing a single-shot newline-delimi
 ```
 
 **Security model:**
-- Socket created with mode `0o600` (owner-only read/write)
-- Socket cleaned up on server stop and at startup if stale
-- Path: `<runtime_dir>/eggpool.sock` (defaults to `/tmp/eggpool-<UID>.runtime/eggpool.sock`)
+- Runtime directory is created and verified as an owner-only (`0o700`)
+  non-symlink directory owned by the effective UID.
+- Socket is created with mode `0o600` (owner-only read/write), and startup
+  fails closed if ownership or mode verification cannot complete.
+- Stale cleanup probes a real socket, requires current-UID ownership, and
+  removes only the inode observed by the probe; symlinks, regular files,
+  active sockets, and foreign-owned sockets are left untouched.
+- Linux peer credentials are checked when `SO_PEERCRED` is available.
+- Path: `<runtime_dir>/eggpool.sock` (`$EGGPOOL_RUNTIME_DIR` → a suitable
+  `$XDG_RUNTIME_DIR/eggpool` → private state/runtime fallback → UID-scoped
+  `/tmp` fallback).
+
+The request envelope is bounded to 64 KiB, accepts only protocol version 1,
+requires a bounded safe request ID and a known command, and rejects non-object
+JSON, non-object `params`, invalid digests, invalid UTF-8, and multiple frames
+on one connection before dispatch. Reads and writes have bounded timeouts.
 
 **Connection model:** One request per connection, structured response, then close. Designed for short-lived CLI interactions.
 

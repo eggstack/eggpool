@@ -313,6 +313,73 @@ class TestControlServerLifecycle:
         await srv.stop()
 
     @pytest.mark.asyncio
+    async def test_creates_private_runtime_directory(self, socket_dir: Path) -> None:
+        runtime = socket_dir / "nested" / "runtime"
+        path = runtime / "eggpool.sock"
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            assert runtime.stat().st_mode & 0o077 == 0
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsafe_runtime_directory(self, socket_dir: Path) -> None:
+        socket_dir.chmod(0o755)
+        srv = ControlServer(_noop_handler, path=_sock(socket_dir))
+        with pytest.raises(Exception, match="not owner-only"):
+            await srv.start()
+
+    @pytest.mark.asyncio
+    async def test_permission_failure_closes_and_removes_its_socket(
+        self, socket_dir: Path
+    ) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        with (
+            patch(
+                "eggpool.control.server.os.chmod",
+                side_effect=PermissionError("simulated chmod failure"),
+            ),
+            pytest.raises(Exception, match="failed to restrict socket permissions"),
+        ):
+            await srv.start()
+        assert srv._server is None
+        assert not path.exists()
+
+    @pytest.mark.asyncio
+    async def test_distinct_xdg_runtime_dirs_isolate_servers(
+        self, socket_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime_a = socket_dir / "runtime-a"
+        runtime_b = socket_dir / "runtime-b"
+        state_a = socket_dir / "state-a"
+        state_b = socket_dir / "state-b"
+        for directory in (runtime_a, runtime_b, state_a, state_b):
+            directory.mkdir(mode=0o700)
+
+        monkeypatch.delenv("EGGPOOL_RUNTIME_DIR", raising=False)
+        monkeypatch.setenv("XDG_STATE_HOME", str(state_a))
+        monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime_a))
+        server_a = ControlServer(_noop_handler)
+        await server_a.start()
+        try:
+            path_a = control_socket_path()
+            monkeypatch.setenv("XDG_STATE_HOME", str(state_b))
+            monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime_b))
+            server_b = ControlServer(_noop_handler)
+            await server_b.start()
+            try:
+                path_b = control_socket_path()
+                assert path_a != path_b
+                assert path_a.exists()
+                assert path_b.exists()
+            finally:
+                await server_b.stop()
+        finally:
+            await server_a.stop()
+
+    @pytest.mark.asyncio
     async def test_removes_socket_on_stop(self, socket_dir: Path) -> None:
         path = _sock(socket_dir)
         srv = ControlServer(_noop_handler, path=path)
@@ -345,6 +412,20 @@ class TestControlServerLifecycle:
 
 
 class TestControlServerValidation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_line",
+        [b"null\n", b"[]\n", b"1\n", b'"text"\n', b"{bad\n", b"\xff\n"],
+    )
+    async def test_invalid_bounded_frames_are_protocol_errors(
+        self, raw_line: bytes
+    ) -> None:
+        srv = ControlServer(_noop_handler, path=Path("/dev/null"))
+        response = await srv._process_request(raw_line)
+        assert response.ok is False
+        assert response.stage == "parse"
+        assert response.result_category == "parse_error"
+
     @pytest.mark.asyncio
     async def test_handles_valid_request(self, socket_dir: Path) -> None:
         path = _sock(socket_dir)
@@ -513,6 +594,47 @@ class TestControlServerValidation:
                 assert resp["ok"] is False
                 assert resp["stage"] == "parse"
                 assert "request must be a JSON object" in resp["message"]
+            finally:
+                writer.close()
+                with _Silence():
+                    await writer.wait_closed()
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_params(self, socket_dir: Path) -> None:
+        path = _sock(socket_dir)
+        srv = ControlServer(_noop_handler, path=path)
+        await srv.start()
+        try:
+            payload = _make_request()
+            payload["params"] = []
+            resp = await _send_raw(path, payload)
+            assert resp["ok"] is False
+            assert resp["stage"] == "parse"
+            assert "params must be a JSON object" in resp["message"]
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_rejects_multiple_frames_on_one_connection(
+        self, socket_dir: Path
+    ) -> None:
+        handler = AsyncMock(side_effect=_noop_handler)
+        path = _sock(socket_dir)
+        srv = ControlServer(handler, path=path)
+        await srv.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(path))
+            try:
+                frame = json.dumps(_make_request()).encode() + b"\n"
+                writer.write(frame + frame)
+                await writer.drain()
+                response = json.loads(await asyncio.wait_for(reader.readline(), 5.0))
+                assert response["ok"] is False
+                assert response["stage"] == "parse"
+                assert "multiple requests" in response["message"]
+                handler.assert_not_called()
             finally:
                 writer.close()
                 with _Silence():

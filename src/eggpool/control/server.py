@@ -47,7 +47,6 @@ import contextlib
 import errno
 import logging
 import os
-import pwd
 import re
 import socket as _socket
 import stat
@@ -87,6 +86,10 @@ class _OversizedRequestError(Exception):
     """Internal marker: the request line exceeded ``MAX_REQUEST_SIZE``."""
 
 
+class _TrailingRequestDataError(Exception):
+    """Internal marker: more than one frame arrived on a connection."""
+
+
 @dataclass(frozen=True)
 class ControlRequest:
     """Parsed inbound control request."""
@@ -95,6 +98,7 @@ class ControlRequest:
     request_id: str
     command: str
     validated_digest: str | None = None
+    params: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -198,6 +202,7 @@ class ControlServer:
         self._reload_handler = reload_handler
         self._path = path or control_socket_path()
         self._server: asyncio.Server | None = None
+        self._socket_identity: tuple[int, int, int] | None = None
 
     async def start(self) -> None:
         """Bind the socket and begin accepting connections."""
@@ -208,9 +213,8 @@ class ControlServer:
                 f"({len(path_bytes)} bytes; max {CONTROL_SOCKET_PATH_MAX_BYTES}): "
                 f"{self._path}. Set EGGPOOL_RUNTIME_DIR to a shorter directory."
             )
+        _ensure_runtime_dir(self._path.parent)
         _clean_stale_socket(self._path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        _verify_runtime_dir(self._path.parent)
         try:
             self._server = await asyncio.start_unix_server(
                 self._handle_connection,
@@ -221,6 +225,7 @@ class ControlServer:
             raise ControlServerError(
                 f"failed to bind control socket {self._path}: {exc}"
             ) from exc
+        self._socket_identity = _stat_socket_identity(self._path)
         try:
             _restrict_socket_permissions(self._path)
         except ControlServerError:
@@ -228,7 +233,8 @@ class ControlServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
-            _remove_socket_file(self._path)
+            _remove_socket_file(self._path, expected_identity=self._socket_identity)
+            self._socket_identity = None
             raise
         logger.info("control server listening on %s", self._path)
 
@@ -238,7 +244,8 @@ class ControlServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
-        _clean_stale_socket(self._path)
+        _remove_socket_file(self._path, expected_identity=self._socket_identity)
+        self._socket_identity = None
         logger.info("control server stopped")
 
     async def _handle_connection(
@@ -273,10 +280,13 @@ class ControlServer:
                 # buffered line exceeds the stream limit, so oversized
                 # requests are rejected before the line is fully materialized.
                 raise _OversizedRequestError from exc
+            await asyncio.sleep(0)
+            if getattr(reader, "_buffer", b""):
+                raise _TrailingRequestDataError
             response = await self._process_request(raw_line)
             resp_bytes = jsonx.dumps_bytes(response.to_dict()) + b"\n"
             writer.write(resp_bytes)
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), timeout=COMMAND_TIMEOUT_S)
         except TimeoutError:
             logger.warning("control request timed out from %s", peer)
             err_resp = _error_response(
@@ -286,7 +296,7 @@ class ControlServer:
             )
             writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
             with contextlib.suppress(Exception):
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=COMMAND_TIMEOUT_S)
         except _OversizedRequestError:
             logger.warning("oversized control request from %s", peer)
             err_resp = _error_response(
@@ -296,7 +306,16 @@ class ControlServer:
             )
             writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
             with contextlib.suppress(Exception):
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=COMMAND_TIMEOUT_S)
+        except _TrailingRequestDataError:
+            err_resp = _error_response(
+                "",
+                "multiple requests in one connection are not supported",
+                stage="parse",
+            )
+            writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(writer.drain(), timeout=COMMAND_TIMEOUT_S)
         except Exception:
             logger.exception("unhandled error on control connection from %s", peer)
             err_resp = _error_response(
@@ -306,7 +325,7 @@ class ControlServer:
             )
             writer.write(jsonx.dumps_bytes(err_resp.to_dict()) + b"\n")
             with contextlib.suppress(Exception):
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=COMMAND_TIMEOUT_S)
         finally:
             writer.close()
             with contextlib.suppress(Exception):
@@ -341,10 +360,17 @@ class ControlServer:
             )
 
         payload: dict[str, Any] = cast("dict[str, Any]", raw_payload)
+        params = payload.get("params")
+        if params is not None and not isinstance(params, dict):
+            return _error_response(
+                "",
+                "params must be a JSON object",
+                stage="parse",
+            )
         proto = payload.get("protocol_version")
         if proto != PROTOCOL_VERSION:
             return _error_response(
-                str(payload.get("request_id", "")),
+                _safe_request_id(payload.get("request_id")),
                 f"unsupported protocol version: {proto}",
                 stage="parse",
             )
@@ -356,9 +382,11 @@ class ControlServer:
                 "missing or invalid request_id",
                 stage="parse",
             )
-        if len(request_id) > MAX_REQUEST_ID_LEN:
+        if len(request_id) > MAX_REQUEST_ID_LEN or any(
+            ord(char) < 0x20 or char.isspace() for char in request_id
+        ):
             return _error_response(
-                request_id,
+                request_id if len(request_id) <= MAX_REQUEST_ID_LEN else "",
                 "request_id exceeds maximum length",
                 stage="parse",
             )
@@ -395,6 +423,7 @@ class ControlServer:
             validated_digest=(
                 validated_digest if isinstance(validated_digest, str) else None
             ),
+            params=cast("dict[str, Any] | None", params),
         )
 
         try:
@@ -415,6 +444,10 @@ def _error_response(
     stage: str = "error",
 ) -> ControlResponse:
     """Build a standardised error response."""
+    result_category = {
+        "parse": "parse_error",
+        "timeout": "timeout",
+    }.get(stage, "internal_error")
     return ControlResponse(
         protocol_version=PROTOCOL_VERSION,
         request_id=request_id,
@@ -426,20 +459,46 @@ def _error_response(
         restart_required=(),
         retirement_pending=False,
         message=message,
-        result_category="internal_error",
+        result_category=result_category,
     )
 
 
-def _remove_socket_file(path: Path) -> None:
-    """Unconditionally remove a socket file. Never raises."""
-    with contextlib.suppress(OSError):
+def _safe_request_id(value: object) -> str:
+    """Return a bounded request ID suitable for an error response."""
+    if not isinstance(value, str) or not value or len(value) > MAX_REQUEST_ID_LEN:
+        return ""
+    if any(ord(char) < 0x20 or char.isspace() for char in value):
+        return ""
+    return value
+
+
+def _remove_socket_file(
+    path: Path,
+    *,
+    expected_identity: tuple[int, int, int] | None = None,
+) -> None:
+    """Remove only the expected socket entry, never following a symlink."""
+    try:
+        if expected_identity is None:
+            return
+        current = _stat_socket_identity(path)
+        if current is None:
+            return
+        if current[:2] != expected_identity[:2]:
+            logger.warning("Socket identity changed; not removing %s", path)
+            return
+        if not stat.S_ISSOCK(current[2]) or path.is_symlink():
+            logger.warning("Refusing to remove non-socket control path %s", path)
+            return
         path.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 def _stat_socket_identity(path: Path) -> tuple[int, int, int] | None:
     """Capture (device, inode, mode) for a path. Returns None if unavailable."""
     try:
-        st = path.stat()
+        st = path.lstat()
         return (st.st_dev, st.st_ino, st.st_mode)
     except OSError:
         return None
@@ -458,7 +517,8 @@ def _clean_stale_socket(path: Path) -> None:
     Uses inode identity checks to detect pathname replacement races
     between the probe and the unlink.
     """
-    if not path.exists() and not path.is_symlink():
+    identity_before = _stat_socket_identity(path)
+    if identity_before is None:
         return
 
     # Fail closed: refuse to clean symlinks.
@@ -467,12 +527,17 @@ def _clean_stale_socket(path: Path) -> None:
         return
 
     # Fail closed: refuse to clean non-socket files.
-    if path.exists() and not stat.S_ISSOCK(path.stat().st_mode):
+    if not stat.S_ISSOCK(identity_before[2]):
         logger.warning("Refusing to clean non-socket at %s", path)
         return
 
-    # Capture identity before probing.
-    identity_before = _stat_socket_identity(path)
+    try:
+        owner_uid = path.lstat().st_uid
+    except OSError:
+        return
+    if owner_uid != os.geteuid():
+        logger.warning("Refusing to clean foreign-owned socket at %s", path)
+        return
 
     # Probe the socket.
     try:
@@ -508,7 +573,7 @@ def _clean_stale_socket(path: Path) -> None:
 
     # Verify identity has not changed during the probe (TOCTOU guard).
     identity_after = _stat_socket_identity(path)
-    if identity_before != identity_after:
+    if identity_after is None or identity_before[:2] != identity_after[:2]:
         logger.warning("Socket identity changed during probe; not removing %s", path)
         return
 
@@ -517,7 +582,7 @@ def _clean_stale_socket(path: Path) -> None:
         # Re-verify identity at the last possible moment so a file
         # swapped in between the probe and the unlink is never evicted.
         identity_final = _stat_socket_identity(path)
-        if identity_final is None or identity_final != identity_after:
+        if identity_final is None or identity_final[:2] != identity_after[:2]:
             logger.warning(
                 "Socket identity changed before unlink; not removing %s", path
             )
@@ -539,6 +604,15 @@ def _restrict_socket_permissions(path: Path) -> None:
         ControlServerError: If chmod fails or mode is wrong after setting.
     """
     try:
+        before = path.lstat()
+    except OSError as exc:
+        raise ControlServerError(
+            f"failed to inspect control socket {path}: {exc}"
+        ) from exc
+    if not stat.S_ISSOCK(before.st_mode) or before.st_uid != os.geteuid():
+        raise ControlServerError(f"control socket {path} is not an owner-owned socket")
+
+    try:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError as exc:
         raise ControlServerError(
@@ -546,11 +620,17 @@ def _restrict_socket_permissions(path: Path) -> None:
         ) from exc
 
     try:
-        actual = stat.S_IMODE(path.stat().st_mode)
+        after = path.lstat()
     except OSError as exc:
         raise ControlServerError(
             f"failed to verify socket permissions on {path}: {exc}"
         ) from exc
+
+    if not stat.S_ISSOCK(after.st_mode) or after.st_uid != os.geteuid():
+        raise ControlServerError(
+            f"control socket {path} was replaced during permission setup"
+        )
+    actual = stat.S_IMODE(after.st_mode)
 
     if actual != (stat.S_IRUSR | stat.S_IWUSR):
         raise ControlServerError(
@@ -568,32 +648,42 @@ def _verify_runtime_dir(path: Path) -> None:
     Raises ControlServerError if the directory is unsafe.
     """
     try:
-        st = path.stat()
+        st = path.lstat()
     except OSError as exc:
         raise ControlServerError(
             f"Cannot stat runtime directory {path}: {exc}"
         ) from exc
 
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise ControlServerError(f"Runtime path {path} is not a private directory")
+
     mode = stat.S_IMODE(st.st_mode)
-    # Fail closed if group or world writable.
-    unsafe_bits = stat.S_IWGRP | stat.S_IWOTH
+    # The socket directory itself must not disclose or permit traversal by
+    # other users. A sticky shared parent is acceptable because it is not the
+    # directory used for the control socket.
+    unsafe_bits = stat.S_IRWXG | stat.S_IRWXO
     if mode & unsafe_bits:
         raise ControlServerError(
-            f"Runtime directory {path} is group/world writable "
+            f"Runtime directory {path} is not owner-only "
             f"(mode {oct(mode)}); refusing to bind control socket"
         )
 
-    try:
-        owner = pwd.getpwuid(st.st_uid)
-        if owner.pw_uid != os.getuid():
-            raise ControlServerError(
-                f"Runtime directory {path} is owned by UID {st.st_uid}, "
-                f"expected {os.getuid()}"
-            )
-    except KeyError:
+    if st.st_uid != os.geteuid():
         raise ControlServerError(
-            f"Runtime directory {path} has unknown UID {st.st_uid}"
-        ) from None
+            f"Runtime directory {path} is owned by UID {st.st_uid}, "
+            f"expected {os.geteuid()}"
+        )
+
+
+def _ensure_runtime_dir(path: Path) -> None:
+    """Create and verify the private directory used for the control socket."""
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        raise ControlServerError(
+            f"Cannot create runtime directory {path}: {exc}"
+        ) from exc
+    _verify_runtime_dir(path)
 
 
 class ControlPeerCredentialError(Exception):

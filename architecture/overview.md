@@ -241,7 +241,7 @@ Multi-source model metadata enrichment. `ModelInfoService` orchestrates periodic
 | **Path** | `src/eggpool/control/` |
 | **Deep Dive** | [deep-dive-control.md](deep-dive-control.md) |
 
-Unix-domain socket control server for live config rehash. `control/server.py` implements a single-shot newline-delimited JSON protocol (v1) on a UDS at `<runtime_dir>/eggpool.sock` (resolved by `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → `$XDG_RUNTIME_DIR/eggpool` → `/tmp/eggpool-<UID>.runtime`). for `eggpool rehash`. Socket mode `0o600` (owner-only). `control/client.py` connects from the CLI to issue reload commands. `control/reload_manager.py` orchestrates the staged reload: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. The control plane is the only path for live config changes without process restart.
+Unix-domain socket control server for live config rehash. `control/server.py` implements a single-shot newline-delimited JSON protocol (v1) on a UDS at `<runtime_dir>/eggpool.sock` (resolved by `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → suitable `$XDG_RUNTIME_DIR/eggpool` → private state/runtime fallback → UID-scoped `/tmp` fallback). The runtime directory is verified as owner-only `0o700`, the socket as owner-only `0o600`, and stale cleanup is inode- and ownership-scoped. `control/client.py` connects from the CLI to issue reload commands. `control/reload_manager.py` orchestrates the staged reload: `stage()` → `commit()`/`rollback()` → `finalize_retirement()`. The control plane is the only path for live config changes without process restart.
 
 **Related**: [deep-dive-runtime.md](deep-dive-runtime.md), [deep-dive-core.md](deep-dive-core.md), [deep-dive-deployment.md](deep-dive-deployment.md)
 
