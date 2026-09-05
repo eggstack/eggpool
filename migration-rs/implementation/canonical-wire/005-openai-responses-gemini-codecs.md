@@ -1,6 +1,6 @@
 # W005 — OpenAI Responses and Gemini generateContent Codecs
 
-Status: dependency-ready; W004 closure accepted
+Status: closed; see [closure record](../../closure/canonical-wire/005-status.md)
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w005--openai-responses-and-gemini-generatecontent-codecs`
 
