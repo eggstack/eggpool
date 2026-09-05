@@ -1,6 +1,6 @@
 # C001 — Coordinator Contract and Deterministic Failure Corpus Freeze
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/coordinator/001-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

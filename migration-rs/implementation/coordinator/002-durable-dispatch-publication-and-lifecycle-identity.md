@@ -1,6 +1,6 @@
 # C002 — Durable Dispatch Publication and Lifecycle Identity
 
-Status: planned; blocked on C001 accepted closure
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

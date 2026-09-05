@@ -249,7 +249,9 @@ The C001 oracle covers 23 failure/effect cases, 11 stream terminal/EOF cases,
 the durable row projection, the runtime publication receipt and finalization
 progress fields, wire learning/rejection and leader/follower roles, and a
 local HTTP provider stub. Its full runtime bundle is repeatable under injected
-clock values; the committed JSON is a reviewed scalar projection.
+clock values; the committed JSON is a reviewed scalar projection. The focused
+tests also inject a commit fault into a temporary migrated database and verify
+the bounded rollback outcome.
 
 C002 may now implement durable dispatch publication and lifecycle identity
 against this contract. C001 does not authorize provider dispatch, Rust

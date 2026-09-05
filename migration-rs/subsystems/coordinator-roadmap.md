@@ -1,6 +1,6 @@
 # M7 Coordinator, Retry, Failover, and Durable Finalization Roadmap
 
-Status: active
+Status: active; C001 closed, C002 dependency-ready
 
 Repository baseline: `04820555479dc3ab86622d9c658c44c45c2c07e7`
 
@@ -147,3 +147,13 @@ M7 closes only after C001-C011 have accepted closure records under `../closure/c
 - no new high/medium M7 correctness or security issue remains.
 
 If post-closure review finds a material defect, add a new C012+ corrective plan. Do not rewrite historical closure records.
+
+## Current closure state
+
+C001 is accepted and closed. Its contract, deterministic fixture inventory,
+Python structural observation projection, and local provider/failure tests are
+recorded in [`coordinator-contract.md`](../coordinator-contract.md) and
+[`closure/coordinator/001-status.md`](../closure/coordinator/001-status.md).
+C002 is the sole dependency-ready implementation plan. C003-C011 remain
+serially blocked on their named predecessors, and M8 remains blocked on
+accepted C011 closure plus its own planning review.
