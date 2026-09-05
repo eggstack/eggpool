@@ -1,9 +1,10 @@
 # Phase 10 — Control-Plane and XDG Runtime Hardening
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phase 1; coordinate with Phases 2, 6, and 11.
+Implementation commit: `c5ab0100001beb7cb16bc138b7e4ddda725cf78e`
 
 ## Objective
 
@@ -226,3 +227,84 @@ Ensure valid rehash requests retain current semantics and Phase 2 busy behavior 
 ## Handoff evidence
 
 Provide path-resolution examples, permission-failure test output, protocol validation matrix, XDG dual-instance results, any peer-credential decision, and confirmation that no broad permission warning remains in server startup.
+
+## Closure record
+
+### Implementation completed
+
+- `runtime_paths.runtime_dir()` now prefers an explicit runtime override,
+  then a suitable private `XDG_RUNTIME_DIR`, then a private state/runtime
+  fallback, with a UID-scoped `/tmp` path only as a last resort. The control
+  client and server continue to use the same `control_socket_path()` resolver.
+- Control startup creates the runtime directory with `0700` intent and fails
+  closed unless the final path is an owner-only, owner-owned directory and
+  not a symlink or special file. Socket setup verifies owner, socket type, and
+  `0600` mode before the server is considered available.
+- Stale cleanup uses `lstat`, refuses symlinks, regular files, active sockets,
+  and foreign-owned sockets, and checks the observed device/inode before
+  unlinking. Startup-failure and shutdown cleanup are scoped to the socket
+  identity created by that server instance.
+- The v1 envelope rejects non-object JSON, non-object `params`, malformed
+  request IDs, unknown commands, unsupported versions, invalid digests,
+  invalid UTF-8, oversized input, and multiple frames before dispatch. Reads
+  and writes use bounded timeouts; protocol errors have a non-internal
+  `parse_error` category. The client applies the same bounded response limit
+  and validates response object shape.
+- Linux `SO_PEERCRED` enforcement remains enabled where available and fails
+  closed on missing, malformed, or unreadable peer credentials. Unsupported
+  platforms retain the mandatory socket-permission gate.
+
+### Verification evidence
+
+The exact implementation was verified with:
+
+```text
+rtk uv run pytest tests/unit/test_control_server.py tests/unit/test_runtime_paths.py tests/unit/test_reload_security.py -q --tb=short --maxfail=1
+121 passed
+
+rtk uv run pytest tests/integration/test_rehash_cli_edge_cases.py tests/integration/test_rehash_acceptance.py -q --tb=short --maxfail=1
+13 passed, 1 skipped
+
+rtk uv run ruff format --check src/ tests/ scripts/
+728 files already formatted
+rtk uv run ruff check src/ tests/ scripts/
+All checks passed!
+rtk uv run pyright src/ scripts/
+0 errors, 0 warnings, 0 informations
+rtk uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed
+rtk git diff --check
+passed
+```
+
+The focused unit coverage includes the permission-failure cleanup path,
+private-directory and symlink rejection, owner-scoped stale cleanup, bounded
+protocol-shape matrix, multiple-frame rejection, and two simultaneously
+available servers using distinct `XDG_RUNTIME_DIR` and `XDG_STATE_HOME`
+values. The one integration skip is the pre-existing subprocess retirement
+timeout scenario; it is not XDG or control-protocol coverage, and the strict
+XDG isolation test passes.
+
+### Peer-credential decision
+
+No new cross-platform dependency was introduced. On Linux, the existing
+`SO_PEERCRED` check is mandatory when the platform exposes it; missing or
+malformed kernel data rejects the connection. On platforms without that
+socket option, owner-only directory and socket permissions remain mandatory.
+
+### Dependency review
+
+Phase 11 (`plans/012-phase-11-reload-diagnostics.md`) was already in
+`implementation handoff` and is now unblocked with respect to its Phase 10
+coordination point; no status transition was needed. Phase 12
+(`plans/013-phase-12-ci-soak-and-performance-closure.md`) remains in
+`implementation handoff` because it still depends on Phase 11 and is the
+roadmap-wide closure gate. The corrective Plan 014 is also already available
+as an implementation-handoff plan and is not blocked by C011. No future plan
+was explicitly marked `blocked` by C011, so no other plan status required
+changing.
+
+There is no broad permission-failure warning path in control-server startup:
+permission or ownership verification raises `ControlServerError`, closes the
+listener, and removes only the instance-owned socket when its identity is
+known.
