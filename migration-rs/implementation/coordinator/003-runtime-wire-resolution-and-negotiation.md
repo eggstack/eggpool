@@ -1,6 +1,6 @@
 # C003 — Runtime Wire Resolution and Negotiation Ownership
 
-Status: planned; blocked on C002 accepted closure
+Status: ready for handoff; C002 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

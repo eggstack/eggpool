@@ -1,14 +1,14 @@
 # M7 Coordinator Implementation Handoffs
 
-Status: active; C001 closed, C002 dependency-ready
+Status: active; C001-C002 closed, C003 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
 | ID | Plan | Class | Dependency state |
 |---|---|---|---|
 | C001 | [Coordinator contract and deterministic failure corpus](001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | closed; see [closure](../../closure/coordinator/001-status.md) |
-| C002 | [Durable dispatch publication and lifecycle identity](002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | **ready for handoff** |
-| C003 | [Runtime wire resolution and negotiation ownership](003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | queued behind C002 |
+| C002 | [Durable dispatch publication and lifecycle identity](002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | closed; see [closure](../../closure/coordinator/002-status.md) |
+| C003 | [Runtime wire resolution and negotiation ownership](003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | **ready for handoff** |
 | C004 | [Provider-bound attempt construction and upstream submission](004-provider-attempt-construction-and-submission.md) | capability/invariant | queued behind C003 |
 | C005 | [Failure effects, retry budget, and failover](005-failure-effects-retry-and-failover.md) | invariant/capability | queued behind C004 |
 | C006 | [Durable finalization and retained terminal ownership](006-durable-finalization-and-retained-ownership.md) | invariant | queued behind C005 |

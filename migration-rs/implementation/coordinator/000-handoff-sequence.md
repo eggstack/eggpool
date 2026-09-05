@@ -5,8 +5,8 @@ Status: active
 Execute and close in this order:
 
 1. C001 — freeze coordinator/failure/retry/finalization contract and fixtures (**closed**; see [closure](../../closure/coordinator/001-status.md)).
-2. C002 — durable dispatch publication and lifecycle identity (**ready**).
-3. C003 — runtime wire resolution, rejection cache, learning, and negotiation single-flight.
+2. C002 — durable dispatch publication and lifecycle identity (**closed**; see [closure](../../closure/coordinator/002-status.md)).
+3. C003 — runtime wire resolution, rejection cache, learning, and negotiation single-flight (**ready**).
 4. C004 — provider-bound attempt construction, auth/header/path assembly, and M4 submission.
 5. C005 — canonical failure effects, retry budget, account/wire failover, exhaustion.
 6. C006 — attempt/request finalizers, claim compensation, retained terminal ownership.

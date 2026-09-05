@@ -1,6 +1,8 @@
 # C002 — Durable Dispatch Publication and Lifecycle Identity
 
-Status: ready for handoff
+Status: complete
+
+Implementation commit: `8caae259ca6b4d45c0a2594a499ed6f2ea6762fd`
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
