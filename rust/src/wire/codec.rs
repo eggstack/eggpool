@@ -11,6 +11,7 @@ use super::registry::{CodecFamily, ConfiguredWireProfile, WireSurface};
 use crate::wire::ir::{
     CanonicalEvent, CanonicalRequest, CanonicalResponse, ClientSurface, ProviderErrorEvidence,
 };
+use crate::wire::stream::{SseFrame, decode_stream_event, encode_client_event};
 
 /// Python-owned codec identifiers accepted by the static registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -253,7 +254,33 @@ pub trait WireCodec {
         &self,
         _frame: &Value,
     ) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
-        Err(CodecError::new(CodecReasonCode::MalformedProviderEvent))
+        decode_stream_event(self.stream_adapter(), _frame)
+    }
+
+    /// Decode one already-framed SSE record without owning byte framing.
+    fn decode_stream_frame(
+        &self,
+        frame: &SseFrame,
+    ) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
+        let mut value = serde_json::Map::new();
+        value.insert("data".into(), serde_json::Value::String(frame.data.clone()));
+        if let Some(event) = &frame.event {
+            value.insert("event".into(), serde_json::Value::String(event.clone()));
+        }
+        self.decode_stream_event(&serde_json::Value::Object(value))
+    }
+
+    /// Encode one canonical event in a client streaming grammar.
+    ///
+    /// An empty byte vector is an intentional no-op for events that have no
+    /// faithful representation on the selected client surface.  Material
+    /// loss remains a typed error in the same way as finite adaptation.
+    fn encode_stream_event(
+        &self,
+        event: &CanonicalEvent,
+        client_surface: ClientSurface,
+    ) -> Result<Vec<u8>, CodecError> {
+        encode_client_event(client_surface, event)
     }
 }
 

@@ -6,6 +6,7 @@ pub mod codec;
 pub mod codecs;
 pub mod ir;
 pub mod registry;
+pub mod stream;
 
 pub use adaptation::{
     AdaptationOutcome, AdaptationPolicy, CapabilityDisposition, LossPolicy, MAX_ADAPTATION_NOTICES,
@@ -24,4 +25,9 @@ pub use codecs::{AnthropicMessagesCodec, OpenAiChatCodec, builtin_codec_instance
 pub use registry::{
     CodecFamily, ConfiguredWireProfile, WireHint, WireProfileDefinition, WireProfileId,
     WireProfileRegistry, WireRegistryError, WireSurface, WireSurfaceName,
+};
+pub use stream::{
+    MAX_SSE_FRAME_BYTES, SSEFrame, SseDecodeError, SseDecodeResult, SseDecoder, SseFrame,
+    StreamError, StreamEventDecoder, StreamTerminalOutcome, StreamTerminalSummary,
+    TerminalEvidence, UsageProtocol, decode_stream_event, encode_client_event, normalize_usage,
 };
