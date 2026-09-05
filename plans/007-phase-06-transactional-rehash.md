@@ -1,7 +1,7 @@
 # Phase 6 — Transactional Rehash and Compensatable Commit
 
 Date: 2026-07-19
-Status: implemented
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–5.
 
@@ -282,27 +282,51 @@ Use Phase 1 snapshots to verify:
 
 ### Chosen commit ordering
 
-SQLite commit BEFORE publication (option 2 from the plan's three alternatives):
+The shipped implementation uses a staged-swap protocol. SQLite commits before
+runtime-swap acceptance, while the staged candidate remains unavailable to
+leases:
 
-1. Prepare persistence delta (calculate, don't commit)
-2. Prepare process transitions (calculate, don't apply)
-3. Pre-commit verification (revalidate active generation, shutdown state)
-4. Apply persistence delta in SQLite transaction (stage AND commit)
-5. Publish candidate generation atomically through RuntimeManager
-6. Apply process transitions (after publication)
-7. Mark transaction completed
+1. Prepare persistence and process-transition deltas without mutation.
+2. Preflight transitions and revalidate the active generation, digest, and
+   shutdown state.
+3. Open the SQLite transaction and apply the persistence delta.
+4. Stage the candidate swap, closing lease admission, and apply the prepared
+   process transitions inside the same transaction.
+5. Exit the SQLite transaction, committing persistence while the old
+   generation remains the active accepting generation.
+6. Commit the pending runtime swap under the runtime-manager lock. This is the
+   visibility/acceptance point: the candidate becomes active and lease
+   admission reopens atomically.
+7. Run accepted-generation finalization: transfer candidate ownership, update
+   compatibility state, finalize transitions, schedule retirement, and mark
+   the transaction complete. A post-acceptance failure retains the new
+   generation and an executable retry owner.
 
 ### Rationale for SQLite/publication ordering
 
-The implementation chose "commit before publication" because:
+The implementation chose "commit before runtime-swap acceptance" because:
 
-- **Smallest irrecoverable window**: If SQLite commit fails, the runtime is untouched (no generation swap). If publication fails after SQLite commit, the persistence delta is idempotent and will be re-synced on the next reload.
-- **No runtime rollback needed**: The alternative (commit after publication) requires a tested runtime rollback or durable intent record if SQLite commit fails post-publication. The chosen ordering avoids this complexity.
-- **No durable intent record needed**: Since commit happens before publication, a process crash during commit leaves either no change (commit failed) or a persisted delta that the next startup will reconcile.
+- **Requests cannot observe a partial candidate**: staging gates leases while
+  SQLite and process transitions are being settled; the old generation remains
+  the accepting generation until the swap commits.
+- **Pre-acceptance failures are reversible**: SQLite rollback, staged-swap
+  rollback, transition rollback, and candidate abort are coordinated by one
+  cleanup path.
+- **Crash recovery is startup reconciliation**: no separate reload-intent row
+  is required; startup rebuilds the active generation from validated config and
+  reconciles provider/account persistence.
 
 ### Transaction state machine
 
-16 monotonic states: `CREATED → VALIDATED → DIFFED → CANDIDATE_PREPARED → PERSISTENCE_PREPARED → PROCESS_TRANSITIONS_PREPARED → COMMIT_STARTED → RUNTIME_PUBLISHED → PROCESS_TRANSITIONS_APPLIED → PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED → COMPLETED`
+The transaction state machine has explicit preparation, preflight, staging,
+swap-acceptance, finalization, and terminal states. The production success path
+is `CREATED → VALIDATED → DIFFED → CANDIDATE_PREPARED →
+PERSISTENCE_PREPARED → PROCESS_TRANSITIONS_PREPARED →
+PROCESS_TRANSITIONS_PREFLIGHTED → COMMIT_STARTED → RUNTIME_STAGED →
+RUNTIME_SWAP_COMMITTED → PROCESS_TRANSITIONS_APPLIED →
+PERSISTENCE_COMMITTED → OBSERVABLE_STATE_UPDATED → RETIREMENT_SCHEDULED →
+COMPLETED`. `ReloadAcceptanceState` separately records the narrow
+`PERSISTENCE_COMMITTED_RUNTIME_PENDING` boundary and final `ACCEPTED` state.
 
 Terminal states: `COMPLETED`, `ABORTED`, `COMPENSATION_FAILED`
 
@@ -310,33 +334,23 @@ All transitions are asserted in code via `_VALID_TRANSITIONS` dict.
 
 ### Fault-matrix results
 
-Every stage has a tested failure path:
-
-| Stage | Test | Active unchanged? | State |
-|-------|------|-------------------|-------|
-| Digest mismatch | `TestDigestMismatchInjection` | Yes | ABORTED |
-| Diff computation | `TestDiffComputationFailure` | Yes | ABORTED |
-| Candidate build | `TestCandidateBuildFailure` | Yes | ABORTED |
-| Persistence delta prepare | `TestReconciliationFailure` | Yes | ABORTED |
-| Process transition apply | `TestProcessTransitionApplyFailure.test_process_transition_failure_compensates` | No (new gen live) | COMPLETED (compensated) |
-| Process transition compensation | `TestProcessTransitionApplyFailure.test_process_transition_compensation_failure` | No (new gen live) | COMPENSATION_FAILED |
-| Publication | `TestPublishFailure` | Yes | ABORTED |
-| Post-publication retirement | `TestPostPublicationFailureVisible` | No (new gen live) | COMPLETED (compensated) |
-| Provider client construction | `TestProviderClientConstructionFailure` | Yes | ABORTED |
-| Catalog construction | `TestCatalogConstructionFailure` | Yes | ABORTED |
-| Task-spec construction | `TestTaskSpecConstructionFailure` | Yes | ABORTED |
-| Client pool close | `TestClientPoolCloseFailure` | No (retirement) | Retired OK |
-| Outbound manager close | `TestOutboundManagerCloseFailure` | No (retirement) | Retired OK |
-| Supervisor stop | `TestSupervisorStopFailure` | No (retirement) | Retired OK |
-| Retirement timeout | `TestRetirementTimeoutHeldLease` | No (forced close) | Retired OK |
-| Shutdown during pre-commit | `TestShutdownDuringTransaction` | Yes | ABORTED |
+The fault matrix is covered by the reload integration suite rather than by
+one monolithic test class. `test_reload_fault_matrix.py` covers candidate,
+commit, transition, cancellation, compensation, and post-swap bookkeeping
+faults; `test_database_commit_failure.py`,
+`test_database_outcome_matrix.py`, and
+`test_commit_failure_invalidation.py` cover confirmed and indeterminate
+SQLite outcomes; `test_acceptance_finalization.py`,
+`test_post_acceptance_faults.py`, and the shutdown suites cover acceptance,
+retained ownership, retirement, and process shutdown. Pre-publication faults
+leave the old generation authoritative and roll back persistence, staged
+swap, applied transitions, and candidate ownership. Post-acceptance faults
+retain the new generation and expose retryable finalization state.
 
 ### Cancellation/shutdown tests
 
-- `TestPhase6FaultInjection.test_pre_commit_transaction_aborts_on_shutdown`: Shutdown during candidate build aborts the transaction.
-- `TestPhase6FaultInjection.test_wait_for_transaction_completion_returns_when_idle`: Shutdown wait returns immediately when no transaction active.
-- `TestPhase6FaultInjection.test_wait_for_transaction_completion_signals_on_finish`: Shutdown wait returns after transaction completes.
-- `test_cancelled_error_shields_commit`: Cancellation after publication shields remaining commit work (from existing test suite).
+- `tests/integration/reload/test_shutdown_transaction_ordering.py` covers shutdown during an active transaction and the idle/finished transaction wait behavior.
+- `tests/integration/reload/test_reload_fault_matrix.py::TestPostPublicationCancellationShielding::test_cancel_after_publish_shields_commit` verifies that cancellation after publication shields the remaining commit work.
 
 ### Key implementation details
 
@@ -344,3 +358,56 @@ Every stage has a tested failure path:
 - **Post-publication compensation**: `_compensate_post_publication` retries process transitions if they failed. The new generation is always accepted (cannot be rolled back). Compensation failure is operator-visible via `COMPENSATION_FAILED` state.
 - **Shutdown-wait mechanism**: `ReloadManager.wait_for_transaction_completion()` allows shutdown to wait for an in-flight transaction before closing process-owned dependencies. The `_transaction_complete_event` is signaled in the `finally` block of `reload()`.
 - **Process-transition behavioral methods**: `ProcessTransition` is now a base class with `preflight()`, `apply()`, and `rollback()` methods. `TaskSpecTransition` implements the actual task-spec reconfiguration via `apply_spec_diff()`.
+
+## Closure evidence
+
+The original implementation landed in `1705061a` and `6da32988`. The staged
+swap, acceptance-boundary, cancellation, shutdown, rollback, and finalization
+corrections subsequently landed through the reload atomicity corrective-pass
+lineage (Plans 014–020). Together they satisfy the C007 transaction contract:
+
+- candidate construction prepares resources and immutable deltas without
+  mutating active runtime, process-owned writers, or persistence;
+- pre-acceptance failures restore the old generation, reopen lease admission,
+  roll back applied transitions, and abort candidate ownership;
+- SQLite commit, runtime-swap acceptance, ownership transfer, compatibility
+  mirroring, and old-generation retirement are distinct observable facts;
+- cancellation and shutdown wait for or retain the active transaction instead
+  of closing dependencies underneath it; and
+- accepted-generation housekeeping failures retain a retryable owner rather
+  than rolling back an already authoritative generation.
+
+Focused verification passed:
+
+```text
+uv run pytest \
+  tests/unit/test_process_transition_plan.py \
+  tests/unit/test_reload_manager.py \
+  tests/unit/test_reload_failure_injection.py \
+  tests/unit/test_reload_post_publication_failures.py \
+  tests/unit/test_reload_resource_failure_paths.py \
+  tests/unit/test_reload_diagnostics_matrix.py \
+  tests/integration/reload/ \
+  -q --tb=short --maxfail=1
+402 passed in 48.05s
+
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+728 files already formatted; Ruff clean; Pyright 0 errors; 14 smoke tests passed.
+```
+
+The repository-wide run reached `7,967 passed, 45 skipped, 1 warning` and
+stopped at the unrelated pre-existing failure
+`tests/unit/test_wire_ir.py::test_anthropic_request_normalizes_system_and_tool_blocks`.
+That test expects a string while the current renderer returns a text-block
+list; the C007 transaction and reload suites remain green.
+
+## Dependency review
+
+The direct successor, Phase 7 (`plans/008-phase-07-active-generation-state-authority.md`),
+is already implemented. Phases 8–12 are available implementation-handoff
+plans; their C007-related prerequisites are now satisfied or explicitly
+coordinated with later phases. No future plan is explicitly marked blocked by
+C007, so no additional plan status required changing.
