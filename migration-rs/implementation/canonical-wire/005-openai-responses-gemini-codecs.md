@@ -1,6 +1,6 @@
 # W005 — OpenAI Responses and Gemini generateContent Codecs
 
-Status: planned; blocked on W004 closure by default serial handoff
+Status: dependency-ready; W004 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w005--openai-responses-and-gemini-generatecontent-codecs`
 
