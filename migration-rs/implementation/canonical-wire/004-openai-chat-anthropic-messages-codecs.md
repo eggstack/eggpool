@@ -1,6 +1,6 @@
 # W004 — OpenAI Chat Completions and Anthropic Messages Codecs
 
-Status: planned; blocked on W003 closure
+Status: ready for handoff; W003 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w004--openai-chat-completions-and-anthropic-messages-codecs`
 

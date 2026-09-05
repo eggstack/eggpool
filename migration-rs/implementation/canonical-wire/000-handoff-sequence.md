@@ -1,13 +1,13 @@
 # M6 Canonical Wire Handoff Sequence
 
-Status: active; W003 dependency-ready
+Status: active; W004 dependency-ready
 
 Execute and close these plans in dependency order:
 
 1. W001 — contract and deterministic fixture freeze (**closed**);
 2. W002 — canonical IR, request admission, limits, and M5 fact bridge (**closed; W001 closed**);
-3. W003 — static wire-profile registry and codec contract (**ready; W002 closed**);
-4. W004 — OpenAI Chat Completions and Anthropic Messages codecs (blocked on W003);
+3. W003 — static wire-profile registry and codec contract (**closed; W002 closed**);
+4. W004 — OpenAI Chat Completions and Anthropic Messages codecs (**dependency-ready; W003 closed**);
 5. W005 — OpenAI Responses and Gemini generateContent codecs (blocked on W004 by default serial handoff);
 6. W006 — reasoning, tools, structured output, and loss policy (blocked on W004/W005);
 7. W007 — multimodal, documents, cache controls, and provider-sensitive pure adaptation (blocked on W006);

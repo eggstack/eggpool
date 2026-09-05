@@ -1,6 +1,6 @@
 # M6 Canonical Request, Wire Codec, Transcoding, and SSE Roadmap
 
-Status: active; W003 dependency-ready
+Status: active; W004 dependency-ready
 
 Repository baseline: `e096ed177f94b64b23a82852d6ec1bebc8782316`
 
@@ -16,8 +16,8 @@ It does not own account selection, dynamic wire negotiation/preference/retry, pr
 M5 D001-D009 closed
  -> W001 contract/fixture freeze (**closed**)
  -> W002 canonical IR + admission/limits + M5 bridge (**closed**)
- -> W003 static profiles + codec contract (**dependency-ready**)
- -> W004 Chat + Anthropic codecs
+ -> W003 static profiles + codec contract (**closed**)
+ -> W004 Chat + Anthropic codecs (**dependency-ready**)
  -> W005 Responses + Gemini codecs
  -> W006 reasoning/tools/structured/loss policy
  -> W007 multimodal/documents/cache/provider adaptation

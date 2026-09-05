@@ -24,13 +24,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
-| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W003 ready** |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W004 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | capability/invariant | W002 closed | **ready for handoff** |
+| W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | capability | W003 closed | **ready for handoff** |
 
 The M6 sequence and dependency state are also recorded under `implementation/canonical-wire/README.md` and `000-handoff-sequence.md`.
 
@@ -40,6 +40,7 @@ The M6 sequence and dependency state are also recorded under `implementation/can
 |---|---|---|---|---|
 | W001 | [Canonical wire contract and deterministic fixture freeze](implementation/canonical-wire/001-contract-and-fixture-freeze.md) | invariant/infrastructure | [`52f1dfac`](https://github.com/eggstack/eggpool/commit/52f1dfac) | [closed](closure/canonical-wire/001-status.md) |
 | W002 | [Canonical IR, request admission, limits, and M5 fact bridge](implementation/canonical-wire/002-canonical-ir-request-admission-and-limits.md) | capability/invariant | [`2096727b`](https://github.com/eggstack/eggpool/commit/2096727b) | [closed](closure/canonical-wire/002-status.md) |
+| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | capability/invariant | [`f0ab286`](https://github.com/eggstack/eggpool/commit/f0ab286) | [closed](closure/canonical-wire/003-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
@@ -72,8 +73,8 @@ D009 resolved the two post-D008 accepted-selection findings: configured random f
 |---|---|---|
 | W001 | [Contract and deterministic fixture freeze](implementation/canonical-wire/001-contract-and-fixture-freeze.md) | closed; see [closure](closure/canonical-wire/001-status.md) |
 | W002 | [Canonical IR, request admission, limits, and M5 fact bridge](implementation/canonical-wire/002-canonical-ir-request-admission-and-limits.md) | closed; see [closure](closure/canonical-wire/002-status.md) |
-| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | **dependency-ready; W002 closed** |
-| W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | planned; blocked on W003 closure |
+| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | closed; see [closure](closure/canonical-wire/003-status.md) |
+| W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | **dependency-ready; W003 closed** |
 | W005 | [OpenAI Responses and Gemini generateContent codecs](implementation/canonical-wire/005-openai-responses-gemini-codecs.md) | planned; blocked on W004 closure by default serial handoff |
 | W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | planned; blocked on W004/W005 closure |
 | W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | planned; blocked on W006 closure |
@@ -97,7 +98,7 @@ No new database schema is planned for M6.
 
 ## Future work and block state
 
-W003 is the sole dependency-ready M6 plan. W001 and W002 are closed; W004-W010 remain planned but blocked in sequence.
+W004 is the sole dependency-ready M6 plan. W001-W003 are closed; W005-W010 remain planned but blocked in sequence.
 
 M7 coordinator/retry/finalization research may proceed conceptually, but **M7 implementation handoff remains blocked until accepted W010 closure** establishes the selected-profile codec runtime as stable.
 
@@ -105,6 +106,6 @@ M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 quali
 
 ## Closure state
 
-F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W003. No M7 implementation plan is dependency-ready.
+F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W004. No M7 implementation plan is dependency-ready.
 
 If a later review finds a material gap in a closed M6 plan, create a bounded corrective plan and update aggregate state rather than rewriting historical closure evidence.
