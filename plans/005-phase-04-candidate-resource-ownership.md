@@ -1,7 +1,7 @@
 # Phase 4 — Candidate Resource Ownership and Abort Cleanup
 
 Date: 2026-07-19
-Status: implemented
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–3.
 
@@ -198,3 +198,76 @@ Run at least 100 failed reloads at several injection stages. Assert stable:
 ## Handoff evidence
 
 Provide the ownership inventory, focused failure-injection commands, repeated-failure resource table, one successful transfer/retirement trace, and any resource intentionally classified as process-owned with justification.
+
+## Closure evidence
+
+The candidate ownership implementation was delivered by `0f5e815d` with the
+cancellation/diagnostics gap-fill in `41bf80fc`. The final corrective closure
+is recorded in `2e5e6ba0e2ac36bde20c09eb6c91cb38e4f4b7e5`.
+
+The ownership contract is explicit in `RuntimeGenerationCandidate`:
+
+- `building → prepared → transferred` and `building/prepared → aborted` are
+  enforced state transitions.
+- The factory registers every generation-owned closeable immediately after
+  construction: `client_pool`, conditional `outbound_manager`,
+  `missing_account_recovery`, `finalization_supervisor`, and `supervisor`.
+- Abort closes callbacks in reverse registration order, continues after close
+  failures, records bounded redacted diagnostics, and is idempotent.
+- Abort after transfer is a true no-op and preserves `transferred`; the
+  runtime manager alone owns retirement cleanup after publication.
+- Pre-commit reload failures and cancellation use the shared abort owner with
+  shielded bounded cleanup. Process-owned database, repositories, metrics
+  coalescer, shared writers, runtime metrics, dashboard telemetry, update
+  checker, and model-router affinity are not registered on candidates.
+- Construction diagnostics preserve the original failure as the primary
+  cause; no `cleanup_partial_generation` implementation remains.
+
+Focused verification passed:
+
+```text
+uv run pytest \
+  tests/unit/test_candidate_resource_ownership.py \
+  tests/unit/test_generation_factory.py \
+  tests/unit/test_runtime_manager.py \
+  tests/unit/test_runtime_generation_retirement.py \
+  tests/unit/test_reload_manager.py \
+  tests/unit/test_reload_diagnostics_matrix.py \
+  tests/integration/reload/ \
+  tests/integration/test_rehash_streaming_swap.py \
+  -q --tb=short --maxfail=1
+557 passed in 90.86s
+
+uv run pytest \
+  tests/integration/reload/test_reload_resources.py::test_resource_cycle_does_not_accumulate \
+  -q --tb=short --maxfail=1
+1 passed in 3.69s
+
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+728 files already formatted; Ruff clean; Pyright 0 errors; 14 smoke tests passed.
+```
+
+The 100-cycle plateau regression exercises four barriers (`on_candidate_started`,
+`on_candidate_complete`, `on_reconcile_started`, and `on_publish_started`) and
+asserts after every failed reload that the active generation and open
+client/outbound/supervisor resource counts do not grow. Successful transfer
+and later exactly-once retirement are covered by
+`test_transition_ownership.py`, `test_retention_close_counts.py`, and the
+runtime retirement suite.
+
+The repository-wide run reached `7,967 passed, 45 skipped, 1 warning` and
+stopped at the unrelated pre-existing failure
+`tests/unit/test_wire_ir.py::test_anthropic_request_normalizes_system_and_tool_blocks`.
+The failure expects a string while the current renderer returns a text-block
+list; C005 changes no wire-IR code or tests.
+
+## Dependency review
+
+The direct successor, Phase 5 (`plans/006-phase-05-shared-runtime-generation-factory.md`),
+is already `complete`, so closing C005 introduces no newly blocked work. Phase
+6 is already `implemented`, Phase 7 is already `implemented`, and Phases 8–12
+remain available implementation-handoff plans with no explicit blocked
+status. No future plan status required changing.
