@@ -1,3 +1,15 @@
 //! Canonical, provider-independent wire semantics.
 
+pub mod codec;
 pub mod ir;
+pub mod registry;
+
+pub use codec::{
+    AdaptationNotice, BuiltinCodec, CodecError, CodecOutput, CodecReasonCode, CompatibilityPath,
+    DecodedProviderPayload, StreamAdapterKind, WireCodec, WireCodecId, builtin_codec,
+    compatibility_path,
+};
+pub use registry::{
+    CodecFamily, ConfiguredWireProfile, WireHint, WireProfileDefinition, WireProfileId,
+    WireProfileRegistry, WireRegistryError, WireSurface, WireSurfaceName,
+};

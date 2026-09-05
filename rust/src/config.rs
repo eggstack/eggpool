@@ -1231,6 +1231,9 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
+        let wire_registry = crate::wire::WireProfileRegistry::embedded().map_err(|error| {
+            ConfigError::validation(format!("invalid wire profile registry: {error}"))
+        })?;
         if self.providers.is_empty() && !self.accounts.is_empty() {
             let accounts = std::mem::take(&mut self.accounts);
             self.providers.insert(
@@ -1262,7 +1265,7 @@ impl Config {
                     "Provider key does not match declared id for {provider_id}"
                 )));
             }
-            validate_provider(provider, &self.proxies, &mut account_names)?;
+            validate_provider(provider, &self.proxies, &mut account_names, &wire_registry)?;
         }
         validate_model_routers(&self.model_routers)?;
         for override_config in self.model_overrides.values() {
@@ -1454,6 +1457,7 @@ fn validate_provider(
     provider: &mut ProviderConfig,
     proxies: &BTreeMap<String, ProxyConfig>,
     names: &mut BTreeSet<String>,
+    wire_registry: &crate::wire::WireProfileRegistry,
 ) -> Result<(), ConfigError> {
     if provider.id.is_empty()
         || !provider
@@ -1583,6 +1587,9 @@ fn validate_provider(
     }
     validate_auth(&provider.auth)?;
     validate_headers(&provider.headers, Some(&provider.auth), "provider")?;
+    wire_registry
+        .validate_provider_references(&provider.wire_surfaces, &provider.model_wire)
+        .map_err(|error| ConfigError::validation(error.to_string()))?;
     for (surface, candidate) in &provider.wire_surfaces {
         validate_path(&candidate.path_template)?;
         if let Some(path) = &candidate.stream_path_template {
