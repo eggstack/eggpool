@@ -30,18 +30,9 @@ const RECOVERY_KEY_HARD_CAP: usize = 4_096;
 type RecoveryCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Non-persistent trace value passed to M7 for durable routing-decision
-/// publication. It contains no request body, credentials, or error text.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct RoutingDecisionTrace {
-    pub requested_model_id: String,
-    pub provider_id: Option<String>,
-    pub protocol: Option<String>,
-    pub request_surface: String,
-    pub candidates: Vec<RoutingCandidate>,
-    pub exclusions: Vec<super::RoutingExclusion>,
-    pub selected_account_name: Option<String>,
-    pub local_claim_id: Option<u64>,
-}
+/// publication. Accepted traces are immutable claim snapshots; no request
+/// body, credential, or error text enters the value.
+pub type RoutingDecisionTrace = claim::SelectionSnapshot;
 
 #[derive(Clone)]
 struct RoutingState {
@@ -236,75 +227,104 @@ impl RoutingRouter {
     ) -> Result<Option<SelectionClaim>, ClaimError> {
         self.maybe_recover_missing_support(facts, exclude_accounts);
         let _guard = self.selection_lock.lock().await;
-        let mut excluded = exclude_accounts.clone();
-        loop {
-            let active = claim::active_snapshot(&self.state.claims);
-            let catalog = self.state.catalog.lock().expect("catalog lock");
-            let (mut candidates, exclusions) = eligibility::build_eligible_candidates(
-                &self.state.registry,
-                &catalog,
-                &self.state.estimator,
-                self.state.health.as_ref(),
-                self.state.quarantine.as_ref(),
-                facts,
-                self.state.policy.clone(),
-                &active,
-            );
-            candidates.retain(|candidate| !excluded.contains(&candidate.account_name));
-            let (ordered, fairness) = self.fairness_order(facts, &mut candidates, false);
-            let Some(candidate) = ordered.into_iter().next() else {
-                drop(catalog);
-                let _ = exclusions;
-                return Ok(None);
-            };
+        let active = claim::active_snapshot(&self.state.claims);
+        let catalog = self.state.catalog.lock().expect("catalog lock");
+        let (mut candidates, mut exclusions) = eligibility::build_eligible_candidates(
+            &self.state.registry,
+            &catalog,
+            &self.state.estimator,
+            self.state.health.as_ref(),
+            self.state.quarantine.as_ref(),
+            facts,
+            self.state.policy.clone(),
+            &active,
+        );
+        candidates.retain(|candidate| !exclude_accounts.contains(&candidate.account_name));
+        candidates.retain(|candidate| self.probe_available_read_only(candidate, facts));
+        let (ordered, fairness) = self.fairness_order(facts, &mut candidates, true);
+        let mut accepted = None;
+        let mut accepted_fairness = fairness;
+        for candidate in ordered {
             let Some(owns_probe) = self.acquire_probe(&candidate, facts) else {
-                excluded.insert(candidate.account_name.clone());
+                exclusions.push(super::RoutingExclusion {
+                    account_name: candidate.account_name,
+                    reason_code: "probe_unavailable".into(),
+                });
                 continue;
             };
-            let projected_cost = self.state.estimator.estimate_cost(
-                &candidate.account_name,
-                &facts.canonical_model_id,
-                facts.projected_tokens.max(0),
-                facts.now as f64,
-            );
-            if let Err(error) = self.state.estimator.add_pending_claim(
-                &candidate.account_name,
-                facts.projected_tokens.max(0),
-                projected_cost,
-            ) {
-                if owns_probe {
-                    self.release_probe(&candidate.account_name);
-                }
-                return Err(ClaimError::Quota(error));
-            }
-            let mut selection = SelectionClaim::new(
-                self.state
-                    .registry
-                    .get(&candidate.account_name)
-                    .map_or(0, |identity| identity.account_id),
-                candidate.account_name.clone(),
-                candidate.provider_id.clone(),
-                candidate.canonical_model_id.clone(),
-                candidate.upstream_model_id.clone(),
-                candidate.protocol.clone(),
-                candidate.priority,
-                candidate.requires_transcode,
-                facts.projected_tokens.max(0),
-                projected_cost,
-                owns_probe,
-                self.state.claims.clone(),
-                self.state.estimator.clone(),
-                self.state.health.clone(),
-            );
-            selection = claim::publish(&self.state.claims, selection)?;
-            // Fairness is committed only after the candidate owns all local
-            // state, so a failed claim does not consume a rotor position.
-            if let Some(fairness) = fairness.filter(|decision| decision.applied) {
-                self.commit_fairness(facts, &candidate, fairness.candidate_count);
-            }
-            drop(catalog);
-            return Ok(Some(selection));
+            accepted = Some((candidate, owns_probe));
+            break;
         }
+        let Some((candidate, owns_probe)) = accepted else {
+            drop(catalog);
+            return Ok(None);
+        };
+        let projected_cost = self.state.estimator.estimate_cost(
+            &candidate.account_name,
+            &facts.canonical_model_id,
+            facts.projected_tokens.max(0),
+            facts.now as f64,
+        );
+        let rejected_accounts = exclusions
+            .iter()
+            .filter(|exclusion| exclusion.reason_code == "probe_unavailable")
+            .map(|exclusion| exclusion.account_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let trace_candidates = candidates
+            .iter()
+            .filter(|candidate| !rejected_accounts.contains(candidate.account_name.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        accepted_fairness =
+            self.accepted_fairness(accepted_fairness, &candidate, &rejected_accounts);
+        let account_id = self
+            .state
+            .registry
+            .get(&candidate.account_name)
+            .map_or(0, |identity| identity.account_id);
+        let snapshot = claim::SelectionSnapshot::accepted(
+            facts,
+            trace_candidates,
+            exclusions,
+            accepted_fairness.clone(),
+            &candidate,
+            account_id,
+        );
+        if let Err(error) = self.state.estimator.add_pending_claim(
+            &candidate.account_name,
+            facts.projected_tokens.max(0),
+            projected_cost,
+        ) {
+            if owns_probe {
+                self.release_probe(&candidate.account_name);
+            }
+            return Err(ClaimError::Quota(error));
+        }
+        let mut selection = SelectionClaim::new(
+            account_id,
+            candidate.account_name.clone(),
+            candidate.provider_id.clone(),
+            candidate.canonical_model_id.clone(),
+            candidate.upstream_model_id.clone(),
+            candidate.protocol.clone(),
+            candidate.priority,
+            candidate.requires_transcode,
+            facts.projected_tokens.max(0),
+            projected_cost,
+            owns_probe,
+            snapshot,
+            self.state.claims.clone(),
+            self.state.estimator.clone(),
+            self.state.health.clone(),
+        );
+        selection = claim::publish(&self.state.claims, selection)?;
+        // Fairness is committed only after the candidate owns all local
+        // state, so a failed claim does not consume a rotor position.
+        if let Some(fairness) = accepted_fairness.filter(|decision| decision.applied) {
+            self.commit_fairness(facts, &candidate, fairness.candidate_count);
+        }
+        drop(catalog);
+        Ok(Some(selection))
     }
 
     pub fn trace_for(
@@ -312,24 +332,17 @@ impl RoutingRouter {
         facts: &RoutingRequestFacts,
         claim: Option<&SelectionClaim>,
     ) -> RoutingDecisionTrace {
-        let plan = self.build_routing_plan(facts);
-        RoutingDecisionTrace {
-            requested_model_id: facts.canonical_model_id.clone(),
-            provider_id: facts.provider_id.clone(),
-            protocol: facts.requested_protocol.clone(),
-            request_surface: facts.request_surface.clone(),
-            candidates: plan.candidates,
-            exclusions: plan.exclusions,
-            selected_account_name: claim.map(|item| item.account_name().to_owned()),
-            local_claim_id: claim.map(SelectionClaim::id),
+        if let Some(claim) = claim {
+            return claim.selection_snapshot().clone();
         }
+        claim::SelectionSnapshot::from_plan(self.build_routing_plan(facts))
     }
 
     fn fairness_order(
         &self,
         facts: &RoutingRequestFacts,
         candidates: &mut [RoutingCandidate],
-        commit: bool,
+        apply: bool,
     ) -> (Vec<RoutingCandidate>, Option<FairnessDecision>) {
         let Some(best) = candidates.first() else {
             return (Vec::new(), None);
@@ -381,7 +394,7 @@ impl RoutingRouter {
             self.state
                 .rotor
                 .order_named(&key, &band, |candidate| candidate.account_name.as_str())
-        } else if !commit {
+        } else if self.state.policy.fairness_mode == FairnessMode::Random && !apply {
             (0..band.len()).collect()
         } else {
             let mut indexes: Vec<usize> = (0..band.len()).collect();
@@ -416,13 +429,43 @@ impl RoutingRouter {
                 .map(|candidate| candidate.account_name.clone())
                 .collect(),
         };
-        if commit && self.state.policy.fairness_mode == FairnessMode::RoundRobin {
-            self.state.rotor.commit(&key, band.len());
-        }
         (
             ordered_band.into_iter().chain(rest).collect(),
             Some(decision),
         )
+    }
+
+    fn accepted_fairness(
+        &self,
+        fairness: Option<FairnessDecision>,
+        selected: &RoutingCandidate,
+        rejected_accounts: &std::collections::BTreeSet<&str>,
+    ) -> Option<FairnessDecision> {
+        let mut fairness = fairness?;
+        if !fairness.applied {
+            return Some(fairness);
+        }
+        let band = std::mem::take(&mut fairness.ordered_accounts)
+            .into_iter()
+            .filter(|account| !rejected_accounts.contains(account.as_str()))
+            .collect::<Vec<_>>();
+        if let Some(selected_index) = band
+            .iter()
+            .position(|account| account == &selected.account_name)
+        {
+            fairness.candidate_count = band.len();
+            fairness.selected_index = Some(selected_index);
+            fairness.selected_account_name = Some(selected.account_name.clone());
+            fairness.ordered_accounts = band;
+        } else {
+            fairness.applied = false;
+            fairness.candidate_count = 0;
+            fairness.selected_index = None;
+            fairness.selected_account_name = None;
+            fairness.reason = "probe_unavailable".into();
+            fairness.ordered_accounts.clear();
+        }
+        Some(fairness)
     }
 
     fn commit_fairness(
@@ -486,6 +529,16 @@ impl RoutingRouter {
             return None;
         }
         Some(before != crate::health::CircuitState::Closed)
+    }
+
+    fn probe_available_read_only(
+        &self,
+        candidate: &RoutingCandidate,
+        facts: &RoutingRequestFacts,
+    ) -> bool {
+        self.state.health.as_ref().is_none_or(|health| {
+            health.is_model_healthy_read_only(&candidate.account_name, &facts.canonical_model_id)
+        })
     }
 
     fn release_probe(&self, account_name: &str) {

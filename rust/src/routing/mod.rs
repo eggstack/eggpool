@@ -5,7 +5,7 @@ mod eligibility;
 mod fairness;
 mod router;
 
-pub use claim::{ClaimError, ClaimTransition, SelectionClaim};
+pub use claim::{ClaimError, ClaimTransition, SelectionClaim, SelectionSnapshot};
 pub use eligibility::{
     EligibilityPolicy, FairnessMode, FairnessScope, LocalQuotaMode, RoutingCandidate,
     RoutingExclusion, RoutingPlan, RoutingRequestFacts, ThinkingRequirement,

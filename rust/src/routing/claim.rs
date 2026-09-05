@@ -9,7 +9,11 @@ use thiserror::Error;
 
 use crate::{
     health::HealthManager,
-    quota::{QuotaEstimator, QuotaInvariantError},
+    quota::{QuotaEstimator, QuotaInvariantError, RoutingScore},
+};
+
+use super::{
+    FairnessDecision, RoutingCandidate, RoutingExclusion, RoutingPlan, RoutingRequestFacts,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,102 @@ pub enum ClaimTransition {
     AlreadyTransitioned,
 }
 
+/// Immutable evidence for one accepted local routing decision.
+///
+/// The snapshot is constructed from the pre-publication candidate state and
+/// travels with the claim. It deliberately contains only bounded routing
+/// metadata; request bodies, credentials, and provider error text never cross
+/// this boundary.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SelectionSnapshot {
+    pub requested_model_id: String,
+    pub provider_id: Option<String>,
+    pub protocol: Option<String>,
+    pub request_surface: String,
+    pub candidates: Vec<RoutingCandidate>,
+    pub exclusions: Vec<RoutingExclusion>,
+    pub eligible_candidate_count: usize,
+    pub top_account_name: Option<String>,
+    pub top_score: Option<RoutingScore>,
+    pub selected_account_name: Option<String>,
+    pub selected_account_id: Option<i64>,
+    pub selected_provider_id: Option<String>,
+    pub selected_model_id: Option<String>,
+    pub selected_upstream_model_id: Option<String>,
+    pub selected_protocol: Option<String>,
+    pub selected_priority: Option<u32>,
+    pub selected_requires_transcode: Option<bool>,
+    pub selected_score: Option<RoutingScore>,
+    pub fairness: Option<FairnessDecision>,
+    pub local_claim_id: Option<u64>,
+}
+
+impl SelectionSnapshot {
+    pub(crate) fn accepted(
+        facts: &RoutingRequestFacts,
+        candidates: Vec<RoutingCandidate>,
+        exclusions: Vec<RoutingExclusion>,
+        fairness: Option<FairnessDecision>,
+        selected: &RoutingCandidate,
+        selected_account_id: i64,
+    ) -> Self {
+        let top = candidates.first();
+        Self {
+            requested_model_id: facts.canonical_model_id.clone(),
+            provider_id: facts.provider_id.clone(),
+            protocol: facts.requested_protocol.clone(),
+            request_surface: facts.request_surface.clone(),
+            eligible_candidate_count: candidates.len(),
+            top_account_name: top.map(|candidate| candidate.account_name.clone()),
+            top_score: top.map(|candidate| candidate.score.clone()),
+            candidates,
+            exclusions,
+            selected_account_name: Some(selected.account_name.clone()),
+            selected_account_id: Some(selected_account_id),
+            selected_provider_id: Some(selected.provider_id.clone()),
+            selected_model_id: Some(selected.canonical_model_id.clone()),
+            selected_upstream_model_id: Some(selected.upstream_model_id.clone()),
+            selected_protocol: selected.protocol.clone(),
+            selected_priority: Some(selected.priority),
+            selected_requires_transcode: Some(selected.requires_transcode),
+            selected_score: Some(selected.score.clone()),
+            fairness,
+            local_claim_id: None,
+        }
+    }
+
+    pub(crate) fn from_plan(plan: RoutingPlan) -> Self {
+        let top = plan.candidates.first();
+        Self {
+            requested_model_id: plan.requested_model_id,
+            provider_id: plan.requested_provider_id,
+            protocol: plan.requested_protocol,
+            request_surface: plan.request_surface,
+            eligible_candidate_count: plan.candidates.len(),
+            top_account_name: top.map(|candidate| candidate.account_name.clone()),
+            top_score: top.map(|candidate| candidate.score.clone()),
+            candidates: plan.candidates,
+            exclusions: plan.exclusions,
+            selected_account_name: None,
+            selected_account_id: None,
+            selected_provider_id: None,
+            selected_model_id: None,
+            selected_upstream_model_id: None,
+            selected_protocol: None,
+            selected_priority: None,
+            selected_requires_transcode: None,
+            selected_score: None,
+            fairness: plan.fairness,
+            local_claim_id: None,
+        }
+    }
+
+    fn with_local_claim_id(mut self, id: u64) -> Self {
+        self.local_claim_id = Some(id);
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 struct OwnedClaim {
     state: ClaimState,
@@ -72,6 +172,7 @@ pub struct SelectionClaim {
     projected_tokens: i64,
     projected_cost_microdollars: i64,
     owns_probe: bool,
+    snapshot: Arc<SelectionSnapshot>,
     book: Arc<Mutex<ClaimBook>>,
     estimator: QuotaEstimator,
     health: Option<HealthManager>,
@@ -91,6 +192,7 @@ impl SelectionClaim {
         projected_tokens: i64,
         projected_cost_microdollars: i64,
         owns_probe: bool,
+        snapshot: SelectionSnapshot,
         book: Arc<Mutex<ClaimBook>>,
         estimator: QuotaEstimator,
         health: Option<HealthManager>,
@@ -108,6 +210,7 @@ impl SelectionClaim {
             projected_tokens,
             projected_cost_microdollars,
             owns_probe,
+            snapshot: Arc::new(snapshot),
             book,
             estimator,
             health,
@@ -149,6 +252,10 @@ impl SelectionClaim {
     }
     pub fn owns_probe(&self) -> bool {
         self.owns_probe
+    }
+
+    pub fn selection_snapshot(&self) -> &SelectionSnapshot {
+        &self.snapshot
     }
 
     pub fn rollback_claim(&self) -> Result<ClaimTransition, ClaimError> {
@@ -271,6 +378,7 @@ pub(crate) fn publish(
     );
     state.terminal_order.push_back(id);
     claim.id = id;
+    claim.snapshot = Arc::new((*claim.snapshot).clone().with_local_claim_id(id));
     Ok(claim)
 }
 

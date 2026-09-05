@@ -1,4 +1,10 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use eggpool::{
     Config,
@@ -25,6 +31,10 @@ fn account(id: i64, name: &str) -> Account {
 }
 
 fn fixture() -> (RoutingRouter, QuotaEstimator) {
+    fixture_with_mode(FairnessMode::RoundRobin)
+}
+
+fn fixture_with_mode(fairness_mode: FairnessMode) -> (RoutingRouter, QuotaEstimator) {
     let mut config = Config::default();
     let mut provider = eggpool::config::ProviderConfig {
         id: "provider-a".into(),
@@ -75,13 +85,49 @@ fn fixture() -> (RoutingRouter, QuotaEstimator) {
         estimator.clone(),
         None,
         EligibilityPolicy {
-            fairness_mode: FairnessMode::RoundRobin,
+            fairness_mode,
             fairness_scope: FairnessScope::ProviderModelProtocol,
             local_quota_mode: LocalQuotaMode::ScoreOnly,
             ..Default::default()
         },
     );
     (router, estimator)
+}
+
+#[derive(Debug)]
+struct RecordingRandom {
+    values: Mutex<Vec<usize>>,
+    calls: AtomicUsize,
+    candidate_counts: Mutex<Vec<usize>>,
+}
+
+impl RecordingRandom {
+    fn new(values: impl IntoIterator<Item = usize>) -> Self {
+        Self {
+            values: Mutex::new(values.into_iter().collect()),
+            calls: AtomicUsize::new(0),
+            candidate_counts: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    fn candidate_counts(&self) -> Vec<usize> {
+        self.candidate_counts.lock().expect("counts lock").clone()
+    }
+}
+
+impl eggpool::routing::FairnessRandom for RecordingRandom {
+    fn choose_index(&self, candidate_count: usize) -> usize {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.candidate_counts
+            .lock()
+            .expect("counts lock")
+            .push(candidate_count);
+        self.values.lock().expect("values lock").pop().unwrap_or(0) % candidate_count
+    }
 }
 
 fn facts() -> RoutingRequestFacts {
@@ -149,6 +195,109 @@ async fn readiness_and_plan_do_not_advance_fairness_or_claim_state() {
     assert_eq!(plan.candidates.len(), 2);
     assert_eq!(router.fairness_key_count(), 0);
     assert_eq!(router.active_request_count("account-a"), 0);
+}
+
+#[tokio::test]
+async fn random_fairness_is_applied_by_accepted_claims_exactly_once() {
+    let (router, _) = fixture_with_mode(FairnessMode::Random);
+    let random = Arc::new(RecordingRandom::new([0, 1]));
+    let router =
+        router.with_random_source(Arc::clone(&random) as Arc<dyn eggpool::routing::FairnessRandom>);
+
+    let claim = router
+        .select_and_claim(&facts(), &BTreeSet::new())
+        .await
+        .expect("claim succeeds")
+        .expect("candidate exists");
+    assert_eq!(claim.account_name(), "account-b");
+    assert_eq!(random.calls(), 1);
+    assert_eq!(random.candidate_counts(), vec![2]);
+    claim.rollback_claim().expect("rollback");
+
+    let next = router
+        .select_and_claim(&facts(), &BTreeSet::new())
+        .await
+        .expect("next claim succeeds")
+        .expect("next candidate exists");
+    assert_eq!(next.account_name(), "account-a");
+    assert_eq!(random.calls(), 2);
+    assert_eq!(random.candidate_counts(), vec![2, 2]);
+    next.rollback_claim().expect("rollback");
+}
+
+#[tokio::test]
+async fn random_read_only_calls_do_not_consume_or_rotate_state() {
+    let (router, _) = fixture_with_mode(FairnessMode::Random);
+    let random = Arc::new(RecordingRandom::new([1]));
+    let router =
+        router.with_random_source(Arc::clone(&random) as Arc<dyn eggpool::routing::FairnessRandom>);
+
+    assert!(router.has_eligible_pairing(&facts()));
+    assert_eq!(router.build_routing_plan(&facts()).candidates.len(), 2);
+    let trace = router.trace_for(&facts(), None);
+    assert_eq!(trace.candidates.len(), 2);
+    assert_eq!(random.calls(), 0);
+    assert_eq!(router.fairness_key_count(), 0);
+}
+
+#[tokio::test]
+async fn off_fairness_remains_score_name_deterministic() {
+    let (router, _) = fixture_with_mode(FairnessMode::Off);
+    let random = Arc::new(RecordingRandom::new([1]));
+    let router =
+        router.with_random_source(Arc::clone(&random) as Arc<dyn eggpool::routing::FairnessRandom>);
+    let claim = router
+        .select_and_claim(&facts(), &BTreeSet::new())
+        .await
+        .expect("claim succeeds")
+        .expect("candidate exists");
+    assert_eq!(claim.account_name(), "account-a");
+    assert_eq!(random.calls(), 0);
+    assert_eq!(router.fairness_key_count(), 0);
+    claim.rollback_claim().expect("rollback");
+}
+
+#[tokio::test]
+async fn accepted_trace_is_frozen_before_claim_publication() {
+    let (router, _) = fixture_with_mode(FairnessMode::Random);
+    let random = Arc::new(RecordingRandom::new([0]));
+    let router =
+        router.with_random_source(Arc::clone(&random) as Arc<dyn eggpool::routing::FairnessRandom>);
+    let claim = router
+        .select_and_claim(&facts(), &BTreeSet::new())
+        .await
+        .expect("claim succeeds")
+        .expect("candidate exists");
+    let post_claim_plan = router.build_routing_plan(&facts());
+    assert_eq!(post_claim_plan.candidates[0].account_name, "account-b");
+
+    let first_trace = router.trace_for(&facts(), Some(&claim));
+    let second_trace = router.trace_for(&facts(), Some(&claim));
+    assert_eq!(first_trace, second_trace);
+    assert_eq!(first_trace.local_claim_id, Some(claim.id()));
+    assert_eq!(
+        first_trace.selected_account_name.as_deref(),
+        Some("account-a")
+    );
+    assert_eq!(first_trace.top_account_name.as_deref(), Some("account-a"));
+    assert_eq!(first_trace.candidates[0].account_name, "account-a");
+    assert_eq!(
+        first_trace
+            .fairness
+            .as_ref()
+            .expect("fairness")
+            .selected_account_name
+            .as_deref(),
+        Some("account-a")
+    );
+    assert_eq!(random.calls(), 1);
+
+    claim
+        .convert_claim_after_durable_publication()
+        .expect("convert");
+    assert_eq!(router.trace_for(&facts(), Some(&claim)), first_trace);
+    claim.release_active_claim().expect("release");
+    assert_eq!(router.trace_for(&facts(), Some(&claim)), first_trace);
 }
 
 #[test]
