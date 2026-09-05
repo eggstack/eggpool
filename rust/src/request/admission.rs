@@ -540,7 +540,28 @@ fn decode_content_block(
             block.cache_control = bounded_marker(object.get("cache_control"))?;
             Ok(block)
         }
-        "image" | "input_image" => {
+        "input_image" => {
+            if let Some(url) = object.get("image_url").and_then(Value::as_str) {
+                let mut block = data_uri_block(url, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?;
+                if let Some(media) = block.media.as_mut() {
+                    media.detail =
+                        bounded_detail(object.get("detail").or_else(|| object.get("quality")))?;
+                }
+                block.prompt_cache_breakpoint =
+                    bounded_marker(object.get("prompt_cache_breakpoint"))?;
+                block.cache_control = bounded_marker(object.get("cache_control"))?;
+                return Ok(block);
+            }
+            let mut block = decode_media_block(object, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?;
+            if let Some(media) = block.media.as_mut() {
+                media.detail =
+                    bounded_detail(object.get("detail").or_else(|| object.get("quality")))?;
+            }
+            block.prompt_cache_breakpoint = bounded_marker(object.get("prompt_cache_breakpoint"))?;
+            block.cache_control = bounded_marker(object.get("cache_control"))?;
+            Ok(block)
+        }
+        "image" => {
             let mut block = decode_media_block(object, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?;
             if let Some(media) = block.media.as_mut() {
                 media.detail =
@@ -1354,11 +1375,28 @@ fn output_limit(
     protocol: &str,
 ) -> Result<Option<u64>, AdmissionError> {
     let value = Value::Object(object.clone());
-    requested_output_tokens(&value, protocol, surface.as_str()).map_err(|_| {
+    let resolved = requested_output_tokens(&value, protocol, surface.as_str()).map_err(|_| {
         AdmissionError::InvalidLimit {
             field: output_key(surface, protocol),
         }
-    })
+    })?;
+    if resolved.is_none() {
+        let keys = if surface == ClientSurface::Responses {
+            ["max_output_tokens", "max_completion_tokens", "max_tokens"]
+        } else if protocol == "anthropic" {
+            ["max_tokens", "", ""]
+        } else {
+            ["max_completion_tokens", "max_tokens", ""]
+        };
+        if keys
+            .iter()
+            .filter(|key| !key.is_empty())
+            .any(|key| object.get(*key).and_then(Value::as_u64) == Some(0))
+        {
+            return Ok(Some(0));
+        }
+    }
+    Ok(resolved)
 }
 
 fn stop_values(

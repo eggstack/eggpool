@@ -1,19 +1,552 @@
 //! Integrated W010 qualification against the committed Python W001 oracle.
 
 use eggpool::request::{AdmissionOptions, admit_request};
-use eggpool::wire::ir::{CanonicalEvent, CanonicalEventType, ClientSurface};
+use eggpool::wire::ir::{
+    CanonicalEvent, CanonicalEventType, CanonicalRequest, CanonicalResponse, CanonicalUsage,
+    ClientSurface, ReasoningMode,
+};
 use eggpool::wire::{
-    ConfiguredWireProfile, FiniteResponseOutcome, LossPolicy, StreamTerminalOutcome,
-    TerminalEvidence, WireCodecId, WireProfileDefinition, WireProfileFlags, WireRuntime,
-    WireRuntimeContext, WireRuntimeError, WireSurface,
+    ConfiguredWireProfile, DecodedProviderPayload, FiniteResponseOutcome, LossPolicy, SseDecoder,
+    StreamTerminalOutcome, TerminalEvidence, WireCodec, WireCodecId, WireProfileDefinition,
+    WireProfileFlags, WireRuntime, WireRuntimeContext, WireRuntimeError, WireSurface,
+    builtin_codec_instance,
 };
 use serde_json::{Value, json};
 
 const W001_OBSERVATIONS: &str =
     include_str!("../../migration-rs/fixtures/canonical-wire/w001-python-observations.json");
+const W012_OBSERVATIONS: &str =
+    include_str!("../../migration-rs/fixtures/canonical-wire/w012-cross-surface-observations.json");
+const W011_OBSERVATIONS: &str =
+    include_str!("../../migration-rs/fixtures/canonical-wire/w011-sse-utf8-observations.json");
 
 fn oracle() -> Value {
     serde_json::from_str(W001_OBSERVATIONS).expect("committed W001 fixture is valid JSON")
+}
+
+fn w012_oracle() -> Value {
+    serde_json::from_str(W012_OBSERVATIONS).expect("committed W012 fixture is valid JSON")
+}
+
+fn hex_bytes(hex: &str) -> Vec<u8> {
+    hex.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair).expect("hex is ASCII");
+            u8::from_str_radix(text, 16).expect("fixture contains valid hex")
+        })
+        .collect()
+}
+
+fn client_surface(name: &str) -> ClientSurface {
+    name.try_into().expect("fixture client surface")
+}
+
+fn wire_surface(name: &str) -> WireSurface {
+    match name {
+        "openai_chat_completions" => WireSurface::OpenaiChatCompletions,
+        "openai_responses" => WireSurface::OpenaiResponses,
+        "anthropic_messages" => WireSurface::AnthropicMessages,
+        "gemini_interactions" => WireSurface::GeminiInteractions,
+        "gemini_generate_content" => WireSurface::GeminiGenerateContent,
+        other => panic!("fixture wire surface {other}"),
+    }
+}
+
+fn native_wire_surface(client: ClientSurface) -> WireSurface {
+    match client {
+        ClientSurface::ChatCompletions => WireSurface::OpenaiChatCompletions,
+        ClientSurface::Responses => WireSurface::OpenaiResponses,
+        ClientSurface::Messages => WireSurface::AnthropicMessages,
+    }
+}
+
+fn client_codec_id(client: ClientSurface) -> WireCodecId {
+    match client {
+        ClientSurface::ChatCompletions => WireCodecId::OpenaiChat,
+        ClientSurface::Responses => WireCodecId::OpenaiResponses,
+        ClientSurface::Messages => WireCodecId::AnthropicMessages,
+    }
+}
+
+fn client_response_projection(client: ClientSurface, value: &Value) -> Value {
+    let codec = builtin_codec_instance(client_codec_id(client)).expect("client codec");
+    let decoded = codec
+        .decode_response(value, 200)
+        .expect("encoded client response")
+        .value;
+    let DecodedProviderPayload::Response(response) = decoded else {
+        panic!("encoded client response decoded as provider error")
+    };
+    response_projection(&response)
+}
+
+fn reasoning_projection(reasoning: &eggpool::wire::ir::ReasoningIntent) -> Value {
+    let mode = match reasoning.mode {
+        ReasoningMode::Unspecified => "unspecified",
+        ReasoningMode::Effort => "effort",
+        ReasoningMode::FixedBudget => "fixed_budget",
+        ReasoningMode::Adaptive => "adaptive",
+        ReasoningMode::Toggle => "toggle",
+    };
+    json!({
+        "requested": reasoning.requested,
+        "mode": mode,
+        "effort": reasoning.effort,
+        "budget_tokens": reasoning.budget_tokens,
+    })
+}
+
+fn usage_projection(usage: Option<&CanonicalUsage>) -> Value {
+    usage.map_or(Value::Null, |usage| {
+        json!({
+            "prompt_tokens": usage.input_tokens.unwrap_or(0),
+            "completion_tokens": usage.output_tokens.unwrap_or(0),
+            "total_tokens": usage.total_tokens.unwrap_or(0),
+            "cache_creation_tokens": usage
+                .cache_creation_input_tokens
+                .or(usage.cache_write_input_tokens)
+                .unwrap_or(0),
+            "cache_read_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+        })
+    })
+}
+
+fn block_projection(block: &eggpool::wire::ir::CanonicalContentBlock) -> Value {
+    let media = block.media.as_ref();
+    json!({
+        "kind": block.kind.as_str(),
+        "text": block.text,
+        "media_type": media.and_then(|media| media.media_type.clone()),
+        "data": media.and_then(|media| media.data.clone()),
+        "uri": media.and_then(|media| media.uri.clone()),
+        "call_id": block.call_id,
+        "name": block.name,
+        "arguments": block.arguments,
+        "tool_input": block.tool_input,
+        "is_error": block.is_error,
+        "signature": block.signature,
+    })
+}
+
+fn request_projection(request: &CanonicalRequest) -> Value {
+    let messages: Vec<Value> = request
+        .messages
+        .iter()
+        .map(|message| {
+            json!({
+                "role": message.role.as_str(),
+                "content": message.content.iter().map(block_projection).collect::<Vec<_>>(),
+                "tool_call_id": message.tool_call_id,
+                "name": message.name,
+                "refusal": message.refusal,
+            })
+        })
+        .collect();
+    let tools: Vec<Value> = request
+        .tools
+        .iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            })
+        })
+        .collect();
+    let tool_choice = request.tool_choice.as_ref().map(|choice| {
+        let mode = match choice.mode {
+            eggpool::wire::ir::ToolChoiceMode::Auto => "auto",
+            eggpool::wire::ir::ToolChoiceMode::Required => "required",
+            eggpool::wire::ir::ToolChoiceMode::None => "none",
+            eggpool::wire::ir::ToolChoiceMode::Function => "function",
+        };
+        json!({"mode": mode, "function_name": choice.function_name})
+    });
+    let metadata: Vec<Value> = request
+        .metadata
+        .iter()
+        .map(|(key, value)| json!([key, value]))
+        .collect();
+    json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": request.stream,
+        "max_output_tokens": request.max_output_tokens,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "stop": request.stop,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "response_format": request.response_format,
+        "reasoning": reasoning_projection(&request.reasoning),
+        "client_surface": request.client_surface.as_str(),
+        "metadata": metadata,
+    })
+}
+
+fn output_block_projection(block: &eggpool::wire::ir::CanonicalOutputBlock) -> Value {
+    json!({
+        "kind": block.kind.as_str(),
+        "text": block.text,
+        "call_id": block.call_id,
+        "name": block.name,
+        "arguments": block.arguments,
+    })
+}
+
+fn response_projection(response: &CanonicalResponse) -> Value {
+    json!({
+        "model": response.model,
+        "output": response.output.iter().map(output_block_projection).collect::<Vec<_>>(),
+        "finish_reason": response.finish_reason,
+        "usage": usage_projection(response.usage.as_ref()),
+        "request_id": response.response_id,
+    })
+}
+
+fn event_projection(event: &CanonicalEvent) -> Value {
+    json!({
+        "type": event_type_name(event),
+        "response_id": event.response_id,
+        "model": event.model,
+        "index": event.index,
+        "delta": event.delta,
+        "call_id": event.call_id,
+        "name": event.name,
+        "arguments": event.arguments,
+        "finish_reason": event.finish_reason,
+        "usage": usage_projection(event.usage.as_ref()),
+        "error_type": event.error_type,
+        "error_message": event.error_message,
+    })
+}
+
+fn encoded_frame_projection(bytes: &[u8]) -> Vec<Value> {
+    let mut decoder = SseDecoder::default();
+    let mut frames = decoder.feed(bytes).expect("encoded client SSE is valid");
+    frames.extend(decoder.finish().expect("encoded client SSE EOF").frames);
+    frames
+        .into_iter()
+        .map(|frame| {
+            let data = if frame.data == "[DONE]" {
+                Value::String(frame.data)
+            } else {
+                serde_json::from_str(&frame.data).unwrap_or(Value::String(frame.data))
+            };
+            json!({
+                "event": frame.event,
+                "data": data,
+                "fields": frame.fields,
+            })
+        })
+        .collect()
+}
+
+fn semantic_json_equal(actual: &Value, expected: &Value) -> bool {
+    match (actual, expected) {
+        (Value::Object(actual), Value::Object(expected)) => {
+            actual.len() == expected.len()
+                && actual.iter().all(|(key, value)| {
+                    expected
+                        .get(key)
+                        .is_some_and(|other| semantic_json_equal(value, other))
+                })
+        }
+        (Value::Array(actual), Value::Array(expected)) => {
+            actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(actual, expected)| semantic_json_equal(actual, expected))
+        }
+        _ => actual == expected,
+    }
+}
+
+fn terminal_evidence_name(evidence: Option<TerminalEvidence>) -> Option<&'static str> {
+    evidence.map(|evidence| match evidence {
+        TerminalEvidence::OpenaiDone => "openai_done",
+        TerminalEvidence::ResponsesCompleted => "responses_completed",
+        TerminalEvidence::ResponsesIncomplete => "responses_incomplete",
+        TerminalEvidence::ResponsesFailed => "responses_failed",
+        TerminalEvidence::AnthropicMessageStop => "anthropic_message_stop",
+        TerminalEvidence::GeminiCompleted => "gemini_completed",
+        TerminalEvidence::GeminiIncomplete => "gemini_incomplete",
+        TerminalEvidence::ProviderError => "provider_error",
+    })
+}
+
+#[test]
+fn w012_compares_all_fifteen_request_transformations_to_python() {
+    let expected = w012_oracle();
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    for client_name in ["chat_completions", "responses", "messages"] {
+        let client = client_surface(client_name);
+        let request = &expected["requests"][client_name];
+        let raw = hex_bytes(request["source_body_hex"].as_str().expect("request bytes"));
+        for profile_name in WireSurface::ALL.iter().map(|surface| surface.as_str()) {
+            let upstream = wire_surface(profile_name);
+            let prepared = runtime
+                .prepare_request(&raw, &context(client, upstream))
+                .unwrap_or_else(|error| {
+                    panic!("request {client_name} -> {profile_name}: {error:?}")
+                });
+            let actual_request = request_projection(&prepared.canonical);
+            assert_eq!(
+                actual_request, request["canonical"],
+                "canonical request mismatch for {client_name} -> {profile_name}"
+            );
+            let expected_cell = &request["profiles"][profile_name];
+            assert_eq!(expected_cell["outcome"], "success");
+            if upstream == native_wire_surface(client) {
+                assert_eq!(prepared.body.bytes.as_ref(), raw.as_slice());
+            } else {
+                assert!(
+                    semantic_json_equal(
+                        prepared.body.value.as_ref().expect("encoded value"),
+                        &expected_cell["encoded"]
+                    ),
+                    "semantic request mismatch for {client_name} -> {profile_name}: actual={} expected={}",
+                    prepared.body.value.as_ref().expect("encoded value"),
+                    expected_cell["encoded"]
+                );
+                assert!(!prepared.body.bytes.is_empty());
+            }
+            assert!(prepared.bytes.input_bytes > 0);
+            assert!(prepared.bytes.output_bytes > 0);
+        }
+    }
+}
+
+#[test]
+fn w012_compares_all_fifteen_finite_transformations_to_python() {
+    let expected = w012_oracle();
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    for profile_name in WireSurface::ALL.iter().map(|surface| surface.as_str()) {
+        let upstream = wire_surface(profile_name);
+        let response = &expected["responses"][profile_name];
+        let raw = hex_bytes(
+            response["provider_body_hex"]
+                .as_str()
+                .expect("provider bytes"),
+        );
+        for client_name in ["chat_completions", "responses", "messages"] {
+            let client = client_surface(client_name);
+            let context = context(client, upstream);
+            let finite = runtime
+                .decode_finite_response(&raw, 200, &context, true)
+                .unwrap_or_else(|error| {
+                    panic!("finite {profile_name} -> {client_name}: {error:?}")
+                });
+            let FiniteResponseOutcome::Success(decoded) = finite.outcome else {
+                panic!("finite {profile_name} -> {client_name} was not successful");
+            };
+            assert_eq!(
+                response_projection(&decoded),
+                response["canonical"],
+                "canonical response mismatch for {profile_name} -> {client_name}"
+            );
+            let client_body = finite.client_body.as_ref().expect("client body");
+            if upstream == native_wire_surface(client) {
+                assert_eq!(client_body.bytes, raw);
+            } else {
+                assert_eq!(
+                    client_response_projection(
+                        client,
+                        client_body.value.as_ref().expect("encoded value"),
+                    ),
+                    response["clients"][client_name]["canonical"],
+                    "semantic response mismatch for {profile_name} -> {client_name}"
+                );
+            }
+            assert_eq!(finite.bytes.input_bytes, raw.len());
+        }
+    }
+}
+
+#[test]
+fn w012_compares_all_fifteen_stream_transformations_and_fragmentation() {
+    let expected = w012_oracle();
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    for profile_name in WireSurface::ALL.iter().map(|surface| surface.as_str()) {
+        let upstream = wire_surface(profile_name);
+        let stream_expected = &expected["streams"][profile_name];
+        let raw = hex_bytes(
+            stream_expected["whole_bytes_hex"]
+                .as_str()
+                .expect("stream bytes"),
+        );
+        for client_name in ["chat_completions", "responses", "messages"] {
+            let client = client_surface(client_name);
+            let mut stream = runtime
+                .stream(&context(client, upstream))
+                .expect("stream runtime");
+            let mut events = Vec::new();
+            for byte in &raw {
+                events.extend(
+                    stream
+                        .push(std::slice::from_ref(byte))
+                        .unwrap_or_else(|error| {
+                            panic!("stream {profile_name} -> {client_name}: {error:?}")
+                        })
+                        .events,
+                );
+            }
+            let finalization = stream.finalize().unwrap_or_else(|error| {
+                panic!("stream EOF {profile_name} -> {client_name}: {error:?}")
+            });
+            events.extend(finalization.events);
+            let actual_events: Vec<Value> = events.iter().map(event_projection).collect();
+            assert_eq!(
+                actual_events,
+                stream_expected["event_sequence"]
+                    .as_array()
+                    .expect("event array")
+                    .to_vec(),
+                "event mismatch for {profile_name} -> {client_name}"
+            );
+            let actual_frames: Vec<Value> = events
+                .iter()
+                .map(|event| stream.encode_client_event(event).expect("client event"))
+                .flat_map(|bytes| encoded_frame_projection(&bytes))
+                .collect();
+            assert_eq!(
+                actual_frames,
+                stream_expected["client_frames"][client_name]
+                    .as_array()
+                    .expect("client frame array")
+                    .to_vec(),
+                "client stream encoding mismatch for {profile_name} -> {client_name}"
+            );
+            let terminal = &stream_expected["terminal"];
+            assert_eq!(
+                finalization.terminal.saw_payload,
+                terminal["saw_payload"].as_bool().expect("payload bool")
+            );
+            assert_eq!(
+                finalization.terminal.saw_terminal_event,
+                terminal["saw_terminal_event"]
+                    .as_bool()
+                    .expect("terminal bool")
+            );
+            assert_eq!(
+                terminal_evidence_name(finalization.terminal.evidence),
+                terminal["terminal_kind"].as_str()
+            );
+            assert_eq!(
+                finalization.terminal.saw_usage_completion,
+                terminal["saw_usage_completion"]
+                    .as_bool()
+                    .expect("usage bool")
+            );
+            assert_eq!(
+                finalization.terminal.incomplete_frame_at_eof,
+                terminal["incomplete_frame_at_eof"]
+                    .as_bool()
+                    .expect("EOF bool")
+            );
+            assert_eq!(
+                finalization.terminal.parser_error_count,
+                terminal["parser_error_count"]
+                    .as_u64()
+                    .expect("parser count") as usize
+            );
+            assert_eq!(
+                finalization.terminal.outcome,
+                StreamTerminalOutcome::Success
+            );
+        }
+    }
+}
+
+#[test]
+fn w012_keeps_w011_invalid_and_truncated_utf8_regressions_in_the_qualification_set() {
+    let expected: Value = serde_json::from_str(W011_OBSERVATIONS).expect("W011 JSON");
+    let cases = expected["cases"].as_array().expect("W011 cases");
+    assert!(cases.iter().any(|case| case["name"] == "invalid_data_line"));
+    assert!(
+        cases
+            .iter()
+            .any(|case| case["name"] == "truncated_data_line_after_json_prefix")
+    );
+    assert!(
+        cases
+            .iter()
+            .filter(|case| case["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("eof_incomplete")))
+            .count()
+            >= 6
+    );
+}
+
+#[test]
+fn w012_covers_presence_and_typed_negative_paths() {
+    let expected = w012_oracle();
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let presence = &expected["presence_cases"]["explicit_zero_and_null"];
+    let raw = hex_bytes(
+        presence["source_body_hex"]
+            .as_str()
+            .expect("presence bytes"),
+    );
+    for profile in WireSurface::ALL {
+        let prepared = runtime
+            .prepare_request(&raw, &context(ClientSurface::ChatCompletions, profile))
+            .expect("presence request remains admissible");
+        assert_eq!(
+            request_projection(&prepared.canonical),
+            presence["canonical"]
+        );
+    }
+
+    let malformed = runtime
+        .decode_finite_response(
+            b"{",
+            200,
+            &context(
+                ClientSurface::ChatCompletions,
+                WireSurface::OpenaiChatCompletions,
+            ),
+            true,
+        )
+        .expect("malformed response is classified");
+    assert!(matches!(
+        malformed.outcome,
+        FiniteResponseOutcome::Malformed { .. }
+    ));
+
+    let provider_error = runtime
+        .decode_finite_response(
+            br#"{"error":{"type":"overloaded","message":"synthetic"}}"#,
+            503,
+            &context(
+                ClientSurface::ChatCompletions,
+                WireSurface::OpenaiChatCompletions,
+            ),
+            true,
+        )
+        .expect("provider error is classified");
+    assert!(matches!(
+        provider_error.outcome,
+        FiniteResponseOutcome::ProviderError(_)
+    ));
+
+    let mut stream = runtime
+        .stream(&context(
+            ClientSurface::ChatCompletions,
+            WireSurface::OpenaiChatCompletions,
+        ))
+        .expect("stream runtime");
+    stream
+        .push(b"data: {\"choices\":[]}")
+        .expect("partial stream accepted");
+    let terminal = stream
+        .finalize()
+        .expect("partial stream finalized")
+        .terminal;
+    assert_ne!(terminal.outcome, StreamTerminalOutcome::Success);
 }
 
 fn profile(surface: WireSurface) -> ConfiguredWireProfile {

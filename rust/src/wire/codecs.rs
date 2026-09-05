@@ -1461,10 +1461,7 @@ fn decode_usage(
                 );
                 usage.cache_write_input_tokens = usage.cache_creation_input_tokens;
             }
-            usage.total_tokens = sum_tokens(
-                sum_tokens(usage.input_tokens, usage.output_tokens),
-                usage.cached_input_tokens,
-            );
+            usage.total_tokens = sum_tokens(usage.input_tokens, usage.output_tokens);
         }
     }
     Ok(Some(usage))

@@ -251,7 +251,13 @@ RESPONSE_PAYLOADS: dict[str, dict[str, Any]] = {
                 "content": {
                     "parts": [
                         {"text": "synthetic answer"},
-                        {"functionCall": {"name": "lookup", "args": {"ok": True}}},
+                        {
+                            "functionCall": {
+                                "id": "call_fixture_1",
+                                "name": "lookup",
+                                "args": {"ok": True},
+                            }
+                        },
                     ]
                 },
                 "finishReason": "STOP",

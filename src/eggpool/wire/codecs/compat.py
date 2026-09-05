@@ -108,6 +108,11 @@ class OpenAIChatCodec:
             block.text or "" for block in response.output if block.kind == "text"
         )
         message["content"] = text
+        reasoning = "".join(
+            block.text or "" for block in response.output if block.kind == "reasoning"
+        )
+        if reasoning:
+            message["reasoning_content"] = reasoning
         tool_calls = [block for block in response.output if block.kind == "tool_call"]
         if tool_calls:
             message["tool_calls"] = [
@@ -129,7 +134,17 @@ class OpenAIChatCodec:
                 {
                     "index": 0,
                     "message": message,
-                    "finish_reason": response.finish_reason,
+                    "finish_reason": _translate_reason(
+                        response.finish_reason,
+                        {
+                            "end_turn": "stop",
+                            "stop_sequence": "stop",
+                            "max_tokens": "length",
+                            "tool_use": "tool_calls",
+                            "pause_turn": "tool_calls",
+                            "refusal": "content_filter",
+                        },
+                    ),
                 }
             ],
         }
@@ -348,10 +363,23 @@ class AnthropicMessagesCodec:
             "role": "assistant",
             "model": response.model or "",
             "content": content,
-            "stop_reason": response.finish_reason,
+            "stop_reason": _translate_reason(
+                response.finish_reason,
+                {
+                    "stop": "end_turn",
+                    "length": "max_tokens",
+                    "tool_calls": "tool_use",
+                    "content_filter": "refusal",
+                },
+            ),
         }
         if response.usage is not None:
-            result["usage"] = response.usage.to_dict()
+            result["usage"] = {
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "cache_read_input_tokens": response.usage.cache_read_tokens,
+                "cache_creation_input_tokens": response.usage.cache_creation_tokens,
+            }
         return result
 
     def encode_event(self, event: CanonicalEvent) -> bytes:
@@ -382,7 +410,19 @@ class AnthropicMessagesCodec:
                 },
             )
         if event.type == "usage" and event.usage is not None:
-            return _anthropic_sse("message_delta", {"usage": event.usage.to_dict()})
+            return _anthropic_sse(
+                "message_delta",
+                {
+                    "usage": {
+                        "input_tokens": event.usage.prompt_tokens,
+                        "output_tokens": event.usage.completion_tokens,
+                        "cache_read_input_tokens": event.usage.cache_read_tokens,
+                        "cache_creation_input_tokens": (
+                            event.usage.cache_creation_tokens
+                        ),
+                    }
+                },
+            )
         return _anthropic_sse(event.type, {})
 
 
@@ -460,7 +500,20 @@ def _usage(value: object, *, protocol: str):
     prompt = _token_count(raw.get("prompt_tokens"))
     completion = _token_count(raw.get("completion_tokens"))
     total = _token_count(raw.get("total_tokens")) or prompt + completion
-    return CanonicalUsage(prompt, completion, total)
+    details = raw.get("prompt_tokens_details")
+    details_mapping = details if isinstance(details, Mapping) else {}
+    return CanonicalUsage(
+        prompt,
+        completion,
+        total,
+        cache_creation_tokens=_token_count(
+            details_mapping.get("cache_write_tokens")
+            or raw.get("cache_creation_tokens")
+        ),
+        cache_read_tokens=_token_count(
+            details_mapping.get("cached_tokens") or raw.get("cache_read_tokens")
+        ),
+    )
 
 
 def _token_count(value: object) -> int:
@@ -473,6 +526,10 @@ def _token_count(value: object) -> int:
 
 def _string(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _translate_reason(value: str | None, translations: Mapping[str, str]) -> str | None:
+    return None if value is None else translations.get(value, value)
 
 
 def _int(value: object) -> int | None:

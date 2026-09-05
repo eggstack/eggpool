@@ -80,7 +80,18 @@ def _usage(value: object, *, protocol: str) -> CanonicalUsage | None:
         raw.get("completion_tokens", raw.get("output_tokens"))
     )
     total = _nonnegative_int(raw.get("total_tokens")) or prompt + completion
-    return CanonicalUsage(prompt, completion, total)
+    details = _mapping(raw.get("prompt_tokens_details")) or {}
+    return CanonicalUsage(
+        prompt,
+        completion,
+        total,
+        cache_creation_tokens=_nonnegative_int(
+            details.get("cache_write_tokens") or raw.get("cache_creation_tokens")
+        ),
+        cache_read_tokens=_nonnegative_int(
+            details.get("cached_tokens") or raw.get("cache_read_tokens")
+        ),
+    )
 
 
 def _gemini_usage(value: object) -> CanonicalUsage | None:
@@ -152,8 +163,17 @@ def _responses_content(
     for block in blocks:
         if block.kind == "text":
             result.append({"type": content_type, "text": block.text or ""})
-        elif block.kind == "image" and block.uri:
-            result.append({"type": "input_image", "image_url": block.uri})
+        elif block.kind == "image" and (block.uri or block.data):
+            result.append(
+                {
+                    "type": "input_image",
+                    "image_url": block.uri
+                    or (
+                        f"data:{block.media_type or 'application/octet-stream'};"
+                        f"base64,{block.data}"
+                    ),
+                }
+            )
         elif block.kind == "refusal":
             result.append({"type": "refusal", "refusal": block.text or ""})
     return result
@@ -532,14 +552,20 @@ def _responses_reasoning_blocks(
     ]
 
 
-def _openai_usage(usage: CanonicalUsage | None) -> dict[str, int] | None:
+def _openai_usage(usage: CanonicalUsage | None) -> dict[str, object] | None:
     if usage is None:
         return None
-    return {
+    result: dict[str, object] = {
         "input_tokens": usage.prompt_tokens,
         "output_tokens": usage.completion_tokens,
         "total_tokens": usage.total_tokens,
     }
+    if usage.cache_read_tokens or usage.cache_creation_tokens:
+        result["prompt_tokens_details"] = {
+            "cached_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_creation_tokens,
+        }
+    return result
 
 
 class GeminiInteractionsCodec:
@@ -856,6 +882,8 @@ def _gemini_parts(blocks: Sequence[CanonicalContentBlock]) -> list[dict[str, obj
     for block in blocks:
         if block.kind == "text":
             result.append({"text": block.text or ""})
+        elif block.kind == "reasoning":
+            result.append({"text": block.text or "", "thought": True})
         elif block.kind == "image" and block.data:
             result.append(
                 {
@@ -875,20 +903,22 @@ def _gemini_parts(blocks: Sequence[CanonicalContentBlock]) -> list[dict[str, obj
                 }
             )
         elif block.kind == "tool_call":
-            result.append(
-                {
-                    "functionCall": {
-                        "name": block.name or "",
-                        "args": dict(block.tool_input or {}),
-                    }
-                }
-            )
+            function_call: dict[str, object] = {
+                "name": block.name or "",
+                "args": _json_value(block.arguments),
+            }
+            if block.call_id:
+                function_call["id"] = block.call_id
+            result.append({"functionCall": function_call})
         elif block.kind == "tool_result":
+            response: dict[str, object] = {"result": block.text or ""}
+            if block.call_id:
+                response["id"] = block.call_id
             result.append(
                 {
                     "functionResponse": {
                         "name": block.name or "",
-                        "response": {"result": block.text or ""},
+                        "response": response,
                     }
                 }
             )
@@ -961,6 +991,15 @@ class GeminiGenerateContentCodec:
                 nested_schema = _mapping(schema.get("schema")) if schema else None
                 if nested_schema is not None:
                     generation["responseSchema"] = dict(nested_schema)
+        if request.reasoning.requested is False:
+            generation["thinkingConfig"] = {"thinkingBudget": 0}
+        elif (
+            request.reasoning.mode == "fixed_budget"
+            and request.reasoning.budget_tokens is not None
+        ):
+            generation["thinkingConfig"] = {
+                "thinkingBudget": request.reasoning.budget_tokens
+            }
         if generation:
             result["generationConfig"] = generation
         if request.tools:
@@ -1131,6 +1170,7 @@ def _generate_output(
                         output.append(
                             CanonicalOutputBlock(
                                 "tool_call",
+                                call_id=_string(call.get("id")),
                                 name=_string(call.get("name")),
                                 arguments=_json_text(call.get("args")),
                             )

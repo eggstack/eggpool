@@ -10,6 +10,7 @@ and from their concrete JSON/SSE grammar.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeAlias, cast
@@ -299,6 +300,10 @@ def canonical_request_from_mapping(
         payload.get("max_completion_tokens"),
         payload.get("max_tokens"),
     )
+    response_format = _mapping_or_none(payload.get("response_format"))
+    if response_format is None and client_surface == "responses":
+        text = _mapping_or_none(payload.get("text"))
+        response_format = _mapping_or_none(text.get("format")) if text else None
     return CanonicalRequest(
         model=model,
         messages=messages,
@@ -309,7 +314,7 @@ def canonical_request_from_mapping(
         stop=stop,
         tools=_decode_tools(payload.get("tools")),
         tool_choice=_decode_tool_choice(payload.get("tool_choice")),
-        response_format=_mapping_or_none(payload.get("response_format")),
+        response_format=response_format,
         reasoning=reasoning_intent_from_mapping(payload),
         client_surface=client_surface,
     )
@@ -371,6 +376,18 @@ def _decode_messages(
                             arguments=_string_or_none(function.get("arguments")),
                         )
                     )
+            if role == "tool":
+                tool_call_id = _string_or_none(raw.get("tool_call_id"))
+                blocks = [
+                    CanonicalContentBlock(
+                        "tool_result",
+                        text=block.text,
+                        call_id=tool_call_id,
+                    )
+                    if block.kind == "text"
+                    else block
+                    for block in blocks
+                ]
         result.append(
             CanonicalMessage(
                 role=role,
@@ -561,16 +578,24 @@ def _encode_openai_request(request: CanonicalRequest) -> dict[str, object]:
 def _encode_anthropic_request(request: CanonicalRequest) -> dict[str, object]:
     out: dict[str, object] = {"model": request.model, "messages": []}
     messages = cast("list[dict[str, object]]", out["messages"])
+    system_blocks: list[dict[str, object]] = []
     for message in request.messages:
-        if message.role == "system":
-            out["system"] = _encode_anthropic_content(message.content)
+        if message.role in {"system", "developer"}:
+            encoded = _encode_anthropic_content(message.content)
+            if isinstance(encoded, str):
+                system_blocks.append({"type": "text", "text": encoded})
+            elif isinstance(encoded, list):
+                system_blocks.extend(encoded)
             continue
         item: dict[str, object] = {
             "role": "user" if message.role == "tool" else message.role,
             "content": _encode_anthropic_content(message.content),
         }
         messages.append(item)
+    if system_blocks:
+        out["system"] = system_blocks
     _add_common_request_fields(out, request, max_key="max_tokens")
+    out.pop("response_format", None)
     if request.tools:
         out["tools"] = [
             {
@@ -705,7 +730,7 @@ def _encode_anthropic_content(content: Sequence[CanonicalContentBlock]) -> objec
                     "type": "tool_use",
                     "id": block.call_id or "",
                     "name": block.name or "",
-                    "input": dict(block.tool_input or {}),
+                    "input": _tool_input(block),
                 }
             )
         elif block.kind == "tool_result":
@@ -718,6 +743,18 @@ def _encode_anthropic_content(content: Sequence[CanonicalContentBlock]) -> objec
                 }
             )
     return result
+
+
+def _tool_input(block: CanonicalContentBlock) -> dict[str, object]:
+    if block.tool_input is not None:
+        return dict(block.tool_input)
+    if not block.arguments:
+        return {}
+    try:
+        value = json.loads(block.arguments)
+    except (TypeError, ValueError):
+        return {}
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _encode_tool_choice(choice: CanonicalToolChoice) -> object:

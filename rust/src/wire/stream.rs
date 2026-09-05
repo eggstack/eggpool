@@ -1201,14 +1201,15 @@ fn decode_generate_content(payload: &Map<String, Value>, events: &mut Vec<Canoni
                 }
                 if let Some(call) = object(part.get("functionCall")) {
                     let mut start = canonical_event(CanonicalEventType::ToolCallStart);
+                    start.call_id = string(call.get("id"));
                     start.name = string(call.get("name"));
                     events.push(start);
                     let mut args = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
-                    args.name = string(call.get("name"));
-                    args.arguments = string(call.get("args")).or_else(|| {
+                    args.call_id = string(call.get("id"));
+                    let arguments = string(call.get("args")).or_else(|| {
                         serde_json::to_string(call.get("args").unwrap_or(&Value::Null)).ok()
                     });
-                    args.delta = args.arguments.clone();
+                    args.delta = arguments;
                     events.push(args);
                 }
             }
@@ -1347,13 +1348,8 @@ fn encode_chat_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
         }
         CanonicalEventType::Usage => {}
         CanonicalEventType::ResponseIncomplete => {}
-        CanonicalEventType::Error => {
-            return Ok(sse(
-                None,
-                &json!({"error":{"type":event.error_type.clone().unwrap_or_else(|| "error".into()),"message":event.error_message.clone().unwrap_or_default()}}),
-            ));
-        }
-        _ => return Ok(Vec::new()),
+        CanonicalEventType::Error => {}
+        _ => {}
     }
     let mut choice = Map::new();
     choice.insert("index".into(), Value::from(event.index.unwrap_or(0)));
@@ -1381,7 +1377,16 @@ fn encode_chat_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
     payload.insert("choices".into(), Value::Array(vec![Value::Object(choice)]));
     if event.event_type == CanonicalEventType::Usage {
         if let Some(usage) = &event.usage {
-            payload.insert("usage".into(), usage_value(usage, UsageProtocol::Openai));
+            payload.insert(
+                "usage".into(),
+                json!({
+                    "prompt_tokens": usage.input_tokens.unwrap_or(0),
+                    "completion_tokens": usage.output_tokens.unwrap_or(0),
+                    "total_tokens": usage.total_tokens.unwrap_or(0),
+                    "cache_creation_tokens": usage.cache_write_input_tokens.unwrap_or(0),
+                    "cache_read_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+                }),
+            );
         }
     }
     Ok(sse(None, &Value::Object(payload)))
@@ -1417,10 +1422,9 @@ fn encode_responses_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError>
             "response.function_call_arguments.delta",
             json!({"type":"response.function_call_arguments.delta","item_id":event.call_id.clone().unwrap_or_default(),"delta":event.delta.clone().unwrap_or_default()}),
         ),
-        CanonicalEventType::ToolCallStop => (
-            "response.output_item.done",
-            json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":event.call_id.clone().unwrap_or_default()}}),
-        ),
+        // The production Responses codec has no client event for a tool-call
+        // stop; the provider's output-item completion is not synthesized.
+        CanonicalEventType::ToolCallStop => return Ok(Vec::new()),
         CanonicalEventType::Usage => return Ok(Vec::new()),
         _ => return Ok(Vec::new()),
     };
@@ -1445,28 +1449,57 @@ fn encode_anthropic_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError>
         CanonicalEventType::Usage => {
             return Ok(sse(
                 Some("message_delta"),
-                &json!({"type":"message_delta","usage":event.usage.as_ref().map(|u| usage_value(u, UsageProtocol::Anthropic)).unwrap_or(Value::Object(Map::new()))}),
+                &json!({"type":"message_delta","usage":event.usage.as_ref().map(|u| json!({"input_tokens":u.input_tokens.unwrap_or(0),"output_tokens":u.output_tokens.unwrap_or(0),"cache_read_input_tokens":u.cache_read_input_tokens.unwrap_or(0),"cache_creation_input_tokens":u.cache_creation_input_tokens.unwrap_or(0)})).unwrap_or(Value::Object(Map::new()))}),
             ));
         }
-        CanonicalEventType::ToolCallStart => (
-            "content_block_start",
-            json!({"type":"content_block_start","index":event.index.unwrap_or(0),"content_block":{"type":"tool_use","id":event.call_id.clone().unwrap_or_default(),"name":event.name.clone().unwrap_or_default(),"input":{}}}),
-        ),
-        CanonicalEventType::ContentStart => (
-            "content_block_start",
-            json!({"type":"content_block_start","index":event.index.unwrap_or(0),"content_block":{"type":"text","text":""}}),
-        ),
-        CanonicalEventType::ContentStop | CanonicalEventType::ToolCallStop => (
-            "content_block_stop",
-            json!({"type":"content_block_stop","index":event.index.unwrap_or(0)}),
-        ),
-        CanonicalEventType::Error => (
-            "error",
-            json!({"type":"error","error":{"type":event.error_type.clone().unwrap_or_else(|| "error".into()),"message":event.error_message.clone().unwrap_or_default()}}),
-        ),
-        _ => return Ok(Vec::new()),
+        // The production Python Messages codec emits generic canonical event
+        // names for structural events it does not specialize. Keep this
+        // cross-surface encoder byte-for-byte compatible with that public
+        // behavior; native Anthropic frames are decoded above, not synthesized
+        // here from a richer private event grammar.
+        CanonicalEventType::ToolCallStart => {
+            return Ok(sse(
+                Some("tool_call_start"),
+                &json!({"type":"tool_call_start"}),
+            ));
+        }
+        CanonicalEventType::ContentStart => {
+            return Ok(sse(Some("content_start"), &json!({"type":"content_start"})));
+        }
+        CanonicalEventType::ContentStop => {
+            return Ok(sse(Some("content_stop"), &json!({"type":"content_stop"})));
+        }
+        CanonicalEventType::ToolCallStop => {
+            return Ok(sse(
+                Some("tool_call_stop"),
+                &json!({"type":"tool_call_stop"}),
+            ));
+        }
+        _ => {
+            let name = canonical_event_name(event.event_type);
+            return Ok(sse(Some(name), &json!({"type":name})));
+        }
     };
     Ok(sse(Some(name), &payload))
+}
+
+fn canonical_event_name(event_type: CanonicalEventType) -> &'static str {
+    match event_type {
+        CanonicalEventType::ResponseStart => "response_start",
+        CanonicalEventType::ContentStart => "content_start",
+        CanonicalEventType::TextDelta => "text_delta",
+        CanonicalEventType::ReasoningStart => "reasoning_start",
+        CanonicalEventType::ReasoningDelta => "reasoning_delta",
+        CanonicalEventType::ReasoningStop => "reasoning_stop",
+        CanonicalEventType::ToolCallStart => "tool_call_start",
+        CanonicalEventType::ToolCallArgumentsDelta => "tool_call_arguments_delta",
+        CanonicalEventType::ToolCallStop => "tool_call_stop",
+        CanonicalEventType::ContentStop => "content_stop",
+        CanonicalEventType::Usage => "usage",
+        CanonicalEventType::ResponseComplete => "response_complete",
+        CanonicalEventType::ResponseIncomplete => "response_incomplete",
+        CanonicalEventType::Error => "error",
+    }
 }
 
 impl fmt::Display for TerminalEvidence {

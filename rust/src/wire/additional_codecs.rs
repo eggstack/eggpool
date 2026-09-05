@@ -259,40 +259,45 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
         if message.role == CanonicalRole::System {
             continue;
         }
-        let mut message_blocks = Vec::new();
-        let flush_message = |input: &mut Vec<Value>, blocks: &mut Vec<&CanonicalContentBlock>| {
-            if !blocks.is_empty() {
+        let tool_results: Vec<_> = message
+            .content
+            .iter()
+            .filter(|block| block.kind == CanonicalBlockKind::ToolResult)
+            .collect();
+        if !tool_results.is_empty() {
+            for block in tool_results {
                 input.push(json!({
-                    "type": "message",
-                    "role": message.role.as_str(),
-                    "content": responses_content(blocks.as_slice(), message.role),
+                    "type":"function_call_output",
+                    "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
+                    "output":block.text.clone().unwrap_or_default()
                 }));
-                blocks.clear();
             }
-        };
-        for block in &message.content {
-            match block.kind {
-                CanonicalBlockKind::ToolCall => {
-                    flush_message(input, &mut message_blocks);
-                    input.push(json!({
-                        "type":"function_call",
-                        "call_id":block.call_id.clone().unwrap_or_default(),
-                        "name":block.name.clone().unwrap_or_default(),
-                        "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())
-                    }));
-                }
-                CanonicalBlockKind::ToolResult => {
-                    flush_message(input, &mut message_blocks);
-                    input.push(json!({
-                        "type":"function_call_output",
-                        "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
-                        "output":block.text.clone().unwrap_or_default()
-                    }));
-                }
-                _ => message_blocks.push(block),
-            }
+            continue;
         }
-        flush_message(input, &mut message_blocks);
+        for block in message
+            .content
+            .iter()
+            .filter(|block| block.kind == CanonicalBlockKind::ToolCall)
+        {
+            input.push(json!({
+                "type":"function_call",
+                "call_id":block.call_id.clone().unwrap_or_default(),
+                "name":block.name.clone().unwrap_or_default(),
+                "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())
+            }));
+        }
+        let message_blocks: Vec<_> = message
+            .content
+            .iter()
+            .filter(|block| block.kind != CanonicalBlockKind::ToolCall)
+            .collect();
+        if !message_blocks.is_empty() {
+            input.push(json!({
+                "type": "message",
+                "role": message.role.as_str(),
+                "content": responses_content(message_blocks.as_slice(), message.role),
+            }));
+        }
     }
     if let Some(system) = request
         .messages
@@ -473,7 +478,7 @@ fn encode_generate_content_request(
 ) -> Result<CodecOutput<Value>, CodecError> {
     validate_request_blocks(request, WireSurface::GeminiGenerateContent)?;
     let notices = request_notices(request, WireSurface::GeminiGenerateContent)?;
-    let contents: Result<Vec<Value>, CodecError> = request.messages.iter().filter(|message| message.role != CanonicalRole::System).map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content, false)?}))).collect();
+    let contents: Result<Vec<Value>, CodecError> = request.messages.iter().filter(|message| message.role != CanonicalRole::System).map(|message| Ok(json!({"role":if message.role == CanonicalRole::Assistant {"model"} else {"user"}, "parts":gemini_parts(&message.content, true)?}))).collect();
     let mut out = Map::new();
     out.insert("contents".into(), Value::Array(contents?));
     if let Some(system) = request
@@ -1074,7 +1079,8 @@ fn decode_generate_content_response(
                 }
                 let name = required_string(call, "name", "parts[].functionCall.name")?;
                 let arguments = compact_value(args);
-                let call_id = stable_tool_call_id(&name, &arguments, call_ordinal);
+                let call_id = optional_string(call, "id")?
+                    .unwrap_or_else(|| stable_tool_call_id(&name, &arguments, call_ordinal));
                 call_ordinal += 1;
                 tool_ids.insert(name.clone(), call_id.clone());
                 output.push(CanonicalOutputBlock {
