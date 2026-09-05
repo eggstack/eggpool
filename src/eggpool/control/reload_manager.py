@@ -1550,25 +1550,22 @@ class ReloadManager:
             validation=validation,
             expected_digest=expected_digest,
         )
-        self._current_transaction = txn
+        # Atomic admission claim — no TOCTOU window.  The claim helper
+        # deliberately contains no awaitable work beyond acquiring the
+        # short claim mutex; validation, finalization retries, candidate
+        # construction, and publication all happen after it returns.
+        await self._claim_reload(txn.request_id)
 
-        # Atomic admission claim — no TOCTOU window.
-        async with self._claim_mutex:
-            if self._reload_claimed:
-                self._current_transaction = None
-                # Phase 11: increment busy rejections.
-                self._counters = replace(
-                    self._counters,
-                    busy_rejections=self._counters.busy_rejections + 1,
-                )
-                raise ReloadInProgressError(
-                    "A reload transaction is already in progress"
-                )
+        try:
+            self._current_transaction = txn
+
             # Plan 018 Workstream C5: before admitting a new reload,
             # check if there are pending finalization jobs from a
             # previous (possibly cancelled) reload and attempt bounded
             # completion.  A committed swap cannot be force-cleared, so
-            # the new reload must wait for finalization to resolve.
+            # the new reload must wait for finalization to resolve.  This
+            # work intentionally runs outside ``_claim_mutex`` so a
+            # competing caller receives the busy result immediately.
             self._reconcile_completed_registered_jobs()
             pending_jobs = [
                 j for j in self._accepted_finalization_jobs.values() if j.is_unresolved
@@ -1617,7 +1614,6 @@ class ReloadManager:
                     if j.is_unresolved
                 ]
                 if still_pending:
-                    self._current_transaction = None
                     self._counters = replace(
                         self._counters,
                         busy_rejections=self._counters.busy_rejections + 1,
@@ -1627,19 +1623,7 @@ class ReloadManager:
                         "generation(s): "
                         + ", ".join(str(j.generation_id) for j in still_pending)
                     )
-            self._reload_claimed = True
-            self._active_reload_task = asyncio.current_task()
-            self._admitted_at = time.monotonic()
-            # Phase 11: increment admitted operations.
-            self._counters = replace(
-                self._counters,
-                admitted_operations=self._counters.admitted_operations + 1,
-            )
-            # Reset the completion event so shutdown waiters see a fresh
-            # signal for this new transaction.
-            self._transaction_complete_event.clear()
 
-        try:
             # Record reload_requested event after claim succeeds.
             await self._safe_record_event(
                 "reload_requested",
@@ -2521,11 +2505,43 @@ class ReloadManager:
                 # Release admission claim on every terminal path, including
                 # cancellation while the gate release is in progress.
                 self._current_transaction = None
-                self._active_reload_task = None
-                async with self._claim_mutex:
-                    self._reload_claimed = False
-                    self._admitted_at = None
-                    self._admitted_request_id = None
+                await self._release_reload_claim()
+
+    async def _claim_reload(self, request_id: str) -> None:
+        """Atomically claim the single reload slot.
+
+        The mutex protects only the claim metadata.  In particular, no
+        event persistence, finalization retry, validation, database work, or
+        generation lifecycle operation may run while it is held.
+        """
+        async with self._claim_mutex:
+            if self._reload_claimed:
+                self._counters = replace(
+                    self._counters,
+                    busy_rejections=self._counters.busy_rejections + 1,
+                )
+                raise ReloadInProgressError(
+                    "A reload transaction is already in progress"
+                )
+            self._reload_claimed = True
+            self._active_reload_task = asyncio.current_task()
+            self._admitted_at = time.monotonic()
+            self._admitted_request_id = request_id
+            self._counters = replace(
+                self._counters,
+                admitted_operations=self._counters.admitted_operations + 1,
+            )
+            # Reset the completion event so shutdown waiters see a fresh
+            # signal for this new transaction.
+            self._transaction_complete_event.clear()
+
+    async def _release_reload_claim(self) -> None:
+        """Release claim state under the same short mutex used to acquire it."""
+        async with self._claim_mutex:
+            self._reload_claimed = False
+            self._active_reload_task = None
+            self._admitted_at = None
+            self._admitted_request_id = None
 
     # -- stage helpers -----------------------------------------------------
 

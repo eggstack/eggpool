@@ -1,7 +1,7 @@
 # Phase 2 — Atomic Reload Admission and Fail-Closed Runtime Leases
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisite: Phase 1 deterministic barriers and state snapshots.
 
@@ -196,13 +196,50 @@ Cover:
 - Focused concurrency test passes for at least 100 repeated runs.
 - No new sleeps, non-strict xfails, or broad exception swallowing are introduced.
 
-## Handoff evidence
+## Closure evidence
 
-Record:
+Implemented in the production reload and request paths, with a final corrective
+pass in this closure:
 
-- the new admission primitive and its ownership contract;
-- focused admission and lease test commands;
-- repeated-run results;
-- before/after control response behavior for concurrent rehash;
-- any protocol-visible 503 envelope change;
-- confirmation that no production path falls back to `app.state.coordinator` after manager installation.
+- `ReloadManager._claim_reload()` and `_release_reload_claim()` own the
+  single-slot claim metadata under `_claim_mutex`. The mutex contains no
+  validation, persistence, finalization retry, candidate construction,
+  publication, or retirement awaits. Claim state is released from the
+  terminal `finally` path, including cancellation and failure.
+- `handle_proxy_request()` requires the installed `RuntimeManager`, maps
+  acquisition failure to the bounded protocol-specific HTTP 503 envelope, and
+  never invokes `app.state.coordinator` after manager installation. Streaming
+  responses transfer the lease to `wrap_stream_with_lease()` until completion
+  or cancellation.
+- Admission diagnostics expose `admitted`, `admitted_at`, and the populated
+  `admitted_request_id`. `reload_requested` is recorded only after admission.
+- Focused verification:
+  `uv run pytest tests/integration/reload/test_reload_admission.py
+  tests/integration/reload/test_concurrent_reload_admission.py
+  tests/integration/reload/test_lease_acquisition_fallback.py
+  tests/unit/test_proxy.py tests/unit/test_reload_manager.py -q --tb=short
+  --maxfail=1` — 76 passed.
+- Lifecycle verification:
+  `uv run pytest tests/unit/test_runtime_manager.py
+  tests/integration/reload/test_lease_condition.py -q --tb=short
+  --maxfail=1` — 100 passed;
+  `uv run pytest tests/unit/test_reload_diagnostics_matrix.py -q
+  --tb=short --maxfail=1` — 68 passed; and
+  `uv run pytest tests/integration/test_rehash_streaming_swap.py -q
+  --tb=short --maxfail=1` — 16 passed.
+- The focused admission coverage includes a deterministic pending-finalization
+  mutex regression and 100 competing claim pairs. Existing terminal-path,
+  lease-failure, streaming, and request regression tests remain green.
+- The concurrent control response remains `ReloadInProgressError`, rendered by
+  the existing control-plane busy response. Runtime lease failure remains a
+  bounded HTTP 503 with `Runtime generation unavailable` and the endpoint's
+  existing service error type.
+
+## Dependency review
+
+The direct successor, Phase 3 (`plans/004-phase-03-asynchronous-generation-retirement.md`),
+is now unblocked by the completed Phase 2 lease contract. Its status was
+already `implementation handoff`, so no status transition was required. No
+future plan is explicitly marked blocked by Phase 2; later roadmap entries are
+either already implemented/complete or available as handoff plans. No other
+plan status was changed.

@@ -41,23 +41,20 @@ async def test_concurrent_reload_admission_deterministic(
     rm = reload_harness.reload_manager
 
     # Direct admission-claim check — two concurrent attempts, one
-    # wins, one observes the atomic claim primitive rejecting.
-    async def _admit() -> bool:
-        async with rm._claim_mutex:  # pyright: ignore[reportPrivateUsage]
-            if rm._reload_claimed:  # pyright: ignore[reportPrivateUsage]
-                return False
-            rm._reload_claimed = True  # pyright: ignore[reportPrivateUsage]
-            rm._admitted_at = time.monotonic()  # pyright: ignore[reportPrivateUsage]
-            return True
-
-    results = await asyncio.gather(_admit(), _admit())
+    # wins, one observes the manager's atomic claim primitive rejecting.
+    results = await asyncio.gather(
+        rm._claim_reload("concurrent-a"),  # pyright: ignore[reportPrivateUsage]
+        rm._claim_reload("concurrent-b"),  # pyright: ignore[reportPrivateUsage]
+        return_exceptions=True,
+    )
+    results = [result is None for result in results]
     ok_count = sum(1 for r in results if r)
     assert ok_count == 1, (
         f"exactly one admission must succeed, got {ok_count}: {results}"
     )
 
     # Reset so the harness can do follow-up work cleanly.
-    rm._reload_claimed = False  # pyright: ignore[reportPrivateUsage]
+    await rm._release_reload_claim()  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio()

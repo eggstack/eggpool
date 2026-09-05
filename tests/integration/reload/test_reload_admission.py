@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -208,3 +209,71 @@ async def test_admission_rejects_immediately_without_waiting(
             f"Rejection ({rejection_time}) should not be after "
             f"completion ({completion_time})"
         )
+
+
+@pytest.mark.asyncio()
+async def test_pending_finalization_does_not_hold_claim_mutex(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Finalization retries run after claim, never inside its mutex."""
+    retry_started = asyncio.Event()
+    release_retry = asyncio.Event()
+
+    async def run_retry() -> None:
+        retry_started.set()
+        await release_retry.wait()
+
+    pending_job = SimpleNamespace(
+        is_unresolved=True,
+        generation_id=99,
+        step=SimpleNamespace(value="retirement"),
+        retained_task=None,
+        run=run_retry,
+    )
+    manager = reload_harness.reload_manager
+    manager._accepted_finalization_jobs["pending-test"] = pending_job  # type: ignore[assignment]
+
+    async def first_reload() -> None:
+        with pytest.raises(ReloadInProgressError):
+            await reload_harness.reload()
+
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(manager, "_reconcile_finalization_job", lambda *_args: None)
+            first_task = asyncio.create_task(first_reload())
+            await asyncio.wait_for(retry_started.wait(), timeout=1.0)
+
+            assert not manager._claim_mutex.locked()  # type: ignore[reportPrivateUsage]
+            assert manager._reload_claimed  # type: ignore[reportPrivateUsage]
+            assert manager._admitted_request_id.startswith(  # type: ignore[union-attr]
+                "reload-"
+            )
+            with pytest.raises(ReloadInProgressError):
+                await asyncio.wait_for(reload_harness.reload(), timeout=0.2)
+
+            release_retry.set()
+            await first_task
+    finally:
+        manager._accepted_finalization_jobs.pop("pending-test", None)
+
+
+@pytest.mark.asyncio()
+async def test_admission_claim_is_stable_for_100_competing_pairs(
+    reload_harness: ReloadHarness,
+) -> None:
+    """Exactly one of each 100 simultaneous claim pairs is admitted."""
+    manager = reload_harness.reload_manager
+
+    for iteration in range(100):
+        results = await asyncio.gather(
+            manager._claim_reload(f"stress-{iteration}-a"),  # type: ignore[reportPrivateUsage]
+            manager._claim_reload(f"stress-{iteration}-b"),  # type: ignore[reportPrivateUsage]
+            return_exceptions=True,
+        )
+        admitted = [result for result in results if result is None]
+        rejected = [
+            result for result in results if isinstance(result, ReloadInProgressError)
+        ]
+        assert len(admitted) == 1
+        assert len(rejected) == 1
+        await manager._release_reload_claim()  # type: ignore[reportPrivateUsage]
