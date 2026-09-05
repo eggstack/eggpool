@@ -5,6 +5,7 @@ Status: closed
 Recommendation: closed; C003 is dependency-ready.
 
 Implementation commit: [`8caae259`](https://github.com/eggstack/eggpool/commit/8caae259ca6b4d45c0a2594a499ed6f2ea6762fd)
+Evidence commit: [`4696705`](https://github.com/eggstack/eggpool/commit/4696705)
 
 Plan: [C002 — durable dispatch publication and lifecycle identity](../../implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md)
 
@@ -60,6 +61,7 @@ changed.
 
 ```text
 rtk cargo fmt
+rtk cargo test --test coordinator_publication -- --nocapture  # 6 passed
 rtk cargo clippy --all-targets -- -D warnings  # no issues found
 rtk cargo test --all-targets  # 187 passed (21 suites)
 rtk uv run pytest tests/migration_rs -q --tb=short --maxfail=1  # 83 passed, 3 skipped
@@ -93,9 +95,9 @@ provided by a caller/test and retain no request content or secrets.
 ## Future-plan audit and registry transition
 
 C002 is removed from the registry's dependency-ready table and added to its
-completed table with implementation commit `8caae259` and this accepted
-closure record. The coordinator README, handoff sequence, C002 plan header,
-and M7 roadmap now record C002 as closed. C003 is promoted to the sole
+completed table with implementation commit `8caae259`, evidence commit
+`4696705`, and this accepted closure record. The coordinator README, handoff
+sequence, C002 plan header, and M7 roadmap now record C002 as closed. C003 is promoted to the sole
 dependency-ready implementation plan because its hard dependency is accepted.
 C004-C011 remain queued behind their named serial predecessors. M8 runtime
 generation/background lifecycle remains blocked on accepted C011 M7 closure
