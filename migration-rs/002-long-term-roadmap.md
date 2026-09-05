@@ -104,19 +104,31 @@ Primary class: invariant/capability
 
 Subsystem roadmap: [Coordinator, Retry, Failover, and Durable Finalization](subsystems/coordinator-roadmap.md).
 
-This is the highest-risk migration milestone. Compose the closed M4 transport, M5 routing/claim state, and M6 selected-profile runtime into an explicit request/attempt state machine. Port durable dispatch publication, runtime wire negotiation, provider-bound attempt submission, canonical failure effects, bounded account/wire retry, response handoff, finite and streaming completion, timeout/cancellation, retained terminal ownership, public inference endpoints, semantic-router internal dispatch, and restart reconciliation.
+This is the highest-risk migration milestone. Compose closed M4 transport, M5 routing/claim state, and M6 selected-profile runtime into an explicit request/attempt state machine. Port durable dispatch publication, runtime wire negotiation, provider-bound attempt submission, canonical failure effects, bounded account/wire retry, response handoff, finite/streaming completion, timeout/cancellation, retained terminal ownership, public inference endpoints, semantic-router internal dispatch, and restart reconciliation.
 
-Planned sequence:
+Original sequence:
 
 C001 contract/failure corpus -> C002 durable dispatch publication/lifecycle identity -> C003 runtime wire resolution/negotiation -> C004 provider-bound attempt/submission -> C005 failure effects/retry/failover -> C006 durable finalization/retained ownership -> C007 finite handoff/completion -> C008 streaming/timeouts/cancellation -> C009 public inference endpoints/semantic-router dispatch -> C010 crash/restart reconciliation/fault injection -> C011 differential qualification/M7 closure.
 
-Only `registry.md` authorizes handoff. C001 is initially the sole dependency-ready plan.
+Post-C006 audit found material contract/qualification gaps in C003-C006. Historical closure records remain append-only. The active corrective insertion is:
+
+```text
+C003-C006 historical implementation
+  -> C012 coordinator core contract correction
+  -> C013 coordinator core differential requalification
+  -> C007 finite handoff/completion
+  -> C008 -> C009 -> C010 -> C011
+```
+
+C012 repairs missing fixed/hinted/rate-limited wire semantics and state bounds, preserves provider-native `upstream_model_id` through C004, completes header/request evidence, restores the full C001 failure/effect distinctions including ambiguous-auth behavior, bounds/retires effect ownership, and makes durable finalization re-read zero-row transitions and reject incompatible retained commands. C013 independently proves those fixes against the C001 Python oracle plus deterministic M4, concurrency, boundedness, and finalization fault fixtures.
+
+Only `registry.md` authorizes handoff. C012 is currently the sole dependency-ready plan; C013 is queued; C007 has been re-blocked until accepted C013 closure.
 
 M7 implements a bounded retained-finalization supervisor and explicit reconciliation interface because terminal cleanup cannot depend on the client task. M8, not M7, owns immutable runtime-generation publication, rehash, signal/shutdown orchestration, and recurring/background scheduling around those interfaces.
 
 Response-start is a monotonic point of no return: transparent retries are pre-handoff only. Failed attempts become independently durable-terminal or retained-cleanup-owned before replacement attempt ownership is accepted. Unknown in-flight provider work is never replayed merely because the Rust process restarted.
 
-Exit condition: the C001 failure corpus proves parity for success, retry, alternate-wire/account failover, rejection, cancellation, partial/malformed stream, terminal evidence, DB/runtime cleanup faults, public endpoint semantics, retained finalization, and restart reconciliation, with no unresolved high/medium M7 correctness/security issue. Satisfied only by accepted C011 closure.
+Exit condition: the C001 failure corpus plus C013/C011 integrated qualification prove parity for success, retry, alternate-wire/account failover, rejection, cancellation, partial/malformed stream, terminal evidence, DB/runtime cleanup faults, public endpoint semantics, retained finalization, and restart reconciliation, with no unresolved high/medium M7 correctness/security issue. Satisfied only by accepted C011 closure after the corrective core passes C013.
 
 ## M8 — Runtime generations, rehash, background tasks, and process lifecycle
 
