@@ -19,9 +19,10 @@ use crate::{
 };
 
 use super::limits::{
-    DEFAULT_MAX_REQUEST_BODY_BYTES, LimitError, MAX_IMAGE_BYTES, MAX_PDF_BYTES,
-    estimate_context_input_tokens, estimate_reservation_tokens, requested_output_tokens,
-    validate_base64,
+    DEFAULT_MAX_REQUEST_BODY_BYTES, LimitError, MAX_AUDIO_BYTES, MAX_CACHE_MARKER_BYTES,
+    MAX_IMAGE_BYTES, MAX_MEDIA_AGGREGATE_BYTES, MAX_MEDIA_ITEMS, MAX_MEDIA_URI_BYTES,
+    MAX_PDF_BYTES, estimate_context_input_tokens, estimate_reservation_tokens,
+    requested_output_tokens, valid_reference, validate_base64, validate_media_type,
 };
 
 const MAX_JSON_DEPTH: usize = 64;
@@ -235,7 +236,7 @@ fn canonical_request_from_object(
         mapping_field(object, "response_format")?
     };
     let reasoning = decode_reasoning(object)?;
-    let cache_control = object.get("cache_control").cloned();
+    let cache_control = bounded_marker(object.get("cache_control"))?;
     let metadata = decode_metadata(object.get("metadata"))?;
     let parallel_tool_calls = optional_bool(object, "parallel_tool_calls")?;
     validate_media_limits(&messages)?;
@@ -418,7 +419,22 @@ fn decode_message_array(
                             tool_input: None,
                             is_error: false,
                             signature: None,
+                            cache_control: None,
+                            prompt_cache_breakpoint: None,
                         });
+                    } else if matches!(
+                        block.kind,
+                        CanonicalBlockKind::Image | CanonicalBlockKind::Document
+                    ) && converted
+                        .iter()
+                        .rposition(|candidate| candidate.kind == CanonicalBlockKind::ToolResult)
+                        .is_some_and(|index| converted[index].media.is_none())
+                    {
+                        let index = converted
+                            .iter()
+                            .rposition(|candidate| candidate.kind == CanonicalBlockKind::ToolResult)
+                            .expect("tool result index was just checked");
+                        converted[index].media = block.media;
                     } else {
                         converted.push(block);
                     }
@@ -498,7 +514,10 @@ fn decode_content_block(
         })?;
     match kind {
         "text" | "input_text" | "output_text" => {
-            Ok(CanonicalContentBlock::text(string_field(object, "text")?))
+            let mut block = CanonicalContentBlock::text(string_field(object, "text")?);
+            block.cache_control = bounded_marker(object.get("cache_control"))?;
+            block.prompt_cache_breakpoint = bounded_marker(object.get("prompt_cache_breakpoint"))?;
+            Ok(block)
         }
         "image_url" => {
             let image = object
@@ -512,22 +531,53 @@ fn decode_content_block(
                     .ok_or(AdmissionError::InvalidField {
                         field: "image_url.url",
                     })?;
-            data_uri_block(url, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)
+            let mut block = data_uri_block(url, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?;
+            if let Some(media) = block.media.as_mut() {
+                media.detail =
+                    bounded_detail(image.get("detail").or_else(|| image.get("quality")))?;
+            }
+            block.prompt_cache_breakpoint = bounded_marker(object.get("prompt_cache_breakpoint"))?;
+            block.cache_control = bounded_marker(object.get("cache_control"))?;
+            Ok(block)
         }
         "image" | "input_image" => {
-            decode_media_block(object, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)
+            let mut block = decode_media_block(object, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?;
+            if let Some(media) = block.media.as_mut() {
+                media.detail =
+                    bounded_detail(object.get("detail").or_else(|| object.get("quality")))?;
+            }
+            block.prompt_cache_breakpoint = bounded_marker(object.get("prompt_cache_breakpoint"))?;
+            block.cache_control = bounded_marker(object.get("cache_control"))?;
+            Ok(block)
         }
-        "file" | "document" | "input_file" => decode_document_block(object),
+        "file" | "document" | "input_file" => {
+            let mut block = decode_document_block(object)?;
+            block.cache_control = bounded_marker(object.get("cache_control"))?;
+            block.prompt_cache_breakpoint = bounded_marker(object.get("prompt_cache_breakpoint"))?;
+            Ok(block)
+        }
         "input_audio" | "audio" => Ok(CanonicalContentBlock {
             kind: CanonicalBlockKind::Audio,
             text: None,
             media: Some(MediaSource {
-                media_type: None,
+                media_type: object
+                    .get("media_type")
+                    .or_else(|| object.get("mime_type"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 data: object
                     .get("data")
+                    .or_else(|| {
+                        object
+                            .get("input_audio")
+                            .and_then(Value::as_object)
+                            .and_then(|value| value.get("data"))
+                    })
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 uri: None,
+                detail: None,
+                file_id: None,
             }),
             call_id: None,
             name: None,
@@ -535,6 +585,8 @@ fn decode_content_block(
             tool_input: None,
             is_error: false,
             signature: None,
+            cache_control: None,
+            prompt_cache_breakpoint: None,
         }),
         "thinking" | "reasoning" | "reasoning_content" => Ok(CanonicalContentBlock {
             kind: CanonicalBlockKind::Reasoning,
@@ -553,12 +605,14 @@ fn decode_content_block(
                 .get("signature")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            cache_control: bounded_marker(object.get("cache_control"))?,
+            prompt_cache_breakpoint: bounded_marker(object.get("prompt_cache_breakpoint"))?,
         }),
         "tool_use" => Ok(tool_call_block(object, true)?),
         "tool_result" => Ok(CanonicalContentBlock {
             kind: CanonicalBlockKind::ToolResult,
             text: content_text(object.get("content"))?,
-            media: None,
+            media: decode_tool_result_media(object.get("content"))?,
             call_id: string_value(object.get("tool_use_id"))?,
             name: None,
             arguments: None,
@@ -568,6 +622,8 @@ fn decode_content_block(
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             signature: None,
+            cache_control: None,
+            prompt_cache_breakpoint: None,
         }),
         "refusal" if role == CanonicalRole::Assistant => Ok(CanonicalContentBlock {
             kind: CanonicalBlockKind::Refusal,
@@ -579,6 +635,8 @@ fn decode_content_block(
             tool_input: None,
             is_error: false,
             signature: None,
+            cache_control: None,
+            prompt_cache_breakpoint: None,
         }),
         other => Err(AdmissionError::UnsupportedContent { kind: other.into() }),
     }
@@ -598,6 +656,13 @@ fn decode_media_block(
         .get("media_type")
         .and_then(Value::as_str)
         .map(str::to_owned);
+    if let Some(media_type) = media_type.as_deref() {
+        if !validate_media_type(media_type) {
+            return Err(AdmissionError::InvalidField {
+                field: "media.media_type",
+            });
+        }
+    }
     let data = source
         .get("data")
         .and_then(Value::as_str)
@@ -606,6 +671,11 @@ fn decode_media_block(
         .get("url")
         .and_then(Value::as_str)
         .or_else(|| object.get("url").and_then(Value::as_str))
+        .map(str::to_owned);
+    let file_id = source
+        .get("file_id")
+        .or_else(|| source.get("fileId"))
+        .and_then(Value::as_str)
         .map(str::to_owned);
     if source_type == Some("base64") || data.is_some() {
         let encoded = data.as_deref().ok_or(AdmissionError::InvalidField {
@@ -621,12 +691,24 @@ fn decode_media_block(
             },
         )
         .map_err(|error| media_error(error, kind))?;
-    } else if uri.is_none() {
+    } else if uri.is_none() && file_id.is_none() {
         return Err(AdmissionError::InvalidField {
             field: "media.source",
         });
     }
-    Ok(media_block(kind, uri.as_deref(), media_type, data))
+    if let Some(uri) = uri.as_deref() {
+        if !valid_reference(uri) {
+            return Err(AdmissionError::InvalidField { field: "media.url" });
+        }
+    }
+    if let Some(file_id) = file_id.as_deref() {
+        if !valid_reference(file_id) {
+            return Err(AdmissionError::InvalidField {
+                field: "media.file_id",
+            });
+        }
+    }
+    Ok(media_block(kind, uri.as_deref(), media_type, data, file_id))
 }
 
 fn decode_document_block(
@@ -635,6 +717,20 @@ fn decode_document_block(
     if let Some(file) = object.get("file").and_then(Value::as_object) {
         if let Some(file_data) = file.get("file_data").and_then(Value::as_str) {
             return data_uri_block(file_data, CanonicalBlockKind::Document, MAX_PDF_BYTES);
+        }
+        if let Some(file_id) = file.get("file_id").and_then(Value::as_str) {
+            if !valid_reference(file_id) {
+                return Err(AdmissionError::InvalidField {
+                    field: "file.file_id",
+                });
+            }
+            return Ok(media_block(
+                CanonicalBlockKind::Document,
+                None,
+                Some("application/pdf".into()),
+                None,
+                Some(file_id.into()),
+            ));
         }
     }
     decode_media_block(object, CanonicalBlockKind::Document, MAX_PDF_BYTES)
@@ -663,6 +759,7 @@ fn media_block(
     uri: Option<&str>,
     media_type: Option<String>,
     data: Option<String>,
+    file_id: Option<String>,
 ) -> CanonicalContentBlock {
     CanonicalContentBlock {
         kind,
@@ -671,6 +768,8 @@ fn media_block(
             media_type,
             data,
             uri: uri.map(str::to_owned),
+            detail: None,
+            file_id,
         }),
         call_id: None,
         name: None,
@@ -678,6 +777,8 @@ fn media_block(
         tool_input: None,
         is_error: false,
         signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
     }
 }
 
@@ -690,6 +791,11 @@ fn data_uri_block(
         .strip_prefix("data:")
         .and_then(|value| value.split_once(";base64,"))
     {
+        if !validate_media_type(media_type) {
+            return Err(AdmissionError::InvalidField {
+                field: "media.media_type",
+            });
+        }
         validate_base64(
             encoded,
             limit,
@@ -705,14 +811,53 @@ fn data_uri_block(
             None,
             Some(media_type.to_owned()),
             Some(encoded.to_owned()),
+            None,
         ));
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Ok(media_block(kind, Some(uri), None, None));
+        if !valid_reference(uri) {
+            return Err(AdmissionError::InvalidField { field: "media.url" });
+        }
+        return Ok(media_block(kind, Some(uri), None, None, None));
     }
     Err(AdmissionError::UnsupportedContent {
         kind: "media URI".into(),
     })
+}
+
+fn bounded_detail(value: Option<&Value>) -> Result<Option<String>, AdmissionError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(detail) = value.as_str() else {
+        return Err(AdmissionError::InvalidField {
+            field: "image.detail",
+        });
+    };
+    if !matches!(detail, "auto" | "low" | "medium" | "high") {
+        return Err(AdmissionError::InvalidField {
+            field: "image.detail",
+        });
+    }
+    Ok(Some(detail.to_owned()))
+}
+
+fn bounded_marker(value: Option<&Value>) -> Result<Option<Value>, AdmissionError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if serde_json::to_vec(value)
+        .map(|encoded| encoded.len() > MAX_CACHE_MARKER_BYTES)
+        .unwrap_or(true)
+    {
+        return Err(AdmissionError::MediaLimit {
+            kind: "cache marker",
+        });
+    }
+    Ok(Some(value.clone()))
 }
 
 fn decode_openai_tool_call(value: &Value) -> Result<CanonicalContentBlock, AdmissionError> {
@@ -733,6 +878,8 @@ fn decode_openai_tool_call(value: &Value) -> Result<CanonicalContentBlock, Admis
         tool_input: None,
         is_error: false,
         signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
     })
 }
 
@@ -751,6 +898,8 @@ fn tool_call_block(
         tool_input: input,
         is_error: false,
         signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
     })
 }
 
@@ -767,6 +916,8 @@ fn decode_response_function_call(
         tool_input: None,
         is_error: false,
         signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
     })
 }
 
@@ -783,6 +934,8 @@ fn decode_response_function_output(
         tool_input: None,
         is_error: false,
         signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
     })
 }
 
@@ -817,6 +970,8 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<CanonicalTool>, AdmissionEr
                 name,
                 description: string_value(function.get("description"))?,
                 parameters,
+                cache_control: bounded_marker(function.get("cache_control"))?,
+                defer_loading: function.get("defer_loading").and_then(Value::as_bool),
             })
         })
         .collect()
@@ -1023,24 +1178,75 @@ fn positive_budget(value: &Value, _field: &'static str) -> Result<u64, Admission
 }
 
 fn validate_media_limits(messages: &[CanonicalMessage]) -> Result<(), AdmissionError> {
+    let mut media_count = 0_usize;
+    let mut aggregate = 0_u64;
     for message in messages {
         for block in &message.content {
+            if matches!(
+                block.kind,
+                CanonicalBlockKind::Image
+                    | CanonicalBlockKind::Document
+                    | CanonicalBlockKind::Audio
+            ) {
+                media_count = media_count.saturating_add(1);
+                if media_count > MAX_MEDIA_ITEMS {
+                    return Err(AdmissionError::CollectionLimit { kind: "media" });
+                }
+            }
             if let Some(media) = &block.media {
+                if let Some(uri) = &media.uri {
+                    if uri.len() > MAX_MEDIA_URI_BYTES {
+                        return Err(AdmissionError::MediaLimit { kind: "media URI" });
+                    }
+                }
+                if let Some(file_id) = &media.file_id {
+                    if file_id.len() > MAX_MEDIA_URI_BYTES {
+                        return Err(AdmissionError::MediaLimit {
+                            kind: "file reference",
+                        });
+                    }
+                }
                 if let Some(data) = &media.data {
                     let limit = if block.kind == CanonicalBlockKind::Image {
                         MAX_IMAGE_BYTES
                     } else if block.kind == CanonicalBlockKind::Document {
                         MAX_PDF_BYTES
+                    } else if block.kind == CanonicalBlockKind::Audio {
+                        MAX_AUDIO_BYTES
                     } else {
                         u64::MAX
                     };
-                    if limit != u64::MAX && data.len() as u64 > limit.saturating_mul(2) {
-                        return Err(AdmissionError::MediaLimit {
-                            kind: if block.kind == CanonicalBlockKind::Image {
-                                "image"
-                            } else {
-                                "document"
+                    if limit != u64::MAX {
+                        let decoded = super::limits::decoded_base64_len(data).ok_or(
+                            AdmissionError::InvalidField {
+                                field: "media.data",
                             },
+                        )?;
+                        aggregate = aggregate.saturating_add(decoded);
+                        if decoded > limit || aggregate > MAX_MEDIA_AGGREGATE_BYTES {
+                            return Err(AdmissionError::MediaLimit {
+                                kind: if block.kind == CanonicalBlockKind::Image {
+                                    "image"
+                                } else if block.kind == CanonicalBlockKind::Document {
+                                    "document"
+                                } else {
+                                    "audio"
+                                },
+                            });
+                        }
+                    }
+                }
+                if let Some(media_type) = &media.media_type {
+                    if !validate_media_type(media_type) {
+                        return Err(AdmissionError::InvalidField {
+                            field: "media.media_type",
+                        });
+                    }
+                }
+                if let Some(detail) = &media.detail {
+                    if !matches!(detail.as_str(), "auto" | "low" | "medium" | "high") {
+                        return Err(AdmissionError::MediaLimit {
+                            kind: "image detail",
                         });
                     }
                 }
@@ -1238,4 +1444,36 @@ fn content_text(value: Option<&Value>) -> Result<Option<String>, AdmissionError>
             field: "tool_result.content",
         }),
     }
+}
+
+fn decode_tool_result_media(value: Option<&Value>) -> Result<Option<MediaSource>, AdmissionError> {
+    let Some(Value::Array(items)) = value else {
+        return Ok(None);
+    };
+    for item in items {
+        let object = item.as_object().ok_or(AdmissionError::InvalidField {
+            field: "tool_result.content",
+        })?;
+        let block = match object.get("type").and_then(Value::as_str) {
+            Some("image_url") => {
+                let image = object
+                    .get("image_url")
+                    .and_then(Value::as_object)
+                    .ok_or(AdmissionError::InvalidField { field: "image_url" })?;
+                let url = image.get("url").and_then(Value::as_str).ok_or(
+                    AdmissionError::InvalidField {
+                        field: "image_url.url",
+                    },
+                )?;
+                data_uri_block(url, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?
+            }
+            Some("image") | Some("input_image") => {
+                decode_media_block(object, CanonicalBlockKind::Image, MAX_IMAGE_BYTES)?
+            }
+            Some("document") | Some("file") | Some("input_file") => decode_document_block(object)?,
+            _ => continue,
+        };
+        return Ok(block.media);
+    }
+    Ok(None)
 }

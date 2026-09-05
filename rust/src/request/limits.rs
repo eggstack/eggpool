@@ -9,6 +9,12 @@ pub const MAX_ESTIMATED_INPUT_TOKENS: u64 = 128_000;
 pub const CONTEXT_ESTIMATE_MIN_TOKENS: u64 = 1_000;
 pub const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 pub const MAX_PDF_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
+pub const MAX_MEDIA_ITEMS: usize = 64;
+pub const MAX_MEDIA_AGGREGATE_BYTES: u64 = 40 * 1024 * 1024;
+pub const MAX_MEDIA_URI_BYTES: usize = 8 * 1024;
+pub const MAX_MEDIA_TYPE_BYTES: usize = 128;
+pub const MAX_CACHE_MARKER_BYTES: usize = 1024;
 pub const ESTIMATED_BYTES_PER_TOKEN: u64 = 3;
 pub const ESTIMATED_TEXT_CHARS_PER_TOKEN: u64 = 4;
 pub const ESTIMATED_NON_ASCII_BYTES_PER_TOKEN: u64 = 2;
@@ -170,6 +176,29 @@ pub fn validate_base64(
         return Err(LimitError::EncodedPayloadTooLarge { kind });
     }
     Ok(decoded_len)
+}
+
+pub fn validate_media_type(media_type: &str) -> bool {
+    !media_type.is_empty()
+        && media_type.len() <= MAX_MEDIA_TYPE_BYTES
+        && media_type.is_ascii()
+        && !media_type.chars().any(char::is_whitespace)
+        && media_type.split_once('/').is_some_and(|(kind, subtype)| {
+            !kind.is_empty()
+                && !subtype.is_empty()
+                && kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && subtype
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        })
+}
+
+pub fn valid_reference(value: &str) -> bool {
+    value.len() <= MAX_MEDIA_URI_BYTES
+        && ((value.starts_with("http://") || value.starts_with("https://"))
+            || value.starts_with("file_")
+            || value.starts_with("file-")
+            || value.starts_with("urn:"))
 }
 
 fn ceil_div(value: u64, divisor: u64) -> u64 {

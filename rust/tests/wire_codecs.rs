@@ -315,15 +315,15 @@ fn unsupported_media_and_invalid_tool_arguments_fail_explicitly() {
         )
         .expect("admission keeps the document in canonical IR")
         .value;
-    let error = chat
+    let encoded = chat
         .encode_request(
             &request,
             &profile(WireSurface::OpenaiChatCompletions, WireCodecId::OpenaiChat),
         )
-        .expect_err("W007-owned documents must not disappear");
+        .expect("supported OpenAI file references remain explicit");
     assert_eq!(
-        error.reason,
-        eggpool::wire::CodecReasonCode::UnsupportedSemanticFeature
+        encoded.value["messages"][0]["content"][0]["file"]["file_data"],
+        "https://example.invalid/file.pdf"
     );
 
     let messages = AnthropicMessagesCodec;
@@ -334,6 +334,7 @@ fn unsupported_media_and_invalid_tool_arguments_fail_explicitly() {
             output: vec![eggpool::wire::ir::CanonicalOutputBlock {
                 kind: eggpool::wire::ir::CanonicalBlockKind::ToolCall,
                 text: None,
+                media: None,
                 call_id: Some("toolu-1".into()),
                 name: Some("lookup".into()),
                 arguments: Some("not-json".into()),

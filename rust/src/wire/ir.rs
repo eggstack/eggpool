@@ -134,11 +134,13 @@ impl<T> Presence<T> {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MediaSource {
     pub media_type: Option<String>,
     pub data: Option<String>,
     pub uri: Option<String>,
+    pub detail: Option<String>,
+    pub file_id: Option<String>,
 }
 
 impl fmt::Debug for MediaSource {
@@ -148,6 +150,8 @@ impl fmt::Debug for MediaSource {
             .field("media_type", &self.media_type)
             .field("data_bytes", &self.data.as_ref().map(String::len))
             .field("uri_present", &self.uri.is_some())
+            .field("detail", &self.detail)
+            .field("file_id_present", &self.file_id.is_some())
             .finish()
     }
 }
@@ -163,6 +167,8 @@ pub struct CanonicalContentBlock {
     pub tool_input: Option<Map<String, Value>>,
     pub is_error: bool,
     pub signature: Option<String>,
+    pub cache_control: Option<Value>,
+    pub prompt_cache_breakpoint: Option<Value>,
 }
 
 impl CanonicalContentBlock {
@@ -177,6 +183,8 @@ impl CanonicalContentBlock {
             tool_input: None,
             is_error: false,
             signature: None,
+            cache_control: None,
+            prompt_cache_breakpoint: None,
         }
     }
 }
@@ -194,6 +202,11 @@ impl fmt::Debug for CanonicalContentBlock {
             .field("tool_input_keys", &self.tool_input.as_ref().map(Map::len))
             .field("is_error", &self.is_error)
             .field("signature_present", &self.signature.is_some())
+            .field("cache_control_present", &self.cache_control.is_some())
+            .field(
+                "prompt_cache_breakpoint_present",
+                &self.prompt_cache_breakpoint.is_some(),
+            )
             .finish()
     }
 }
@@ -235,6 +248,8 @@ pub struct CanonicalTool {
     pub name: String,
     pub description: Option<String>,
     pub parameters: Map<String, Value>,
+    pub cache_control: Option<Value>,
+    pub defer_loading: Option<bool>,
 }
 
 impl fmt::Debug for CanonicalTool {
@@ -250,6 +265,8 @@ impl fmt::Debug for CanonicalTool {
                 "parameter_keys",
                 &self.parameters.keys().collect::<Vec<_>>(),
             )
+            .field("cache_control_present", &self.cache_control.is_some())
+            .field("defer_loading", &self.defer_loading)
             .finish()
     }
 }
@@ -528,6 +545,7 @@ impl CanonicalRequest {
 pub struct CanonicalOutputBlock {
     pub kind: CanonicalBlockKind,
     pub text: Option<String>,
+    pub media: Option<MediaSource>,
     pub call_id: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
@@ -747,8 +765,13 @@ fn encode_tools_and_choice(
 ) {
     if !request.tools.is_empty() {
         out.insert("tools".into(), Value::Array(request.tools.iter().map(|tool| {
-            if anthropic { json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "input_schema":Value::Object(tool.parameters.clone())}) }
-            else { json!({"type":"function", "function":{"name":tool.name, "description":tool.description, "parameters":Value::Object(tool.parameters.clone())}}) }
+            if anthropic {
+                let mut value = json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "input_schema":Value::Object(tool.parameters.clone())});
+                if let Some(marker) = &tool.cache_control {
+                    value["cache_control"] = marker.clone();
+                }
+                value
+            } else { json!({"type":"function", "function":{"name":tool.name, "description":tool.description, "parameters":Value::Object(tool.parameters.clone())}}) }
         }).collect()));
     }
     if let Some(choice) = &request.tool_choice {
@@ -794,20 +817,37 @@ fn encode_chat_message(message: &CanonicalMessage) -> Value {
 }
 
 fn encode_content(content: &[CanonicalContentBlock], openai: bool) -> Value {
-    if content.len() == 1 && content[0].kind == CanonicalBlockKind::Text {
+    if content.len() == 1
+        && content[0].kind == CanonicalBlockKind::Text
+        && content[0].cache_control.is_none()
+        && content[0].prompt_cache_breakpoint.is_none()
+    {
         return Value::String(content[0].text.clone().unwrap_or_default());
     }
     Value::Array(content.iter().filter_map(|block| match block.kind {
-        CanonicalBlockKind::Text => Some(json!({"type":"text", "text":block.text.clone().unwrap_or_default()})),
-        CanonicalBlockKind::Image if openai => Some(json!({
-            "type":"image_url",
-            "image_url":{"url":block.media.as_ref().map(|media| media.uri.clone().unwrap_or_else(|| format!(
-                "data:{};base64,{}",
-                media.media_type.as_deref().unwrap_or("application/octet-stream"),
-                media.data.as_deref().unwrap_or_default(),
-            ))).unwrap_or_default()}
-        })),
+        CanonicalBlockKind::Text => {
+            let mut value = json!({"type":"text", "text":block.text.clone().unwrap_or_default()});
+            if let Some(marker) = &block.cache_control {
+                value["cache_control"] = marker.clone();
+            } else if block.prompt_cache_breakpoint.is_some() {
+                value["cache_control"] = json!({"type":"ephemeral"});
+            }
+            Some(value)
+        }
+        CanonicalBlockKind::Image if openai => block.media.as_ref().map(|media| {
+            let url = media.uri.clone().or_else(|| {
+                media.data.as_ref().map(|data| {
+                    format!(
+                        "data:{};base64,{}",
+                        media.media_type.as_deref().unwrap_or("application/octet-stream"),
+                        data,
+                    )
+                })
+            });
+            json!({"type":"image_url", "image_url":{"url":url, "detail":media.detail}})
+        }),
         CanonicalBlockKind::Image => block.media.as_ref().map(|media| if let Some(data) = &media.data { json!({"type":"image", "source":{"type":"base64", "media_type":media.media_type.clone().unwrap_or_else(||"application/octet-stream".into()), "data":data}}) } else { json!({"type":"image", "source":{"type":"url", "url":media.uri}}) }),
+        CanonicalBlockKind::Document => block.media.as_ref().map(|media| json!({"type":"document", "source":if let Some(data) = &media.data { json!({"type":"base64", "media_type":media.media_type.clone().unwrap_or_else(||"application/pdf".into()), "data":data}) } else if let Some(uri) = &media.uri { json!({"type":"url", "url":uri}) } else { json!({"type":"file_id", "file_id":media.file_id}) }})),
         CanonicalBlockKind::Reasoning if openai => Some(json!({"type":"reasoning_content", "text":block.text.clone().unwrap_or_default()})),
         CanonicalBlockKind::Reasoning => Some(json!({"type":"thinking", "thinking":block.text.clone().unwrap_or_default()})),
         CanonicalBlockKind::ToolCall if !openai => Some(json!({"type":"tool_use", "id":block.call_id, "name":block.name, "input":Value::Object(block.tool_input.clone().unwrap_or_default())})),

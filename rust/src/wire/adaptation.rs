@@ -191,6 +191,8 @@ pub fn request_notices(
     reasoning_notices(request, target, source, &mut notices);
     structured_notices(request, target, source, &mut notices);
     tool_notices(request, target, source, &mut notices);
+    media_notices(request, target, source, &mut notices);
+    cache_notices(request, target, source, &mut notices);
 
     if request.metadata.is_empty() {
         // no-op
@@ -216,6 +218,144 @@ pub fn request_notices(
         ));
     }
     Ok(notices)
+}
+
+fn media_notices(
+    request: &CanonicalRequest,
+    target: WireSurface,
+    source: Option<WireSurface>,
+    notices: &mut Vec<AdaptationNotice>,
+) {
+    for message in &request.messages {
+        for block in &message.content {
+            let code = match (block.kind, target) {
+                (CanonicalBlockKind::Audio, _) => Some("audio_not_representable"),
+                (CanonicalBlockKind::Document, WireSurface::GeminiInteractions) => {
+                    Some("document_not_representable")
+                }
+                _ => None,
+            };
+            if let Some(code) = code {
+                notices.push(notice(code, "content", source, Some(target)));
+            }
+            if block.kind == CanonicalBlockKind::Image
+                && block
+                    .media
+                    .as_ref()
+                    .is_some_and(|media| media.detail.is_some())
+                && !matches!(
+                    target,
+                    WireSurface::OpenaiChatCompletions | WireSurface::OpenaiResponses
+                )
+            {
+                notices.push(notice(
+                    "image_detail_not_representable",
+                    "content.image.detail",
+                    source,
+                    Some(target),
+                ));
+            }
+        }
+    }
+}
+
+fn cache_notices(
+    request: &CanonicalRequest,
+    target: WireSurface,
+    source: Option<WireSurface>,
+    notices: &mut Vec<AdaptationNotice>,
+) {
+    if request.cache_control.is_some() {
+        notices.push(notice(
+            "cache_control_unsupported_placement",
+            "cache_control",
+            source,
+            Some(target),
+        ));
+        if !valid_cache_control(request.cache_control.as_ref()) {
+            notices.push(notice(
+                "cache_control_invalid_shape",
+                "cache_control",
+                source,
+                Some(target),
+            ));
+        }
+    }
+    for message in &request.messages {
+        for block in &message.content {
+            let has_anthropic = block.cache_control.is_some();
+            let has_openai = block.prompt_cache_breakpoint.is_some();
+            if has_anthropic && !valid_cache_control(block.cache_control.as_ref()) {
+                notices.push(notice(
+                    "cache_control_invalid_shape",
+                    "content.cache_control",
+                    source,
+                    Some(target),
+                ));
+            }
+            if has_openai && !valid_prompt_breakpoint(block.prompt_cache_breakpoint.as_ref()) {
+                notices.push(notice(
+                    "cache_breakpoint_invalid_shape",
+                    "content.prompt_cache_breakpoint",
+                    source,
+                    Some(target),
+                ));
+            }
+            if (has_anthropic && target != WireSurface::AnthropicMessages)
+                || (has_openai && target == WireSurface::GeminiInteractions)
+                || (has_openai && target == WireSurface::GeminiGenerateContent)
+            {
+                notices.push(notice(
+                    "cache_boundary_not_representable",
+                    "content.cache_control",
+                    source,
+                    Some(target),
+                ));
+            }
+        }
+    }
+    for tool in &request.tools {
+        if tool.cache_control.is_some() && target != WireSurface::AnthropicMessages {
+            notices.push(notice(
+                "cache_control_unsupported_by_target",
+                "tools.cache_control",
+                source,
+                Some(target),
+            ));
+        }
+        if tool.cache_control.is_some() && !valid_cache_control(tool.cache_control.as_ref()) {
+            notices.push(notice(
+                "cache_control_invalid_shape",
+                "tools.cache_control",
+                source,
+                Some(target),
+            ));
+        }
+        if tool.defer_loading.is_some() && target != WireSurface::AnthropicMessages {
+            notices.push(notice(
+                "provider_extension_not_representable",
+                "tools.defer_loading",
+                source,
+                Some(target),
+            ));
+        }
+    }
+}
+
+fn valid_cache_control(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("ephemeral")
+}
+
+fn valid_prompt_breakpoint(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("mode"))
+        .and_then(serde_json::Value::as_str)
+        == Some("explicit")
 }
 
 /// Apply caller/M5 reasoning capability facts without mutating those facts.

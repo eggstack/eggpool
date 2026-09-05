@@ -15,10 +15,14 @@ use super::codec::{
 use super::ir::{
     CacheCounterStatus, CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage,
     CanonicalOutputBlock, CanonicalRequest, CanonicalResponse, CanonicalRole, CanonicalToolChoice,
-    CanonicalUsage, ClientSurface, ProviderErrorEvidence, ReasoningMode, ToolChoiceMode,
+    CanonicalUsage, ClientSurface, MediaSource, ProviderErrorEvidence, ReasoningMode,
+    ToolChoiceMode,
 };
 use super::registry::{ConfiguredWireProfile, WireSurface};
-use crate::request::{AdmissionError, canonical_request_from_value};
+use crate::request::{
+    AdmissionError, MAX_IMAGE_BYTES, MAX_MEDIA_URI_BYTES, MAX_PDF_BYTES,
+    canonical_request_from_value, validate_base64, validate_media_type,
+};
 
 const MAX_PROVIDER_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 
@@ -325,11 +329,19 @@ fn encode_anthropic_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                     .tools
                     .iter()
                     .map(|tool| {
-                        json!({
+                        let mut value = json!({
                             "name": tool.name,
                             "description": tool.description.clone().unwrap_or_default(),
                             "input_schema": Value::Object(tool.parameters.clone()),
-                        })
+                        });
+                        if is_valid_cache_control(tool.cache_control.as_ref()) {
+                            let marker = tool.cache_control.as_ref().expect("validated marker");
+                            value["cache_control"] = marker.clone();
+                        }
+                        if let Some(defer_loading) = tool.defer_loading {
+                            value["defer_loading"] = Value::Bool(defer_loading);
+                        }
+                        value
                     })
                     .collect(),
             ),
@@ -411,9 +423,6 @@ fn add_common_request_fields(
     if let Some(value) = request.parallel_tool_calls {
         out.insert("parallel_tool_calls".into(), Value::Bool(value));
     }
-    if let Some(value) = &request.cache_control {
-        out.insert("cache_control".into(), value.clone());
-    }
     if !request.metadata.is_empty() {
         out.insert(
             "metadata".into(),
@@ -476,47 +485,105 @@ fn encode_openai_content_lossless(content: &[CanonicalContentBlock]) -> Value {
     if content.len() == 1 && content[0].kind == CanonicalBlockKind::Text {
         return Value::String(content[0].text.clone().unwrap_or_default());
     }
-    Value::Array(
-        content
-            .iter()
-            .filter_map(|block| match block.kind {
-                CanonicalBlockKind::Text => {
-                    Some(json!({"type": "text", "text": block.text.clone().unwrap_or_default()}))
-                }
-                CanonicalBlockKind::Image => block.media.as_ref().map(|media| {
-                    json!({
+    let mut values = Vec::new();
+    for block in content {
+        match block.kind {
+            CanonicalBlockKind::Text => {
+                values
+                    .push(json!({"type": "text", "text": block.text.clone().unwrap_or_default()}));
+            }
+            CanonicalBlockKind::Image => {
+                if let Some(media) = block.media.as_ref() {
+                    let mut image = json!({
                         "type": "image_url",
                         "image_url": {"url": media.uri.clone().unwrap_or_else(|| format!(
                             "data:{};base64,{}",
                             media.media_type.as_deref().unwrap_or("application/octet-stream"),
                             media.data.as_deref().unwrap_or_default(),
                         ))}
-                    })
-                }),
-                CanonicalBlockKind::Reasoning => {
-                    Some(json!({"type": "reasoning_content", "text": block.text.clone().unwrap_or_default()}))
+                    });
+                    if let Some(detail) = &media.detail {
+                        image["image_url"]["detail"] = Value::String(detail.clone());
+                    }
+                    if is_valid_prompt_breakpoint(block.prompt_cache_breakpoint.as_ref()) {
+                        let marker = block
+                            .prompt_cache_breakpoint
+                            .as_ref()
+                            .expect("validated marker");
+                        image["prompt_cache_breakpoint"] = marker.clone();
+                    }
+                    if is_valid_cache_control(block.cache_control.as_ref()) {
+                        let marker = block.cache_control.as_ref().expect("validated marker");
+                        image["cache_control"] = marker.clone();
+                    }
+                    values.push(image);
                 }
-                CanonicalBlockKind::Refusal => {
-                    Some(json!({"type": "refusal", "refusal": block.text.clone().unwrap_or_default()}))
+            }
+            CanonicalBlockKind::Document => {
+                if let Some(media) = block.media.as_ref() {
+                    let file_data = media
+                        .uri
+                        .clone()
+                        .or_else(|| media.file_id.clone())
+                        .or_else(|| {
+                            media.data.as_ref().map(|data| {
+                                format!(
+                                    "data:{};base64,{}",
+                                    media.media_type.as_deref().unwrap_or("application/pdf"),
+                                    data
+                                )
+                            })
+                        })
+                        .unwrap_or_default();
+                    values.push(json!({"type":"file", "file":{"filename":"document.pdf", "file_data":file_data}}));
                 }
-                CanonicalBlockKind::ToolResult => {
-                    Some(Value::String(block.text.clone().unwrap_or_default()))
+            }
+            CanonicalBlockKind::Reasoning => {
+                values.push(json!({"type": "reasoning_content", "text": block.text.clone().unwrap_or_default()}));
+            }
+            CanonicalBlockKind::Refusal => {
+                values.push(
+                    json!({"type": "refusal", "refusal": block.text.clone().unwrap_or_default()}),
+                );
+            }
+            CanonicalBlockKind::ToolResult => {
+                if let Some(text) = &block.text {
+                    values.push(json!({"type":"text", "text":text}));
                 }
-                CanonicalBlockKind::ToolCall
-                | CanonicalBlockKind::Document
-                | CanonicalBlockKind::Audio => None,
-            })
-            .collect(),
-    )
+                if let Some(media) = block.media.as_ref() {
+                    if let Some(url) = media.uri.clone().or_else(|| {
+                        media.data.as_ref().map(|data| {
+                            format!(
+                                "data:{};base64,{}",
+                                media
+                                    .media_type
+                                    .as_deref()
+                                    .unwrap_or("application/octet-stream"),
+                                data
+                            )
+                        })
+                    }) {
+                        values.push(json!({"type":"image_url", "image_url":{"url":url}}));
+                    }
+                }
+            }
+            CanonicalBlockKind::ToolCall | CanonicalBlockKind::Audio => {}
+        }
+    }
+    Value::Array(values)
 }
 
 fn encode_anthropic_content(content: &[CanonicalContentBlock]) -> Result<Value, CodecError> {
-    if content.len() == 1 && content[0].kind == CanonicalBlockKind::Text {
+    if content.len() == 1
+        && content[0].kind == CanonicalBlockKind::Text
+        && content[0].cache_control.is_none()
+        && content[0].prompt_cache_breakpoint.is_none()
+    {
         return Ok(Value::String(content[0].text.clone().unwrap_or_default()));
     }
     let mut result = Vec::with_capacity(content.len());
     for block in content {
-        let value = match block.kind {
+        let mut value = match block.kind {
             CanonicalBlockKind::Text => {
                 json!({"type": "text", "text": block.text.clone().unwrap_or_default()})
             }
@@ -561,17 +628,54 @@ fn encode_anthropic_content(content: &[CanonicalContentBlock]) -> Result<Value, 
                     "input": input,
                 })
             }
-            CanonicalBlockKind::ToolResult => json!({
-                "type": "tool_result",
-                "tool_use_id": block.call_id,
-                "content": block.text.clone().unwrap_or_default(),
-                "is_error": block.is_error,
-            }),
+            CanonicalBlockKind::ToolResult => {
+                let tool_content = if let Some(media) = block.media.as_ref() {
+                    let mut parts = Vec::new();
+                    if let Some(text) = &block.text {
+                        parts.push(json!({"type":"text", "text":text}));
+                    }
+                    parts.push(anthropic_media_value(media, CanonicalBlockKind::Image)?);
+                    Value::Array(parts)
+                } else {
+                    Value::String(block.text.clone().unwrap_or_default())
+                };
+                json!({
+                    "type": "tool_result",
+                    "tool_use_id": block.call_id,
+                    "content": tool_content,
+                    "is_error": block.is_error,
+                })
+            }
             CanonicalBlockKind::Refusal => json!({
                 "type": "text",
                 "text": block.text.clone().unwrap_or_default(),
             }),
-            CanonicalBlockKind::Document | CanonicalBlockKind::Audio => {
+            CanonicalBlockKind::Document => {
+                let media = block.media.as_ref().ok_or_else(|| {
+                    codec_error(
+                        CodecReasonCode::UnsupportedSemanticFeature,
+                        Some("content.document"),
+                        None,
+                        Some(WireSurface::AnthropicMessages),
+                    )
+                })?;
+                let source = if let Some(data) = &media.data {
+                    json!({"type":"base64", "media_type":media.media_type.clone().unwrap_or_else(||"application/pdf".into()), "data":data})
+                } else if let Some(uri) = &media.uri {
+                    json!({"type":"url", "url":uri})
+                } else if let Some(file_id) = &media.file_id {
+                    json!({"type":"file_id", "file_id":file_id})
+                } else {
+                    return Err(codec_error(
+                        CodecReasonCode::UnsupportedSemanticFeature,
+                        Some("content.document"),
+                        None,
+                        Some(WireSurface::AnthropicMessages),
+                    ));
+                };
+                json!({"type":"document", "source":source})
+            }
+            CanonicalBlockKind::Audio => {
                 return Err(codec_error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("content"),
@@ -580,9 +684,48 @@ fn encode_anthropic_content(content: &[CanonicalContentBlock]) -> Result<Value, 
                 ));
             }
         };
+        if matches!(
+            block.kind,
+            CanonicalBlockKind::Text | CanonicalBlockKind::Image | CanonicalBlockKind::Document
+        ) {
+            if is_valid_cache_control(block.cache_control.as_ref()) {
+                let marker = block.cache_control.as_ref().expect("validated marker");
+                value["cache_control"] = marker.clone();
+            } else if is_valid_prompt_breakpoint(block.prompt_cache_breakpoint.as_ref()) {
+                value["cache_control"] = json!({"type":"ephemeral"});
+            }
+        }
         result.push(value);
     }
     Ok(Value::Array(result))
+}
+
+fn anthropic_media_value(
+    media: &MediaSource,
+    kind: CanonicalBlockKind,
+) -> Result<Value, CodecError> {
+    let source = if let Some(data) = &media.data {
+        json!({
+            "type": "base64",
+            "media_type": media.media_type.clone().unwrap_or_else(|| if kind == CanonicalBlockKind::Document { "application/pdf".into() } else { "application/octet-stream".into() }),
+            "data": data,
+        })
+    } else if let Some(uri) = &media.uri {
+        json!({"type":"url", "url":uri})
+    } else if let Some(file_id) = &media.file_id {
+        json!({"type":"file_id", "file_id":file_id})
+    } else {
+        return Err(codec_error(
+            CodecReasonCode::UnsupportedSemanticFeature,
+            Some("content.media"),
+            None,
+            Some(WireSurface::AnthropicMessages),
+        ));
+    };
+    Ok(json!({
+        "type": if kind == CanonicalBlockKind::Document { "document" } else { "image" },
+        "source": source,
+    }))
 }
 
 fn validate_request_blocks(
@@ -591,10 +734,7 @@ fn validate_request_blocks(
 ) -> Result<(), CodecError> {
     for message in &request.messages {
         for block in &message.content {
-            if matches!(
-                block.kind,
-                CanonicalBlockKind::Document | CanonicalBlockKind::Audio
-            ) {
+            if matches!(block.kind, CanonicalBlockKind::Audio) {
                 return Err(codec_error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("content"),
@@ -712,6 +852,7 @@ fn decode_openai_message_output(
         Some(Value::String(text)) => output.push(CanonicalOutputBlock {
             kind: CanonicalBlockKind::Text,
             text: Some(text.clone()),
+            media: None,
             call_id: None,
             name: None,
             arguments: None,
@@ -725,6 +866,22 @@ fn decode_openai_message_output(
                     .get("type")
                     .and_then(Value::as_str)
                     .ok_or_else(|| response_error("message.content[].type"))?;
+                if kind == "image_url" || kind == "image" || kind == "file" {
+                    let media = decode_response_media(object, kind)?;
+                    output.push(CanonicalOutputBlock {
+                        kind: if kind == "file" {
+                            CanonicalBlockKind::Document
+                        } else {
+                            CanonicalBlockKind::Image
+                        },
+                        text: None,
+                        media: Some(media),
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                    });
+                    continue;
+                }
                 let text = match kind {
                     "text" => object
                         .get("text")
@@ -755,6 +912,7 @@ fn decode_openai_message_output(
                 output.push(CanonicalOutputBlock {
                     kind: output_kind,
                     text: Some(text.to_owned()),
+                    media: None,
                     call_id: None,
                     name: None,
                     arguments: None,
@@ -770,6 +928,7 @@ fn decode_openai_message_output(
         output.push(CanonicalOutputBlock {
             kind: CanonicalBlockKind::Refusal,
             text: Some(refusal.to_owned()),
+            media: None,
             call_id: None,
             name: None,
             arguments: None,
@@ -792,6 +951,7 @@ fn decode_openai_tool_call(value: &Value) -> Result<CanonicalOutputBlock, CodecE
     Ok(CanonicalOutputBlock {
         kind: CanonicalBlockKind::ToolCall,
         text: None,
+        media: None,
         call_id: Some(id),
         name: Some(name),
         arguments: Some(arguments),
@@ -823,6 +983,19 @@ fn decode_anthropic_response(
             "text" => output.push(CanonicalOutputBlock {
                 kind: CanonicalBlockKind::Text,
                 text: Some(required_string(object, "text", "content[].text")?),
+                media: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+            }),
+            "image" | "document" => output.push(CanonicalOutputBlock {
+                kind: if kind == "document" {
+                    CanonicalBlockKind::Document
+                } else {
+                    CanonicalBlockKind::Image
+                },
+                text: None,
+                media: Some(decode_response_media(object, kind)?),
                 call_id: None,
                 name: None,
                 arguments: None,
@@ -830,6 +1003,7 @@ fn decode_anthropic_response(
             "thinking" => output.push(CanonicalOutputBlock {
                 kind: CanonicalBlockKind::Reasoning,
                 text: Some(required_string(object, "thinking", "content[].thinking")?),
+                media: None,
                 call_id: None,
                 name: None,
                 arguments: None,
@@ -842,6 +1016,7 @@ fn decode_anthropic_response(
                 output.push(CanonicalOutputBlock {
                     kind: CanonicalBlockKind::ToolCall,
                     text: None,
+                    media: None,
                     call_id: Some(required_string(object, "id", "content[].id")?),
                     name: Some(required_string(object, "name", "content[].name")?),
                     arguments: Some(compact_json(input)),
@@ -891,7 +1066,38 @@ pub(crate) fn encode_openai_response(
         .filter(|block| block.kind == CanonicalBlockKind::Text)
         .filter_map(|block| block.text.as_deref())
         .collect();
-    message.insert("content".into(), Value::String(text));
+    let has_media = response.output.iter().any(|block| {
+        matches!(
+            block.kind,
+            CanonicalBlockKind::Image | CanonicalBlockKind::Document
+        )
+    });
+    if has_media {
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(json!({"type":"text", "text":text}));
+        }
+        for block in &response.output {
+            let Some(media) = &block.media else { continue };
+            let value = match block.kind {
+                CanonicalBlockKind::Image => {
+                    let mut value = json!({"type":"image_url", "image_url":{"url": media.uri.clone().or_else(|| media.data.as_ref().map(|data| format!("data:{};base64,{}", media.media_type.as_deref().unwrap_or("application/octet-stream"), data))).unwrap_or_default()}});
+                    if let Some(detail) = &media.detail {
+                        value["image_url"]["detail"] = Value::String(detail.clone());
+                    }
+                    value
+                }
+                CanonicalBlockKind::Document => {
+                    json!({"type":"file", "file":{"filename":"document.pdf", "file_data":media.uri.clone().or_else(|| media.file_id.clone()).or_else(|| media.data.as_ref().map(|data| format!("data:{};base64,{}", media.media_type.as_deref().unwrap_or("application/pdf"), data))).unwrap_or_default()}})
+                }
+                _ => continue,
+            };
+            content.push(value);
+        }
+        message.insert("content".into(), Value::Array(content));
+    } else {
+        message.insert("content".into(), Value::String(text));
+    }
     let reasoning: String = response
         .output
         .iter()
@@ -1017,9 +1223,32 @@ pub(crate) fn encode_anthropic_response(
                     Some(WireSurface::AnthropicMessages),
                 ));
             }
-            CanonicalBlockKind::Image
-            | CanonicalBlockKind::Document
-            | CanonicalBlockKind::Audio => {
+            CanonicalBlockKind::Image | CanonicalBlockKind::Document => {
+                let media = block.media.as_ref().ok_or_else(|| {
+                    codec_error(
+                        CodecReasonCode::UnsupportedSemanticFeature,
+                        Some("output.content.media"),
+                        None,
+                        Some(WireSurface::AnthropicMessages),
+                    )
+                })?;
+                let source = if let Some(data) = &media.data {
+                    json!({"type":"base64", "media_type":media.media_type.clone().unwrap_or_else(|| if block.kind == CanonicalBlockKind::Document { "application/pdf".into() } else { "application/octet-stream".into() }), "data":data})
+                } else if let Some(uri) = &media.uri {
+                    json!({"type":"url", "url":uri})
+                } else if let Some(file_id) = &media.file_id {
+                    json!({"type":"file_id", "file_id":file_id})
+                } else {
+                    return Err(codec_error(
+                        CodecReasonCode::UnsupportedSemanticFeature,
+                        Some("output.content.media"),
+                        None,
+                        Some(WireSurface::AnthropicMessages),
+                    ));
+                };
+                content.push(json!({"type":if block.kind == CanonicalBlockKind::Document { "document" } else { "image" }, "source":source}));
+            }
+            CanonicalBlockKind::Audio => {
                 return Err(codec_error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("output.content"),
@@ -1066,10 +1295,7 @@ fn validate_output_blocks(
     for block in &response.output {
         if matches!(
             block.kind,
-            CanonicalBlockKind::ToolResult
-                | CanonicalBlockKind::Image
-                | CanonicalBlockKind::Document
-                | CanonicalBlockKind::Audio
+            CanonicalBlockKind::ToolResult | CanonicalBlockKind::Audio
         ) {
             return Err(codec_error(
                 CodecReasonCode::UnsupportedSemanticFeature,
@@ -1350,6 +1576,138 @@ fn required_string(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| response_error(field))
+}
+
+pub(crate) fn decode_response_media(
+    object: &Map<String, Value>,
+    kind: &str,
+) -> Result<MediaSource, CodecError> {
+    let source = object
+        .get("image_url")
+        .or_else(|| object.get("source"))
+        .or_else(|| object.get("file"))
+        .and_then(Value::as_object)
+        .unwrap_or(object);
+    let raw_url = source
+        .get("url")
+        .or_else(|| source.get("file_data"))
+        .and_then(Value::as_str);
+    let (media_type, data, uri) = if let Some(value) = raw_url {
+        if let Some((prefix, encoded)) = value
+            .strip_prefix("data:")
+            .and_then(|value| value.split_once(";base64,"))
+        {
+            (Some(prefix.to_owned()), Some(encoded.to_owned()), None)
+        } else {
+            (None, None, Some(value.to_owned()))
+        }
+    } else {
+        (
+            source
+                .get("media_type")
+                .or_else(|| source.get("mime_type"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            source
+                .get("data")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            source
+                .get("file_uri")
+                .or_else(|| source.get("uri"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        )
+    };
+    if data.is_none() && uri.is_none() && source.get("file_id").is_none() {
+        return Err(codec_error(
+            CodecReasonCode::MalformedProviderResponse,
+            Some(if kind == "document" {
+                "content[].document"
+            } else {
+                "content[].image"
+            }),
+            None,
+            None,
+        ));
+    }
+    if let Some(data) = data.as_deref() {
+        let limit = if kind == "document" || kind == "file" {
+            MAX_PDF_BYTES
+        } else {
+            MAX_IMAGE_BYTES
+        };
+        validate_base64(
+            data,
+            limit,
+            if kind == "document" || kind == "file" {
+                "document"
+            } else {
+                "image"
+            },
+        )
+        .map_err(|_| CodecError {
+            reason: CodecReasonCode::ResourceLimitViolation,
+            field: Some("content[].media.data".into()),
+            source_surface: None,
+            target_surface: None,
+        })?;
+    }
+    if let Some(media_type) = media_type.as_deref() {
+        if !validate_media_type(media_type) {
+            return Err(codec_error(
+                CodecReasonCode::MalformedProviderResponse,
+                Some("content[].media.media_type"),
+                None,
+                None,
+            ));
+        }
+    }
+    if uri
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_MEDIA_URI_BYTES)
+        || source
+            .get("file_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.len() > MAX_MEDIA_URI_BYTES)
+    {
+        return Err(CodecError {
+            reason: CodecReasonCode::ResourceLimitViolation,
+            field: Some("content[].media.reference".into()),
+            source_surface: None,
+            target_surface: None,
+        });
+    }
+    Ok(MediaSource {
+        media_type,
+        data,
+        uri,
+        detail: source
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        file_id: source
+            .get("file_id")
+            .or_else(|| source.get("fileId"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
+fn is_valid_cache_control(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        == Some("ephemeral")
+}
+
+fn is_valid_prompt_breakpoint(value: Option<&Value>) -> bool {
+    value
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("mode"))
+        .and_then(Value::as_str)
+        == Some("explicit")
 }
 
 fn response_error(field: impl Into<String>) -> CodecError {
