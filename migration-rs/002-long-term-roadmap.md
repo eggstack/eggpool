@@ -24,51 +24,39 @@ M0 Foundation + oracle
   -> M12 Python retirement
 ```
 
-Some later milestones may proceed in parallel against stable interfaces, but no milestone may bypass its correctness dependencies for the purpose of declaring closure.
+No milestone may bypass correctness dependencies merely to declare closure.
 
 ## M0 — Migration foundation and behavioral oracle
 
 Primary class: infrastructure/invariant
 
-Purpose: make the rewrite measurable before implementing large amounts of Rust behavior.
+Establish the isolated Rust scaffold, migration rules, Python/Rust black-box oracle, contract inventory, normalization policy, deterministic fixtures, and minimal verification posture.
 
-Required outcomes:
-
-- `rust/` Cargo build scaffold producing an isolated `eggpool` binary;
-- migration-specific Rust coding/dependency rules;
-- black-box runner capable of invoking Python and Rust candidates separately;
-- contract inventory covering config, CLI, API, DB, SSR/static assets, and operational surfaces;
-- explicit normalization policy for incidental differences;
-- deterministic fixture server/database/config helpers;
-- minimal Rust verification commands and no broad CI matrix.
-
-Exit condition: an implementation agent can add one Rust behavior and prove whether it matches Python without manual ad hoc comparison.
+Exit condition: one Rust behavior can be added and measured against Python without ad hoc comparison. Satisfied after F006 corrective closure.
 
 ## M1 — Configuration, CLI parser, and filesystem contract
 
 Primary class: capability/invariant
 
-Port configuration models, defaults, validation, env resolution, filesystem/path ownership, config initialization, and the full CLI command tree skeleton.
+Port configuration/defaults/validation/env/path ownership and the CLI command-tree contract. Parser/help/validation/exit behavior must remain explicit even where underlying commands are staged.
 
-The milestone may stub commands whose underlying subsystems are not yet implemented, but parser/help/validation/exit behavior must be explicit and differential tests must distinguish implemented from intentionally unavailable internals.
-
-Exit condition: supported config corpus acceptance/defaulting/path resolution and CLI parser/help/exit classes match the compatibility contract.
+Exit condition: config/path/CLI compatibility corpus matches the frozen contract. Included in the closed foundation sequence.
 
 ## M2 — SQLite schema, migrations, and repository layer
 
 Primary class: infrastructure/invariant
 
-Reuse the existing numbered SQL migrations and checksums. Implement serialized SQLite access, transaction semantics, repositories, crash/startup compatibility, and read/write fixtures.
+Reuse existing numbered migrations/checksums and serialized SQLite access. Preserve Python-created DB readability and supported Rust-to-Python rollback compatibility.
 
-Exit condition: Python-created databases can be opened and queried by Rust; Rust writes remain readable by Python within the supported rollback window; schema/checksum behavior is identical.
+Exit condition: schema/checksum/repository semantics are compatible. Included in closed F004.
 
 ## M3 — HTTP read/control plane and SSR dashboard
 
 Primary class: capability
 
-Introduce Tokio/Axum inbound HTTP, auth middleware, body limits, health/readiness, read-only stats/model-info/control endpoints that have dependencies available, SSR rendering, static asset copy/manifest, and dashboard routing.
+Use Tokio/Axum for inbound HTTP, auth/body limits, health/readiness, available read/control endpoints, SSR rendering, static assets, and dashboard routing without redesign.
 
-Exit condition: the existing dashboard surfaces can be exercised against Rust without redesign, and the selected read/control APIs pass differential tests.
+Exit condition: selected read/control/dashboard surfaces pass differential tests. Foundation/F005 established the migration-stage baseline.
 
 ## M4 — Provider HTTP stack and Eggress outbound proxy integration
 
@@ -76,13 +64,11 @@ Primary class: infrastructure/capability
 
 Subsystem roadmap: [Provider Transport](subsystems/provider-transport-roadmap.md).
 
-Implement provider/account HTTP connection pools on Hyper/Hyper-util/Rustls and an Eggress-backed connector for per-account pproxy-style outbound URIs.
+Hyper/Hyper-util/Rustls provider/account pools plus in-process Eggress proxy connector. Exact proxy surface is corpus-qualified; unsupported forms fail closed.
 
-Qualify exactly the proxy URI/protocol features EggPool promises; use narrow Eggress features and fail closed for unsupported forms.
+Completed sequence: T001 -> T002 -> T003 -> T004 -> T005 -> T006 corrective runtime interoperability closure.
 
-The completed implementation sequence is T001 contract/fixture freeze -> T002 direct Hyper/Rustls core -> T003 Eggress connector/proxy parity -> T004 provider/account client pool -> T005 differential qualification -> T006 extended proxy runtime corrective closure.
-
-Exit condition: controlled direct and proxied provider HTTP fixtures match Python transport semantics and diagnostics. Satisfied after T006.
+Exit condition satisfied after T006.
 
 ## M5 — Catalog, account registry, routing, quota, health, and model-router state
 
@@ -90,15 +76,13 @@ Primary class: capability/invariant
 
 Subsystem roadmap: [Routing Domain and Catalog State](subsystems/routing-domain-roadmap.md).
 
-Port deterministic domain logic before inference dispatch. Preserve eligibility, priority tiers, fairness, claims, durable backoffs, capability filtering, quarantine, catalog/model-info identity, and bounded affinity/learned state.
+Port deterministic catalog/account/eligibility/fairness/claim/quota/backoff/circuit/quarantine/model-router/affinity state before inference orchestration.
 
-Historical implementation sequence: D001 contract/fixture freeze -> D002 account registry/catalog cache -> D003 catalog refresh/normalization/persistence -> D004 quota/claims/scoring plus D005 health/backoff/circuit/quarantine -> D006 eligibility/routing/fairness/local claims -> D007 model-router compilation/affinity -> D008 differential qualification/initial closure -> D009 selection-fairness and frozen-routing-trace corrective pass. D009 is closed.
+Completed sequence: D001 -> D002 -> D003 -> D004/D005 -> D006 -> D007 -> D008 -> D009 corrective selection-fairness/frozen-trace closure.
 
-D009 made configured random fairness affect the actual accepted claim path and froze the exact accepted score/fairness/candidate snapshot on the local claim so later routing traces do not rescore after pending/active publication. D001-D008 closure records remain append-only historical evidence.
+M5 local selection claims stop before durable inference persistence. Semantic model-router selector calls that require the coordinator remain M7. Generic external catalog/background polling remains M8.
 
-M5's local selection claim stops before durable inference persistence. Semantic model-router selector calls that invoke `RequestCoordinator` remain M7 work. Optional generic external catalog polling/background scheduling remains M8 work.
-
-Exit condition: deterministic state snapshots produce parity-equivalent candidate sets, selections, exclusions, local claim ownership, durable M5 effects, and accepted selection/fairness trace evidence under concurrency/restart tests. Satisfied after D009.
+Exit condition satisfied after D009.
 
 ## M6 — Canonical request boundary, wire codecs, transcoding, and SSE
 
@@ -106,39 +90,39 @@ Primary class: capability/invariant
 
 Subsystem roadmap: [Canonical Request and Wire Codec Runtime](subsystems/canonical-wire-roadmap.md).
 
-Port the deterministic semantic transformation layer while keeping inference orchestration out of scope: bounded request admission, canonical source intent/IR, static wire-profile registry, OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, Gemini generateContent, reasoning/tools/structured-output loss policy, multimodal/documents/cache controls, SSE framing/event conversion, normalized usage, terminal evidence, and one caller-selected-profile runtime facade for M7.
+Own deterministic bounded request admission, canonical IR, static wire profiles/codecs, semantic adaptation/loss policy, media/documents/cache controls, finite response transformations, SSE/event conversion, normalized usage, terminal evidence, and one caller-selected-profile runtime.
 
-Historical implementation sequence:
+Historical sequence: W001 -> W002 -> W003 -> W004 -> W005 -> W006 -> W007 -> W008 -> W009 -> W010. Post-W010 review added W011 SSE EOF UTF-8 correction and W012 full cross-surface differential requalification/re-closure.
 
-W001 contract/fixture freeze -> W002 canonical IR/admission/limits/M5 bridge -> W003 static wire profiles/codec contract -> W004 OpenAI Chat + Anthropic codecs -> W005 OpenAI Responses + Gemini codecs -> W006 reasoning/tools/structured-output/loss policy -> W007 multimodal/documents/cache/provider adaptation -> W008 SSE/events/usage/terminal evidence -> W009 selected-profile runtime facade -> W010 integrated differential qualification/closure.
+Dynamic learned wire preference/rejection/negotiation/retry, provider send, response handoff, timeout/cancellation, effects, and durable finalization remain M7.
 
-Post-W010 review reopened aggregate M6 for two bounded correctness/qualification findings. The corrective sequence is W011 SSE EOF UTF-8 finalization correction -> W012 full Python-derived cross-surface request/finite/stream differential requalification and M6 re-closure.
-
-W010 remains append-only historical closure evidence. Its aggregate conclusion is superseded only for the W011/W012 findings: Rust can silently drop an incomplete UTF-8 suffix at SSE EOF, and the W010 15-pair cross-surface assertions do not compare the complete semantic fields/client encodings required by the plan even though the Python oracle exposes richer transformation observations.
-
-Only the registry's dependency-ready table authorizes implementation. W011 and W012 are closed corrective plans with accepted closure records.
-
-M6 deliberately does **not** port Python `wire.resolver` runtime negotiation state. Learned/preferred wire selection, rejected-wire candidates, alternate-wire retry, provider HTTP submission, response handoff, cancellation/timeouts, failure effects, and durable finalization remain M7 because they depend on attempt ownership.
-
-Exit condition: non-dispatch request/finite/stream transformations across all supported client/profile pairs match Python under explicit exact-vs-semantic rules, resource/security bounds are explicit, invalid UTF-8 and malformed/incomplete streams cannot become false success, and M7 can consume one stable selected-profile codec runtime. Satisfied after accepted W011 and W012 closure.
+Exit condition satisfied after W011/W012.
 
 ## M7 — Coordinator, retry/failover, and durable finalization
 
 Primary class: invariant/capability
 
-This is the highest-risk migration milestone. Port request persistence, account claim ownership, upstream submission, failure classification/effects, bounded retry, alternate-wire negotiation, downstream handoff, streaming ownership, cancellation, retained finalization, and terminal cleanup.
+Subsystem roadmap: [Coordinator, Retry, Failover, and Durable Finalization](subsystems/coordinator-roadmap.md).
 
-M7 consumes the closed M4 provider transport, M5 local selection/claim state, and M6 selected-profile codec runtime. It owns the dynamic wire negotiation/retry lifecycle deliberately excluded from M6.
+This is the highest-risk migration milestone. Compose the closed M4 transport, M5 routing/claim state, and M6 selected-profile runtime into an explicit request/attempt state machine. Port durable dispatch publication, runtime wire negotiation, provider-bound attempt submission, canonical failure effects, bounded account/wire retry, response handoff, finite and streaming completion, timeout/cancellation, retained terminal ownership, public inference endpoints, semantic-router internal dispatch, and restart reconciliation.
 
-M7 planning/implementation handoff is now eligible for its own planning review. This closure does not promote a M7 implementation plan automatically; M7 remains unplanned until that review is accepted.
+Planned sequence:
 
-Exit condition: the failure-mode corpus proves parity for success, retry, rejection, cancellation, partial stream, premature EOF, malformed provider behavior, and crash-recovery ownership.
+C001 contract/failure corpus -> C002 durable dispatch publication/lifecycle identity -> C003 runtime wire resolution/negotiation -> C004 provider-bound attempt/submission -> C005 failure effects/retry/failover -> C006 durable finalization/retained ownership -> C007 finite handoff/completion -> C008 streaming/timeouts/cancellation -> C009 public inference endpoints/semantic-router dispatch -> C010 crash/restart reconciliation/fault injection -> C011 differential qualification/M7 closure.
+
+Only `registry.md` authorizes handoff. C001 is initially the sole dependency-ready plan.
+
+M7 implements a bounded retained-finalization supervisor and explicit reconciliation interface because terminal cleanup cannot depend on the client task. M8, not M7, owns immutable runtime-generation publication, rehash, signal/shutdown orchestration, and recurring/background scheduling around those interfaces.
+
+Response-start is a monotonic point of no return: transparent retries are pre-handoff only. Failed attempts become independently durable-terminal or retained-cleanup-owned before replacement attempt ownership is accepted. Unknown in-flight provider work is never replayed merely because the Rust process restarted.
+
+Exit condition: the C001 failure corpus proves parity for success, retry, alternate-wire/account failover, rejection, cancellation, partial/malformed stream, terminal evidence, DB/runtime cleanup faults, public endpoint semantics, retained finalization, and restart reconciliation, with no unresolved high/medium M7 correctness/security issue. Satisfied only by accepted C011 closure.
 
 ## M8 — Runtime generations, rehash, background tasks, and process lifecycle
 
 Primary class: infrastructure/capability
 
-Replace Python/Granian generation/process machinery with Rust-native immutable generation snapshots, reference-counted leases, atomic publication, retained terminal ownership, process-level state, signal/shutdown handling, and bounded background tasks.
+After M7 closure, replace Python/Granian generation/process machinery with Rust-native immutable generation snapshots, reference-counted leases, atomic publication, ownership of the M7 finalization supervisor, live rehash, process-level state, signal/shutdown handling, and bounded recurring background tasks.
 
 Exit condition: live rehash does not interrupt in-flight work; shutdown/restart semantics converge; runtime diagnostics remain compatible.
 
@@ -146,37 +130,33 @@ Exit condition: live rehash does not interrupt in-flight work; shutdown/restart 
 
 Primary class: capability
 
-Complete `serve`, daemon/foreground behavior, stop/restart, deploy helpers, croncheck/ensure-running, backup/recover, migration commands, update/version, onboarding/connect/logout, config editing/key management, diagnostics, uninstall, and other documented commands.
+Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Packaging follows only when binary behavior exists.
 
-Packaging/install behavior is migrated only when the corresponding binary behavior exists.
-
-Exit condition: documented CLI workflow parity is complete on supported deployment targets.
+Exit condition: documented CLI workflow parity on supported targets.
 
 ## M10 — Full differential qualification and SBC characterization
 
 Primary class: invariant/polish
 
-Run the complete contract matrix, targeted live-provider smoke tests, visual dashboard review, database rollback/upgrade tests, failure/restart tests, and same-host resource characterization on at least one representative ARM64 SBC profile.
+Run the complete contract matrix, targeted live-provider smoke tests, dashboard visual review, DB rollback/upgrade, failure/restart, and representative ARM64 SBC resource characterization. Do not invent unsupported performance gates.
 
-Do not invent hard performance gates unsupported by evidence. Record RSS/process/thread/local-dispatch observations separately from upstream inference latency.
-
-Exit condition: all mandatory compatibility gaps are closed or approved as supported differences by ADR.
+Exit condition: mandatory compatibility gaps are closed or approved by ADR.
 
 ## M11 — Rust cutover
 
 Primary class: capability
 
-Make Rust the canonical install/release/runtime implementation, update installer/package/release docs, preserve existing filesystem/config/database locations, and publish rollback instructions to the final Python reference release where schema compatibility permits.
+Make Rust the canonical install/release/runtime implementation while preserving filesystem/config/database locations and documented rollback to the final Python reference where schema compatibility permits.
 
-Exit condition: new installs and upgrades use Rust by default with no Python runtime dependency.
+Exit condition: new installs/upgrades use Rust by default without Python runtime dependency.
 
 ## M12 — Python retirement
 
 Primary class: polish/invariant
 
-After a defined stabilization window, remove Python production/runtime packaging and migration-only dual-run machinery. Preserve a reference tag/branch and retain only differential fixtures that remain useful as regression assets.
+After stabilization, remove Python production/runtime packaging and migration-only dual-run machinery while preserving reference history and useful differential fixtures.
 
-Exit condition: repository and release pipeline are pure Rust for production while historical parity evidence remains traceable.
+Exit condition: production repository/release path is pure Rust with traceable parity evidence.
 
 ## Cross-cutting constraints
 
@@ -184,8 +164,9 @@ At every milestone:
 
 - Python remains usable until cutover;
 - no dashboard redesign is folded into migration work;
-- no database reset is allowed;
-- no broad new CI matrix without demonstrated need;
-- provider secrets and proxy credentials remain redacted;
-- unsupported behavior fails closed rather than silently bypassing routing/proxy/security semantics;
-- implementation plans remain bounded and closure evidence is mandatory.
+- no database reset or Rust-only schema fork for convenience;
+- no broad CI matrix without demonstrated need;
+- secrets/proxy credentials remain redacted;
+- unsupported behavior fails closed;
+- implementation plans remain bounded with accepted closure evidence;
+- local/SBC scope does not justify cloud/distributed orchestration frameworks.
