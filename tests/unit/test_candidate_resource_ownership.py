@@ -302,8 +302,12 @@ class TestCandidateTransfer:
         c.mark_prepared()
         c.transfer_to_runtime_manager()
 
-        await c.abort(RuntimeError("noop"))
+        diag = await c.abort(RuntimeError("noop"))
         close_fn.assert_not_called()
+        assert c.ownership_state is CandidateOwnershipState.TRANSFERRED
+        assert diag.ownership_state == "transferred"
+        assert diag.ownership_state_at_failure == "transferred"
+        assert diag.resource_types_registered == ()
 
     @pytest.mark.asyncio
     async def test_abort_then_transfer_raises(self) -> None:

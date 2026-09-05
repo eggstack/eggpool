@@ -163,15 +163,28 @@ async def test_resource_cycle_does_not_accumulate(
 
     baseline_snapshot = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 
-    # Run 5 failed reload cycles
-    for i in range(5):
+    # Run 100 failed reload cycles across construction, reconciliation, and
+    # pre-publication barriers.  The candidate is fully built for every stage
+    # after ``on_candidate_started``, so the ownership callbacks are exercised
+    # rather than only the admission path.
+    failure_stages = (
+        "on_candidate_started",
+        "on_candidate_complete",
+        "on_reconcile_started",
+        "on_publish_started",
+    )
+    for i in range(100):
         injector = ReloadFaultInjector(
-            target_stage="on_candidate_started",
+            target_stage=failure_stages[i % len(failure_stages)],
             fault_type=FaultType.RECOVERABLE,
             message=f"cycle {i}",
         )
         result = await reload_harness.reload(observer=injector)
         assert result.ok is False
+
+        snapshot = RuntimeSnapshot.capture(reload_harness.runtime_manager)
+        resource_diffs = snapshot.assert_no_resource_leak(baseline_snapshot)
+        assert resource_diffs == [], f"cycle {i}: resource leak: {resource_diffs}"
 
     final_snapshot = RuntimeSnapshot.capture(reload_harness.runtime_manager)
 

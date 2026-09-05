@@ -3092,17 +3092,17 @@ class ReloadManager:
 
             return candidate
 
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Candidate generation construction failed; aborting reload"
             )
             await candidate.abort(
-                cause=RuntimeError("Candidate generation construction failed"),
+                cause=exc,
                 failure_stage="build",
             )
             raise ReloadPreparationError(
                 "Failed to construct candidate generation"
-            ) from None
+            ) from exc
 
     # -- Phase 6: prepared deltas -------------------------------------------
 

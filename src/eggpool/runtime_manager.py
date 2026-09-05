@@ -343,6 +343,24 @@ class RuntimeGenerationCandidate:
                     primary_failure_stage=failure_stage,
                     ownership_state_at_failure=self._state.value,
                 )
+            if self._state is CandidateOwnershipState.TRANSFERRED:
+                # Ownership has already moved to RuntimeManager.  Abort is
+                # deliberately a no-op after transfer, including preserving
+                # the terminal ownership state.  The runtime manager now
+                # owns the callbacks and will close the generation during
+                # retirement.
+                return CleanupDiagnostics(
+                    generation_id=self._generation_id,
+                    ownership_state=self._state.value,
+                    resource_types_registered=(),
+                    resource_types_closed=(),
+                    close_duration_s=0.0,
+                    close_errors=(),
+                    timed_out=False,
+                    primary_failure=safe_exception_detail(cause, stage=failure_stage),
+                    primary_failure_stage=failure_stage,
+                    ownership_state_at_failure=self._state.value,
+                )
 
             ownership_state_at_failure = self._state.value
             registered_names = tuple(r.name for r in self._resources)
