@@ -1,6 +1,8 @@
 # C005 — Failure Effects, Retry Budget, and Failover
 
-Status: planned; blocked on C004 accepted closure
+Status: complete; see [closure record](../../closure/coordinator/005-status.md)
+
+Implementation commit: `97a48464b775514f90d36d021607c091881a36d3`
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

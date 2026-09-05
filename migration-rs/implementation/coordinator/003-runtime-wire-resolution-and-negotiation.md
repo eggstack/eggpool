@@ -1,6 +1,8 @@
 # C003 — Runtime Wire Resolution and Negotiation Ownership
 
-Status: ready for handoff; C002 accepted closure
+Status: complete; see [closure record](../../closure/coordinator/003-status.md)
+
+Implementation commit: `97a48464b775514f90d36d021607c091881a36d3`
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
