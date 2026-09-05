@@ -1,8 +1,8 @@
 # M6 Canonical Request, Wire Codec, Transcoding, and SSE Roadmap
 
-Status: closed after W010
+Status: corrective pass active; W011 dependency-ready
 
-Repository baseline: `e096ed177f94b64b23a82852d6ec1bebc8782316`
+Repository baseline: `fb36054278817de63b5c516c82202184c9200be7`
 
 Canonical source: `../000-long-term-specification.md`, `../001-terminology-and-domain-model.md`, `../002-long-term-roadmap.md`, and accepted M5 D009 closure. Applicable ADRs: ADR-0001 through ADR-0003.
 
@@ -14,20 +14,31 @@ It does not own account selection, dynamic wire negotiation/preference/retry, pr
 
 ```text
 M5 D001-D009 closed
- -> W001 contract/fixture freeze (**closed**)
- -> W002 canonical IR + admission/limits + M5 bridge (**closed**)
- -> W003 static profiles + codec contract (**closed**)
- -> W004 Chat + Anthropic codecs (**closed**)
- -> W005 Responses + Gemini codecs (**closed**)
- -> W006 reasoning/tools/structured/loss policy (**closed**)
- -> W007 multimodal/documents/cache/provider adaptation (**closed**)
- -> W008 SSE/events/usage/terminal evidence (**closed**)
- -> W009 selected-profile runtime facade (**closed**)
- -> W010 integrated M6 qualification/closure (**closed**)
- -> M7 planning/implementation handoff may undergo its own planning review
+ -> W001 contract/fixture freeze (closed)
+ -> W002 canonical IR + admission/limits + M5 bridge (closed)
+ -> W003 static profiles + codec contract (closed)
+ -> W004 Chat + Anthropic codecs (closed)
+ -> W005 Responses + Gemini codecs (closed)
+ -> W006 reasoning/tools/structured/loss policy (closed)
+ -> W007 multimodal/documents/cache/provider adaptation (closed)
+ -> W008 SSE/events/usage/terminal evidence (historical closure)
+ -> W009 selected-profile runtime facade (closed)
+ -> W010 integrated M6 qualification/closure (historical aggregate closure)
+ -> W011 SSE EOF UTF-8 finalization correction (ready)
+ -> W012 cross-surface differential requalification and M6 re-closure (blocked on W011)
+ -> M7 planning review only after W012 accepted closure
 ```
 
-Only one plan is registered dependency-ready at a time. W004/W005 are conceptually parallel after W003 but the default handoff stayed serial. W009 and W010 are now closed.
+Only one plan is registered dependency-ready at a time. W001-W010 retain append-only closure records. W010's aggregate conclusion is reopened only for the post-closure findings enumerated by W011/W012.
+
+## Post-W010 findings
+
+Independent review found two mandatory M6 gaps:
+
+1. Rust `SseDecoder::finish()` does not force a retained incomplete UTF-8 suffix through EOF replacement decoding. Python `SSEDecoder.finish()` calls its incremental decoder with `final=True`, emits U+FFFD, increments replacement evidence, and then processes the final line/event. Rust can silently drop those trailing bytes. W008 explicitly required invalid-UTF-8 and EOF parity; W010 did not test this case.
+2. W010's 15-pair request/finite/stream matrix is structurally broad but semantically under-asserted. The Python W001 oracle already computes full canonical request plus per-profile request encodings, yet the committed projection and Rust W010 request test compare only coarse request metadata. The finite response cross-surface test checks success plus client-body presence, and the stream cross-surface test checks encodability/terminal non-emptiness rather than full client semantics. Those tests do not prove the mandatory role/content/tool/reasoning/media/structured/usage/event-order fields claimed by W010 closure.
+
+W011 corrects the concrete parser defect. W012 then performs the full Python-derived cross-surface requalification and fixes any bounded M6 codec/adaptation mismatches it exposes.
 
 ## Core invariants
 
@@ -41,10 +52,14 @@ Prefer one JSON parse, immutable sharing/`Bytes`, bounded collections/media/docu
 
 ## Milestones
 
-W001 freezes the oracle; W002 establishes the canonical semantic boundary; W003 freezes static profile/codec interfaces; W004-W005 cover finite wire families; W006-W007 centralize semantic adaptation and bounded media/cache behavior; W008 owns streaming/usage/terminal evidence; W009 composes the M7-facing facade; W010 performs integrated differential, resource, dependency, and security qualification.
+W001 freezes the oracle; W002 establishes the canonical semantic boundary; W003 freezes static profile/codec interfaces; W004-W005 cover finite wire families; W006-W007 centralize semantic adaptation and bounded media/cache behavior; W008 owns streaming/usage/terminal evidence; W009 composes the M7-facing facade; W010 is historical integrated qualification evidence.
+
+W011 is the narrow UTF-8 EOF correction. W012 is the aggregate cross-surface differential requalification/re-closure gate. Do not fold M7 orchestration into either corrective pass.
 
 ## Verification and closure
 
-Use deterministic fixtures for all four surfaces/profiles, roles/content/tools/reasoning/structured output/media/documents/cache controls, finite errors, usage/cache counters, SSE framing/chunk splits, and terminal evidence. No live paid provider or broad CI matrix is required.
+Use deterministic fixtures for all supported client/profile pairs, roles/content/tools/reasoning/structured output/media/documents/cache controls, finite errors, usage/cache counters, SSE framing/chunk splits/invalid UTF-8, client event encoding, and terminal evidence. No live paid provider or broad CI matrix is required.
 
-M6 closes only after W001-W010 have accepted closure evidence and integrated oracle results show parity-equivalent canonical semantics, adaptation decisions, client bytes/events, usage, warnings/errors, and terminal evidence. W010 is closed with accepted evidence in `closure/canonical-wire/010-status.md`. M6 closure means M7 can rely on transformation semantics; it does not mean Rust inference dispatch exists. M7 remains unpromoted until its own planning review.
+M6 is not considered closed for successor handoff while W011/W012 are open. Historical W001-W010 closure evidence remains valid except for the aggregate conclusions explicitly superseded by the corrective findings. M6 re-closes only after W011 and W012 have accepted closure evidence and integrated Python-derived results prove parity-equivalent canonical semantics, adaptation decisions, client bodies/events, usage, warnings/errors, UTF-8 EOF behavior, and terminal evidence.
+
+After W012 accepted closure, M7 may become eligible for its own planning review; no M7 implementation plan is promoted automatically.
