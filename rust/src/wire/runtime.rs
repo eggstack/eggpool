@@ -558,7 +558,8 @@ impl WireRuntime {
                             bytes: Bytes::copy_from_slice(body),
                         }
                     } else {
-                        let output = codec
+                        let client_codec = self.client_response_codec(context)?;
+                        let output = client_codec
                             .encode_response_with_policy(
                                 &response,
                                 context.client_surface,
@@ -611,7 +612,7 @@ impl WireRuntime {
         context: &WireRuntimeContext,
     ) -> Result<EncodedWireBody, WireRuntimeError> {
         self.validate_context(context)?;
-        let codec = self.response_codec(context)?;
+        let codec = self.client_response_codec(context)?;
         let output = codec
             .encode_response_with_policy(
                 response,
@@ -666,6 +667,20 @@ impl WireRuntime {
         builtin_codec_instance(context.selected_profile.definition.response_codec).ok_or_else(
             || self.profile_error(context, ProfileMismatchReason::ResponseCodecUnavailable),
         )
+    }
+
+    fn client_response_codec(
+        &self,
+        context: &WireRuntimeContext,
+    ) -> Result<Box<dyn WireCodec>, WireRuntimeError> {
+        let codec_id = match context.client_surface {
+            ClientSurface::ChatCompletions => WireCodecId::OpenaiChat,
+            ClientSurface::Responses => WireCodecId::OpenaiResponses,
+            ClientSurface::Messages => WireCodecId::AnthropicMessages,
+        };
+        builtin_codec_instance(codec_id).ok_or_else(|| {
+            self.profile_error(context, ProfileMismatchReason::ResponseCodecUnavailable)
+        })
     }
 
     fn profile_error(

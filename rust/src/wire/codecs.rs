@@ -934,6 +934,19 @@ fn decode_openai_message_output(
             arguments: None,
         });
     }
+    if let Some(reasoning) = message.get("reasoning_content") {
+        let reasoning = reasoning
+            .as_str()
+            .ok_or_else(|| response_error("message.reasoning_content"))?;
+        output.push(CanonicalOutputBlock {
+            kind: CanonicalBlockKind::Reasoning,
+            text: Some(reasoning.to_owned()),
+            media: None,
+            call_id: None,
+            name: None,
+            arguments: None,
+        });
+    }
     Ok(output)
 }
 
