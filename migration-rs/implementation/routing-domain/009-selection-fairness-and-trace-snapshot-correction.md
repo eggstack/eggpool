@@ -1,6 +1,6 @@
 # D009 — Selection Fairness and Frozen Routing-Trace Correction
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/routing-domain/009-status.md)
 
 Source roadmap: `migration-rs/subsystems/routing-domain-roadmap.md`
 

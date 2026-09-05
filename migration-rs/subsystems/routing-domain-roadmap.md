@@ -1,6 +1,6 @@
 # M5 Routing Domain and Catalog State Roadmap
 
-Status: active corrective pass after D008; D009 ready
+Status: closed after D009 corrective pass
 
 Repository baseline: `08597187d00660996ad14df6e5aeedce7dbd696e`
 
@@ -218,10 +218,10 @@ D007 model-router compilation + bounded affinity (closed)
 D008 integrated qualification + initial M5 closure (historically closed)
                  |
                  v
-D009 random-selection + frozen-trace corrective pass (READY)
+D009 random-selection + frozen-trace corrective pass (closed)
                  |
                  v
-M6 implementation handoff re-unblocked only after D009 closure
+M6 implementation handoff re-unblocked after D009 closure
 ```
 
 D004 and D005 shared D003 as a hard predecessor. D009 is a post-closure correction over the integrated D001-D008 implementation. Historical closure records remain append-only.
@@ -278,15 +278,16 @@ Run integrated account/catalog/quota/health/router/model-router state scenarios,
 
 D008 remains historical evidence. Independent review later found two mandatory D006 selection-contract paths not exercised by its matrix; D009 supersedes the aggregate “no unresolved gap” conclusion only for those findings.
 
-### D009 — Selection fairness and frozen routing-trace correction (ready)
+### D009 — Selection fairness and frozen routing-trace correction (closed)
 
 Correct actual random fairness selection and freeze the accepted score/fairness/candidate snapshot on `SelectionClaim` so later routing traces cannot rescore post-claim state.
 
 Required evidence includes direct `select_and_claim` random-mode tests with an invocation-counting RNG, zero RNG mutation from read-only plan/readiness/trace calls, round-robin regression coverage, half-open contention, and a trace fixture where post-claim pending/active load would otherwise reorder peers.
 
-Implementation plan: [D009](../implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md).
+Implementation plan: [D009](../implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md); see
+[closure](../closure/routing-domain/009-status.md).
 
-Exit: actual accepted random selection matches the controlled contract, trace evidence is frozen at accepted selection, the D008 integrated suite remains green, and no M6/M7 behavior is introduced.
+Exit: actual accepted random selection matches the controlled contract, trace evidence is frozen at accepted selection, the D008 integrated suite remains green, and no M6/M7 behavior is introduced. Achieved; see the D009 closure record.
 
 ## 10. Verification strategy
 
@@ -338,8 +339,8 @@ This milestone is especially important for SBC deployments. The Rust design shou
 
 ## 13. Closure condition
 
-M5 is currently reopened for D009. D001-D008 closure records remain accepted historical evidence, but M5 is not considered fully closed while the random-selection and frozen-trace defects remain unresolved.
+M5 is closed after accepted D009 evidence proved actual random fairness through the claim path, zero fairness mutation from read-only operations, immutable accepted routing snapshots, stable trace serialization after claim-state mutation, and a green D008 integrated regression pass.
 
 M5 closes after accepted D009 evidence proves actual random fairness through the claim path, zero fairness mutation from read-only operations, immutable accepted routing snapshots, stable trace serialization after claim-state mutation, and a green D008 integrated regression pass.
 
-On D009 closure, record the subsystem as `closed after D009 corrective pass` and re-unblock M6 implementation handoff. M5 closure still does not mean a client inference request can be dispatched; M6 supplies canonical request facts and M7 consumes the selected claim/transport without redesigning the routing-domain state machine.
+The subsystem is recorded as `closed after D009 corrective pass` and M6 implementation handoff is re-unblocked. M5 closure still does not mean a client inference request can be dispatched; M6 supplies canonical request facts and M7 consumes the selected claim/transport without redesigning the routing-domain state machine.
