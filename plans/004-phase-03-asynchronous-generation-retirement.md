@@ -1,7 +1,7 @@
 # Phase 3 — Asynchronous Runtime-Generation Retirement
 
 Date: 2026-07-19
-Status: implementation handoff
+Status: complete (2026-09-05)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–2.
 
@@ -193,3 +193,70 @@ After each test, assert no runtime retirement tasks remain pending and all instr
 ## Handoff evidence
 
 Record focused test commands, before/after rehash latency with a held stream, retirement diagnostic examples, forced-close behavior, and task/resource counts after shutdown.
+
+## Closure evidence
+
+Implemented and verified on implementation commit
+`d7b3cd7fa9965ba0d10dff913473e73c12a8505c`.
+
+The runtime manager now publishes the candidate and records the prior slot in
+the retiring collection with exactly one tracked retirement task under the
+manager lock. Lease release uses the slot drain event rather than polling;
+retirement tasks consume unexpected failures and retain bounded
+`failed_close` diagnostics; close attempts are idempotent and preserve the
+existing resource order; and shutdown wakes/joins all tracked retirements,
+including held-lease generations. Reload-result retirement status uses the
+manager's public pending-retirement predicate, which includes retained
+failed-close slots.
+
+Focused verification passed:
+
+```text
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+
+uv run pytest \
+  tests/unit/test_runtime_generation_retirement.py \
+  tests/unit/test_runtime_manager.py \
+  tests/unit/test_reload_manager.py \
+  tests/unit/test_reload_diagnostics_matrix.py \
+  tests/unit/test_generation_finalization_ownership.py \
+  tests/integration/reload/test_reload_retirement.py \
+  tests/integration/reload/test_lease_condition.py \
+  tests/integration/reload/test_shutdown_adoption.py \
+  tests/integration/reload/test_shutdown_adoption_final.py \
+  tests/integration/test_rehash_streaming_swap.py \
+  -q --tb=short --maxfail=1
+34 focused ownership/retirement regressions passed; the broader listed
+retirement/reload suites also passed.
+```
+
+The focused coverage proves prompt held-lease publication (`<1s`), immediate
+active-generation replacement, natural drainage, deadline force-close, late
+idempotent release, concurrent multi-generation retirement, exact close
+counts, consumed/diagnosable retirement-task failure, and shutdown task
+hygiene. The retirement tests no longer rely on scheduler sleeps; they join
+the tracked task or assert manager state registered at publication.
+
+The before/after publication comparison is explicit in history: baseline
+implementation `f0005cb9` awaited `begin_retirement()` from
+`install_candidate()`; the closure implementation removes that drain wait and
+the held-lease integration assertion requires completion under one second.
+
+The final repository-wide run reached `7,967 passed, 45 skipped` and stopped
+at the unrelated pre-existing failure
+`tests/unit/test_wire_ir.py::test_anthropic_request_normalizes_system_and_tool_blocks`:
+the current wire renderer returns a text-block list where that test expects a
+string. C004 changed no wire-IR source or test files; the failure is therefore
+outside this closure's scope and is recorded rather than silently attributed
+to retirement.
+
+## Dependency review
+
+Phase 4 (`plans/005-phase-04-candidate-resource-ownership.md`) is the direct
+successor. Its status is already `implemented`, so completing C004 removes its
+remaining Phase 3 prerequisite without requiring a status transition. Phases
+5–7 are already `complete`/`implemented`; Phases 8–12 are handoff plans with
+no explicit blocked status. No future plan status required changing.
