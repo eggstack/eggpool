@@ -1,0 +1,98 @@
+{
+  "schema_version": "m6-canonical-wire-w001/v1",
+  "purpose": "Deterministic semantic oracle inputs for the M6 canonical wire boundary.",
+  "public_client_surfaces": [
+    "chat_completions",
+    "responses",
+    "messages"
+  ],
+  "wire_profiles": {
+    "openai_chat_completions": {
+      "request_codec": "openai_chat",
+      "response_codec": "openai_chat",
+      "stream_codec": "openai_chat_sse",
+      "terminal_evidence": ["openai_done"]
+    },
+    "openai_responses": {
+      "request_codec": "openai_responses",
+      "response_codec": "openai_responses",
+      "stream_codec": "openai_responses_sse",
+      "terminal_evidence": ["responses_completed", "responses_incomplete", "responses_failed"]
+    },
+    "anthropic_messages": {
+      "request_codec": "anthropic_messages",
+      "response_codec": "anthropic_messages",
+      "stream_codec": "anthropic_messages_sse",
+      "terminal_evidence": ["anthropic_message_stop"]
+    },
+    "gemini_interactions": {
+      "request_codec": "gemini_interactions",
+      "response_codec": "gemini_interactions",
+      "stream_codec": "gemini_interactions_sse",
+      "terminal_evidence": ["gemini_completed", "gemini_incomplete"]
+    },
+    "gemini_generate_content": {
+      "request_codec": "gemini_generate_content",
+      "response_codec": "gemini_generate_content",
+      "stream_codec": "gemini_generate_content_sse",
+      "terminal_evidence": ["gemini_completed", "gemini_incomplete"]
+    }
+  },
+  "request_cases": {
+    "minimal": "model-only request with omitted optional fields",
+    "rich": "ordered roles, content parts, tools, tool results, reasoning, schema, media, cache metadata, and stream flag",
+    "presence": "omitted, null, false, and zero values remain distinguishable",
+    "unicode": "synthetic Unicode and escaped text",
+    "invalid": "malformed JSON, non-object top level, missing/invalid model, and unsupported content",
+    "limits": "raw-body, context, media/document, and bounded reservation edges"
+  },
+  "response_cases": {
+    "text": "finite text success",
+    "parts": "multiple text/reasoning/tool output blocks",
+    "usage": "reported, zero, missing, nested cache, and unknown usage shapes",
+    "error": "provider error envelope and malformed provider payload"
+  },
+  "stream_cases": {
+    "grammar": ["LF", "CRLF", "event", "id", "comment", "ignored field", "multiline data", "blank record"],
+    "boundaries": ["empty record", "comment-only record", "UTF-8 byte split", "clean terminal EOF", "premature EOF", "oversized unterminated carry"],
+    "events": ["text", "reasoning", "tool", "usage", "finish", "provider error", "malformed JSON"]
+  },
+  "loss_and_error_reason_codes": [
+    "exact_native",
+    "compatible_warning",
+    "approved_semantic_loss",
+    "unsupported_loss_rejected",
+    "malformed_client_request",
+    "malformed_provider_response",
+    "request_limit",
+    "media_limit",
+    "document_limit",
+    "context_limit",
+    "unsupported_wire_profile",
+    "incomplete_stream_terminal_evidence"
+  ],
+  "resource_limits": {
+    "max_request_body_bytes": 10485760,
+    "max_sse_frame_bytes": 65536,
+    "max_estimated_input_tokens": 128000,
+    "max_automatic_affinity_prefix_bytes": 4096,
+    "max_explicit_affinity_header_bytes": 512
+  },
+  "m7_boundary": [
+    "learned_wire_preference",
+    "rejected_wire_candidates",
+    "alternate_wire_retry",
+    "provider_http_submission",
+    "downstream_response_start",
+    "timeout_cancellation_policy",
+    "retry_failure_effects",
+    "durable_attempt_finalization"
+  ],
+  "secret_markers_forbidden": [
+    "FIXTURE_API_KEY",
+    "synthetic-secret-sentinel",
+    "proxy-password",
+    "Authorization: Bearer",
+    "X-EggPool-Route-Session"
+  ]
+}

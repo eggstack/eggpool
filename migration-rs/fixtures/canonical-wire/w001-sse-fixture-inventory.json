@@ -1,0 +1,34 @@
+{
+  "schema_version": "m6-canonical-wire-w001-sse/v1",
+  "purpose": "Byte-level SSE fixture inventory; bytes are assembled by the Python oracle from these stable cases.",
+  "profiles": {
+    "openai_chat_completions": {"records": 3, "terminal": "openai_done", "events": ["text_delta", "response_complete"]},
+    "openai_responses": {"records": 3, "terminal": "responses_completed", "events": ["response_start", "text_delta", "usage", "response_complete"]},
+    "anthropic_messages": {"records": 4, "terminal": "anthropic_message_stop", "events": ["response_start", "text_delta", "usage", "response_complete"]},
+    "gemini_interactions": {"records": 3, "terminal": "gemini_completed", "events": ["response_start", "text_delta", "usage", "response_complete"]},
+    "gemini_generate_content": {"records": 2, "terminal": "gemini_completed", "events": ["text_delta", "usage", "response_complete"]}
+  },
+  "line_endings": ["LF", "CRLF"],
+  "all_single_byte_split": true,
+  "grammar": {
+    "comment": true,
+    "event": true,
+    "id": true,
+    "ignored_field": true,
+    "multiline_data": true,
+    "blank_record": true,
+    "empty_and_comment_only_records": true,
+    "utf8_split": true,
+    "malformed_json": true
+  },
+  "terminal_evidence": [
+    "openai_done",
+    "responses_completed",
+    "responses_incomplete",
+    "responses_failed",
+    "anthropic_message_stop",
+    "gemini_completed",
+    "gemini_incomplete"
+  ],
+  "eof_cases": ["clean_terminal", "before_terminal", "oversized_unterminated"]
+}
