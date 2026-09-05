@@ -110,6 +110,10 @@ def _make_runtime_manager(active_generation: MagicMock | None = None) -> MagicMo
     """Build a mock RuntimeManager."""
     rm = MagicMock()
     rm._shutdown_in_progress = False
+    rm._retirement_tasks = {}
+    rm.is_retirement_pending.side_effect = lambda generation_id: (
+        generation_id in rm._retirement_tasks
+    )
     if active_generation is None:
         active_generation = _make_generation(0)
     rm.active_snapshot.return_value = active_generation

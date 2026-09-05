@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -82,9 +82,6 @@ class TestPromptReloadCompletion:
         # New generation is active
         assert manager.active_snapshot().generation_id == 1
 
-        # Allow the background retirement task to start
-        await asyncio.sleep(0.05)
-
         # Old generation appears as retiring
         diag = manager.diagnostics()
         assert len(diag.retiring) == 1
@@ -106,6 +103,50 @@ class TestPromptReloadCompletion:
         await manager.shutdown()
 
     @pytest.mark.asyncio
+    async def test_publication_registers_retirement_atomically(self) -> None:
+        """The retiring slot and task are visible when publication returns."""
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+        held = await manager.acquire()
+
+        await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
+
+        diagnostics = manager.diagnostics()
+        assert [item.generation_id for item in diagnostics.retiring] == [0]
+        assert diagnostics.retirement_task_count == 1
+        assert diagnostics.retiring[0].state == "retiring"
+
+        await held.release()
+        await manager.wait_for_retirement(0, timeout_s=5.0)
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_retirement_task_failure_is_consumed_and_diagnosed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unexpected retirement failures remain visible without task warnings."""
+        manager = RuntimeManager()
+        await manager.install_initial(_fake_generation(0))
+
+        failure = RuntimeError("retirement failed")
+        monkeypatch.setattr(
+            manager,
+            "_drain_and_close",
+            AsyncMock(side_effect=failure),
+        )
+        await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
+        await manager.wait_for_retirement(0, timeout_s=5.0)
+
+        diagnostic = manager.retirement_snapshot(0)
+        assert diagnostic.state == "failed_close"
+        assert diagnostic.last_close_error is not None
+        assert "retirement failed" in diagnostic.last_close_error
+        assert manager.diagnostics().retirement_task_count == 0
+
+        monkeypatch.undo()
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
     async def test_retirement_pending_from_diagnostics(self) -> None:
         """retirement_pending can be derived from runtime-manager state."""
         manager = RuntimeManager()
@@ -113,9 +154,6 @@ class TestPromptReloadCompletion:
 
         held = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-
-        # Allow the background retirement task to start
-        await asyncio.sleep(0.05)
 
         # Diagnostics show retirement is pending
         diag = manager.diagnostics()
@@ -142,9 +180,6 @@ class TestNaturalDrainage:
 
         lease = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-
-        # Allow the background retirement task to start
-        await asyncio.sleep(0.05)
 
         # Retirement is in progress (lease held)
         diag = manager.diagnostics()
@@ -175,9 +210,6 @@ class TestNaturalDrainage:
 
         lease = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-
-        # Allow the background retirement task to start
-        await asyncio.sleep(0.05)
 
         # Task is tracked
         assert 0 in manager._retirement_tasks
@@ -275,15 +307,11 @@ class TestMultipleGenerations:
 
         # Publish gen1
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
-
         # Hold lease on gen1
         lease1 = await manager.acquire()
 
         # Publish gen2
         await manager.install_candidate(_fake_generation(2), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
-
         # Two retirement tasks tracked
         assert manager.diagnostics().retirement_task_count == 2
 
@@ -338,8 +366,6 @@ class TestMultipleGenerations:
 
         lease = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
-
         # Pool still open (lease held)
         gen0.client_pool.aclose.assert_not_called()
 
@@ -386,6 +412,25 @@ class TestShutdown:
         gen0.client_pool.aclose.assert_called()
 
     @pytest.mark.asyncio
+    async def test_shutdown_forces_held_retirement_without_leaking_tasks(self) -> None:
+        """Shutdown wakes held retirements and joins every tracked task."""
+        manager = RuntimeManager()
+        gen0 = _fake_generation(0)
+        gen1 = _fake_generation(1)
+        await manager.install_initial(gen0)
+        held = await manager.acquire()
+
+        await manager.install_candidate(gen1, drain_timeout_s=60.0)
+        await manager.shutdown()
+
+        assert manager.diagnostics().retirement_task_count == 0
+        assert manager._retiring == []
+        gen0.client_pool.aclose.assert_called_once()
+        gen1.client_pool.aclose.assert_called_once()
+
+        await held.release()
+
+    @pytest.mark.asyncio
     async def test_shutdown_multiple_generations(self) -> None:
         """Shutdown joins multiple retirement tasks."""
         manager = RuntimeManager()
@@ -394,11 +439,9 @@ class TestShutdown:
 
         lease0 = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
 
         lease1 = await manager.acquire()
         await manager.install_candidate(_fake_generation(2), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
 
         # Release all leases
         await lease0.release()
@@ -514,10 +557,13 @@ class TestTaskHygiene:
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=0.05)
         await manager.wait_for_retirement(0, timeout_s=2.0)
 
-        # Close error was captured (not raised)
-        # The slot is removed from _retiring after close, but the
-        # error was logged. Verify the pool aclose was called.
+        # Close error was captured (not raised), and the failed slot remains
+        # observable for operator diagnosis after its task exits.
         gen0.client_pool.aclose.assert_called()
+        diagnostic = manager.retirement_snapshot(0)
+        assert diagnostic.state == "failed_close"
+        assert diagnostic.last_close_error is not None
+        assert "pool close failed" in diagnostic.last_close_error
 
         await manager.shutdown()
 
@@ -548,8 +594,6 @@ class TestSlotStateLifecycle:
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
 
         # Allow the background retirement task to start
-        await asyncio.sleep(0.05)
-
         # Slot should be retiring
         diag = manager.diagnostics()
         assert len(diag.retiring) == 1
@@ -646,8 +690,6 @@ class TestDuplicateSpawnGuard:
 
         lease = await manager.acquire()
         await manager.install_candidate(_fake_generation(1), drain_timeout_s=5.0)
-        await asyncio.sleep(0.05)
-
         assert 0 in manager._retirement_tasks
         original_task = manager._retirement_tasks[0]
 

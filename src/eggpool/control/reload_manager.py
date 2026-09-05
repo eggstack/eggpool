@@ -2579,10 +2579,10 @@ class ReloadManager:
             return ReloadRetirementStatus(retirement_pending=False)
 
         if txn_state == TransactionState.COMPLETED:
-            # Check the retirement task registry which is populated
-            # synchronously at create_task time, avoiding a race with
-            # the transient diagnostics.retiring list.
-            if old_generation_id in self._runtime_manager._retirement_tasks:  # pyright: ignore[reportPrivateUsage]
+            # The manager includes both live tasks and retained failed-close
+            # slots in this decision, so diagnostics stay truthful after a
+            # task exits with a terminal close failure.
+            if self._runtime_manager.is_retirement_pending(old_generation_id):
                 return ReloadRetirementStatus(
                     retirement_pending=True,
                     retiring_generation_id=old_generation_id,

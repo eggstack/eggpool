@@ -8,7 +8,6 @@ Tests that verify:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -48,8 +47,7 @@ async def test_reload_completes_promptly_with_held_lease(
 
     # Release the old lease (retirement should now complete)
     await lease.release()
-    # Wait for the retirement task to finish
-    await asyncio.sleep(0.2)
+    await reload_harness.runtime_manager.wait_for_retirement(0, timeout_s=5.0)
 
 
 @pytest.mark.asyncio()
@@ -73,8 +71,7 @@ async def test_new_generation_active_during_old_lease(
     assert lease.generation_id == old_gen_id
 
     await lease.release()
-    # Wait for retirement to complete
-    await asyncio.sleep(0.2)
+    await reload_harness.runtime_manager.wait_for_retirement(old_gen_id, timeout_s=5.0)
 
 
 @pytest.mark.asyncio()
@@ -89,8 +86,7 @@ async def test_old_generation_retired_after_new_publication(
     assert result.ok is True
     new_gen_id = result.generation
 
-    # Wait for retirement to complete
-    await asyncio.sleep(0.2)
+    await reload_harness.runtime_manager.wait_for_retirement(old_gen_id, timeout_s=5.0)
 
     post_snapshot = RuntimeSnapshot.capture(reload_harness.runtime_manager)
     assert post_snapshot.active_generation_id == new_gen_id

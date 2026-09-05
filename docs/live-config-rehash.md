@@ -401,7 +401,10 @@ to `resolve_apply_outcome()` when `prefer_live=True` (the default).
 After publication, active streams continue on their original
 generation. New requests immediately use the new generation. The old
 generation is retired after all leases drain (default timeout: 300s).
-During retirement, `retirement_pending: true` appears in the response.
+During retirement, `retirement_pending: true` appears in the response. If a
+generation close fails, the runtime manager retains it as `failed_close` and
+keeps the pending status visible for operator diagnosis rather than reporting
+an unqualified successful retirement.
 
 ## Troubleshooting
 

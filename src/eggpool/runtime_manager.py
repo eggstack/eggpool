@@ -925,7 +925,12 @@ class PendingGenerationSwap:
             # Spawn the retirement task through the runtime manager so
             # the manager's retirement-tasks registry stays accurate.
             if old_slot is not None and not rm._shutdown_in_progress:  # pyright: ignore[reportPrivateUsage]
-                await rm._spawn_retirement_task(old_slot, self._drain_timeout_s)  # pyright: ignore[reportPrivateUsage]
+                rm._mark_retiring_locked(  # pyright: ignore[reportPrivateUsage]
+                    old_slot, self._drain_timeout_s
+                )
+                rm._register_retirement_task_locked(  # pyright: ignore[reportPrivateUsage]
+                    old_slot, self._drain_timeout_s
+                )
 
             self._state = PendingSwapState.FINALIZED
             # Clear pending-swap ownership under the same lock.
@@ -1389,6 +1394,8 @@ class RuntimeManager:
             self._active = new_slot
             if old_slot is not None:
                 old_slot.accepting_leases = False
+                self._mark_retiring_locked(old_slot, drain_timeout_s)
+                self._register_retirement_task_locked(old_slot, drain_timeout_s)
             self._next_generation_id = max(
                 self._next_generation_id,
                 generation.generation_id + 1,
@@ -1402,8 +1409,6 @@ class RuntimeManager:
                 generation.generation_id,
                 _digest_prefix(generation.config_digest),
             )
-        if old_slot is not None:
-            await self._spawn_retirement_task(old_slot, drain_timeout_s)
 
     async def prepare_candidate_swap(
         self,
@@ -1653,6 +1658,12 @@ class RuntimeManager:
             raise ValueError(f"No retiring generation with id {generation_id!r}")
         return tuple(_slot_diagnostics(slot, now) for slot in self._retiring)
 
+    def is_retirement_pending(self, generation_id: int) -> bool:
+        """Return whether a generation still has tracked retirement work."""
+        return generation_id in self._retirement_tasks or any(
+            slot.generation.generation_id == generation_id for slot in self._retiring
+        )
+
     def _bind_finalization_supervisor(self, slot: _GenerationSlot) -> None:
         """Bind a generation supervisor to this slot's retirement counter."""
         supervisor = slot.generation.finalization_supervisor
@@ -1698,18 +1709,10 @@ class RuntimeManager:
     def _schedule_retirement_resume(self, slot: _GenerationSlot) -> None:
         """Resume a retirement that previously failed closed on a live ref."""
         gen_id = slot.generation.generation_id
-
-        async def _resume() -> None:
-            try:
-                await self._drain_and_close(
-                    slot,
-                    drain_timeout_s=slot.drain_deadline_s or 5.0,
-                )
-            finally:
-                self._retirement_tasks.pop(gen_id, None)
-
-        self._retirement_tasks[gen_id] = asyncio.create_task(
-            _resume(), name=f"resume-retire-gen-{gen_id}"
+        self._register_retirement_task_locked(
+            slot,
+            slot.drain_deadline_s or 5.0,
+            task_name=f"resume-retire-gen-{gen_id}",
         )
 
     # -- retirement ---------------------------------------------------------
@@ -1728,16 +1731,42 @@ class RuntimeManager:
         so publication returns promptly while retirement proceeds in
         the background.
         """
-        gen_id = slot.generation.generation_id
+        async with self._get_lock():
+            self._mark_retiring_locked(slot, drain_timeout_s)
+            self._register_retirement_task_locked(
+                slot,
+                drain_timeout_s,
+                abandon_terminal_references=abandon_terminal_references,
+            )
 
+    def _mark_retiring_locked(
+        self, slot: _GenerationSlot, drain_timeout_s: float
+    ) -> None:
+        """Move *slot* to the retiring collection; the manager lock is required."""
+        if slot.retirement_started:
+            return
+        slot.retirement_started = True
+        slot.accepting_leases = False
+        slot.state = SlotState.RETIRING
+        slot.retirement_start_time = time.monotonic()
+        slot.drain_deadline_s = drain_timeout_s
+        if self._active is slot:
+            self._active = None
+        if slot not in self._retiring:
+            self._retiring.append(slot)
+
+    def _register_retirement_task_locked(
+        self,
+        slot: _GenerationSlot,
+        drain_timeout_s: float,
+        *,
+        abandon_terminal_references: bool = False,
+        task_name: str | None = None,
+    ) -> None:
+        """Register exactly one retirement task; the manager lock is required."""
+        gen_id = slot.generation.generation_id
         existing = self._retirement_tasks.get(gen_id)
         if existing is not None and not existing.done():
-            # A retirement task for this generation is still running.
-            # Overwriting the registry entry would orphan it: the task
-            # keeps running but is no longer joined by
-            # wait_for_retirement() or shutdown. begin_retirement() is
-            # idempotent, so spawning a duplicate adds nothing — keep
-            # tracking the original task instead.
             logger.info(
                 "Retirement task for generation %d already running; "
                 "not spawning a duplicate",
@@ -1747,16 +1776,39 @@ class RuntimeManager:
 
         async def _retire() -> None:
             try:
-                await self.begin_retirement(
+                await self._drain_and_close(
                     slot,
                     drain_timeout_s=drain_timeout_s,
                     abandon_terminal_references=abandon_terminal_references,
                 )
+            except asyncio.CancelledError:
+                # Shutdown cancellation is itself a terminal diagnostic.  The
+                # normal shutdown path wakes the drain event first, so this is
+                # reserved for a close operation that outlives its bound.
+                slot.last_close_error = "retirement task cancelled"
+                slot.state = SlotState.FAILED_CLOSE
+                logger.warning(
+                    "Runtime generation %d retirement task cancelled",
+                    gen_id,
+                )
+                raise
+            except Exception as exc:  # noqa: BLE001 -- task boundary consumes errors
+                slot.last_close_error = safe_exception_detail(
+                    exc, stage="generation_retirement"
+                )
+                slot.state = SlotState.FAILED_CLOSE
+                logger.exception(
+                    "Runtime generation %d retirement task failed: %s",
+                    gen_id,
+                    slot.last_close_error,
+                )
+                slot.retirement_complete.set()
             finally:
                 self._retirement_tasks.pop(gen_id, None)
 
-        task = asyncio.create_task(_retire(), name=f"retire-gen-{gen_id}")
-        self._retirement_tasks[gen_id] = task
+        self._retirement_tasks[gen_id] = asyncio.create_task(
+            _retire(), name=task_name or f"retire-gen-{gen_id}"
+        )
 
     async def wait_for_retirement(
         self, generation_id: int, *, timeout_s: float = 300.0
@@ -1793,26 +1845,23 @@ class RuntimeManager:
         ``slot.last_close_error`` and logged but do not abort the
         teardown of remaining resources.
         """
-        async with slot.close_lock:
+        wait_for_existing = False
+        async with self._get_lock():
             if slot.retirement_started:
-                return
-            slot.retirement_started = True
-            slot.accepting_leases = False
-            slot.state = SlotState.RETIRING
-            slot.retirement_start_time = time.monotonic()
-            slot.drain_deadline_s = drain_timeout_s
+                if slot.state is SlotState.RETIRING:
+                    wait_for_existing = True
+                else:
+                    return
+            else:
+                self._mark_retiring_locked(slot, drain_timeout_s)
+        if wait_for_existing:
+            await slot.retirement_complete.wait()
+            return
         logger.info(
             "Runtime generation %d retirement starting (active_leases=%d)",
             slot.generation.generation_id,
             slot.active_leases,
         )
-        # Move the slot into the retiring list under the manager lock
-        # so a subsequent diagnostics snapshot sees consistent state.
-        async with self._get_lock():
-            if self._active is slot:
-                self._active = None
-            if slot not in self._retiring:
-                self._retiring.append(slot)
         await self._drain_and_close(
             slot,
             drain_timeout_s=drain_timeout_s,
@@ -1858,13 +1907,19 @@ class RuntimeManager:
         await self._close_slot_resources(slot, drain_timeout_s=drain_timeout_s)
         slot.close_complete_time = time.monotonic()
         async with self._get_lock():
-            slot.state = SlotState.CLOSED
-            with contextlib.suppress(ValueError):
-                self._retiring.remove(slot)
+            slot.state = (
+                SlotState.FAILED_CLOSE
+                if slot.last_close_error is not None
+                else SlotState.CLOSED
+            )
+            if slot.state is SlotState.CLOSED:
+                with contextlib.suppress(ValueError):
+                    self._retiring.remove(slot)
             slot.retirement_complete.set()
         logger.info(
-            "Runtime generation %d retirement complete (forced=%s)",
+            "Runtime generation %d retirement complete (state=%s, forced=%s)",
             slot.generation.generation_id,
+            slot.state.value,
             slot.forced_close,
         )
 
@@ -1900,12 +1955,16 @@ class RuntimeManager:
 
         # 1. Stop background-task scheduling first so no new ticks fire
         #    while we drain in-flight tasks.
-        _close_budget = min(drain_timeout_s, 10.0)
+        # A zero drain timeout is a valid force-close request; it must not
+        # turn the close phase itself into an immediate timeout.
+        _close_budget = min(max(drain_timeout_s, 0.1), 10.0)
         supervisor = generation.supervisor
         if supervisor is not None:
             record_close_attempt("supervisor")
             try:
-                await asyncio.wait_for(supervisor.stop_all(), timeout=_close_budget)
+                result = supervisor.stop_all()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=_close_budget)
             except TimeoutError:
                 slot.last_close_error = "supervisor.stop_all: timed out"
                 logger.warning(
@@ -1954,9 +2013,9 @@ class RuntimeManager:
         if finalization_supervisor is not None:
             record_close_attempt("finalization_supervisor")
             try:
-                await finalization_supervisor.shutdown(
-                    timeout_s=min(drain_timeout_s, 10.0)
-                )
+                result = finalization_supervisor.shutdown(timeout_s=_close_budget)
+                if inspect.isawaitable(result):
+                    await result
             except asyncio.CancelledError:
                 logger.debug(
                     "Runtime generation %d finalization supervisor shutdown cancelled",
@@ -2078,6 +2137,14 @@ class RuntimeManager:
                 drain_timeout_s=5.0,
                 abandon_terminal_references=True,
             )
+        # Shutdown owns the final drain decision.  Wake every retiring task
+        # so it can force-close immediately instead of waiting for a live
+        # rehash deadline or a request that is no longer allowed to extend
+        # process lifetime.
+        async with self._get_lock():
+            for slot in self._retiring:
+                slot.forced_close = True
+                slot.drain_event.set()
         # Join all tracked retirement tasks within a bounded deadline.
         # Force-cancel any tasks that do not complete in time.
         if self._retirement_tasks:

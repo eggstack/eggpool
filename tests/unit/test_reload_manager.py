@@ -1698,6 +1698,14 @@ class TestMilestoneD1RepeatedReloadSoak:
                 f"reload #{cycle} (loss={loss}) failed: {result.message}"
             )
 
+        # Publication registers the final retirement task before returning;
+        # join it explicitly so the no-zombie assertion covers the last swap
+        # without relying on a scheduler turn after the loop.
+        if rm._retirement_tasks:  # pyright: ignore[reportPrivateUsage]
+            await asyncio.gather(
+                *rm._retirement_tasks.values()  # pyright: ignore[reportPrivateUsage]
+            )
+
         # Every reload observed a candidate config and fresh resources.
         assert captured["last_gen_id"] == 25  # gen 1..25 issued
         # Transcoder policies seen at build time should be different
