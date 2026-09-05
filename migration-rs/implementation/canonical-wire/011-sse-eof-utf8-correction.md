@@ -1,6 +1,6 @@
 # W011 — SSE EOF UTF-8 Finalization Correction
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/canonical-wire/011-status.md)
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w011--sse-eof-utf8-finalization-correction`
 

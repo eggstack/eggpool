@@ -1,6 +1,6 @@
 # W012 — Cross-Surface Differential Requalification and M6 Re-Closure
 
-Status: planned; blocked on W011 accepted closure
+Status: dependency-ready; W011 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w012--cross-surface-differential-requalification-and-m6-re-closure`
 

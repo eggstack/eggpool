@@ -1,6 +1,6 @@
 # M6 Canonical Request, Wire Codec, Transcoding, and SSE Roadmap
 
-Status: corrective pass active; W011 dependency-ready
+Status: corrective pass active; W012 dependency-ready
 
 Repository baseline: `fb36054278817de63b5c516c82202184c9200be7`
 
@@ -24,8 +24,8 @@ M5 D001-D009 closed
  -> W008 SSE/events/usage/terminal evidence (historical closure)
  -> W009 selected-profile runtime facade (closed)
  -> W010 integrated M6 qualification/closure (historical aggregate closure)
- -> W011 SSE EOF UTF-8 finalization correction (ready)
- -> W012 cross-surface differential requalification and M6 re-closure (blocked on W011)
+ -> W011 SSE EOF UTF-8 finalization correction (closed)
+ -> W012 cross-surface differential requalification and M6 re-closure (dependency-ready; W011 accepted closure)
  -> M7 planning review only after W012 accepted closure
 ```
 
@@ -54,12 +54,12 @@ Prefer one JSON parse, immutable sharing/`Bytes`, bounded collections/media/docu
 
 W001 freezes the oracle; W002 establishes the canonical semantic boundary; W003 freezes static profile/codec interfaces; W004-W005 cover finite wire families; W006-W007 centralize semantic adaptation and bounded media/cache behavior; W008 owns streaming/usage/terminal evidence; W009 composes the M7-facing facade; W010 is historical integrated qualification evidence.
 
-W011 is the narrow UTF-8 EOF correction. W012 is the aggregate cross-surface differential requalification/re-closure gate. Do not fold M7 orchestration into either corrective pass.
+W011 is the narrow UTF-8 EOF correction and is closed. W012 is the aggregate cross-surface differential requalification/re-closure gate and is dependency-ready. Do not fold M7 orchestration into either corrective pass.
 
 ## Verification and closure
 
 Use deterministic fixtures for all supported client/profile pairs, roles/content/tools/reasoning/structured output/media/documents/cache controls, finite errors, usage/cache counters, SSE framing/chunk splits/invalid UTF-8, client event encoding, and terminal evidence. No live paid provider or broad CI matrix is required.
 
-M6 is not considered closed for successor handoff while W011/W012 are open. Historical W001-W010 closure evidence remains valid except for the aggregate conclusions explicitly superseded by the corrective findings. M6 re-closes only after W011 and W012 have accepted closure evidence and integrated Python-derived results prove parity-equivalent canonical semantics, adaptation decisions, client bodies/events, usage, warnings/errors, UTF-8 EOF behavior, and terminal evidence.
+M6 is not considered closed for successor handoff while W012 is open. Historical W001-W010 closure evidence remains valid except for the aggregate conclusions explicitly superseded by the corrective findings. M6 re-closes only after W011 and W012 have accepted closure evidence and integrated Python-derived results prove parity-equivalent canonical semantics, adaptation decisions, client bodies/events, usage, warnings/errors, UTF-8 EOF behavior, and terminal evidence.
 
 After W012 accepted closure, M7 may become eligible for its own planning review; no M7 implementation plan is promoted automatically.

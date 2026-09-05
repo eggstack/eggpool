@@ -1,6 +1,6 @@
 # M6 Canonical Wire Implementation Handoffs
 
-Status: corrective pass active; W011 ready
+Status: corrective pass active; W012 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md`
 
@@ -20,10 +20,10 @@ W001-W010 retain their historical closure records. Post-W010 review found a conc
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](008-sse-stream-events-usage-and-terminal-evidence.md) | capability/invariant | historical closure; W011 corrects an uncovered EOF UTF-8 case |
 | W009 | [Selected-profile codec runtime boundary](009-selected-profile-codec-runtime-boundary.md) | capability/invariant | closed; see [closure](../../closure/canonical-wire/009-status.md) |
 | W010 | [Differential qualification and M6 closure](010-differential-qualification-and-m6-closure.md) | invariant | historical aggregate closure; superseded for W011/W012 findings only |
-| W011 | [SSE EOF UTF-8 finalization correction](011-sse-eof-utf8-correction.md) | invariant/corrective | **ready for handoff** |
-| W012 | [Cross-surface differential requalification and M6 re-closure](012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | blocked on W011 accepted closure |
+| W011 | [SSE EOF UTF-8 finalization correction](011-sse-eof-utf8-correction.md) | invariant/corrective | closed; see [closure](../../closure/canonical-wire/011-status.md) |
+| W012 | [Cross-surface differential requalification and M6 re-closure](012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | **dependency-ready; W011 closure accepted** |
 
-Only the registry's dependency-ready table authorizes implementation. W011 is the sole ready plan. W012 may be promoted only after accepted W011 closure.
+Only the registry's dependency-ready table authorizes implementation. W012 is the sole dependency-ready plan after accepted W011 closure.
 
 Every active plan must receive an accepted closure record under `migration-rs/closure/canonical-wire/` before its hard successor is promoted. Historical closure records are append-only.
 
