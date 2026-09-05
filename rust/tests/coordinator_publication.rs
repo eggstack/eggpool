@@ -281,6 +281,10 @@ async fn postcommit_interruption_retains_identity_and_compensates_idempotently()
         .compensate_post_commit(&mut interruption)
         .await
         .expect("compensation converges");
+    service
+        .compensate_post_commit(&mut interruption)
+        .await
+        .expect("repeated compensation remains idempotent");
     let state = fixture
         .database
         .call(|connection| {
