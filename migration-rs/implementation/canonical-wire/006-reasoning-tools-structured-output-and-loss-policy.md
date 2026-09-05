@@ -1,6 +1,6 @@
 # W006 — Reasoning, Tools, Structured Output, and Loss Policy
 
-Status: dependency-ready; W004 and W005 closures accepted
+Status: closed; see [closure record](../../closure/canonical-wire/006-status.md)
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w006--reasoning-tools-structured-output-and-loss-policy`
 

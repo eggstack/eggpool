@@ -1,6 +1,6 @@
 # M6 Canonical Wire Handoff Sequence
 
-Status: active; W006 dependency-ready
+Status: active; W007 dependency-ready
 
 Execute and close these plans in dependency order:
 
@@ -9,8 +9,8 @@ Execute and close these plans in dependency order:
 3. W003 — static wire-profile registry and codec contract (**closed; W002 closed**);
 4. W004 — OpenAI Chat Completions and Anthropic Messages codecs (**closed; W003 closed**);
 5. W005 — OpenAI Responses and Gemini generateContent codecs (**closed; W004 closed**);
-6. W006 — reasoning, tools, structured output, and loss policy (**dependency-ready; W004/W005 closed**);
-7. W007 — multimodal, documents, cache controls, and provider-sensitive pure adaptation (blocked on W006);
+6. W006 — reasoning, tools, structured output, and loss policy (**closed; W004/W005 closed**);
+7. W007 — multimodal, documents, cache controls, and provider-sensitive pure adaptation (**dependency-ready; W006 closed**);
 8. W008 — SSE framing, canonical stream events, usage, and terminal evidence (blocked on W007);
 9. W009 — selected-profile codec runtime boundary (blocked on W008);
 10. W010 — integrated differential qualification and M6 closure (blocked on W009).

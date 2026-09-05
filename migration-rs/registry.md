@@ -24,13 +24,13 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
-| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W006 ready** |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | **active** | **W007 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | capability/invariant | W004/W005 closed | **ready for handoff** |
+| W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | capability/invariant | W006 closed | **ready for handoff** |
 
 The M6 sequence and dependency state are also recorded under `implementation/canonical-wire/README.md` and `000-handoff-sequence.md`.
 
@@ -43,6 +43,7 @@ The M6 sequence and dependency state are also recorded under `implementation/can
 | W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | capability/invariant | [`f0ab286`](https://github.com/eggstack/eggpool/commit/f0ab286) | [closed](closure/canonical-wire/003-status.md) |
 | W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | capability | [`f851f62`](https://github.com/eggstack/eggpool/commit/f851f62) | [closed](closure/canonical-wire/004-status.md) |
 | W005 | [OpenAI Responses and Gemini generateContent codecs](implementation/canonical-wire/005-openai-responses-gemini-codecs.md) | capability | [`42200327`](https://github.com/eggstack/eggpool/commit/42200327aadc866c2bad263ffe11a1c3a5045a6a) | [closed](closure/canonical-wire/005-status.md) |
+| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | capability/invariant | [`2835e8c`](https://github.com/eggstack/eggpool/commit/2835e8c) | [closed](closure/canonical-wire/006-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | [`573e081f`](https://github.com/eggstack/eggpool/commit/573e081f) | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | [`a8c3621`](https://github.com/eggstack/eggpool/commit/a8c3621) | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | [`5afbbdd`](https://github.com/eggstack/eggpool/commit/5afbbdd) | [closed](closure/foundation/003-status.md) |
@@ -78,8 +79,8 @@ D009 resolved the two post-D008 accepted-selection findings: configured random f
 | W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | closed; see [closure](closure/canonical-wire/003-status.md) |
 | W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | closed; see [closure](closure/canonical-wire/004-status.md) |
 | W005 | [OpenAI Responses and Gemini generateContent codecs](implementation/canonical-wire/005-openai-responses-gemini-codecs.md) | closed; see [closure](closure/canonical-wire/005-status.md) |
-| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | **dependency-ready; W004/W005 closed** |
-| W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | planned; blocked on W006 closure |
+| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | closed; see [closure](closure/canonical-wire/006-status.md) |
+| W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | **dependency-ready; W006 closed** |
 | W008 | [SSE, canonical stream events, usage, and terminal evidence](implementation/canonical-wire/008-sse-stream-events-usage-and-terminal-evidence.md) | planned; blocked on W007 closure |
 | W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | planned; blocked on W008 closure |
 | W010 | [Differential qualification and M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | planned; blocked on W009 closure |
@@ -100,7 +101,7 @@ No new database schema is planned for M6.
 
 ## Future work and block state
 
-W006 is the sole dependency-ready M6 plan. W001-W005 are closed; W007-W010 remain planned but blocked in sequence.
+W007 is the sole dependency-ready M6 plan. W001-W006 are closed; W008-W010 remain planned but blocked in sequence.
 
 M7 coordinator/retry/finalization research may proceed conceptually, but **M7 implementation handoff remains blocked until accepted W010 closure** establishes the selected-profile codec runtime as stable.
 
@@ -108,6 +109,6 @@ M8 runtime generations/background lifecycle, M9 operational lifecycle, M10 quali
 
 ## Closure state
 
-F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W006. No M7 implementation plan is dependency-ready.
+F001-F006, M4 T001-T006, and M5 D001-D009 are closed. M6 is active at W007. No M7 implementation plan is dependency-ready.
 
 If a later review finds a material gap in a closed M6 plan, create a bounded corrective plan and update aggregate state rather than rewriting historical closure evidence.

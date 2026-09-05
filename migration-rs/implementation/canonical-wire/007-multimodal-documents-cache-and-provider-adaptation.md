@@ -1,6 +1,6 @@
 # W007 — Multimodal, Documents, Cache Controls, and Provider Adaptation
 
-Status: planned; blocked on W006 closure
+Status: dependency-ready; W006 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w007--multimodal-documents-cache-controls-and-provider-sensitive-pure-adaptation`
 
