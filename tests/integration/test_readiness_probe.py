@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi import FastAPI
+from starlette.requests import Request
 
 from eggpool.db.connection import Database
 from eggpool.db.migrations import MigrationRunner
@@ -117,6 +119,67 @@ async def test_readyz_does_not_invoke_probe_writable() -> None:
 
     await probe.stop()
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_readyz_endpoint_reads_cached_probe_snapshot() -> None:
+    """The real endpoint must not start a writable transaction per request."""
+    from eggpool.app import create_app
+
+    config = _build_config()
+    application = create_app(config)
+    application.state.db = SimpleNamespace(_conn=object())
+    application.state.config = config
+    application.state.catalog = SimpleNamespace(cache=SimpleNamespace(model_count=1))
+    application.state.router = SimpleNamespace(has_eligible_pairing=lambda: True)
+    application.state.supervisor = SimpleNamespace(all_healthy=True)
+    application.state.runtime_manager = None
+    application.state.reload_manager = None
+
+    probe_snapshot = ProbeSnapshot(
+        status=ProbeStatus.HEALTHY,
+        last_attempt_at=1000.0,
+        last_success_at=1000.0,
+        last_failure_at=None,
+        last_error_class=None,
+        last_error_message=None,
+        last_probe_duration_ms=1.0,
+        consecutive_failures=0,
+        configured_interval_s=10.0,
+        freshness_deadline_s=30.0,
+        worker_running=True,
+    )
+    snapshot_calls = 0
+
+    class CachedProbe:
+        async def snapshot(self) -> ProbeSnapshot:
+            nonlocal snapshot_calls
+            snapshot_calls += 1
+            return probe_snapshot
+
+    application.state.readiness_probe = CachedProbe()
+    readyz_route = next(
+        route for route in application.routes if route.path == "/v1/readyz"
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/readyz",
+            "raw_path": b"/v1/readyz",
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "app": application,
+        }
+    )
+    response = await readyz_route.endpoint(request)
+
+    assert response.status_code == 200
+    assert response.body == b'{"status":"ok"}'
+    assert snapshot_calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +439,54 @@ async def test_probe_worker_exception_consumed() -> None:
 
     await probe.stop()
     await db.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_probe_worker_unexpected_termination_is_unready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpectedly dead worker is observed and cannot leave readiness green."""
+    db = Database(path=":memory:")
+    await db.connect()
+    runner = MigrationRunner(db)
+    await runner.run()
+
+    probe = DatabaseWritableProbe(db, interval_s=100, initial_probe=False)
+
+    async def crash_worker() -> None:
+        raise RuntimeError("worker crashed")
+
+    monkeypatch.setattr(probe, "_run_worker", crash_worker)
+    await probe.start()
+    await asyncio.sleep(0.05)
+
+    snap = await probe.snapshot()
+    assert snap.status == ProbeStatus.UNHEALTHY
+    assert snap.worker_running is False
+    assert snap.last_error_class == "RuntimeError"
+    assert snap.last_error_message == "worker crashed"
+
+    await probe.stop()
+    await db.disconnect()
+
+
+def test_probe_snapshot_is_immutable() -> None:
+    """Readiness receives an immutable point-in-time value."""
+    snap = ProbeSnapshot(
+        status=ProbeStatus.HEALTHY,
+        last_attempt_at=1000.0,
+        last_success_at=1000.0,
+        last_failure_at=None,
+        last_error_class=None,
+        last_error_message=None,
+        last_probe_duration_ms=1.5,
+        consecutive_failures=0,
+        configured_interval_s=10.0,
+        freshness_deadline_s=30.0,
+        worker_running=True,
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        snap.status = ProbeStatus.STALE  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

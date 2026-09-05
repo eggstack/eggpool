@@ -916,8 +916,9 @@ forced restart.
 The shipped systemd unit uses `Restart=on-failure`, so a worker that exits
 after an indeterminate SQLite state is restarted automatically. The restart
 boundary is intentional: the new worker must pass migrations, integrity
-checks, crash reconciliation, and the writable probe before it accepts
-traffic.
+checks, and crash reconciliation before it accepts traffic. When
+`[readiness_probe].enabled = true`, it must also complete a fresh writable
+probe before readiness is reopened.
 
 ---
 

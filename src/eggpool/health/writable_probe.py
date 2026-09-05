@@ -32,7 +32,7 @@ class ProbeStatus(enum.Enum):
     STOPPED = "stopped"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ProbeSnapshot:
     """Immutable snapshot of the probe's current state.
 
@@ -128,6 +128,7 @@ class DatabaseWritableProbe:
         self._task = asyncio.create_task(
             self._run_worker(), name="eggpool:db_writable_probe"
         )
+        self._task.add_done_callback(self._worker_done)
         logger.info(
             "DatabaseWritableProbe started (interval=%.1fs, freshness=%.1fs)",
             self._interval_s,
@@ -149,10 +150,38 @@ class DatabaseWritableProbe:
                     await self._task
             except (asyncio.CancelledError, TimeoutError):
                 pass
+            except Exception:
+                # The done callback observes the exception as well. Keep
+                # shutdown bounded if a future worker implementation raises
+                # outside the per-probe failure boundary.
+                logger.exception("DatabaseWritableProbe worker failed during stop")
         self._task = None
         async with self._lock:
             self._status = ProbeStatus.STOPPED
         logger.info("DatabaseWritableProbe stopped")
+
+    def _worker_done(self, task: asyncio.Task[None]) -> None:
+        """Consume unexpected worker termination and fail readiness closed."""
+        if task.cancelled() or not self._running:
+            return
+        try:
+            task.result()
+        except Exception as exc:  # noqa: BLE001
+            self._running = False
+            self._last_failure_at = time.time()
+            self._last_error_class = type(exc).__qualname__
+            self._last_error_message = str(exc)[:200]
+            self._status = ProbeStatus.UNHEALTHY
+            logger.exception("DatabaseWritableProbe worker terminated unexpectedly")
+        else:
+            # A worker may only return normally after ``stop()`` has cleared
+            # ``_running``. Treat any other return as an unhealthy worker.
+            self._running = False
+            self._last_failure_at = time.time()
+            self._last_error_class = "WorkerStopped"
+            self._last_error_message = "database writable probe worker stopped"
+            self._status = ProbeStatus.UNHEALTHY
+            logger.error("DatabaseWritableProbe worker stopped unexpectedly")
 
     async def _run_worker(self) -> None:
         """Background worker that performs periodic writable probes."""
@@ -247,6 +276,9 @@ class DatabaseWritableProbe:
                 if age > self._freshness_s:
                     status = ProbeStatus.STALE
 
+            worker_running = (
+                self._running and self._task is not None and not self._task.done()
+            )
             return ProbeSnapshot(
                 status=status,
                 last_attempt_at=self._last_attempt_at,
@@ -258,7 +290,7 @@ class DatabaseWritableProbe:
                 consecutive_failures=self._consecutive_failures,
                 configured_interval_s=self._interval_s,
                 freshness_deadline_s=self._freshness_s,
-                worker_running=self._running,
+                worker_running=worker_running,
                 probe_count=self._probe_count,
                 success_count=self._success_count,
                 failure_count=self._failure_count,

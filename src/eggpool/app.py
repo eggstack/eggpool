@@ -1176,8 +1176,8 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         event_loop_lag_monitor=event_loop_lag_monitor,
     )
 
-    # Run the required initial writable probe before background tasks and
-    # readiness. /readyz only reads this cached result.
+    # Set up the optional process-owned writable probe before background
+    # tasks and readiness. /readyz only reads its cached result.
     from eggpool.health.writable_probe import DatabaseWritableProbe  # noqa: PLC0415
 
     readiness_probe = None
@@ -1189,9 +1189,10 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             timeout_s=config.readiness_probe.timeout_s,
             initial_probe=config.readiness_probe.initial_probe,
         )
-        probe_snapshot = await readiness_probe.force_probe()
-        if probe_snapshot.status.value != "healthy":
-            raise DatabaseError("initial database writable probe failed")
+        if config.readiness_probe.initial_probe:
+            probe_snapshot = await readiness_probe.force_probe()
+            if probe_snapshot.status.value != "healthy":
+                raise DatabaseError("initial database writable probe failed")
     process.readiness_probe = readiness_probe
     app.state.readiness_probe = readiness_probe
 
@@ -1218,8 +1219,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
             process_supervisor=process_supervisor,
         ),
     )
-    # 21. Start background tasks only after startup integrity, durable crash
-    # repair, and the initial writable probe have succeeded.
+    # 21. Start background tasks only after startup integrity and durable
+    # crash repair have succeeded. An enabled probe with initial_probe=true
+    # has already completed its required startup check above.
     await supervisor.start_all()
     # Start process-owned tasks on the process supervisor.
     await process_supervisor.start_all()
@@ -1799,6 +1801,14 @@ def create_app(
                 return Response(
                     content=(
                         '{"status":"degraded","reason":"database probe not started"}'
+                    ),
+                    status_code=503,
+                    media_type="application/json",
+                )
+            if not probe_snap.worker_running:
+                return Response(
+                    content=(
+                        '{"status":"degraded","reason":"database probe worker stopped"}'
                     ),
                     status_code=503,
                     media_type="application/json",

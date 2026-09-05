@@ -344,7 +344,15 @@ ttl_seconds = 86400
 #
 
 [readiness_probe]
+# Optional process-owned writable probe. When enabled, /v1/readyz reads a
+# cached result and never starts a SQLite write transaction itself. The lean
+# default is disabled; enable it when readiness must verify writability on a
+# bounded cadence.
 enabled = false
+# interval_s = 10.0
+# freshness_s = 30.0
+# timeout_s = 5.0
+# initial_probe = true
 
 [model_info]
 enabled = true

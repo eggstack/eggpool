@@ -52,6 +52,7 @@ mode = "off"
 sample_rate = 0.0
 
 [readiness_probe]
+# Optional process-owned writable probe; /v1/readyz reads its cached result.
 enabled = false
 
 [model_info]

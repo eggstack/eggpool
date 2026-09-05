@@ -2,8 +2,12 @@
 
 EggPool treats SQLite integrity and indeterminate runtime connection failures
 as local process failures. The worker closes admission and exits nonzero;
-systemd restarts it. Startup then runs migrations, `PRAGMA quick_check`, crash
-reconciliation, and the initial writable probe before readiness is reopened.
+systemd restarts it. Startup then runs migrations, `PRAGMA quick_check`, and
+crash reconciliation before readiness is reopened. If
+`[readiness_probe].enabled = true`, startup also performs the configured
+writable probe and `/readyz` continues checking its fresh cached result.
+The lean shipped configuration leaves this optional probe disabled; enable it
+when readiness must verify database writability on a bounded cadence.
 
 There is no same-process replacement-connection recovery and no automatic
 database deletion, salvage, vacuum, or in-place repair.
