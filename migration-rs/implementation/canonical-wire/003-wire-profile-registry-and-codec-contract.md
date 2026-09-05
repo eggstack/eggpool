@@ -1,6 +1,6 @@
 # W003 — Static Wire-Profile Registry and Codec Contract
 
-Status: planned; blocked on W002 closure
+Status: ready for handoff; W002 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w003--static-wire-profile-registry-and-codec-contract`
 

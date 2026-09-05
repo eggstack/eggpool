@@ -5,6 +5,17 @@ This is the non-published, side-by-side Rust candidate described by the
 Python remains the canonical production implementation; this package must not
 replace the installed `eggpool` command.
 
+## W002 canonical request boundary
+
+`eggpool::request` owns pure bounded admission, overflow-safe request/media/
+document/token estimates, and compact JSON body preparation. It parses a
+request once, retains only bounded canonical data plus accounting estimates,
+and never selects accounts or submits provider traffic. `eggpool::wire::ir`
+contains the source-owned request, response, usage, provider-error, and stream
+event semantics used by later static wire codecs. M5 routing and model-router
+affinity are reached only through pure adapters supplied with caller-owned
+static facts.
+
 ## Toolchain policy
 
 The package uses Rust edition 2024 and declares Rust 1.85 as its MSRV, the

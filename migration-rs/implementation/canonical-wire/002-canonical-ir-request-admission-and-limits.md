@@ -1,6 +1,6 @@
 # W002 — Canonical IR, Request Admission, Limits, and M5 Fact Bridge
 
-Status: ready for handoff; W001 closure accepted
+Status: closed; W001 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w002--canonical-ir-request-admission-limits-and-m5-fact-bridge`
 
@@ -225,4 +225,6 @@ Do not close if later codecs would need to recover semantics that W002 discarded
 
 ## 17. Closure evidence
 
-Create `migration-rs/closure/canonical-wire/002-status.md` with implementation commit, IR/limit fixture coverage, security/resource audit, verification commands, and registry transition promoting W003.
+Closure record is `migration-rs/closure/canonical-wire/002-status.md`, with implementation commit, IR/limit fixture coverage, security/resource audit, verification commands, and the registry transition promoting W003.
+
+Closure record: [W002 status](../../closure/canonical-wire/002-status.md).
