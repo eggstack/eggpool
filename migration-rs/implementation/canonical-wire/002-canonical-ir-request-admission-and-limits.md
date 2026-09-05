@@ -1,6 +1,6 @@
 # W002 — Canonical IR, Request Admission, Limits, and M5 Fact Bridge
 
-Status: planned; blocked on W001 closure
+Status: ready for handoff; W001 closure accepted
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w002--canonical-ir-request-admission-limits-and-m5-fact-bridge`
 

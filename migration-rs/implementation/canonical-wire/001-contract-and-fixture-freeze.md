@@ -1,6 +1,6 @@
 # W001 — Canonical Wire Contract and Deterministic Fixture Freeze
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/canonical-wire/001-status.md)
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md#w001--contract-and-deterministic-fixture-freeze`
 

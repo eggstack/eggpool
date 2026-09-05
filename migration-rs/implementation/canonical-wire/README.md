@@ -1,6 +1,6 @@
 # M6 Canonical Wire Implementation Handoffs
 
-Status: active; W001 ready for handoff
+Status: active; W002 ready for handoff
 
 Source roadmap: `migration-rs/subsystems/canonical-wire-roadmap.md`
 
@@ -8,8 +8,8 @@ M6 is intentionally split so the behavioral oracle and canonical semantic bounda
 
 | ID | Plan | Class | Dependency state |
 |---|---|---|---|
-| W001 | [Contract and deterministic fixture freeze](001-contract-and-fixture-freeze.md) | invariant/infrastructure | **ready; F001-F006, T001-T006, D001-D009 closed** |
-| W002 | [Canonical IR, request admission, limits, and M5 fact bridge](002-canonical-ir-request-admission-and-limits.md) | capability/invariant | planned; blocked on W001 closure |
+| W001 | [Contract and deterministic fixture freeze](001-contract-and-fixture-freeze.md) | invariant/infrastructure | closed; see [closure](../../closure/canonical-wire/001-status.md) |
+| W002 | [Canonical IR, request admission, limits, and M5 fact bridge](002-canonical-ir-request-admission-and-limits.md) | capability/invariant | **ready for handoff; W001 closed** |
 | W003 | [Static wire-profile registry and codec contract](003-wire-profile-registry-and-codec-contract.md) | capability/invariant | planned; blocked on W002 closure |
 | W004 | [OpenAI Chat Completions and Anthropic Messages codecs](004-openai-chat-anthropic-messages-codecs.md) | capability | planned; blocked on W003 closure |
 | W005 | [OpenAI Responses and Gemini generateContent codecs](005-openai-responses-gemini-codecs.md) | capability | planned; blocked on W004 closure by default serial handoff |
