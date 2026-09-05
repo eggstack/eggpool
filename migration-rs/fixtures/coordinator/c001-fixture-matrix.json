@@ -1,0 +1,140 @@
+{
+  "schema_version": "m7-coordinator-c001/v1",
+  "purpose": "Deterministic structural fixture inventory for the Python coordinator oracle.",
+  "phases": [
+    "admission",
+    "local_claim",
+    "durable_publication",
+    "wire_resolution",
+    "provider_dispatch",
+    "response_handoff",
+    "stream_completion",
+    "terminal_finalization",
+    "restart_reconciliation"
+  ],
+  "durable_tables": {
+    "requests": "parent request identity, selected account/provider/model, pending or terminal status, usage, retry count, and terminal backlink",
+    "request_attempts": "one row per submitted or publish-interrupted attempt, including retry category, release reason, bytes, and completion",
+    "reservations": "one active reservation per published attempt, converged to released or expired exactly once",
+    "routing_decisions": "frozen selection trace written with the attempt publication"
+  },
+  "lifecycle_cases": [
+    {"name": "finite_success", "handoff": false, "retry_allowed": false, "terminal": "completed"},
+    {"name": "streaming_success", "handoff": true, "retry_allowed": false, "terminal": "completed"},
+    {"name": "invalid_input_before_claim", "handoff": false, "retry_allowed": false, "terminal": "client_error"},
+    {"name": "routing_exhaustion", "handoff": false, "retry_allowed": false, "terminal": "unavailable"},
+    {"name": "dispatch_transaction_rollback", "handoff": false, "retry_allowed": false, "terminal": "claim_compensated"},
+    {"name": "post_commit_publication_interruption", "handoff": false, "retry_allowed": false, "terminal": "retained_compensation"},
+    {"name": "downstream_disconnect_before_start", "handoff": false, "retry_allowed": true, "terminal": "cancelled"},
+    {"name": "downstream_disconnect_after_start", "handoff": true, "retry_allowed": false, "terminal": "cancelled"}
+  ],
+  "transport_failure_cases": [
+    "connect",
+    "proxy",
+    "tls",
+    "write",
+    "response_headers",
+    "read",
+    "pool"
+  ],
+  "http_failure_cases": [400, 401, 403, 404, 408, 409, 429, 500, 503],
+  "provider_signal_cases": [
+    "credential_invalid",
+    "wire_auth_mismatch",
+    "wire_surface_unsupported",
+    "wire_schema_mismatch",
+    "model_unsupported_on_surface",
+    "quota_exhausted",
+    "rate_limited",
+    "model_absent",
+    "malformed_error_envelope",
+    "unknown_error_envelope"
+  ],
+  "retry_after_cases": ["numeric_seconds", "http_date", "invalid", "missing"],
+  "wire_negotiation_cases": [
+    "fixed_wire",
+    "learned_preference",
+    "deterministic_rejection",
+    "rejection_cooldown",
+    "candidate_fingerprint_change",
+    "negotiation_throttled",
+    "leader",
+    "follower",
+    "leader_cancellation",
+    "follower_cancellation",
+    "rate_limited_negotiation",
+    "successful_learning"
+  ],
+  "stream_cases": [
+    "finite_malformed_body",
+    "empty_eof",
+    "partial_eof",
+    "malformed_stream",
+    "terminal_failure",
+    "terminal_incomplete",
+    "compatibility_eof",
+    "midstream_exception",
+    "openai_done",
+    "anthropic_message_stop",
+    "responses_completed",
+    "gemini_completed",
+    "gemini_incomplete"
+  ],
+  "cancellation_barriers": [
+    "claim_wait",
+    "durable_commit",
+    "negotiation_wait",
+    "connect",
+    "response_headers",
+    "first_byte",
+    "stream_body",
+    "finalization"
+  ],
+  "concurrency_cases": [
+    "two_requests_one_claim",
+    "duplicate_finalization_callers",
+    "finalization_vs_failed_attempt_cleanup",
+    "negotiation_leader_follower",
+    "leader_cancel_with_follower",
+    "retry_while_prior_cleanup_pending"
+  ],
+  "restart_snapshots": [
+    "pending_request_no_attempt",
+    "pending_request_incomplete_attempt_active_reservation",
+    "terminal_attempt_active_reservation",
+    "completed_request_replayed_terminal_command",
+    "incomplete_request_multiple_attempts"
+  ],
+  "exact_facts": [
+    "state and status vocabulary",
+    "durable identity relationships",
+    "retry category and destination",
+    "whether response handoff has started",
+    "terminal evidence kind",
+    "release/effect component names",
+    "idempotent/conflict outcome"
+  ],
+  "semantic_facts": [
+    "injected clock representation",
+    "SQLite rowids in synthetic fixtures",
+    "transport exception wording",
+    "provider response body wording",
+    "scheduler timing and task identity"
+  ],
+  "m7_boundary": [
+    "M4 owns HTTP transport and pooling",
+    "M5 owns account eligibility, scoring, and local claim acquisition",
+    "M6 owns canonical wire transformation, SSE framing, usage, and terminal evidence",
+    "M7 owns durable attempt publication, wire negotiation, submission policy, retry/failover, handoff, cancellation, retained cleanup, and reconciliation",
+    "M8 owns runtime generation publication, rehash, shutdown orchestration, and recurring scheduling"
+  ],
+  "secret_markers_forbidden": [
+    "sk-c001-fixture-secret",
+    "synthetic-secret-sentinel",
+    "proxy-password-fixture",
+    "Authorization: Bearer",
+    "x-route-session",
+    "fixture raw content",
+    "provider raw error body"
+  ]
+}
