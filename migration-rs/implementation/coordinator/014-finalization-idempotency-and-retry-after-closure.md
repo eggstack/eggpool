@@ -1,6 +1,6 @@
 # C014 — Finalization Idempotency and Retry-After Closure
 
-Status: ready for handoff
+Status: closed; see [closure](../../closure/coordinator/014-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

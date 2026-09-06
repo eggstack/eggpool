@@ -1,12 +1,12 @@
 # C007 — Finite Response Handoff and Completion
 
-Status: ready for handoff; C013 accepted closure
+Status: ready for handoff; C014 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
 Primary class: capability/invariant
 
-Hard dependency: C013.
+Hard dependency: C014.
 
 ## Objective
 

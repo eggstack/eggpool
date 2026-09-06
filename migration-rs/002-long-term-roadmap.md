@@ -125,7 +125,7 @@ C012 repaired missing fixed/hinted/rate-limited wire semantics and state bounds,
 
 Post-C013 review then found four narrower invariants: durable-only duplicate finalization can report incomplete progress despite no runtime obligation; retained finalization compatibility omits persisted byte/timing/request-ID facts; HTTP-date Retry-After can bypass the configured maximum delay; and historical attempt re-finalization can incorrectly compare against mutable parent account/provider selection after a later retry. C014 owns these findings only.
 
-Only `registry.md` authorizes handoff. C014 is the sole dependency-ready M7 plan. C007 is re-blocked until accepted C014 closure; C008-C011 and M8 remain behind their existing serial gates.
+Only `registry.md` authorizes handoff. C014 is closed and C007 is the sole dependency-ready M7 plan; C008-C011 and M8 remain behind their existing serial gates.
 
 M7 implements a bounded retained-finalization supervisor and explicit reconciliation interface because terminal cleanup cannot depend on the client task. M8, not M7, owns immutable runtime-generation publication, rehash, signal/shutdown orchestration, and recurring/background scheduling around those interfaces.
 

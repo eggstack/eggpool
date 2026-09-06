@@ -25,15 +25,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
-| M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | **corrective closure active** | **C014 ready** |
+| M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | **implementation active** | **C007 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | accepted C012 and C013 closures | **ready for handoff** |
+| C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | capability/invariant | accepted C014 closure | **ready for handoff** |
 
-C007 is re-blocked behind accepted C014 closure. C008-C011 retain their existing serial dependencies. M8 implementation planning remains blocked on accepted C011 M7 closure and a separate M8 planning review.
+C008-C011 retain their existing serial dependencies. M8 implementation planning remains blocked on accepted C011 M7 closure and a separate M8 planning review.
 
 ## Completed implementation plans
 
@@ -47,6 +47,7 @@ C007 is re-blocked behind accepted C014 closure. C008-C011 retain their existing
 | C006 | [Durable finalization and retained terminal ownership](implementation/coordinator/006-durable-finalization-and-retained-ownership.md) | invariant | `97a4846` | [historical closure](closure/coordinator/006-status.md) |
 | C012 | [Coordinator core contract correction](implementation/coordinator/012-coordinator-core-contract-correction.md) | invariant/corrective | `5495f72` + `2f37f7b` | [closed](closure/coordinator/012-status.md) |
 | C013 | [Coordinator core differential requalification](implementation/coordinator/013-coordinator-core-differential-requalification.md) | invariant/corrective | `85ad837b` | [closed](closure/coordinator/013-status.md) |
+| C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | `7607237d533e5e3f6ae33d2ecd504acff5732959` | [closed](closure/coordinator/014-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | `573e081f` | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | `a8c3621` | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | `5afbbdd` | [closed](closure/foundation/003-status.md) |
@@ -103,14 +104,14 @@ C012/C013 closed the major post-C006 coordinator-core gaps. A post-C013 audit fo
 | C006 | [Durable finalization and retained terminal ownership](implementation/coordinator/006-durable-finalization-and-retained-ownership.md) | historical closure; C014 finalization correction applies |
 | C012 | [Coordinator core contract correction](implementation/coordinator/012-coordinator-core-contract-correction.md) | closed; see [closure](closure/coordinator/012-status.md) |
 | C013 | [Coordinator core differential requalification](implementation/coordinator/013-coordinator-core-differential-requalification.md) | closed; see [closure](closure/coordinator/013-status.md) |
-| C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | **dependency-ready** |
-| C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | re-blocked; C014 |
+| C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | closed; see [closure](closure/coordinator/014-status.md) |
+| C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | **dependency-ready** |
 | C008 | [Streaming handoff, timeouts, cancellation, terminal policy](implementation/coordinator/008-streaming-handoff-timeouts-and-cancellation.md) | queued; C007 |
 | C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | queued; C008 |
 | C010 | [Crash/restart reconciliation and fault injection](implementation/coordinator/010-crash-restart-reconciliation-and-fault-injection.md) | queued; C009 |
 | C011 | [Differential qualification and M7 closure](implementation/coordinator/011-differential-qualification-and-m7-closure.md) | queued; C010 |
 
-Only the dependency-ready table authorizes implementation. Accepted C014 closure restores C007 readiness directly unless implementation exposes a broader defect requiring another corrective plan.
+Only the dependency-ready table authorizes implementation. Accepted C014 closure restores C007 readiness directly; no broader defect was exposed.
 
 ## M7 boundary decisions
 
@@ -126,4 +127,4 @@ M8 runtime generations/background lifecycle remains blocked on accepted C011 M7 
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, and M6 W001-W012 remain closed. M7 remains active toward C011: C001-C002 and C012-C013 are closed, C003-C006 are historical for the named findings, C014 is the sole dependency-ready plan, and C007-C011 remain blocked behind it.
+F001-F006, M4 T001-T006, M5 D001-D009, and M6 W001-W012 remain closed. M7 remains active toward C011: C001-C002 and C012-C014 are closed, C003-C006 are historical for the named findings, C007 is dependency-ready, C008-C011 remain serially blocked, and M8 remains blocked on accepted C011 closure plus its separate planning review.

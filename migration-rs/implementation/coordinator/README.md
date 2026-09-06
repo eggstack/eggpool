@@ -1,6 +1,6 @@
 # M7 Coordinator Implementation Handoffs
 
-Status: corrective closure active; C014 dependency-ready
+Status: implementation active; C007 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
@@ -14,14 +14,14 @@ Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 | C006 | [Durable finalization and retained terminal ownership](006-durable-finalization-and-retained-ownership.md) | invariant | historical closure; corrected by C012/C013; C014 applies residual finalization fix |
 | C012 | [Coordinator core contract correction](012-coordinator-core-contract-correction.md) | invariant/corrective | closed; see [closure](../../closure/coordinator/012-status.md) |
 | C013 | [Coordinator core differential requalification](013-coordinator-core-differential-requalification.md) | invariant/corrective | closed; see [closure](../../closure/coordinator/013-status.md) |
-| C014 | [Finalization idempotency and Retry-After closure](014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | **ready for handoff** |
-| C007 | [Finite response handoff and completion](007-finite-response-handoff-and-completion.md) | capability/invariant | re-blocked behind C014 |
+| C014 | [Finalization idempotency and Retry-After closure](014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | closed; see [closure](../../closure/coordinator/014-status.md) |
+| C007 | [Finite response handoff and completion](007-finite-response-handoff-and-completion.md) | capability/invariant | **dependency-ready** |
 | C008 | [Streaming handoff, timeouts, cancellation, and terminal policy](008-streaming-handoff-timeouts-and-cancellation.md) | capability/invariant | queued behind C007 |
 | C009 | [Public inference endpoints and semantic-router internal dispatch](009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | queued behind C008 |
 | C010 | [Crash/restart reconciliation and fault injection](010-crash-restart-reconciliation-and-fault-injection.md) | invariant | queued behind C009 |
 | C011 | [Differential qualification and M7 closure](011-differential-qualification-and-m7-closure.md) | invariant | queued behind C010 |
 
-Only `migration-rs/registry.md` authorizes an implementation handoff. C014 is the sole ready coordinator plan. C007 must not resume until C014 has an accepted closure record.
+Only `migration-rs/registry.md` authorizes an implementation handoff. C007 is now the sole ready coordinator plan after accepted C014 closure.
 
 M7 must not become a Rust copy of Python's large coordinator module. New Rust code should stay organized around explicit request/attempt state, durable publication, retry policy, terminal ownership, and small composable interfaces to M4/M5/M6.
 
