@@ -154,9 +154,11 @@ impl AttemptBuilder {
             .get(input.profile.definition.surface.as_str())
         {
             add_static_headers(&mut headers, &surface.headers)?;
-            if let Some(auth) = &surface.auth {
-                add_auth_header(&mut headers, auth, input.account_api_key.as_deref())?;
-            }
+            add_auth_header(
+                &mut headers,
+                surface.auth.as_ref().unwrap_or(&input.provider.auth),
+                input.account_api_key.as_deref(),
+            )?;
         } else {
             add_auth_header(
                 &mut headers,
@@ -321,9 +323,20 @@ fn add_static_headers(
     values: &[ProviderStaticHeaderConfig],
 ) -> Result<(), AttemptError> {
     for value in values {
-        let Some(raw) = value.value.as_deref() else {
-            continue;
+        let raw = match (value.value.as_deref(), value.value_env.as_deref()) {
+            (Some(value), _) => Some(value.to_owned()),
+            (None, Some(environment)) => std::env::var(environment).ok(),
+            (None, None) => None,
         };
+        let Some(raw) = raw.as_deref() else { continue };
+        if raw
+            .chars()
+            .any(|character| matches!(character, '\r' | '\n' | '\0'))
+        {
+            return Err(AttemptError::InvalidInput(
+                "provider header value contains a control character".into(),
+            ));
+        }
         let name = HeaderName::try_from(value.name.as_str())
             .map_err(|_| AttemptError::InvalidInput("invalid provider header name".into()))?;
         let header = HeaderValue::try_from(raw)
@@ -339,6 +352,17 @@ fn add_auth_header(
     key: Option<&str>,
 ) -> Result<(), AttemptError> {
     if auth.mode.eq_ignore_ascii_case("none") {
+        if let Some(key) = key.filter(|value| !value.is_empty()) {
+            for additional in &auth.additional {
+                add_auth_header_value(
+                    headers,
+                    &additional.header,
+                    &additional.mode,
+                    &additional.scheme,
+                    key,
+                )?;
+            }
+        }
         return Ok(());
     }
     let key = key
@@ -350,6 +374,38 @@ fn add_auth_header(
         format!("{} {key}", auth.scheme)
     };
     let name = HeaderName::try_from(auth.header.as_str())
+        .map_err(|_| AttemptError::InvalidInput("invalid provider auth header".into()))?;
+    let value = HeaderValue::try_from(value)
+        .map_err(|_| AttemptError::InvalidInput("invalid provider auth value".into()))?;
+    headers.insert(name, value);
+    for additional in &auth.additional {
+        add_auth_header_value(
+            headers,
+            &additional.header,
+            &additional.mode,
+            &additional.scheme,
+            key,
+        )?;
+    }
+    Ok(())
+}
+
+fn add_auth_header_value(
+    headers: &mut HeaderMap,
+    header: &str,
+    mode: &str,
+    scheme: &str,
+    key: &str,
+) -> Result<(), AttemptError> {
+    if mode.eq_ignore_ascii_case("none") {
+        return Ok(());
+    }
+    let value = if scheme.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{} {key}", scheme)
+    };
+    let name = HeaderName::try_from(header)
         .map_err(|_| AttemptError::InvalidInput("invalid provider auth header".into()))?;
     let value = HeaderValue::try_from(value)
         .map_err(|_| AttemptError::InvalidInput("invalid provider auth value".into()))?;

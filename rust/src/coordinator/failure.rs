@@ -344,7 +344,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         client_outcome = "service_unavailable";
     } else {
         match (observation.status, signal.as_str()) {
-            (_, "credential_invalid") => {
+            (_, "credential_invalid" | "authentication_failed") => {
                 category = FailureCategory::Authentication;
                 account_effect = "disable_auth";
                 circuit_effect = "failure";
@@ -372,7 +372,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                     action = NextAction::RetryWire;
                 }
             }
-            (Some(400), _) | (Some(409 | 422), _) => {
+            (Some(400), _) => {
                 category = FailureCategory::BadRequest;
             }
             (Some(401), "model_absent") => {
@@ -389,7 +389,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             (Some(401), _) => {
                 category = FailureCategory::Authentication;
             }
-            (Some(402), _) | (Some(403), "quota_exhausted") => {
+            (Some(402), _)
+            | (Some(403), "quota_exhausted")
+            | (Some(409 | 422), "quota_exhausted") => {
                 category = FailureCategory::Quota;
                 account_effect = "quota";
                 persist_backoff = true;
@@ -445,7 +447,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 }
                 client_outcome = "timeout";
             }
-            (Some(429), _) => {
+            (Some(429), _) | (Some(409 | 422), "rate_limited") => {
                 category = FailureCategory::RateLimit;
                 account_effect = "rate_limit";
                 persist_backoff = true;
@@ -455,6 +457,9 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                     retry_scope = RetryScope::Account;
                     action = NextAction::RetryAccount;
                 }
+            }
+            (Some(409 | 422), _) => {
+                category = FailureCategory::BadRequest;
             }
             (Some(500..=599), _) => {
                 category = FailureCategory::Temporary;

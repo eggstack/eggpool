@@ -243,7 +243,8 @@ impl WireResolver {
             .0
             .filter(|(_, fixed)| *fixed)
             .map(|(surface, _)| surface);
-        let preferred = learned
+        let preferred = fixed
+            .or(learned)
             .or_else(|| preference.0.map(|(surface, _)| surface))
             .or(preference.1);
         candidates.sort_by_key(|candidate| {
