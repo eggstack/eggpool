@@ -128,6 +128,7 @@ impl DurableFinalizer {
         let durable = self.finalize_durable(identity, &data, true).await?;
         let runtime_cleanup_required = claim.is_some();
         let runtime_released = release_claim(claim.as_ref())?;
+        let durable_converged = durable_converged(&durable.progress);
         Ok(FinalizationResult {
             runtime_released,
             progress: FinalizationProgress {
@@ -135,7 +136,7 @@ impl DurableFinalizer {
                 quota_released: runtime_released,
                 active_count_released: runtime_released,
                 probe_released: runtime_released,
-                completed: runtime_released,
+                completed: durable_converged && (!runtime_cleanup_required || runtime_released),
                 ..durable.progress
             },
             ..durable
@@ -151,6 +152,7 @@ impl DurableFinalizer {
         let durable = self.finalize_durable(identity, &data, false).await?;
         let runtime_cleanup_required = claim.is_some();
         let runtime_released = release_claim(claim.as_ref())?;
+        let durable_converged = durable_converged(&durable.progress);
         Ok(FinalizationResult {
             runtime_released,
             progress: FinalizationProgress {
@@ -158,7 +160,7 @@ impl DurableFinalizer {
                 quota_released: runtime_released,
                 active_count_released: runtime_released,
                 probe_released: runtime_released,
-                completed: runtime_released,
+                completed: durable_converged && (!runtime_cleanup_required || runtime_released),
                 ..durable.progress
             },
             request_terminal: false,
@@ -222,15 +224,21 @@ impl DurableFinalizer {
                     reason: "row is missing".into(),
                 });
             };
-            if account_id != identity.account_id
-                || model_id != identity.model_id
-                || provider_id != identity.provider_id
-                || protocol != identity.client_protocol
-            {
+            let request_identity_matches = model_id == identity.model_id
+                && protocol == identity.client_protocol
+                && (!terminalize_request
+                    || (account_id == identity.account_id
+                        && provider_id == identity.provider_id));
+            if !request_identity_matches {
                 return Ok(TxnResult::Invariant {
                     entity: "request",
                     id: identity.db_request_id,
-                    reason: "identity relationship does not match".into(),
+                    reason: if terminalize_request {
+                        "identity relationship does not match"
+                    } else {
+                        "request model/protocol relationship does not match"
+                    }
+                    .into(),
                 });
             }
             let request_terminal = is_terminal_status(&current);
@@ -447,6 +455,13 @@ fn release_claim(claim: Option<&SelectionClaim>) -> Result<bool, FinalizationErr
     Ok(true)
 }
 
+fn durable_converged(progress: &FinalizationProgress) -> bool {
+    progress.durable_transition_checked
+        && progress.durable_attempt_transitioned
+        && progress.durable_reservation_converged
+        && progress.effect_progress
+}
+
 fn is_terminal_status(status: &str) -> bool {
     matches!(
         status,
@@ -538,6 +553,8 @@ struct SupervisorInner {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandCompatibility {
+    proxy_request_id: String,
+    attempt_number: i64,
     account_id: i64,
     account_name: String,
     provider_id: String,
@@ -554,6 +571,10 @@ struct CommandCompatibility {
     input_tokens: i64,
     output_tokens: i64,
     cost_microdollars: i64,
+    bytes_received: i64,
+    bytes_emitted: i64,
+    latency_ms: i64,
+    upstream_request_id: Option<String>,
 }
 
 impl FinalizationCommand {
@@ -563,6 +584,8 @@ impl FinalizationCommand {
             Self::FailedAttempt { identity, data, .. } => (identity, false, data),
         };
         CommandCompatibility {
+            proxy_request_id: identity.proxy_request_id.clone(),
+            attempt_number: identity.attempt_number,
             account_id: identity.account_id,
             account_name: identity.account_name.clone(),
             provider_id: identity.provider_id.clone(),
@@ -579,6 +602,10 @@ impl FinalizationCommand {
             input_tokens: data.input_tokens,
             output_tokens: data.output_tokens,
             cost_microdollars: data.cost_microdollars,
+            bytes_received: data.bytes_received,
+            bytes_emitted: data.bytes_emitted,
+            latency_ms: data.latency_ms,
+            upstream_request_id: data.upstream_request_id.clone(),
         }
     }
 }

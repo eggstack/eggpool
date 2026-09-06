@@ -275,6 +275,9 @@ impl EffectLedger {
 }
 
 pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> FailureEffects {
+    let retry_after = observation
+        .retry_after
+        .map(|value| value.min(policy.max_retry_after));
     let signal = observation
         .signal
         .as_deref()
@@ -498,7 +501,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 account_effect = "rate_limit";
                 persist_backoff = true;
                 backoff_reason = Some("rate_limited");
-                backoff_until = observation.retry_after;
+                backoff_until = retry_after;
                 evidence_class = "http_429_rate_limited".into();
                 provider_attributable = true;
                 if retryable {
@@ -598,7 +601,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         evidence_class,
         circuit_penalty,
         release_probe_only,
-        retry_after: observation.retry_after,
+        retry_after,
         provider_attributable,
         downstream_started: observation.downstream_started || observation.response_started,
     }
@@ -637,7 +640,7 @@ pub fn parse_retry_after(
         return Some(Duration::from_secs(seconds as u64).min(policy.max_retry_after));
     }
     let seconds = parse_rfc1123(value)? - now_epoch_seconds;
-    (seconds >= 0).then(|| Duration::from_secs(seconds as u64))
+    (seconds >= 0).then(|| Duration::from_secs(seconds as u64).min(policy.max_retry_after))
 }
 
 fn parse_rfc1123(value: &str) -> Option<i64> {

@@ -43,6 +43,11 @@ async fn fixture() -> Fixture {
                 [],
             )?;
             connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id)
+                 VALUES (2, 'account-b', 'UNUSED_B', 1, 'provider-b')",
+                [],
+            )?;
+            connection.execute(
                 "INSERT INTO models (model_id, protocol, provider_id, resolution_status)
                  VALUES ('model-a', 'openai', 'provider-a', 'resolved')",
                 [],
@@ -67,22 +72,52 @@ async fn fixture() -> Fixture {
         ..Default::default()
     });
     config.providers.insert("provider-a".into(), provider);
+    let mut second_provider = eggpool::config::ProviderConfig {
+        id: "provider-b".into(),
+        base_url: "https://provider-b.invalid/v1".into(),
+        protocols: vec!["openai".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    second_provider
+        .accounts
+        .push(eggpool::config::AccountConfig {
+            name: "account-b".into(),
+            ..Default::default()
+        });
+    config
+        .providers
+        .insert("provider-b".into(), second_provider);
     config.validate().expect("fixture config validates");
     let registry = AccountRegistry::from_config(
         &config,
-        &[Account {
-            id: 1,
-            name: "account-a".into(),
-            api_key_env: "UNUSED".into(),
-            enabled: true,
-            weight: 1.0,
-            provider_id: "provider-a".into(),
-        }],
+        &[
+            Account {
+                id: 1,
+                name: "account-a".into(),
+                api_key_env: "UNUSED".into(),
+                enabled: true,
+                weight: 1.0,
+                provider_id: "provider-a".into(),
+            },
+            Account {
+                id: 2,
+                name: "account-b".into(),
+                api_key_env: "UNUSED_B".into(),
+                enabled: true,
+                weight: 1.0,
+                provider_id: "provider-b".into(),
+            },
+        ],
         &CredentialStore::default(),
     )
     .expect("registry builds");
     let mut catalog = ModelCatalogCache::default();
     catalog.set_account_provider("account-a", "provider-a");
+    catalog.set_account_provider("account-b", "provider-b");
     let mut model = ModelInput::new("model-a");
     model.protocol = Some("openai".into());
     model.protocol_source = Some("fixture".into());
@@ -90,7 +125,17 @@ async fn fixture() -> Fixture {
     catalog
         .update_from_account("account-a", "provider-a", &[model], true, true)
         .expect("catalog model");
-    let estimator = QuotaEstimator::new([AccountQuota::new("account-a")]);
+    let mut second_model = ModelInput::new("model-a");
+    second_model.protocol = Some("openai".into());
+    second_model.protocol_source = Some("fixture".into());
+    second_model.resolution_status = ProtocolResolutionStatus::Resolved;
+    catalog
+        .update_from_account("account-b", "provider-b", &[second_model], true, true)
+        .expect("second catalog model");
+    let estimator = QuotaEstimator::new([
+        AccountQuota::new("account-a"),
+        AccountQuota::new("account-b"),
+    ]);
     let router = RoutingRouter::new(
         registry,
         catalog,
@@ -110,13 +155,27 @@ async fn published_attempt(
     request_id: &str,
     attempt_number: i64,
 ) -> eggpool::coordinator::PublishedAttempt {
+    published_attempt_for_account(fixture, request_id, attempt_number, "account-a").await
+}
+
+async fn published_attempt_for_account(
+    fixture: &Fixture,
+    request_id: &str,
+    attempt_number: i64,
+    account_name: &str,
+) -> eggpool::coordinator::PublishedAttempt {
     let mut facts = RoutingRequestFacts::new("model-a");
     facts.requested_protocol = Some("openai".into());
     facts.client_protocol = Some("openai".into());
     facts.projected_tokens = 42;
+    let excluded_accounts = ["account-a", "account-b"]
+        .into_iter()
+        .filter(|candidate| *candidate != account_name)
+        .map(str::to_owned)
+        .collect();
     let claim = fixture
         .router
-        .select_and_claim(&facts, &BTreeSet::new())
+        .select_and_claim(&facts, &excluded_accounts)
         .await
         .expect("claim succeeds")
         .expect("candidate exists");
@@ -161,6 +220,7 @@ async fn request_finalization_converges_rows_and_runtime_once() {
     assert!(result.attempt_transitioned);
     assert!(result.reservation_transitioned);
     assert!(result.runtime_released);
+    assert!(result.progress.completed);
     assert_eq!(fixture.router.active_request_count("account-a"), 0);
     assert_eq!(
         fixture.estimator.snapshot(&["account-a".into()])["account-a"].reserved_requests,
@@ -180,6 +240,8 @@ async fn request_finalization_converges_rows_and_runtime_once() {
         .await
         .expect("duplicate compatible finalization observes convergence");
     assert!(!observed.request_transitioned);
+    assert!(observed.progress.completed);
+    assert!(!observed.progress.runtime_cleanup_required);
     let conflict = finalizer
         .finalize_request(
             &published.identity,
@@ -220,6 +282,7 @@ async fn failed_attempt_cleanup_leaves_request_retryable() {
         .expect("failed attempt cleanup succeeds");
     assert!(result.attempt_terminal);
     assert!(!result.request_terminal);
+    assert!(result.progress.completed);
     let rows = fixture
         .database
         .call(|connection| {
@@ -250,6 +313,22 @@ async fn failed_attempt_cleanup_leaves_request_retryable() {
     assert_eq!(rows.1, 1);
     assert_eq!(rows.2, "released");
     assert!(!rows.3.unwrap().contains('\0'));
+    let duplicate = finalizer
+        .finalize_failed_attempt(
+            &published.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::UpstreamError,
+                status_code: Some(503),
+                error_class: Some("temporary".into()),
+                release_reason: Some("retryable".into()),
+                ..FinalizationData::default()
+            },
+            None,
+        )
+        .await
+        .expect("duplicate failed-attempt observation converges");
+    assert!(duplicate.progress.completed);
+    assert!(!duplicate.progress.runtime_cleanup_required);
     fixture.database.close().await.expect("database closes");
 }
 
@@ -456,13 +535,24 @@ async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
         DurableFinalizer::new(fixture_conflict.database.clone()),
         1,
     );
+    let base_data = FinalizationData {
+        outcome: FinalizationOutcome::Completed,
+        status_code: Some(200),
+        input_tokens: 1,
+        output_tokens: 2,
+        cost_microdollars: 3,
+        bytes_received: 4,
+        bytes_emitted: 5,
+        latency_ms: 6,
+        upstream_request_id: Some("upstream-base".into()),
+        error_class: Some("base-error".into()),
+        release_reason: Some("base-release".into()),
+        ..FinalizationData::default()
+    };
     let first = supervisor
         .register(FinalizationCommand::Request {
             identity: published_conflict.identity.clone(),
-            data: FinalizationData {
-                outcome: FinalizationOutcome::Completed,
-                ..FinalizationData::default()
-            },
+            data: base_data.clone(),
             claim: Some(published_conflict.claim),
         })
         .expect("first command");
@@ -495,6 +585,60 @@ async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
     assert!(matches!(
         identity_incompatible,
         FinalizationError::IncompatibleCommand
+    ));
+    let incompatible_data = |mutate: fn(&mut FinalizationData)| {
+        let mut data = base_data.clone();
+        mutate(&mut data);
+        FinalizationCommand::Request {
+            identity: published_conflict.identity.clone(),
+            data,
+            claim: None,
+        }
+    };
+    for command in [
+        incompatible_data(|data| data.status_code = Some(201)),
+        incompatible_data(|data| data.error_class = Some("different".into())),
+        incompatible_data(|data| data.release_reason = Some("different".into())),
+        incompatible_data(|data| data.input_tokens = 11),
+        incompatible_data(|data| data.output_tokens = 12),
+        incompatible_data(|data| data.cost_microdollars = 13),
+        incompatible_data(|data| data.bytes_received = 14),
+        incompatible_data(|data| data.bytes_emitted = 15),
+        incompatible_data(|data| data.latency_ms = 16),
+        incompatible_data(|data| data.upstream_request_id = Some("different".into())),
+    ] {
+        assert!(matches!(
+            supervisor.register(command),
+            Err(FinalizationError::IncompatibleCommand)
+        ));
+    }
+    let mut proxy_incompatible = published_conflict.identity.clone();
+    proxy_incompatible.proxy_request_id = "different-request".into();
+    assert!(matches!(
+        supervisor.register(FinalizationCommand::Request {
+            identity: proxy_incompatible,
+            data: base_data.clone(),
+            claim: None,
+        }),
+        Err(FinalizationError::IncompatibleCommand)
+    ));
+    let mut attempt_number_incompatible = published_conflict.identity.clone();
+    attempt_number_incompatible.attempt_number = 2;
+    assert!(matches!(
+        supervisor.register(FinalizationCommand::Request {
+            identity: attempt_number_incompatible,
+            data: base_data.clone(),
+            claim: None,
+        }),
+        Err(FinalizationError::IncompatibleCommand)
+    ));
+    assert!(matches!(
+        supervisor.register(FinalizationCommand::FailedAttempt {
+            identity: published_conflict.identity.clone(),
+            data: base_data,
+            claim: None,
+        }),
+        Err(FinalizationError::IncompatibleCommand)
     ));
     first.wait().await.expect("first command completes");
     fixture_conflict
@@ -571,6 +715,118 @@ async fn retry_replacement_waits_for_prior_attempt_cleanup_and_converges_once() 
 }
 
 #[tokio::test]
+async fn historical_retry_finalization_uses_attempt_identity_not_parent_selection() {
+    let fixture = fixture().await;
+    let first = published_attempt_for_account(&fixture, "c014-history", 1, "account-a").await;
+    let finalizer = DurableFinalizer::new(fixture.database.clone());
+    let first_data = FinalizationData {
+        outcome: FinalizationOutcome::UpstreamError,
+        status_code: Some(503),
+        error_class: Some("temporary".into()),
+        bytes_received: 11,
+        bytes_emitted: 7,
+        latency_ms: 13,
+        upstream_request_id: Some("upstream-first".into()),
+        release_reason: Some("retryable".into()),
+        ..FinalizationData::default()
+    };
+    finalizer
+        .finalize_failed_attempt(&first.identity, first_data.clone(), Some(first.claim))
+        .await
+        .expect("first retryable attempt finalizes");
+
+    let second = published_attempt_for_account(&fixture, "c014-history", 2, "account-b").await;
+    let historical = finalizer
+        .finalize_failed_attempt(&first.identity, first_data, None)
+        .await
+        .expect("historical retry finalization remains idempotent");
+    assert!(historical.progress.completed);
+    assert!(!historical.request_terminal);
+
+    let request_id = first.identity.db_request_id;
+    let second_reservation_id = second.identity.reservation_id;
+    let parent = fixture
+        .database
+        .call(move |connection| {
+            Ok((
+                connection.query_row(
+                    "SELECT account_id, provider_id, status FROM requests WHERE id = ?1",
+                    [request_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )?,
+                connection.query_row(
+                    "SELECT status FROM reservations WHERE id = ?1",
+                    [second_reservation_id],
+                    |row| row.get::<_, String>(0),
+                )?,
+            ))
+        })
+        .await
+        .expect("historical rows");
+    assert_eq!(parent.0, (2, "provider-b".into(), "pending".into()));
+    assert_eq!(parent.1, "active");
+
+    let completed = finalizer
+        .finalize_request(
+            &second.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                release_reason: Some("completed".into()),
+                ..FinalizationData::default()
+            },
+            Some(second.claim),
+        )
+        .await
+        .expect("replacement attempt completes");
+    assert!(completed.progress.completed);
+    let rows = fixture
+        .database
+        .call(|connection| {
+            Ok((
+                connection.query_row("SELECT status FROM requests", [], |row| {
+                    row.get::<_, String>(0)
+                })?,
+                connection.query_row(
+                    "SELECT COUNT(*) FROM request_attempts WHERE completed_at IS NOT NULL",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                connection.query_row(
+                    "SELECT COUNT(*) FROM reservations WHERE status IN ('released', 'expired')",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await
+        .expect("terminal retry rows");
+    assert_eq!(rows, ("completed".into(), 2, 2));
+    assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    assert_eq!(fixture.router.active_request_count("account-b"), 0);
+    assert_eq!(
+        fixture
+            .estimator
+            .snapshot(&["account-a".into(), "account-b".into()])["account-a"]
+            .reserved_requests,
+        0
+    );
+    assert_eq!(
+        fixture
+            .estimator
+            .snapshot(&["account-a".into(), "account-b".into()])["account-b"]
+            .reserved_requests,
+        0
+    );
+    fixture.database.close().await.expect("database closes");
+}
+
+#[tokio::test]
 async fn replacement_claim_cannot_bypass_a_blocked_prior_publication() {
     let fixture = fixture().await;
     let barrier = Arc::new(Barrier::new(2));
@@ -585,9 +841,10 @@ async fn replacement_claim_cannot_bypass_a_blocked_prior_publication() {
     facts.requested_protocol = Some("openai".into());
     facts.client_protocol = Some("openai".into());
     facts.projected_tokens = 42;
+    let only_account_a = BTreeSet::from(["account-b".to_owned()]);
     let first_claim = fixture
         .router
-        .select_and_claim(&facts, &BTreeSet::new())
+        .select_and_claim(&facts, &only_account_a)
         .await
         .expect("first claim selection")
         .expect("first claim exists");
@@ -612,7 +869,7 @@ async fn replacement_claim_cannot_bypass_a_blocked_prior_publication() {
     };
     let replacement = fixture
         .router
-        .select_and_claim(&facts, &BTreeSet::new())
+        .select_and_claim(&facts, &only_account_a)
         .await
         .expect("replacement selection")
         .expect("replacement claim exists for the publication gate");

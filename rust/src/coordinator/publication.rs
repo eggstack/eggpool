@@ -442,14 +442,13 @@ impl PublicationService {
                     request_id,
                     _existing_account_id,
                     existing_model_id,
-                    existing_provider_id,
+                    _existing_provider_id,
                     existing_protocol,
                     existing_streamed,
                     existing_status,
                 )) = existing
                 {
                     if existing_model_id != model_id
-                        || existing_provider_id != provider_id
                         || existing_protocol != input.client_protocol
                         || existing_streamed != i64::from(input.streamed)
                     {

@@ -201,7 +201,7 @@ fn c013_retry_after_parsing_preserves_python_semantics_and_bound() {
     );
     assert_eq!(
         parse_retry_after("Sun, 14 Nov 2027 22:13:32 GMT", 1_700_000_000, policy),
-        Some(Duration::from_secs(126_230_412))
+        Some(Duration::from_secs(1_800))
     );
     assert_eq!(
         parse_retry_after("not-a-delay", 1_700_000_000, policy),
