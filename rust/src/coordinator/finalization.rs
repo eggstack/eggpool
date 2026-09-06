@@ -538,6 +538,14 @@ struct SupervisorInner {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CommandCompatibility {
+    account_id: i64,
+    account_name: String,
+    provider_id: String,
+    model_id: String,
+    upstream_model_id: String,
+    client_protocol: String,
+    upstream_protocol: String,
+    reservation_id: i64,
     request_terminal: bool,
     outcome: FinalizationOutcome,
     status_code: Option<u16>,
@@ -550,11 +558,19 @@ struct CommandCompatibility {
 
 impl FinalizationCommand {
     fn compatibility(&self) -> CommandCompatibility {
-        let (request_terminal, data) = match self {
-            Self::Request { data, .. } => (true, data),
-            Self::FailedAttempt { data, .. } => (false, data),
+        let (identity, request_terminal, data) = match self {
+            Self::Request { identity, data, .. } => (identity, true, data),
+            Self::FailedAttempt { identity, data, .. } => (identity, false, data),
         };
         CommandCompatibility {
+            account_id: identity.account_id,
+            account_name: identity.account_name.clone(),
+            provider_id: identity.provider_id.clone(),
+            model_id: identity.model_id.clone(),
+            upstream_model_id: identity.upstream_model_id.clone(),
+            client_protocol: identity.client_protocol.clone(),
+            upstream_protocol: identity.upstream_protocol.clone(),
+            reservation_id: identity.reservation_id,
             request_terminal,
             outcome: data.outcome,
             status_code: data.status_code,

@@ -11,8 +11,9 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        PublicationError, PublicationFaultInjector, PublicationInput, PublicationOutcome,
-        PublicationService, PublicationStage,
+        DurableFinalizer, FinalizationData, FinalizationOutcome, PublicationError,
+        PublicationFaultInjector, PublicationInput, PublicationOutcome, PublicationService,
+        PublicationStage,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     quota::{AccountQuota, QuotaEstimator},
@@ -242,10 +243,18 @@ async fn later_attempt_reuses_the_pending_request_without_creating_a_parent() {
     let PublicationOutcome::Published(first) = first else {
         panic!("first publication must be new");
     };
-    first
-        .claim
-        .release_active_claim()
-        .expect("release first claim");
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_failed_attempt(
+            &first.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::UpstreamError,
+                release_reason: Some("retryable".into()),
+                ..FinalizationData::default()
+            },
+            Some(first.claim),
+        )
+        .await
+        .expect("finalize first attempt before retry");
 
     let second = service
         .publish(claim(&fixture).await, input(2))

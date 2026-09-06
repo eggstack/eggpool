@@ -1,6 +1,6 @@
 # M7 Coordinator Handoff Sequence
 
-Status: corrective pass active
+Status: corrective core closed; C007 ready
 
 Execute and close in this order:
 
@@ -10,9 +10,9 @@ Execute and close in this order:
 4. C004 — provider-bound attempt construction, auth/header/path assembly, and M4 submission (**historical closure**; post-closure findings corrected by C012/C013).
 5. C005 — canonical failure effects, retry budget, account/wire failover, exhaustion (**historical closure**; post-closure findings corrected by C012/C013).
 6. C006 — attempt/request finalizers, claim compensation, retained terminal ownership (**historical closure**; post-closure findings corrected by C012/C013).
-7. C012 — coordinator core contract correction for C003-C006 (**ready**).
-8. C013 — independent differential/fault requalification of corrected C003-C006.
-9. C007 — finite provider response classification, downstream handoff, completion (**re-blocked until C013 closes**).
+7. C012 — coordinator core contract correction for C003-C006 (**closed**).
+8. C013 — independent differential/fault requalification of corrected C003-C006 (**closed**; see [closure](../../closure/coordinator/013-status.md)).
+9. C007 — finite provider response classification, downstream handoff, completion (**ready**).
 10. C008 — streaming handoff, header/first-byte/idle timeouts, cancellation, EOF/terminal policy.
 11. C009 — Axum public inference endpoints and D007 semantic-router internal coordinator dispatch.
 12. C010 — restart reconciliation and deterministic fault injection across durable/runtime boundaries.

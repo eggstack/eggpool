@@ -14,6 +14,9 @@ pub enum FailureSource {
     Transport,
     ProviderResponse,
     Client,
+    ClientValidation,
+    LocalPreparation,
+    Database,
     Cancellation,
 }
 
@@ -137,6 +140,19 @@ pub struct FailureEffects {
     pub wire_effect: String,
     pub backoff_reason: Option<String>,
     pub retry_after: Option<Duration>,
+    /// Relative durable backoff selected by the policy.  Keeping this as a
+    /// duration makes the classifier deterministic under injected clocks;
+    /// persistence adds it to its own clock at the application boundary.
+    pub backoff_until: Option<Duration>,
+    /// Python's policy vocabulary is intentionally retained at this
+    /// boundary.  The enum fields above are useful for Rust control flow,
+    /// while these labels are the differential contract consumed by later
+    /// coordinator slices.
+    pub retry_action: String,
+    pub retry_scope_label: String,
+    pub evidence_class: String,
+    pub circuit_penalty: bool,
+    pub release_probe_only: bool,
     pub provider_attributable: bool,
     pub downstream_started: bool,
 }
@@ -226,10 +242,13 @@ impl FailureDecisionEngine {
     /// Classify once and return whether the caller owns the first effect
     /// application for this attempt.  Retried finalization observes the same
     /// decision without applying account/model effects twice.
-    pub fn decide(&mut self, observation: &FailureObservation) -> (FailureEffects, bool) {
+    pub fn decide(
+        &mut self,
+        observation: &FailureObservation,
+    ) -> Result<(FailureEffects, bool), EffectLedgerError> {
         let effects = classify(observation, self.policy);
-        let first_application = self.ledger.apply_once(observation.attempt_id);
-        (effects, first_application)
+        let first_application = self.ledger.try_apply_once(observation.attempt_id)?;
+        Ok((effects, first_application))
     }
 
     pub fn try_decide(
@@ -263,7 +282,11 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         .unwrap_or_default();
     let local = matches!(
         observation.source,
-        FailureSource::Client | FailureSource::Cancellation
+        FailureSource::Client
+            | FailureSource::ClientValidation
+            | FailureSource::LocalPreparation
+            | FailureSource::Database
+            | FailureSource::Cancellation
     ) || matches!(observation.category_hint, Some(FailureCategory::BadRequest))
         && observation.source == FailureSource::Client;
     let retryable = !observation.response_started
@@ -273,7 +296,10 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         .category_hint
         .unwrap_or(match observation.source {
             FailureSource::Cancellation => FailureCategory::Cancelled,
-            FailureSource::Client => FailureCategory::BadRequest,
+            FailureSource::Client
+            | FailureSource::ClientValidation
+            | FailureSource::LocalPreparation
+            | FailureSource::Database => FailureCategory::BadRequest,
             FailureSource::Transport => FailureCategory::TransientTransport,
             FailureSource::ProviderResponse => match observation.status {
                 Some(401 | 403) => FailureCategory::Authentication,
@@ -312,7 +338,18 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
     };
     let mut persist_backoff = false;
     let mut backoff_reason = None;
+    let mut backoff_until = None;
     let mut provider_attributable = false;
+    let mut evidence_class = match observation.source {
+        FailureSource::Transport => "transport_failure",
+        FailureSource::Database => "database_local",
+        FailureSource::Cancellation => "cancellation_local",
+        FailureSource::ClientValidation => "client_validation",
+        FailureSource::LocalPreparation => "local_preparation_local",
+        FailureSource::Client => "client_validation",
+        FailureSource::ProviderResponse => "provider_response",
+    }
+    .to_owned();
 
     if local {
         category = if observation.source == FailureSource::Cancellation {
@@ -320,11 +357,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         } else {
             FailureCategory::BadRequest
         };
-        client_outcome = if observation.source == FailureSource::Cancellation {
-            "upstream_error"
-        } else {
-            "client_error"
-        };
+        client_outcome = "client_error";
     } else if category == FailureCategory::WireRejected && !observation.response_started {
         wire_effect = "reject_candidate";
         if retryable {
@@ -336,6 +369,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         circuit_effect = "failure";
         persist_backoff = true;
         backoff_reason = Some("connection_failure");
+        backoff_until = Some(Duration::from_secs(30));
         provider_attributable = true;
         if retryable {
             retry_scope = RetryScope::Account;
@@ -350,6 +384,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 circuit_effect = "failure";
                 persist_backoff = true;
                 backoff_reason = Some("authentication_failed");
+                evidence_class = "explicit_credential_invalid".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -374,12 +409,15 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(400), _) => {
                 category = FailureCategory::BadRequest;
+                evidence_class = "http_400_validation".into();
             }
             (Some(401), "model_absent") => {
                 category = FailureCategory::ModelUnavailable;
                 model_effect = "quarantine";
                 persist_backoff = true;
                 backoff_reason = Some("model_unavailable");
+                backoff_until = Some(Duration::from_secs(300));
+                evidence_class = "runtime_model_absent_404".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -388,6 +426,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(401), _) => {
                 category = FailureCategory::Authentication;
+                evidence_class = "http_401_ambiguous".into();
             }
             (Some(402), _)
             | (Some(403), "quota_exhausted")
@@ -396,6 +435,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 account_effect = "quota";
                 persist_backoff = true;
                 backoff_reason = Some("quota_exhausted");
+                evidence_class = "quota_exhausted".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -404,6 +444,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(403), _) => {
                 category = FailureCategory::BadRequest;
+                evidence_class = "http_403_no_evidence".into();
             }
             (Some(404), "model_absent") => {
                 category = FailureCategory::ModelUnavailable;
@@ -416,6 +457,8 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 };
                 persist_backoff = true;
                 backoff_reason = Some("model_unavailable");
+                backoff_until = Some(Duration::from_secs(300));
+                evidence_class = "runtime_model_absent_404".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -428,6 +471,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             {
                 category = FailureCategory::WireRejected;
                 wire_effect = "reject_candidate";
+                evidence_class = wire_evidence_class(&signal).to_owned();
                 if retryable {
                     retry_scope = RetryScope::Wire;
                     action = NextAction::RetryWire;
@@ -440,6 +484,8 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 circuit_effect = "failure";
                 persist_backoff = true;
                 backoff_reason = Some("connect_timeout");
+                backoff_until = Some(Duration::from_secs(30));
+                evidence_class = "http_408_timeout".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -452,6 +498,8 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 account_effect = "rate_limit";
                 persist_backoff = true;
                 backoff_reason = Some("rate_limited");
+                backoff_until = observation.retry_after;
+                evidence_class = "http_429_rate_limited".into();
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -460,6 +508,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(409 | 422), _) => {
                 category = FailureCategory::BadRequest;
+                evidence_class = "http_409_no_evidence".into();
             }
             (Some(500..=599), _) => {
                 category = FailureCategory::Temporary;
@@ -468,6 +517,8 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 circuit_effect = "failure";
                 persist_backoff = true;
                 backoff_reason = Some("upstream_server_error");
+                backoff_until = Some(Duration::from_secs(20));
+                evidence_class = format!("http_{}_server_error", observation.status.unwrap_or(500));
                 provider_attributable = true;
                 if retryable {
                     retry_scope = RetryScope::Account;
@@ -493,6 +544,37 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
     {
         action = NextAction::Exhaust;
     }
+    let retry_scope_label = match retry_scope {
+        RetryScope::None => "none",
+        RetryScope::Account => "other_account",
+        RetryScope::Wire => "same_account_other_wire",
+        RetryScope::Wait => "wait",
+    };
+    let retry_action = match action {
+        NextAction::RetryAccount => "other_account_same_wire",
+        NextAction::RetryWire => "alternate_wire_same_account",
+        NextAction::WaitRateLimit => "wait_rate_limit",
+        NextAction::Complete | NextAction::Exhaust => "none",
+    };
+    if matches!(
+        signal.as_str(),
+        "wire_auth_mismatch"
+            | "wire_surface_unsupported"
+            | "wire_schema_mismatch"
+            | "model_unsupported_on_surface"
+    ) && observation.alternate_wire_available
+    {
+        evidence_class = wire_evidence_class(&signal).to_owned();
+    }
+    if observation.source == FailureSource::ProviderResponse
+        && observation.status.is_none()
+        && evidence_class == "provider_response"
+    {
+        evidence_class = "provider_response_unknown".into();
+    }
+    let circuit_penalty = circuit_effect != "none";
+    let release_probe_only =
+        !circuit_penalty && account_effect == "none" && model_effect == "none" && !persist_backoff;
     FailureEffects {
         category,
         retry_scope,
@@ -510,9 +592,25 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
         circuit_effect: circuit_effect.into(),
         wire_effect: wire_effect.into(),
         backoff_reason: backoff_reason.map(str::to_owned),
+        backoff_until,
+        retry_action: retry_action.into(),
+        retry_scope_label: retry_scope_label.into(),
+        evidence_class,
+        circuit_penalty,
+        release_probe_only,
         retry_after: observation.retry_after,
         provider_attributable,
         downstream_started: observation.downstream_started || observation.response_started,
+    }
+}
+
+fn wire_evidence_class(signal: &str) -> &'static str {
+    match signal {
+        "wire_auth_mismatch" => "wire_auth_mismatch_rejection",
+        "wire_surface_unsupported" => "wire_surface_unsupported_rejection",
+        "wire_schema_mismatch" => "wire_schema_mismatch_rejection",
+        "model_unsupported_on_surface" => "model_unsupported_on_surface_rejection",
+        _ => "wire_rejection",
     }
 }
 
@@ -532,15 +630,14 @@ pub fn parse_retry_after(
     now_epoch_seconds: i64,
     policy: RetryPolicy,
 ) -> Option<Duration> {
-    let seconds = value
-        .trim()
-        .parse::<i64>()
-        .ok()
-        .or_else(|| parse_rfc1123(value).map(|epoch| epoch - now_epoch_seconds))?;
-    if seconds < 0 {
-        return None;
+    if let Ok(seconds) = value.trim().parse::<i64>() {
+        if seconds < 0 {
+            return None;
+        }
+        return Some(Duration::from_secs(seconds as u64).min(policy.max_retry_after));
     }
-    Some(Duration::from_secs(seconds as u64).min(policy.max_retry_after))
+    let seconds = parse_rfc1123(value)? - now_epoch_seconds;
+    (seconds >= 0).then(|| Duration::from_secs(seconds as u64))
 }
 
 fn parse_rfc1123(value: &str) -> Option<i64> {

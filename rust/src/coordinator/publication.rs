@@ -185,6 +185,8 @@ pub enum PublicationError {
     Injected { stage: PublicationStage },
     #[error("duplicate publication conflicts with existing request identity {proxy_request_id:?}")]
     DuplicateConflict { proxy_request_id: String },
+    #[error("replacement attempt cannot publish before the prior attempt converges")]
+    PriorAttemptNotFinalized,
     #[error("claim transition failed: {0}")]
     Claim(#[from] ClaimError),
     #[error(
@@ -238,6 +240,7 @@ enum TransactionOutcome {
     },
     Observed(FinalizationIdentity),
     Conflict,
+    PriorAttemptNotFinalized,
 }
 
 /// C002 durable publication service.
@@ -298,6 +301,9 @@ impl PublicationService {
             Ok(value) => value,
             Err(error) => return self.rollback_after_error(claim, error),
         };
+        if matches!(transaction, TransactionOutcome::PriorAttemptNotFinalized) {
+            return self.rollback_after_error(claim, PublicationError::PriorAttemptNotFinalized);
+        }
 
         let TransactionOutcome::Created {
             request_id,
@@ -321,6 +327,7 @@ impl PublicationService {
                     },
                 ),
                 TransactionOutcome::Created { .. } => unreachable!(),
+                TransactionOutcome::PriorAttemptNotFinalized => unreachable!(),
             };
         };
 
@@ -511,7 +518,38 @@ impl PublicationService {
                             attempt_number: input.attempt_number,
                         }));
                     }
-                    // A retry attempt on an existing pending request is valid.
+                    if input.attempt_number > 1 {
+                        let prior_attempt = connection
+                            .query_row(
+                                "SELECT a.completed_at, r.status
+                                 FROM request_attempts a
+                                 LEFT JOIN reservations r ON r.request_id = a.request_id
+                                     AND r.account_id = a.account_id
+                                     AND r.model_id = a.model_id
+                                 WHERE a.request_id = ?1 AND a.attempt_number = ?2
+                                 ORDER BY r.id DESC LIMIT 1",
+                                params![request_id, input.attempt_number - 1],
+                                |row| {
+                                    Ok((
+                                        row.get::<_, Option<String>>(0)?,
+                                        row.get::<_, Option<String>>(1)?,
+                                    ))
+                                },
+                            )
+                            .optional()?;
+                        if prior_attempt.is_none()
+                            || prior_attempt
+                                .as_ref()
+                                .is_some_and(|(completed, reservation)| {
+                                    completed.is_none() || reservation.as_deref() == Some("active")
+                                })
+                        {
+                            return Ok(TransactionOutcome::PriorAttemptNotFinalized);
+                        }
+                    }
+                    // A retry attempt on an existing pending request is valid
+                    // only after the previous attempt's durable and local
+                    // release boundary has converged.
                     connection.execute(
                         "UPDATE requests SET account_id = ?, reserved_microdollars = ?,\n\
                          provider_id = ? WHERE id = ? AND status = 'pending'",

@@ -122,7 +122,7 @@ C003-C006 historical implementation
 
 C012 repairs missing fixed/hinted/rate-limited wire semantics and state bounds, preserves provider-native `upstream_model_id` through C004, completes header/request evidence, restores the full C001 failure/effect distinctions including ambiguous-auth behavior, bounds/retires effect ownership, and makes durable finalization re-read zero-row transitions and reject incompatible retained commands. C013 independently proves those fixes against the C001 Python oracle plus deterministic M4, concurrency, boundedness, and finalization fault fixtures.
 
-Only `registry.md` authorizes handoff. C012 is currently the sole dependency-ready plan; C013 is queued; C007 has been re-blocked until accepted C013 closure.
+Only `registry.md` authorizes handoff. C013 is accepted and the corrected core is closed; C007 is now the sole dependency-ready plan. C008-C011 and M8 remain behind their existing serial gates.
 
 M7 implements a bounded retained-finalization supervisor and explicit reconciliation interface because terminal cleanup cannot depend on the client task. M8, not M7, owns immutable runtime-generation publication, rehash, signal/shutdown orchestration, and recurring/background scheduling around those interfaces.
 

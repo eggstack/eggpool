@@ -1,4 +1,10 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use eggpool::{
     Config,
@@ -7,7 +13,8 @@ use eggpool::{
     coordinator::{
         DurableFinalizer, EffectLedger, FailureObservation, FinalizationCommand, FinalizationData,
         FinalizationError, FinalizationOutcome, FinalizationSupervisor, ProviderModelPresence,
-        PublicationInput, PublicationOutcome, PublicationService, RetryPolicy, classify,
+        PublicationFaultInjector, PublicationInput, PublicationOutcome, PublicationService,
+        PublicationStage, RetryPolicy, classify,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     quota::{AccountQuota, QuotaEstimator},
@@ -98,7 +105,11 @@ async fn fixture() -> Fixture {
     }
 }
 
-async fn published(fixture: &Fixture, request_id: &str) -> eggpool::coordinator::PublishedAttempt {
+async fn published_attempt(
+    fixture: &Fixture,
+    request_id: &str,
+    attempt_number: i64,
+) -> eggpool::coordinator::PublishedAttempt {
     let mut facts = RoutingRequestFacts::new("model-a");
     facts.requested_protocol = Some("openai".into());
     facts.client_protocol = Some("openai".into());
@@ -112,7 +123,7 @@ async fn published(fixture: &Fixture, request_id: &str) -> eggpool::coordinator:
     let outcome = PublicationService::new(fixture.database.clone())
         .publish(
             claim,
-            PublicationInput::new(request_id, "openai", "openai", false, 1),
+            PublicationInput::new(request_id, "openai", "openai", false, attempt_number),
         )
         .await
         .expect("publication succeeds");
@@ -120,6 +131,10 @@ async fn published(fixture: &Fixture, request_id: &str) -> eggpool::coordinator:
         panic!("expected published attempt");
     };
     *value
+}
+
+async fn published(fixture: &Fixture, request_id: &str) -> eggpool::coordinator::PublishedAttempt {
+    published_attempt(fixture, request_id, 1).await
 }
 
 #[tokio::test]
@@ -357,6 +372,84 @@ async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
         .await
         .expect("database closes");
 
+    let fixture_attempt = fixture().await;
+    let published_attempt = published(&fixture_attempt, "c013-missing-attempt").await;
+    fixture_attempt
+        .database
+        .call(|connection| {
+            connection.execute("DELETE FROM request_attempts WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await
+        .expect("delete attempt");
+    let missing_attempt = DurableFinalizer::new(fixture_attempt.database.clone())
+        .finalize_request(
+            &published_attempt.identity,
+            FinalizationData::default(),
+            None,
+        )
+        .await
+        .expect_err("missing attempt is not convergence");
+    assert!(matches!(
+        missing_attempt,
+        FinalizationError::Invariant {
+            entity: "attempt",
+            ..
+        }
+    ));
+    published_attempt
+        .claim
+        .release_quota_reservation()
+        .expect("release attempt fixture quota");
+    published_attempt
+        .claim
+        .release_active_claim()
+        .expect("release attempt fixture claim");
+    fixture_attempt
+        .database
+        .close()
+        .await
+        .expect("database closes");
+
+    let fixture_reservation = fixture().await;
+    let published_reservation = published(&fixture_reservation, "c013-missing-reservation").await;
+    fixture_reservation
+        .database
+        .call(|connection| {
+            connection.execute("DELETE FROM reservations WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await
+        .expect("delete reservation");
+    let missing_reservation = DurableFinalizer::new(fixture_reservation.database.clone())
+        .finalize_request(
+            &published_reservation.identity,
+            FinalizationData::default(),
+            None,
+        )
+        .await
+        .expect_err("missing reservation is not convergence");
+    assert!(matches!(
+        missing_reservation,
+        FinalizationError::Invariant {
+            entity: "reservation",
+            ..
+        }
+    ));
+    published_reservation
+        .claim
+        .release_quota_reservation()
+        .expect("release reservation fixture quota");
+    published_reservation
+        .claim
+        .release_active_claim()
+        .expect("release reservation fixture claim");
+    fixture_reservation
+        .database
+        .close()
+        .await
+        .expect("database closes");
+
     let fixture_conflict = fixture().await;
     let published_conflict = published(&fixture_conflict, "c012-conflict").await;
     let supervisor = FinalizationSupervisor::with_capacity(
@@ -375,7 +468,7 @@ async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
         .expect("first command");
     let incompatible = supervisor
         .register(FinalizationCommand::Request {
-            identity: published_conflict.identity,
+            identity: published_conflict.identity.clone(),
             data: FinalizationData {
                 outcome: FinalizationOutcome::ClientError,
                 ..FinalizationData::default()
@@ -387,10 +480,157 @@ async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
         incompatible,
         FinalizationError::IncompatibleCommand
     ));
+    let mut identity_conflict = published_conflict.identity.clone();
+    identity_conflict.account_id = 99;
+    let identity_incompatible = supervisor
+        .register(FinalizationCommand::Request {
+            identity: identity_conflict,
+            data: FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                ..FinalizationData::default()
+            },
+            claim: None,
+        })
+        .expect_err("same key with different durable identity must not share");
+    assert!(matches!(
+        identity_incompatible,
+        FinalizationError::IncompatibleCommand
+    ));
     first.wait().await.expect("first command completes");
     fixture_conflict
         .database
         .close()
         .await
         .expect("database closes");
+}
+
+#[tokio::test]
+async fn retry_replacement_waits_for_prior_attempt_cleanup_and_converges_once() {
+    let fixture = fixture().await;
+    let first = published_attempt(&fixture, "c013-retry-order", 1).await;
+    let finalizer = DurableFinalizer::new(fixture.database.clone());
+    let failed = finalizer
+        .finalize_failed_attempt(
+            &first.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::UpstreamError,
+                status_code: Some(503),
+                release_reason: Some("retryable".into()),
+                ..FinalizationData::default()
+            },
+            Some(first.claim),
+        )
+        .await
+        .expect("first attempt cleanup");
+    assert!(failed.attempt_terminal);
+    assert!(!failed.request_terminal);
+    assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    assert_eq!(
+        fixture.estimator.snapshot(&["account-a".into()])["account-a"].reserved_requests,
+        0
+    );
+
+    let second = published_attempt(&fixture, "c013-retry-order", 2).await;
+    assert_eq!(second.identity.db_request_id, first.identity.db_request_id);
+    assert_ne!(second.identity.attempt_id, first.identity.attempt_id);
+    let completed = finalizer
+        .finalize_request(
+            &second.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                release_reason: Some("completed".into()),
+                ..FinalizationData::default()
+            },
+            Some(second.claim),
+        )
+        .await
+        .expect("second attempt completion");
+    assert!(completed.request_terminal);
+    let rows = fixture
+        .database
+        .call(|connection| {
+            Ok((
+                connection.query_row("SELECT status FROM requests", [], |row| {
+                    row.get::<_, String>(0)
+                })?,
+                connection.query_row("SELECT COUNT(*) FROM request_attempts", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row(
+                    "SELECT COUNT(*) FROM reservations WHERE status = 'released'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await
+        .expect("terminal rows");
+    assert_eq!(rows, ("completed".into(), 2, 2));
+    assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    fixture.database.close().await.expect("database closes");
+}
+
+#[tokio::test]
+async fn replacement_claim_cannot_bypass_a_blocked_prior_publication() {
+    let fixture = fixture().await;
+    let barrier = Arc::new(Barrier::new(2));
+    let entered = Arc::new(AtomicBool::new(false));
+    let injector = PublicationFaultInjector::block_once_at(
+        PublicationStage::BeforeCommit,
+        Arc::clone(&barrier),
+        Arc::clone(&entered),
+    );
+    let service = PublicationService::new(fixture.database.clone()).with_fault_injector(injector);
+    let mut facts = RoutingRequestFacts::new("model-a");
+    facts.requested_protocol = Some("openai".into());
+    facts.client_protocol = Some("openai".into());
+    facts.projected_tokens = 42;
+    let first_claim = fixture
+        .router
+        .select_and_claim(&facts, &BTreeSet::new())
+        .await
+        .expect("first claim selection")
+        .expect("first claim exists");
+    let task = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .publish(
+                    first_claim,
+                    PublicationInput::new("c013-race", "openai", "openai", false, 1),
+                )
+                .await
+        }
+    });
+    while !entered.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    barrier.wait();
+    let first = task.await.expect("publication task").expect("publication");
+    let eggpool::coordinator::PublicationOutcome::Published(first) = first else {
+        panic!("expected first publication");
+    };
+    let replacement = fixture
+        .router
+        .select_and_claim(&facts, &BTreeSet::new())
+        .await
+        .expect("replacement selection")
+        .expect("replacement claim exists for the publication gate");
+    let replacement_error = service
+        .publish(
+            replacement,
+            PublicationInput::new("c013-race", "openai", "openai", false, 2),
+        )
+        .await
+        .expect_err("replacement publication must wait for attempt cleanup");
+    assert!(matches!(
+        replacement_error,
+        eggpool::coordinator::PublicationError::PriorAttemptNotFinalized
+    ));
+    first
+        .claim
+        .release_active_claim()
+        .expect("release blocked claim");
+    assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    fixture.database.close().await.expect("database closes");
 }
