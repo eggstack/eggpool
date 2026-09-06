@@ -2,7 +2,7 @@
 
 Status: closed
 
-Implementation commit: [`5495f72`](https://github.com/eggstack/eggpool/commit/5495f72)
+Implementation commits: [`5495f72`](https://github.com/eggstack/eggpool/commit/5495f72), [`2f37f7b`](https://github.com/eggstack/eggpool/commit/2f37f7b)
 
 Plan: [C012 — coordinator core contract correction](../../implementation/coordinator/012-coordinator-core-contract-correction.md)
 
