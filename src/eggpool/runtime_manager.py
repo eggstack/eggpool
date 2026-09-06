@@ -53,7 +53,8 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
 
 **Process-owned** (never recreated for a generation):
 
-- ``AppConfig`` -- immutable after startup; shared across generations.
+- startup ``AppConfig`` input and the compatibility fallback on
+  ``app.state``; active request configuration lives on the generation.
 - ``Database`` (primary + stats) -- single-connection serialization.
 - All repositories (``AccountRepository``, ``RequestRepository``,
   ``AttemptRepository``, ``ReservationRepository``,
@@ -62,7 +63,8 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
   ``ProviderRepository``, ``UsageRollupRepository``,
   ``RoutingDecisionRepository``) -- thin repos over process-owned DB.
 - ``MetricsWriteCoalescer`` -- flushed at shutdown; survives gen.
-- ``RuntimeMetricsService`` -- reads manager diagnostics.
+- ``RuntimeMetricsService`` -- process-owned diagnostics service that refreshes
+  generation-backed probe sources from the manager per snapshot.
 - ``DashboardTelemetry`` -- 30s in-memory cache.
 - ``UpdateChecker`` -- 24h PyPI probe.
 - ``ModelRouterAffinity`` -- bounded process-local semantic route cache;
@@ -87,18 +89,20 @@ table and ``_RUNTIME_OWNED_APP_STATE_ATTRS``.
   / ``StreamDiagnostics`` / ``RoutingTraceGuard`` -- per-generation
   telemetry/guardrails.
 
-**Closures that capture startup services** (reload hazard):
+**Generation-aware background closures**:
 
 - Catalog refresh callbacks lease the active generation and use the shared
   model-info lifecycle helper; they do not capture ``catalog`` or
   ``effective_model_info`` from startup.
-- ``_retention_cleanup_once`` captures ``db``, ``config``, ``router``.
-- ``_refresh_usage_windows_once`` captures ``router``.
-- ``_health_disabled_models_prune_once`` captures ``app`` (reads ``app.state``).
+- ``_retention_cleanup_once`` captures the process-owned ``db`` and leases the
+  active generation for config and router state.
+- ``_refresh_usage_windows_once`` leases the active generation for router state.
+- ``_health_disabled_models_prune_once`` leases the active generation before
+  reading generation-owned state.
 - ``_metrics_flush_once`` captures ``metrics_coalescer``.
 - ``_automatic_backup_once`` captures ``config``, ``db``, paths.
 
-All other callbacks capture only process-owned resources (``db``,
+Process-owned callbacks capture only process-owned resources (``db``,
 ``config``, ``metrics_coalescer``).
 
 Forward references

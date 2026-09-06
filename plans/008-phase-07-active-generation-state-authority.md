@@ -1,7 +1,7 @@
 # Phase 7 — Active-Generation State Authority
 
 Date: 2026-07-19
-Status: complete (2026-09-05)
+Status: complete (2026-09-06)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–6.
 
@@ -254,10 +254,62 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 
 ## Dependency review
 
-Phase 8 (`plans/009-phase-08-dispatch-writer-restoration.md`) is unblocked:
-its Phase 7 prerequisite is now formally complete, and the plan is already in
-the repository's `implementation handoff` state. Phase 11
-(`plans/012-phase-11-reload-diagnostics.md`) is also unblocked with respect to
-Phases 1–7 and remains in that same handoff state. Phase 9 still coordinates
-with Phase 8, while Phase 10 and Phase 12 retain their later prerequisites, so
-their statuses do not change. No other future-plan status required updating.
+Phase 8 (`plans/009-phase-08-dispatch-writer-restoration.md`) is not
+applicable because the later Plan 091/092 decision removed the dormant writer;
+its Phase 7 prerequisite remains satisfied. Phase 9 and Phase 10 are complete.
+Phase 11 (`plans/012-phase-11-reload-diagnostics.md`) is unblocked with respect
+to Phases 1–7 and remains in the repository's `implementation handoff` state.
+Phase 12 (`plans/013-phase-12-ci-soak-and-performance-closure.md`) remains an
+implementation handoff gated on Phase 11. No future plan was explicitly
+blocked by C008, so no other plan status required updating.
+
+## Final corrective closure
+
+The original C008 closure record was requalified on 2026-09-06 after an exact
+production-source audit found that authentication, model listing, dashboard
+request-shaping, body-size enforcement, and runtime metrics still retained
+direct or stale generation-derived state paths. The corrective implementation
+landed in `a995205e`.
+
+Production diagnostic and API routes now acquire one active-generation lease
+for the full async handler lifetime. Active configuration is used for runtime
+authentication, model exposure, dashboard shaping, and request-body limits.
+Runtime metrics remains process-owned but refreshes all generation-backed probe
+sources from the active manager generation for each serialized snapshot. The
+compatibility mirror remains write-only bootstrap/test support and is not an
+authority for request or diagnostic decisions.
+
+Exact-head verification at `a995205e` passed:
+
+```text
+uv sync --frozen --extra ci
+uv run pytest tests/unit/test_auth.py tests/unit/test_runtime_manager.py \
+  tests/unit/test_runtime_metrics.py \
+  tests/integration/reload/test_stale_app_state.py \
+  tests/integration/test_transcoding_dashboard.py \
+  tests/integration/test_dashboard_routes.py \
+  tests/integration/test_application_startup.py \
+  tests/integration/test_model_info_e2e.py \
+  tests/unit/test_api_runtime.py tests/unit/test_api_network.py \
+  tests/unit/test_model_info_aliases.py \
+  tests/unit/test_model_info_match_evidence_api.py \
+  -q --tb=short --maxfail=1
+283 passed, 1 warning in 17.11s
+
+uv run ruff format --check src/ tests/ scripts/
+728 files already formatted
+uv run ruff check src/ tests/ scripts/
+All checks passed
+uv run pyright src/ scripts/
+0 errors, 0 warnings, 0 informations
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed in 0.54s
+```
+
+### Final dependency/status audit
+
+The current plan inventory was checked for direct C008 dependencies and
+explicitly blocked statuses. Phase 8 is not applicable; Phases 9 and 10 are
+complete; Phase 11 is an unblocked implementation handoff; and Phase 12 is an
+unblocked implementation handoff whose stated prerequisite is the still-open
+Phase 11 work. No future plan required a status update.
