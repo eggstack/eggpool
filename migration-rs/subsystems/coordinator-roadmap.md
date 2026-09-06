@@ -1,6 +1,6 @@
 # M7 Coordinator, Retry, Failover, and Durable Finalization Roadmap
 
-Status: corrective core closed; C007 dependency-ready
+Status: corrective closure active; C014 dependency-ready
 
 Repository baseline for original M7 planning: `04820555479dc3ab86622d9c658c44c45c2c07e7`
 
@@ -77,6 +77,9 @@ Retryable pre-handoff failures transition through an independently terminal atte
 13. **Terminal evidence is not invented.** M6 terminal evidence feeds M7 policy; EOF alone is not universal success.
 14. **Bounded work.** Attempts, effect bookkeeping, wire state, flights, finalization jobs, diagnostics, and recovery scans all have hard bounds/retirement.
 15. **No secret persistence/logging.** Auth/API/proxy values and arbitrary request/provider bodies never enter default diagnostics or durable error detail.
+16. **Completion reflects required ownership, not invocation shape.** A durable-only duplicate with no runtime claim may be complete; a command with unreleased required runtime ownership may not.
+17. **Historical attempt identity is immutable.** Re-observing an old terminal attempt after a replacement changes mutable parent selection validates against the historical attempt/reservation identity without mutating later ownership.
+18. **Retry-After is uniformly bounded.** Numeric and HTTP-date forms cannot exceed the configured maximum effective delay.
 
 ## Dependency sequence
 
@@ -94,6 +97,7 @@ C001 contract + deterministic failure corpus              [closed]
  -> C006 durable finalization/retained ownership          [historical closure]
  -> C012 coordinator core contract correction             [closed]
  -> C013 coordinator core differential requalification    [closed]
+ -> C014 finalization idempotency + Retry-After closure   [READY]
  -> C007 finite response/handoff completion
  -> C008 streaming/handoff/timeouts/cancellation
  -> C009 public inference endpoints + semantic-router dispatch
@@ -104,25 +108,36 @@ C001 contract + deterministic failure corpus              [closed]
 M8 planning/implementation eligibility
 ```
 
-The append-only C012/C013 numbering is intentional. Post-C006 audit found material gaps in the historically closed C003-C006 slice; planning history is not rewritten. C012 and C013 are closed by their corrective implementation and evidence records. C007 is restored as the sole dependency-ready plan.
+The append-only C012-C014 numbering is intentional. Post-closure audits found material or bounded gaps in historically accepted coordinator slices; planning history is not rewritten. C014 is now the sole dependency-ready plan and C007 is re-blocked until it closes.
 
 Only the dependency-ready table in `../registry.md` authorizes handoff.
 
 ## Post-C006 corrective findings
 
-The historical `97a4846` implementation remains useful but did not fully satisfy the accepted C001/C003-C006 contracts. C012/C013 are limited to these findings:
+The historical `97a4846` implementation remains useful but did not fully satisfy the accepted C001/C003-C006 contracts. C012/C013 addressed these findings:
 
-- failure observations/effects omit policy-bearing identity/transport/protocol/signal/model-presence dimensions;
-- ambiguous 401 and explicit invalid-credential evidence are currently conflated;
-- attempt effect bookkeeping is process-lifetime and unbounded;
-- wire state insertion/bounds and fixed/hint/rate-limit-delay semantics are incomplete;
-- provider-native `upstream_model_id` is lost before C004 path/body construction;
-- C004 forwarded-header/request-ID/evidence boundary is incomplete;
-- C006 can claim convergence after zero-row attempt/reservation updates without durable re-read;
-- retained finalization can coalesce incompatible commands by key alone;
-- partial runtime/effect progress is not explicit enough to prove resumable convergence.
+- failure observations/effects omitted policy-bearing identity/transport/protocol/signal/model-presence dimensions;
+- ambiguous 401 and explicit invalid-credential evidence were conflated;
+- attempt effect bookkeeping was process-lifetime and unbounded;
+- wire state insertion/bounds and fixed/hint/rate-limit-delay semantics were incomplete;
+- provider-native `upstream_model_id` was lost before C004 path/body construction;
+- C004 forwarded-header/request-ID/evidence boundary was incomplete;
+- C006 could claim convergence after zero-row attempt/reservation updates without durable re-read;
+- retained finalization could coalesce incompatible commands by key alone;
+- partial runtime/effect progress was not explicit enough to prove resumable convergence.
 
-C012 repairs those semantics. C013 independently requalifies the corrected path against the C001 Python oracle, deterministic M4 fixtures, concurrency, boundedness, and durable/runtime fault injection. Neither plan pulls C007/C008 behavior forward.
+C012 repaired those semantics. C013 independently requalified the corrected path against the C001 Python oracle, deterministic M4 fixtures, concurrency, boundedness, and durable/runtime fault injection.
+
+## Post-C013 residual findings — C014
+
+Post-C013 audit found four narrower issues that must close before C007 resumes:
+
+- durable-only duplicate/reconciliation finalization can report `progress.completed = false` despite compatible durable convergence and no runtime claim obligation;
+- retained finalization compatibility omits authoritative persisted terminal facts such as byte counts, latency, and bounded upstream request ID;
+- numeric Retry-After is capped while HTTP-date Retry-After can bypass `RetryPolicy.max_retry_after`;
+- re-finalizing/re-observing an already-terminal earlier retry attempt after a later attempt updates mutable parent account/provider selection can fail a parent identity check despite valid historical attempt/reservation identity.
+
+C014 must correct these without widening into C007 response handling, C008 streaming policy, C010 restart scanning, or M8 lifecycle work. Its closure requires failing-before/passing-after regression evidence, including a two-attempt historical-idempotency case and uniform Retry-After bound cases.
 
 ## Dependency posture
 
@@ -132,35 +147,27 @@ A small process-local finalization supervisor is justified because terminal clea
 
 ## Failure and requalification corpus
 
-C001 remains the authoritative behavioral corpus. C013 must prove the corrected Rust core across:
+C001 remains the authoritative behavioral corpus. C013 proved the corrected Rust core across client/local failures, transport phases, credential/model/wire evidence, Retry-After, handoff boundaries, wire state, provider-native model submission, header precedence, effect retirement, durable truth, supervisor compatibility, and replacement ownership.
 
-- client/local preparation failures;
-- connect/proxy/TLS/write/read/pool transport phases;
-- ambiguous and explicit 401/403 credential evidence;
-- generic 404/path mismatch vs strong model absence;
-- deterministic wire rejection and alternate-wire legality;
-- 408/429/5xx including bounded Retry-After;
-- response-start false/true no-replay boundary;
-- fixed/hinted/learned/configured wire ordering, TTLs, rejection cooldown, rate-limit negotiation delay, fingerprint changes, eviction, leader/follower cancellation;
-- canonical alias vs provider-native upstream model submission;
-- auth/static/surface/forwarded-header precedence and redaction;
-- effect idempotency/retirement/capacity;
-- missing/already-terminal request/attempt/reservation durable states;
-- compatible/incompatible supervisor registration;
-- partial runtime release and resumable convergence;
-- two-attempt replacement ownership ordering.
+C014 adds focused coverage for:
+
+- durable-only completion progress;
+- compatibility over every authoritative `FinalizationData` field persisted by the durable finalizer;
+- numeric and HTTP-date Retry-After values below/above the configured cap;
+- historical attempt re-observation after later retry publication;
+- no cross-attempt runtime release or mutable parent selection rollback.
 
 ## M7/M8 boundary
 
 M7 implements terminal command identity/progress, bounded retained jobs, explicit drain/reconcile interfaces, and later C010 one-shot restart reconciliation. M8 owns generation publication/replacement, shutdown ordering, signals, and recurring invocation of background/reconciliation work.
 
-C012/C013 must not introduce a perpetual scheduler merely to make finalization/effect state bounded.
+C014 must not introduce a perpetual scheduler merely to close finalization or delay semantics.
 
 ## Closure
 
-M7 closes only after accepted C001-C013/C007-C011 closure evidence proves:
+M7 closes only after accepted C001-C014/C007-C011 closure evidence proves:
 
-- C012/C013 corrective findings are resolved;
+- C012-C014 corrective findings are resolved;
 - no retry after client-visible handoff;
 - no selected-claim, reservation, active-count, quota, circuit-probe, wire-flight, effect-registry, or retained-finalization leak;
 - every retryable attempt reaches its required cleanup boundary before replacement ownership;
@@ -169,8 +176,8 @@ M7 closes only after accepted C001-C013/C007-C011 closure evidence proves:
 - finite and streaming public endpoints match Python semantically;
 - no unresolved high/medium M7 correctness/security issue remains.
 
-C011 remains the aggregate M7 closure plan. C012/C013 correct and requalify the core before C007 proceeds; they do not replace C011.
+C011 remains the aggregate M7 closure plan. C014 only closes the residual core invariants before C007 proceeds; it does not replace C011.
 
 ## Current closure state
 
-C001, C002, C012, and C013 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the post-C006 findings enumerated above. C007 is the sole dependency-ready plan. C008-C011 retain their serial dependencies. M8 remains blocked on accepted C011 closure plus its own planning review.
+C001, C002, C012, and C013 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the findings corrected by C012-C014. C014 is the sole dependency-ready plan. C007 is re-blocked on C014; C008-C011 retain their serial dependencies. M8 remains blocked on accepted C011 closure plus its own planning review.
