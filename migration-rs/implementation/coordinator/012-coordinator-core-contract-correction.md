@@ -1,6 +1,6 @@
 # C012 — Coordinator Core Contract Correction
 
-Status: ready for handoff
+Status: closed; see [closure](../../closure/coordinator/012-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

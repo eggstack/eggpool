@@ -1,6 +1,6 @@
 # M7 Coordinator, Retry, Failover, and Durable Finalization Roadmap
 
-Status: corrective pass active; C012 dependency-ready, C013 queued, C007 re-blocked
+Status: corrective pass active; C012 closed, C013 dependency-ready, C007 re-blocked
 
 Repository baseline for original M7 planning: `04820555479dc3ab86622d9c658c44c45c2c07e7`
 
@@ -92,8 +92,8 @@ C001 contract + deterministic failure corpus              [closed]
  -> C004 provider-bound attempt/submission                [historical closure]
  -> C005 failure effects/retry/failover                   [historical closure]
  -> C006 durable finalization/retained ownership          [historical closure]
- -> C012 coordinator core contract correction             [READY]
- -> C013 coordinator core differential requalification
+ -> C012 coordinator core contract correction             [closed]
+ -> C013 coordinator core differential requalification    [READY]
  -> C007 finite response/handoff completion
  -> C008 streaming/handoff/timeouts/cancellation
  -> C009 public inference endpoints + semantic-router dispatch
@@ -104,7 +104,7 @@ C001 contract + deterministic failure corpus              [closed]
 M8 planning/implementation eligibility
 ```
 
-The append-only C012/C013 numbering is intentional. Post-C006 audit found material gaps in the historically closed C003-C006 slice; planning history is not rewritten. C007 was previously dependency-ready and is now re-blocked until accepted C013 closure.
+The append-only C012/C013 numbering is intentional. Post-C006 audit found material gaps in the historically closed C003-C006 slice; planning history is not rewritten. C012 is closed by its corrective implementation record. C007 was previously dependency-ready and remains re-blocked until accepted C013 closure.
 
 Only the dependency-ready table in `../registry.md` authorizes handoff.
 
@@ -173,4 +173,4 @@ C011 remains the aggregate M7 closure plan. C012/C013 correct and requalify the 
 
 ## Current closure state
 
-C001 and C002 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the post-C006 findings enumerated above. C012 is the sole dependency-ready plan. C013 is queued behind C012. C007 has been re-blocked behind C013; C008-C011 retain their serial dependencies. M8 remains blocked on accepted C011 closure plus its own planning review.
+C001, C002, and C012 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the post-C006 findings enumerated above. C013 is the sole dependency-ready plan. C007 has been re-blocked behind C013; C008-C011 retain their serial dependencies. M8 remains blocked on accepted C011 closure plus its own planning review.

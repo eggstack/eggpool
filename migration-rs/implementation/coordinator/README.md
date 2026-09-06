@@ -1,6 +1,6 @@
 # M7 Coordinator Implementation Handoffs
 
-Status: corrective pass active; C012 dependency-ready, C013 queued, C007 re-blocked
+Status: corrective pass active; C012 closed, C013 dependency-ready, C007 re-blocked
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
@@ -12,8 +12,8 @@ Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 | C004 | [Provider-bound attempt construction and upstream submission](004-provider-attempt-construction-and-submission.md) | capability/invariant | historical closure; C012/C013 correct and requalify post-closure findings |
 | C005 | [Failure effects, retry budget, and failover](005-failure-effects-retry-and-failover.md) | invariant/capability | historical closure; C012/C013 correct and requalify post-closure findings |
 | C006 | [Durable finalization and retained terminal ownership](006-durable-finalization-and-retained-ownership.md) | invariant | historical closure; C012/C013 correct and requalify post-closure findings |
-| C012 | [Coordinator core contract correction](012-coordinator-core-contract-correction.md) | invariant/corrective | **ready for handoff** |
-| C013 | [Coordinator core differential requalification](013-coordinator-core-differential-requalification.md) | invariant/corrective | queued behind C012 |
+| C012 | [Coordinator core contract correction](012-coordinator-core-contract-correction.md) | invariant/corrective | closed; see [closure](../../closure/coordinator/012-status.md) |
+| C013 | [Coordinator core differential requalification](013-coordinator-core-differential-requalification.md) | invariant/corrective | **dependency-ready** |
 | C007 | [Finite response handoff and completion](007-finite-response-handoff-and-completion.md) | capability/invariant | re-blocked behind accepted C013 closure |
 | C008 | [Streaming handoff, timeouts, cancellation, and terminal policy](008-streaming-handoff-timeouts-and-cancellation.md) | capability/invariant | queued behind C007 |
 | C009 | [Public inference endpoints and semantic-router internal dispatch](009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | queued behind C008 |

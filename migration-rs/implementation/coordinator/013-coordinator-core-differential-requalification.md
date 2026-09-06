@@ -1,6 +1,6 @@
 # C013 — Coordinator Core Differential Requalification
 
-Status: queued behind C012
+Status: ready for handoff; C012 accepted
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
