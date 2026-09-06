@@ -1,7 +1,7 @@
 # Phase 6 — Transactional Rehash and Compensatable Commit
 
 Date: 2026-07-19
-Status: complete (2026-09-05)
+Status: complete (2026-09-06)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–5.
 
@@ -410,4 +410,34 @@ The direct successor, Phase 7 (`plans/008-phase-07-active-generation-state-autho
 is already implemented. Phases 8–12 are available implementation-handoff
 plans; their C007-related prerequisites are now satisfied or explicitly
 coordinated with later phases. No future plan is explicitly marked blocked by
-C007, so no additional plan status required changing.
+C007, so no additional plan status required changing. The final status audit
+confirms that Phase 8 is now not applicable, Phases 9 and 10 are complete,
+Phase 11 is an unblocked implementation handoff, and Phase 12 remains an
+unblocked handoff gated on the later Phase 11 work.
+
+## Final revalidation
+
+Revalidated on 2026-09-06 at the closing commit:
+
+```text
+uv run pytest \
+  tests/unit/test_process_transition_plan.py \
+  tests/unit/test_reload_manager.py \
+  tests/unit/test_reload_failure_injection.py \
+  tests/unit/test_reload_post_publication_failures.py \
+  tests/unit/test_reload_resource_failure_paths.py \
+  tests/unit/test_reload_diagnostics_matrix.py \
+  tests/integration/reload/ \
+  -q --tb=short --maxfail=1
+402 passed in 45.01s
+
+uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/
+uv run pyright src/ scripts/
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+728 files already formatted; Ruff clean; Pyright 0 errors; 14 smoke tests passed.
+```
+
+This revalidation confirms the staged transaction, pre-acceptance rollback,
+post-acceptance finalization ownership, cancellation/shutdown handling, and
+diagnostic state-machine evidence recorded above remain green at closure.
