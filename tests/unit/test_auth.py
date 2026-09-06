@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from eggpool.app import acquire_runtime_lease
 from eggpool.auth import require_auth, require_auth_at_startup, verify_api_key
 from eggpool.models.config import AppConfig
 from eggpool.request.coordinator import _redact_auth_shape
@@ -207,6 +209,47 @@ async def test_auth_whitespace_key_rejected_at_runtime() -> None:
         headers={"Authorization": "Bearer "},
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio()
+async def test_require_auth_uses_active_generation_config() -> None:
+    """Authentication must follow the active generation after rehash."""
+    old_config = AppConfig()
+    old_config.server.api_key = "old-secret"
+    active_config = AppConfig()
+    active_config.server.api_key = "active-secret"
+
+    manager = MagicMock()
+    manager.has_active_generation.return_value = True
+    manager.active_snapshot.return_value = SimpleNamespace(config=active_config)
+    request = SimpleNamespace(
+        headers={"authorization": "Bearer active-secret"},
+        state=SimpleNamespace(runtime_lease=None),
+        app=SimpleNamespace(
+            state=SimpleNamespace(config=old_config, runtime_manager=manager)
+        ),
+    )
+
+    await require_auth(request)
+
+
+@pytest.mark.asyncio()
+async def test_acquire_runtime_lease_releases_after_diagnostic_request() -> None:
+    """Generation-backed diagnostics retain ownership across handler awaits."""
+    lease = SimpleNamespace(runtime=object(), release=AsyncMock())
+    manager = MagicMock()
+    manager.acquire = AsyncMock(return_value=lease)
+
+    request = MagicMock()
+    request.app.state.runtime_manager = manager
+
+    dependency = acquire_runtime_lease(request)
+    await anext(dependency)
+    assert request.state.runtime_lease is lease
+
+    await dependency.aclose()
+    lease.release.assert_awaited_once_with()
+    assert request.state.runtime_lease is None
 
 
 class TestRequireAuthAtStartup:

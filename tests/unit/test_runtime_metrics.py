@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
@@ -207,6 +208,36 @@ async def test_snapshot_returns_all_top_level_keys(db: Database) -> None:
     assert set(snap1["memory"].keys()) == set(snap2["memory"].keys())
     assert set(snap1["db"].keys()) == set(snap2["db"].keys())
     assert set(snap1["routing_runtime"].keys()) == set(snap2["routing_runtime"].keys())
+
+
+@pytest.mark.asyncio
+async def test_snapshot_refreshes_generation_owned_sources(db: Database) -> None:
+    """Runtime diagnostics follow the manager's active generation after rehash."""
+    old_config = _build_config()
+    new_config = _build_config()
+    new_config.server.threads = 7
+    generation = SimpleNamespace(
+        config=new_config,
+        supervisor=None,
+        router=None,
+        health_manager=None,
+        outbound_manager=None,
+        client_pool=None,
+        dispatch_overhead_recorder=None,
+        dispatch_span_recorder=None,
+        model_info=None,
+        stream_diagnostics=None,
+        finalization_supervisor=None,
+        routing_trace_guard=None,
+    )
+    service = _make_service(db, config=old_config)
+    service._runtime_manager = SimpleNamespace(  # noqa: SLF001
+        active_snapshot=lambda: generation
+    )
+
+    snapshot = await service.snapshot()
+
+    assert snapshot["server"]["configured_server_threads"] == 7
 
 
 @pytest.mark.asyncio

@@ -120,7 +120,19 @@ async def require_auth(request: Request) -> None:
     Raises:
         HTTPException: If the API key is missing or invalid.
     """
-    config: AppConfig = request.app.state.config
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    runtime_manager = getattr(request.app.state, "runtime_manager", None)
+    if runtime_manager is not None:
+        generation = get_active_generation(request)
+        if generation is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Runtime generation unavailable",
+            )
+        config: AppConfig = generation.config
+    else:
+        config = request.app.state.config
     expected = config.server.resolved_api_key
     if expected is None:
         return

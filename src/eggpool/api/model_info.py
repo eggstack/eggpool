@@ -654,9 +654,12 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
     """
     from fastapi import Depends
 
+    from eggpool.app import acquire_runtime_lease as _acquire_runtime_lease
     from eggpool.auth import require_auth as _require_auth
 
-    dependencies = [Depends(_require_auth)] if require_auth else None
+    dependencies = [Depends(_acquire_runtime_lease)]
+    if require_auth:
+        dependencies.insert(0, Depends(_require_auth))
 
     app.add_api_route(
         path="/api/model-info",
@@ -696,7 +699,7 @@ def register_model_info_routes(app: Any, require_auth: bool = False) -> None:
         path="/api/model-info/refresh",
         endpoint=handle_model_info_refresh,
         methods=["POST"],
-        dependencies=[Depends(_require_auth)],
+        dependencies=[Depends(_require_auth), Depends(_acquire_runtime_lease)],
     )
 
 

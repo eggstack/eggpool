@@ -13,7 +13,7 @@ from importlib.metadata import version as _get_version
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -73,6 +73,7 @@ from eggpool.model_info.presentation import compact_model_info_summary
 from eggpool.models.api import HealthResponse
 from eggpool.models.config import AppConfig
 from eggpool.runtime_manager import (
+    GenerationLease,
     ProcessRuntime,
     RuntimeGeneration,
     RuntimeManager,
@@ -586,6 +587,10 @@ def get_active_generation(request: Request) -> RuntimeGeneration | None:
     has an active generation, or ``None`` otherwise.  Intended for
     request handlers that need generation-owned services.
     """
+    leased = getattr(getattr(request, "state", None), "runtime_lease", None)
+    if isinstance(leased, GenerationLease):
+        return leased.runtime
+
     runtime_manager: RuntimeManager | None = getattr(
         request.app.state, "runtime_manager", None
     )
@@ -597,6 +602,45 @@ def get_active_generation(request: Request) -> RuntimeGeneration | None:
         return None
 
 
+async def acquire_runtime_lease(request: Request) -> AsyncGenerator[None]:
+    """Hold the active generation for an async diagnostic request.
+
+    Generation-backed dashboard and JSON endpoints use this dependency so
+    their service references remain valid for every await in the handler.
+    Minimal unit-test apps without a runtime manager retain their legacy
+    app-state fallback behavior.
+    """
+    runtime_manager: RuntimeManager | None = getattr(
+        request.app.state, "runtime_manager", None
+    )
+    if runtime_manager is None:
+        yield
+        return
+
+    try:
+        lease = await runtime_manager.acquire()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Runtime generation unavailable",
+        ) from exc
+
+    request.state.runtime_lease = lease
+    try:
+        yield
+    finally:
+        await lease.release()
+        request.state.runtime_lease = None
+
+
+def _current_app_config(app: FastAPI) -> AppConfig:
+    """Resolve configuration from the active generation when available."""
+    runtime_manager: RuntimeManager | None = getattr(app.state, "runtime_manager", None)
+    if runtime_manager is not None:
+        return runtime_manager.active_snapshot().config
+    return app.state.config
+
+
 def mirror_generation_on_app_state(
     app: FastAPI,
     generation: RuntimeGeneration,
@@ -606,13 +650,13 @@ def mirror_generation_on_app_state(
     .. deprecated::
         Prefer :meth:`RuntimeManager.acquire` or
         :meth:`RuntimeManager.snapshot_active_values` for accessing
-    generation-owned services. The ``app.state`` mirrors exist for
-    dashboard routes and readiness/operational probes only. Request
-    handlers acquire the generation lease directly and do not read them.
+        generation-owned services. The ``app.state`` mirrors exist only for
+        compatibility consumers and minimal test applications. Production
+        request and diagnostic handlers acquire the generation lease directly
+        or use an active snapshot for short synchronous checks.
 
-    The mirrors exist for dashboard routes and operational probes that have
-    not yet migrated to generation snapshots. Request handlers acquire the
-    generation lease directly and do not read these mirrors.
+    Production dashboard and API handlers acquire the generation lease
+    directly and do not read these mirrors.
     Publication replaces these mirrors whenever a new generation is
     published so the pointers always reflect the currently active slot.
 
@@ -998,27 +1042,9 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         process=process,
     )
 
-    # 12. Mirror factory results onto app.state for dashboard routes,
-    #     readyz probes, and request handlers.
-    app.state.registry = gen_result.registry
-    app.state.catalog = gen_result.catalog
-    app.state.router = gen_result.router
-    app.state.client_pool = gen_result.client_pool
-    app.state.outbound_manager = gen_result.outbound_manager
-    # Keep backward-compat alias
-    legacy_client = gen_result.client_pool.get_default_client()
-    if legacy_client is not None:
-        app.state.httpx_client = legacy_client
-    app.state.health_manager = gen_result.health_manager
-    app.state.account_backoff_repo = gen_result.account_backoff_repo
-    app.state.cost_calculator = gen_result.cost_calculator
-    app.state.dispatch_overhead_recorder = gen_result.dispatch_overhead_recorder
-    app.state.dispatch_span_recorder = gen_result.dispatch_span_recorder
-    app.state.stats = gen_result.stats_service
-    app.state.supervisor = gen_result.supervisor
-    app.state.routing_trace_guard = gen_result.routing_trace_guard
-    app.state.stream_diagnostics = gen_result.stream_diagnostics
-    app.state.local_pre_upstream_recorder = gen_result.local_pre_upstream_recorder
+    # 12. Keep one compatibility snapshot for bootstrap-only consumers.
+    # Request handlers resolve generation-owned values from RuntimeManager.
+    mirror_generation_on_app_state(app, gen_result.generation)
 
     # Local aliases for sections below that still reference these by name.
     supervisor = gen_result.supervisor
@@ -1052,7 +1078,6 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     # graph as startup. The bounded external pass is the first enrichment
     # opportunity; recurring work is driven by catalog_refresh ticks.
     model_info = gen_result.model_info
-    app.state.model_info = model_info
     if model_info is not None and config.model_info.startup_refresh:
         try:
             reconcile_result = await model_info.reconcile_catalog_snapshot(
@@ -1141,7 +1166,7 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
     from eggpool.runtime_metrics import RuntimeMetricsService
 
     app.state.dashboard_telemetry = DashboardTelemetry()
-    app.state.dashboard_telemetry.cache_stats = app.state.stats.cache_snapshot
+    app.state.dashboard_telemetry.cache_stats = gen_result.stats_service.cache_snapshot
 
     # Maintenance state aggregator for /api/stats/runtime diagnostics.
     app.state.maintenance_state = MaintenanceState()
@@ -1153,21 +1178,21 @@ async def _lifespan_runtime(app: FastAPI) -> AsyncGenerator[None]:
         stats_db=stats_db,
         supervisor=supervisor,
         task_monitor=task_monitor,
-        router=app.state.router,
-        health_manager=app.state.health_manager,
+        router=gen_result.router,
+        health_manager=gen_result.health_manager,
         started_monotonic=app.state.started_monotonic,
         started_epoch=app.state.started_epoch,
         metrics_coalescer=metrics_coalescer,
         outbound_manager=outbound_manager,
-        provider_client_pool=app.state.client_pool,
-        dispatch_overhead_recorder=app.state.dispatch_overhead_recorder,
+        provider_client_pool=gen_result.client_pool,
+        dispatch_overhead_recorder=gen_result.dispatch_overhead_recorder,
         local_pre_upstream_recorder=getattr(
             app.state, "local_pre_upstream_recorder", None
         ),
         dispatch_span_recorder=getattr(app.state, "dispatch_span_recorder", None),
         model_info=model_info,
         dashboard_telemetry=app.state.dashboard_telemetry,
-        stream_diagnostics=app.state.stream_diagnostics,
+        stream_diagnostics=gen_result.stream_diagnostics,
         routing_trace_guard=getattr(app.state, "routing_trace_guard", None),
         runtime_manager=None,  # wired in step 24 below
         process=process,
@@ -1640,7 +1665,7 @@ def create_app(
         )
     app.add_middleware(
         _BodyLimitMiddleware,
-        max_bytes=lambda: app.state.config.server.max_request_body_bytes,
+        max_bytes=lambda: _current_app_config(app).server.max_request_body_bytes,
     )
 
     # Dashboard and statistics routes (require auth unless dashboard.public = true)
@@ -1954,13 +1979,15 @@ def create_app(
             media_type="application/json",
         )
 
-    @app.get(f"{API_V1_PREFIX}/models")
+    @app.get(
+        f"{API_V1_PREFIX}/models",
+        dependencies=[Depends(acquire_runtime_lease)],
+    )
     async def list_models(  # pyright: ignore[reportUnusedFunction]
         request: Request,
     ) -> dict[str, Any]:
         await require_auth(request)
 
-        config: AppConfig = request.app.state.config
         # Use the active generation snapshot for generation-owned services.
         runtime_manager: RuntimeManager | None = getattr(
             request.app.state, "runtime_manager", None
@@ -1969,17 +1996,25 @@ def create_app(
         if runtime_manager is not None and runtime_manager.has_active_generation():
             try:
                 gen = runtime_manager.active_snapshot()
+                config: AppConfig = gen.config
                 catalog: CatalogService = gen.catalog
                 health_mgr: HealthManager | None = gen.health_manager
                 mi_service = getattr(gen, "model_info", None)
             except Exception:
-                catalog = request.app.state.catalog
-                health_mgr = getattr(request.app.state, "health_manager", None)
-                mi_service = getattr(request.app.state, "model_info", None)
-        else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Runtime generation unavailable",
+                ) from None
+        elif runtime_manager is None:
+            config = request.app.state.config
             catalog = request.app.state.catalog
             health_mgr = getattr(request.app.state, "health_manager", None)
             mi_service = getattr(request.app.state, "model_info", None)
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="Runtime generation unavailable",
+            )
         models = catalog.get_models_for_exposure(health_manager=health_mgr)
         model_router_registry = getattr(gen, "model_router_registry", None)
         if model_router_registry is None:

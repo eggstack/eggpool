@@ -157,8 +157,14 @@ class RuntimeMetricsService:
         self._routing_trace_writer = routing_trace_writer
         self._maintenance_state = maintenance_state
         self._event_loop_lag_monitor = event_loop_lag_monitor
+        self._snapshot_lock = asyncio.Lock()
 
     async def snapshot(self) -> dict[str, Any]:
+        """Return a snapshot using one coherent generation's sources."""
+        async with self._snapshot_lock:
+            return await self._snapshot_unlocked()
+
+    async def _snapshot_unlocked(self) -> dict[str, Any]:
         """Return a best-effort runtime snapshot.
 
         The snapshot gathers data from multiple sources.  If any probe
@@ -170,6 +176,11 @@ class RuntimeMetricsService:
 
         result: dict[str, Any] = {}
         result["probe_errors"] = probe_errors
+
+        # RuntimeMetricsService is process-owned, but several of its probes
+        # inspect generation-owned objects. Refresh those references at the
+        # start of each snapshot so diagnostics follow committed rehashes.
+        self._refresh_active_generation_sources(probe_errors)
 
         # Server / process info
         result["server"] = self._snapshot_server(now_monotonic, probe_errors)
@@ -272,6 +283,35 @@ class RuntimeMetricsService:
         result["readiness_probe"] = await self._snapshot_readiness_probe(probe_errors)
 
         return result
+
+    def _refresh_active_generation_sources(self, probe_errors: list[str]) -> None:
+        """Point generation-backed probes at the manager's active generation."""
+        manager = self._runtime_manager
+        if manager is None:
+            return
+        try:
+            generation = manager.active_snapshot()
+        except Exception as exc:
+            _append_probe_error(
+                probe_errors,
+                f"Active generation source refresh failed: {type(exc).__name__}",
+            )
+            return
+
+        self._config = generation.config
+        self._supervisor = generation.supervisor
+        self._router = generation.router
+        self._health_manager = generation.health_manager
+        self._outbound_manager = generation.outbound_manager
+        self._provider_client_pool = generation.client_pool
+        self._dispatch_overhead_recorder = generation.dispatch_overhead_recorder
+        self._dispatch_span_recorder = generation.dispatch_span_recorder
+        self._model_info = getattr(generation, "model_info", None)
+        self._stream_diagnostics = getattr(generation, "stream_diagnostics", None)
+        self._finalization_supervisor = getattr(
+            generation, "finalization_supervisor", None
+        )
+        self._routing_trace_guard = generation.routing_trace_guard
 
     def _snapshot_finalization_supervisor(
         self, probe_errors: list[str]

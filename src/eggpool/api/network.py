@@ -57,13 +57,14 @@ def register_network_routes(
     """
     from fastapi import Depends
 
+    from eggpool.app import acquire_runtime_lease as _acquire_runtime_lease
     from eggpool.auth import require_auth as _require_auth
 
     app.add_api_route(
         path="/api/network/diagnostics",
         endpoint=handle_network_diagnostics,
         methods=["GET"],
-        dependencies=[Depends(_require_auth)],
+        dependencies=[Depends(_require_auth), Depends(_acquire_runtime_lease)],
     )
 
 

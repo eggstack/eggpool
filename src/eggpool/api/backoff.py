@@ -150,9 +150,12 @@ def register_backoff_routes(app: Any, require_auth: bool = False) -> None:
     """
     from fastapi import Depends
 
+    from eggpool.app import acquire_runtime_lease as _acquire_runtime_lease
     from eggpool.auth import require_auth as _require_auth
 
-    dependencies = [Depends(_require_auth)] if require_auth else None
+    dependencies = [Depends(_acquire_runtime_lease)]
+    if require_auth:
+        dependencies.insert(0, Depends(_require_auth))
     app.add_api_route(
         path="/api/backoffs",
         endpoint=handle_backoffs,

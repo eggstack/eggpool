@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from fastapi import Request  # noqa: TCH002 — FastAPI needs runtime access
+from fastapi import (  # noqa: TCH002 — FastAPI needs runtime access
+    HTTPException,
+    Request,
+)
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from eggpool.dashboard.render import (
@@ -493,13 +496,32 @@ def _heatmap_time_range(retain_days: int) -> TimeRange:
 
 
 def _get_dashboard_config(request: Request) -> Any:
-    """Look up the dashboard config from app state, raising ConfigError if disabled."""
-    config = getattr(request.app.state, "config", None)
+    """Look up dashboard config from the active generation."""
+    config = _get_active_config(request)
     if config is None:
         raise ConfigError("config not loaded")
     if not config.dashboard.enabled:
         raise ConfigError("dashboard disabled")
     return config.dashboard
+
+
+def _get_active_config(request: Request) -> Any:
+    """Return the immutable config used by the current dashboard request."""
+    from eggpool.app import get_active_generation  # noqa: PLC0415
+
+    runtime_manager = getattr(request.app.state, "runtime_manager", None)
+    if runtime_manager is not None:
+        generation = get_active_generation(request)
+        if generation is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Runtime generation unavailable",
+            )
+        return generation.config
+    config = getattr(request.app.state, "config", None)
+    if config is None:
+        raise ConfigError("config not loaded")
+    return config
 
 
 def _get_update_info(request: Request) -> Any | None:
@@ -761,7 +783,7 @@ async def handle_overview(
         request, theme
     )
     request_shaping_summary = _build_request_shaping_summary(
-        request.app.state.config,
+        _get_active_config(request),
         cache_observability=cache_observability,
         period=time_range.label,
     )
@@ -2211,7 +2233,7 @@ async def handle_cache(
         ):
             telemetry.record_stage("cache", name, _gather_ms)
     request_shaping_summary = _build_request_shaping_summary(
-        request.app.state.config,
+        _get_active_config(request),
         routing_runtime=cast("dict[str, Any]", snapshot.get("routing_runtime") or {}),
         cache_observability=cache_observability,
         canonical_request_segmentation=canonical_request_segmentation,
@@ -2305,7 +2327,7 @@ async def handle_request_shaping_json(request: Request) -> Response:
     )
     return JSONResponse(
         content=_build_request_shaping_summary(
-            request.app.state.config,
+            _get_active_config(request),
             routing_runtime=cast(
                 "dict[str, Any]", snapshot.get("routing_runtime") or {}
             ),
@@ -2342,9 +2364,12 @@ def register_dashboard_routes(app: Any, require_auth: bool = False) -> None:
     """
     from fastapi import Depends
 
+    from eggpool.app import acquire_runtime_lease as _acquire_runtime_lease
     from eggpool.auth import require_auth as _require_auth
 
-    dependencies = [Depends(_require_auth)] if require_auth else None
+    dependencies = [Depends(_acquire_runtime_lease)]
+    if require_auth:
+        dependencies.insert(0, Depends(_require_auth))
     for path, endpoint, response_class in (
         ("/", handle_overview, HTMLResponse),
         ("/accounts", handle_accounts, HTMLResponse),
