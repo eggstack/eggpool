@@ -28,6 +28,10 @@ pub struct FinalizationIdentity {
     pub account_name: String,
     pub provider_id: String,
     pub model_id: String,
+    /// Provider-native model identity selected by M5.  The durable
+    /// `model_id` remains the canonical/client identity; this value is only
+    /// for provider-bound request construction and policy evidence.
+    pub upstream_model_id: String,
     pub client_protocol: String,
     pub upstream_protocol: String,
     pub attempt_number: i64,
@@ -500,7 +504,8 @@ impl PublicationService {
                             account_id: existing_account_id,
                             account_name: existing_account_name,
                             provider_id: existing_provider_id,
-                            model_id: existing_model_id,
+                            model_id: existing_model_id.clone(),
+                            upstream_model_id: existing_model_id,
                             client_protocol: existing_protocol,
                             upstream_protocol,
                             attempt_number: input.attempt_number,
@@ -703,6 +708,7 @@ impl PublicationService {
             account_name: claim.account_name().to_owned(),
             provider_id: claim.provider_id().to_owned(),
             model_id: claim.canonical_model_id().to_owned(),
+            upstream_model_id: claim.upstream_model_id().to_owned(),
             client_protocol: input.client_protocol.clone(),
             upstream_protocol: input.upstream_protocol.clone(),
             attempt_number: input.attempt_number,

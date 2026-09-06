@@ -61,6 +61,7 @@ fn profile(surface: WireSurface, priority: u32) -> ConfiguredWireProfile {
 async fn resolver_learns_accepts_rejects_and_shares_a_leader() {
     let resolver = WireResolver::new(WireResolverConfig {
         max_concurrent_per_provider: 1,
+        min_negotiation_interval: Duration::ZERO,
         ..Default::default()
     });
     let now = Instant::now();
@@ -120,13 +121,65 @@ async fn resolver_learns_accepts_rejects_and_shares_a_leader() {
 }
 
 #[test]
+fn wire_state_is_bounded_on_all_insertion_paths_and_rate_delay_is_reactive() {
+    let resolver = WireResolver::new(WireResolverConfig {
+        cache_capacity: 2,
+        max_provider_state: 2,
+        min_negotiation_interval: Duration::ZERO,
+        ..Default::default()
+    });
+    let base = Instant::now();
+    let chat = WireCandidate::new(profile(WireSurface::OpenaiChatCompletions, 10), "chat");
+    let messages = WireCandidate::new(profile(WireSurface::AnthropicMessages, 20), "messages");
+    let responses = WireCandidate::new(profile(WireSurface::OpenaiResponses, 30), "responses");
+    let first = resolver.resolve("p", "m", vec![chat.clone(), messages.clone()], base);
+    resolver.accept(
+        "p",
+        "m",
+        &first.fingerprint,
+        WireSurface::AnthropicMessages,
+        base,
+    );
+    resolver.reject(
+        "p",
+        "m",
+        "rejection-only",
+        WireSurface::OpenaiResponses,
+        base,
+    );
+    resolver.resolve("p", "m", vec![responses.clone()], base);
+    assert!(resolver.snapshot().entries <= 2);
+
+    resolver.set_metadata_hint("p", "m", WireSurface::AnthropicMessages);
+    resolver.set_operator_preference("p", "m", WireSurface::OpenaiResponses, true);
+    let fixed = resolver.resolve("p", "m", vec![chat, messages, responses], base);
+    assert_eq!(fixed.candidates.len(), 1);
+    assert_eq!(fixed.candidates[0].surface(), WireSurface::OpenaiResponses);
+
+    resolver.delay_provider_negotiation("p", Duration::from_secs(60), base);
+    let throttled = tokio_test_begin(&resolver, base + Duration::from_secs(1));
+    assert_eq!(throttled, eggpool::coordinator::NegotiationRole::Throttled);
+}
+
+fn tokio_test_begin(
+    resolver: &WireResolver,
+    now: Instant,
+) -> eggpool::coordinator::NegotiationRole {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async { resolver.begin_negotiation("p", "m", "f", now).await.role() })
+}
+
+#[test]
 fn failure_classifier_enforces_handoff_and_retry_after_bounds() {
     let mut observation = FailureObservation::response(1, 1, http::StatusCode::TOO_MANY_REQUESTS);
     observation.retry_after = parse_retry_after("999999", 0, RetryPolicy::default());
     assert_eq!(observation.retry_after, Some(Duration::from_secs(1_800)));
     assert_eq!(
         classify(&observation, RetryPolicy::default()).action,
-        NextAction::WaitRateLimit
+        NextAction::RetryAccount
     );
     observation.response_started = true;
     assert_eq!(
@@ -156,6 +209,10 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
         .insert("provider-a".into(), provider.clone());
     let clients = ProviderClientPool::from_config(&config).expect("client pool");
     let builder = AttemptBuilder::new(clients, WireRuntime::embedded().expect("registry"));
+    let mut incoming_headers = http::HeaderMap::new();
+    incoming_headers.insert("x-client-header", "forward-me".parse().unwrap());
+    incoming_headers.insert("authorization", "client-secret".parse().unwrap());
+    incoming_headers.insert("connection", "x-client-header".parse().unwrap());
     let identity = FinalizationIdentity {
         proxy_request_id: "request".into(),
         db_request_id: 1,
@@ -165,6 +222,7 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
         account_name: "account-a".into(),
         provider_id: "provider-a".into(),
         model_id: "model-a".into(),
+        upstream_model_id: "upstream-model-a".into(),
         client_protocol: "openai".into(),
         upstream_protocol: "openai".into(),
         attempt_number: 1,
@@ -174,6 +232,9 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
             identity,
             provider,
             account_api_key: Some("super-secret".into()),
+            incoming_headers,
+            request_id: Some("request-id".into()),
+            correlation_id: Some("correlation-id".into()),
             raw_body: Bytes::from_static(br#"{"model":"model-a","messages":[]}"#),
             client_surface: ClientSurface::ChatCompletions,
             profile: profile(WireSurface::OpenaiChatCompletions, 0),
@@ -181,10 +242,15 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
             candidate_fingerprint: "candidate".into(),
         })
         .expect("preparation");
-    assert_eq!(attempt.path, "/v1/model-a/stream");
+    assert_eq!(attempt.path, "/v1/upstream-model-a/stream");
     assert_eq!(
         attempt.headers.get("authorization").unwrap(),
         "Bearer super-secret"
     );
+    assert_eq!(
+        attempt.body,
+        Bytes::from_static(br#"{"model":"upstream-model-a","messages":[],"stream":false}"#)
+    );
+    assert!(!attempt.headers.contains_key("x-client-header"));
     assert!(!format!("{attempt:?}").contains("super-secret"));
 }

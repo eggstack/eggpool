@@ -9,6 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::watch;
+use tokio_rusqlite::rusqlite::OptionalExtension;
 
 use crate::{
     db::{Database, DatabaseError},
@@ -70,6 +71,20 @@ pub struct FinalizationResult {
     pub reservation_converged: bool,
     pub reservation_transitioned: bool,
     pub runtime_released: bool,
+    pub progress: FinalizationProgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct FinalizationProgress {
+    pub durable_transition_checked: bool,
+    pub durable_attempt_transitioned: bool,
+    pub durable_reservation_converged: bool,
+    pub runtime_cleanup_required: bool,
+    pub quota_released: bool,
+    pub active_count_released: bool,
+    pub probe_released: bool,
+    pub effect_progress: bool,
+    pub completed: bool,
 }
 
 #[derive(Debug, Error)]
@@ -82,6 +97,14 @@ pub enum FinalizationError {
     Claim(#[from] ClaimError),
     #[error("finalization supervisor is at capacity")]
     Capacity,
+    #[error("durable finalization invariant failed for {entity} {id}: {reason}")]
+    Invariant {
+        entity: &'static str,
+        id: i64,
+        reason: String,
+    },
+    #[error("retained finalization command conflicts with an active command")]
+    IncompatibleCommand,
     #[error("finalization worker exhausted bounded retries: {0}")]
     RetryExhausted(String),
 }
@@ -103,9 +126,18 @@ impl DurableFinalizer {
         claim: Option<SelectionClaim>,
     ) -> Result<FinalizationResult, FinalizationError> {
         let durable = self.finalize_durable(identity, &data, true).await?;
-        let runtime_released = release_claim(claim)?;
+        let runtime_cleanup_required = claim.is_some();
+        let runtime_released = release_claim(claim.as_ref())?;
         Ok(FinalizationResult {
             runtime_released,
+            progress: FinalizationProgress {
+                runtime_cleanup_required,
+                quota_released: runtime_released,
+                active_count_released: runtime_released,
+                probe_released: runtime_released,
+                completed: runtime_released,
+                ..durable.progress
+            },
             ..durable
         })
     }
@@ -117,9 +149,18 @@ impl DurableFinalizer {
         claim: Option<SelectionClaim>,
     ) -> Result<FinalizationResult, FinalizationError> {
         let durable = self.finalize_durable(identity, &data, false).await?;
-        let runtime_released = release_claim(claim)?;
+        let runtime_cleanup_required = claim.is_some();
+        let runtime_released = release_claim(claim.as_ref())?;
         Ok(FinalizationResult {
             runtime_released,
+            progress: FinalizationProgress {
+                runtime_cleanup_required,
+                quota_released: runtime_released,
+                active_count_released: runtime_released,
+                probe_released: runtime_released,
+                completed: runtime_released,
+                ..durable.progress
+            },
             request_terminal: false,
             request_transitioned: false,
             ..durable
@@ -155,79 +196,209 @@ impl DurableFinalizer {
         let data = data.clone();
         let target_status = data.outcome.request_status().to_owned();
         let detail = data.error_detail.as_deref().map(sanitize_detail);
-        let result = self
-            .database
-            .with_transaction(move |connection| {
-                let current: String = connection.query_row(
-                    "SELECT status FROM requests WHERE id = ?1",
+        let result = self.database.with_transaction(move |connection| {
+            let request = connection
+                .query_row(
+                    "SELECT account_id, model_id, provider_id, protocol, streamed, status
+                     FROM requests WHERE id = ?1",
                     [identity.db_request_id],
-                    |row| row.get(0),
-                )?;
-                let request_terminal = is_terminal_status(&current);
-                let mut request_transitioned = false;
-                if terminalize_request {
-                    if request_terminal && current != target_status {
-                        return Ok(TxnResult::Conflict(current));
-                    }
-                    if !request_terminal {
-                        let changed = connection.execute(
-                            "UPDATE requests SET status = ?1, completed_at = CURRENT_TIMESTAMP,
-                             input_tokens = ?2, output_tokens = ?3, cost_microdollars = ?4,
-                             status_code = ?5, error_class = ?6, error_detail = ?7,
-                             upstream_request_id = ?8 WHERE id = ?9 AND status NOT IN
-                             ('completed','client_error','cancelled','error','interrupted',
-                              'failed','client_disconnected')",
-                            tokio_rusqlite::rusqlite::params![
-                                target_status,
-                                data.input_tokens,
-                                data.output_tokens,
-                                data.cost_microdollars,
-                                data.status_code.map(i64::from),
-                                data.error_class.as_deref(),
-                                detail,
-                                data.upstream_request_id.as_deref(),
-                                identity.db_request_id,
-                            ],
-                        )?;
-                        request_transitioned = changed == 1;
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, String>(5)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((account_id, model_id, provider_id, protocol, _streamed, current)) = request
+            else {
+                return Ok(TxnResult::Invariant {
+                    entity: "request",
+                    id: identity.db_request_id,
+                    reason: "row is missing".into(),
+                });
+            };
+            if account_id != identity.account_id
+                || model_id != identity.model_id
+                || provider_id != identity.provider_id
+                || protocol != identity.client_protocol
+            {
+                return Ok(TxnResult::Invariant {
+                    entity: "request",
+                    id: identity.db_request_id,
+                    reason: "identity relationship does not match".into(),
+                });
+            }
+            let request_terminal = is_terminal_status(&current);
+            let mut request_transitioned = false;
+            if terminalize_request {
+                if request_terminal && current != target_status {
+                    return Ok(TxnResult::Conflict(current));
+                }
+                if !request_terminal {
+                    let changed = connection.execute(
+                        "UPDATE requests SET status = ?1, completed_at = CURRENT_TIMESTAMP,
+                         input_tokens = ?2, output_tokens = ?3, cost_microdollars = ?4,
+                         status_code = ?5, error_class = ?6, error_detail = ?7,
+                         upstream_request_id = ?8, last_attempt_id = ?9 WHERE id = ?10
+                         AND status NOT IN ('completed','client_error','cancelled','error',
+                         'interrupted','failed','client_disconnected')",
+                        tokio_rusqlite::rusqlite::params![
+                            target_status,
+                            data.input_tokens,
+                            data.output_tokens,
+                            data.cost_microdollars,
+                            data.status_code.map(i64::from),
+                            data.error_class.as_deref(),
+                            detail,
+                            data.upstream_request_id.as_deref(),
+                            identity.attempt_id,
+                            identity.db_request_id,
+                        ],
+                    )?;
+                    request_transitioned = changed == 1;
+                    if !request_transitioned {
+                        let observed: Option<String> = connection
+                            .query_row(
+                                "SELECT status FROM requests WHERE id = ?1",
+                                [identity.db_request_id],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        if observed.as_deref() != Some(target_status.as_str()) {
+                            return Ok(TxnResult::Invariant {
+                                entity: "request",
+                                id: identity.db_request_id,
+                                reason: "zero-row terminal transition did not converge".into(),
+                            });
+                        }
                     }
                 }
-                let attempt_changed = connection.execute(
-                    "UPDATE request_attempts SET completed_at = CURRENT_TIMESTAMP,
-                     status_code = ?1, error_class = ?2, error_detail = ?3,
-                     release_reason = ?4, bytes_received = ?5, bytes_emitted = ?6,
-                     latency_ms = ?7, upstream_request_id = ?8
-                     WHERE id = ?9 AND completed_at IS NULL",
-                    tokio_rusqlite::rusqlite::params![
-                        data.status_code.map(i64::from),
-                        data.error_class.as_deref(),
-                        detail,
-                        data.release_reason.as_deref(),
-                        data.bytes_received,
-                        data.bytes_emitted,
-                        data.latency_ms,
-                        data.upstream_request_id.as_deref(),
-                        identity.attempt_id,
-                    ],
-                )?;
-                let reservation_changed = connection.execute(
+            } else if current != "pending" {
+                return Ok(TxnResult::Invariant {
+                    entity: "request",
+                    id: identity.db_request_id,
+                    reason: "failed attempt parent is not pending".into(),
+                });
+            }
+
+            let attempt = connection
+                .query_row(
+                    "SELECT request_id, account_id, provider_id, model_id, protocol,
+                            completed_at, status_code, error_class
+                     FROM request_attempts WHERE id = ?1",
+                    [identity.attempt_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<i64>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((attempt_request, attempt_account, attempt_provider, attempt_model, attempt_protocol, completed_at, existing_status, existing_error)) = attempt else {
+                return Ok(TxnResult::Invariant { entity: "attempt", id: identity.attempt_id, reason: "row is missing".into() });
+            };
+            if attempt_request != identity.db_request_id
+                || attempt_account != identity.account_id
+                || attempt_provider != identity.provider_id
+                || attempt_model != identity.model_id
+                || attempt_protocol != identity.upstream_protocol
+            {
+                return Ok(TxnResult::Invariant { entity: "attempt", id: identity.attempt_id, reason: "identity relationship does not match".into() });
+            }
+            if completed_at.is_some()
+                && (data
+                    .status_code
+                    .map(i64::from)
+                    .is_some_and(|value| Some(value) != existing_status)
+                    || data
+                        .error_class
+                        .as_deref()
+                        .is_some_and(|value| Some(value) != existing_error.as_deref()))
+            {
+                return Ok(TxnResult::Invariant {
+                    entity: "attempt",
+                    id: identity.attempt_id,
+                    reason: "terminal facts conflict".into(),
+                });
+            }
+            let attempt_changed = connection.execute(
+                "UPDATE request_attempts SET completed_at = CURRENT_TIMESTAMP,
+                 status_code = ?1, error_class = ?2, error_detail = ?3,
+                 release_reason = ?4, bytes_received = ?5, bytes_emitted = ?6,
+                 latency_ms = ?7, upstream_request_id = ?8
+                 WHERE id = ?9 AND completed_at IS NULL",
+                tokio_rusqlite::rusqlite::params![
+                    data.status_code.map(i64::from), data.error_class.as_deref(), detail,
+                    data.release_reason.as_deref(), data.bytes_received, data.bytes_emitted,
+                    data.latency_ms, data.upstream_request_id.as_deref(), identity.attempt_id,
+                ],
+            )?;
+            if attempt_changed == 0 {
+                let still_terminal: Option<String> = connection
+                    .query_row("SELECT completed_at FROM request_attempts WHERE id = ?1", [identity.attempt_id], |row| row.get(0))
+                    .optional()?;
+                if still_terminal.is_none() {
+                    return Ok(TxnResult::Invariant { entity: "attempt", id: identity.attempt_id, reason: "zero-row attempt transition did not converge".into() });
+                }
+            }
+
+            let reservation = connection
+                .query_row(
+                    "SELECT request_id, account_id, model_id, status FROM reservations WHERE id = ?1",
+                    [identity.reservation_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
+                )
+                .optional()?;
+            let Some((reservation_request, reservation_account, reservation_model, reservation_status)) = reservation else {
+                return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "row is missing".into() });
+            };
+            if reservation_request != identity.db_request_id
+                || reservation_account != identity.account_id
+                || reservation_model != identity.model_id
+            {
+                return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "identity relationship does not match".into() });
+            }
+            let reservation_changed = if reservation_status == "active" {
+                connection.execute(
                     "UPDATE reservations SET status = 'released', released_at = CURRENT_TIMESTAMP,
                      release_reason = ?1 WHERE id = ?2 AND status = 'active'",
-                    tokio_rusqlite::rusqlite::params![
-                        data.release_reason.as_deref().unwrap_or("finalized"),
-                        identity.reservation_id,
-                    ],
-                )?;
-                Ok(TxnResult::Success {
-                    request_terminal: terminalize_request,
-                    request_transitioned,
-                    attempt_transitioned: attempt_changed == 1,
-                    reservation_transitioned: reservation_changed == 1,
-                })
+                    tokio_rusqlite::rusqlite::params![data.release_reason.as_deref().unwrap_or("finalized"), identity.reservation_id],
+                )?
+            } else if reservation_status == "released" || reservation_status == "expired" {
+                0
+            } else {
+                return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "unknown terminal status".into() });
+            };
+            if reservation_changed == 0 && reservation_status == "active" {
+                let observed: Option<String> = connection.query_row("SELECT status FROM reservations WHERE id = ?1", [identity.reservation_id], |row| row.get(0)).optional()?;
+                if !matches!(observed.as_deref(), Some("released" | "expired")) {
+                    return Ok(TxnResult::Invariant { entity: "reservation", id: identity.reservation_id, reason: "zero-row reservation transition did not converge".into() });
+                }
+            }
+            Ok(TxnResult::Success {
+                request_terminal: terminalize_request,
+                request_transitioned,
+                attempt_transitioned: attempt_changed == 1,
+                reservation_transitioned: reservation_changed == 1,
             })
-            .await?;
+        }).await?;
         match result {
             TxnResult::Conflict(status) => Err(FinalizationError::TerminalConflict { status }),
+            TxnResult::Invariant { entity, id, reason } => {
+                Err(FinalizationError::Invariant { entity, id, reason })
+            }
             TxnResult::Success {
                 request_terminal,
                 request_transitioned,
@@ -241,6 +412,13 @@ impl DurableFinalizer {
                 reservation_converged: true,
                 reservation_transitioned,
                 runtime_released: false,
+                progress: FinalizationProgress {
+                    durable_transition_checked: true,
+                    durable_attempt_transitioned: true,
+                    durable_reservation_converged: true,
+                    effect_progress: true,
+                    ..FinalizationProgress::default()
+                },
             }),
         }
     }
@@ -255,9 +433,14 @@ enum TxnResult {
         reservation_transitioned: bool,
     },
     Conflict(String),
+    Invariant {
+        entity: &'static str,
+        id: i64,
+        reason: String,
+    },
 }
 
-fn release_claim(claim: Option<SelectionClaim>) -> Result<bool, FinalizationError> {
+fn release_claim(claim: Option<&SelectionClaim>) -> Result<bool, FinalizationError> {
     let Some(claim) = claim else { return Ok(false) };
     claim.release_quota_reservation()?;
     claim.release_active_claim()?;
@@ -337,6 +520,7 @@ impl FinalizationHandle {
 #[derive(Debug)]
 struct JobEntry {
     receiver: watch::Receiver<Option<Result<FinalizationResult, String>>>,
+    compatibility: CommandCompatibility,
 }
 
 #[derive(Debug, Clone)]
@@ -348,7 +532,39 @@ pub struct FinalizationSupervisor {
 struct SupervisorInner {
     finalizer: DurableFinalizer,
     capacity: usize,
+    retry_delay: Duration,
     jobs: Mutex<BTreeMap<(i64, i64), JobEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandCompatibility {
+    request_terminal: bool,
+    outcome: FinalizationOutcome,
+    status_code: Option<u16>,
+    error_class: Option<String>,
+    release_reason: Option<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cost_microdollars: i64,
+}
+
+impl FinalizationCommand {
+    fn compatibility(&self) -> CommandCompatibility {
+        let (request_terminal, data) = match self {
+            Self::Request { data, .. } => (true, data),
+            Self::FailedAttempt { data, .. } => (false, data),
+        };
+        CommandCompatibility {
+            request_terminal,
+            outcome: data.outcome,
+            status_code: data.status_code,
+            error_class: data.error_class.clone(),
+            release_reason: data.release_reason.clone(),
+            input_tokens: data.input_tokens,
+            output_tokens: data.output_tokens,
+            cost_microdollars: data.cost_microdollars,
+        }
+    }
 }
 
 impl FinalizationSupervisor {
@@ -361,9 +577,17 @@ impl FinalizationSupervisor {
             inner: Arc::new(SupervisorInner {
                 finalizer,
                 capacity: capacity.max(1),
+                retry_delay: Duration::from_millis(1),
                 jobs: Mutex::new(BTreeMap::new()),
             }),
         }
+    }
+
+    pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("retry delay configured before supervisor sharing")
+            .retry_delay = retry_delay;
+        self
     }
 
     pub fn register(
@@ -371,10 +595,14 @@ impl FinalizationSupervisor {
         command: FinalizationCommand,
     ) -> Result<FinalizationHandle, FinalizationError> {
         let key = command.key();
+        let compatibility = command.compatibility();
         let (sender, receiver) = watch::channel(None);
         {
             let mut jobs = self.inner.jobs.lock().expect("finalization jobs lock");
             if let Some(existing) = jobs.get(&key) {
+                if existing.compatibility != compatibility {
+                    return Err(FinalizationError::IncompatibleCommand);
+                }
                 return Ok(FinalizationHandle {
                     receiver: existing.receiver.clone(),
                 });
@@ -386,12 +614,13 @@ impl FinalizationSupervisor {
                 key,
                 JobEntry {
                     receiver: receiver.clone(),
+                    compatibility,
                 },
             );
         }
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move {
-            let result = run_command(&inner.finalizer, command).await;
+            let result = run_command(&inner.finalizer, command, inner.retry_delay).await;
             let output = match result {
                 Ok(value) => Ok(value),
                 Err(error) => Err(error.to_string()),
@@ -433,6 +662,7 @@ impl FinalizationSupervisor {
 async fn run_command(
     finalizer: &DurableFinalizer,
     command: FinalizationCommand,
+    retry_delay: Duration,
 ) -> Result<FinalizationResult, FinalizationError> {
     let mut last = None;
     for _ in 0..3 {
@@ -456,7 +686,7 @@ async fn run_command(
             Ok(value) => return Ok(value),
             Err(error) => {
                 last = Some(error.to_string());
-                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::time::sleep(retry_delay).await;
             }
         }
     }

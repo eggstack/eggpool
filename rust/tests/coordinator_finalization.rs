@@ -5,9 +5,9 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationError,
-        FinalizationOutcome, FinalizationSupervisor, PublicationInput, PublicationOutcome,
-        PublicationService, RetryPolicy, classify,
+        DurableFinalizer, EffectLedger, FailureObservation, FinalizationCommand, FinalizationData,
+        FinalizationError, FinalizationOutcome, FinalizationSupervisor, ProviderModelPresence,
+        PublicationInput, PublicationOutcome, PublicationService, RetryPolicy, classify,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     quota::{AccountQuota, QuotaEstimator},
@@ -283,4 +283,114 @@ fn failure_policy_keeps_wire_account_and_handoff_scopes_distinct() {
         classify(&observation, RetryPolicy::default()).action,
         eggpool::coordinator::NextAction::Complete
     );
+}
+
+#[test]
+fn failure_policy_distinguishes_ambiguous_credentials_and_model_evidence() {
+    let ambiguous = FailureObservation::response(1, 1, http::StatusCode::UNAUTHORIZED);
+    let effects = classify(&ambiguous, RetryPolicy::default());
+    assert_eq!(effects.account_effect, "none");
+    assert!(!effects.retry);
+
+    let explicit = FailureObservation::response(1, 1, http::StatusCode::UNAUTHORIZED)
+        .signal("credential_invalid");
+    let effects = classify(&explicit, RetryPolicy::default());
+    assert_eq!(effects.account_effect, "disable_auth");
+    assert!(effects.retry);
+
+    let mut model =
+        FailureObservation::response(1, 1, http::StatusCode::NOT_FOUND).signal("model_absent");
+    model.provider_model_presence = ProviderModelPresence::Known;
+    let effects = classify(&model, RetryPolicy::default());
+    assert_eq!(effects.model_effect, "quarantine");
+    assert_eq!(effects.wire_effect, "none");
+
+    model.response_started = true;
+    assert!(!classify(&model, RetryPolicy::default()).retry);
+}
+
+#[test]
+fn effect_ledger_retirement_keeps_capacity_available() {
+    let mut ledger = EffectLedger::with_capacity(2);
+    assert_eq!(ledger.try_apply_once(1), Ok(true));
+    assert_eq!(ledger.try_apply_once(1), Ok(false));
+    assert_eq!(ledger.try_apply_once(2), Ok(true));
+    assert!(ledger.try_apply_once(3).is_err());
+    assert!(ledger.retire(1));
+    assert_eq!(ledger.try_apply_once(3), Ok(true));
+    assert_eq!(ledger.len(), 2);
+}
+
+#[tokio::test]
+async fn finalization_rejects_missing_durable_identity_and_incompatible_jobs() {
+    let fixture_missing = fixture().await;
+    let published_missing = published(&fixture_missing, "c012-missing").await;
+    let finalizer = DurableFinalizer::new(fixture_missing.database.clone());
+    fixture_missing
+        .database
+        .call(|connection| {
+            connection.execute("DELETE FROM reservations WHERE id = 1", [])?;
+            connection.execute("DELETE FROM request_attempts WHERE id = 1", [])?;
+            connection.execute("DELETE FROM requests WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await
+        .expect("delete fixture request");
+    let missing = finalizer
+        .finalize_request(
+            &published_missing.identity,
+            FinalizationData::default(),
+            None,
+        )
+        .await
+        .expect_err("missing request is not convergence");
+    assert!(matches!(
+        missing,
+        FinalizationError::Invariant {
+            entity: "request",
+            ..
+        }
+    ));
+    fixture_missing
+        .database
+        .close()
+        .await
+        .expect("database closes");
+
+    let fixture_conflict = fixture().await;
+    let published_conflict = published(&fixture_conflict, "c012-conflict").await;
+    let supervisor = FinalizationSupervisor::with_capacity(
+        DurableFinalizer::new(fixture_conflict.database.clone()),
+        1,
+    );
+    let first = supervisor
+        .register(FinalizationCommand::Request {
+            identity: published_conflict.identity.clone(),
+            data: FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                ..FinalizationData::default()
+            },
+            claim: Some(published_conflict.claim),
+        })
+        .expect("first command");
+    let incompatible = supervisor
+        .register(FinalizationCommand::Request {
+            identity: published_conflict.identity,
+            data: FinalizationData {
+                outcome: FinalizationOutcome::ClientError,
+                ..FinalizationData::default()
+            },
+            claim: None,
+        })
+        .expect_err("incompatible command must fail at registration");
+    assert!(matches!(
+        incompatible,
+        FinalizationError::IncompatibleCommand
+    ));
+    first.wait().await.expect("first command completes");
+    fixture_conflict
+        .database
+        .close()
+        .await
+        .expect("database closes");
 }

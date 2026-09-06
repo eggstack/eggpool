@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::{
@@ -18,6 +19,13 @@ pub struct AttemptInput {
     pub identity: FinalizationIdentity,
     pub provider: ProviderConfig,
     pub account_api_key: Option<String>,
+    /// The original incoming headers.  Local credentials, hop-by-hop, and
+    /// framing headers are filtered before provider headers are overlaid.
+    pub incoming_headers: HeaderMap,
+    /// Caller request identity forwarded only through the canonical request
+    /// ID header when present; generated IDs stay bounded and secret-free.
+    pub request_id: Option<String>,
+    pub correlation_id: Option<String>,
     pub raw_body: Bytes,
     pub client_surface: ClientSurface,
     pub profile: ConfiguredWireProfile,
@@ -83,6 +91,9 @@ pub struct UpstreamResponseEvidence {
     pub status: StatusCode,
     pub headers: HeaderMap,
     pub body: crate::providers::ProviderBody,
+    pub upstream_request_id: Option<String>,
+    pub headers_elapsed: Duration,
+    pub bytes_observed: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -102,7 +113,7 @@ impl AttemptBuilder {
             input.client_surface,
             input.profile.clone(),
             input.identity.model_id.clone(),
-            input.identity.model_id.clone(),
+            input.identity.upstream_model_id.clone(),
         );
         context.provider_id = Some(input.identity.provider_id.clone());
         context.provider_kind = input.provider.kind.clone();
@@ -116,7 +127,7 @@ impl AttemptBuilder {
         } else {
             &input.profile.path_template
         };
-        let path = expand_path(path_template, &input.identity.model_id)?;
+        let path = expand_path(path_template, &input.identity.upstream_model_id)?;
         let identity = input.identity.clone();
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -127,6 +138,15 @@ impl AttemptBuilder {
             http::header::ACCEPT,
             HeaderValue::from_static("application/json"),
         );
+        add_forwarded_headers(&mut headers, &input.incoming_headers)?;
+        add_request_identity_headers(
+            &mut headers,
+            input.request_id.as_deref().or_else(|| {
+                (!input.identity.proxy_request_id.is_empty())
+                    .then_some(input.identity.proxy_request_id.as_str())
+            }),
+            input.correlation_id.as_deref(),
+        )?;
         add_static_headers(&mut headers, &input.provider.headers)?;
         if let Some(surface) = input
             .provider
@@ -148,7 +168,7 @@ impl AttemptBuilder {
             identity: identity.clone(),
             provider_id: identity.provider_id.clone(),
             account_name: identity.account_name.clone(),
-            upstream_model_id: identity.model_id.clone(),
+            upstream_model_id: identity.upstream_model_id.clone(),
             profile: input.profile,
             candidate_fingerprint: input.candidate_fingerprint,
             method: Method::POST,
@@ -166,13 +186,27 @@ impl AttemptBuilder {
         let client = self
             .clients
             .get_client(&attempt.provider_id, Some(&attempt.account_name))?;
+        let started = Instant::now();
         let response: ProviderResponse = client
             .send(attempt.method, &attempt.path, attempt.headers, attempt.body)
             .await?;
+        let upstream_request_id = [
+            "x-request-id",
+            "request-id",
+            "anthropic-request-id",
+            "x-amzn-requestid",
+        ]
+        .iter()
+        .find_map(|name| response.headers.get(*name))
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.chars().take(128).collect());
         Ok(UpstreamResponseEvidence {
             status: response.status,
             headers: response.headers,
             body: response.body,
+            upstream_request_id,
+            headers_elapsed: started.elapsed(),
+            bytes_observed: 0,
         })
     }
 
@@ -197,6 +231,76 @@ fn validate_input(input: &AttemptInput) -> Result<(), AttemptError> {
     }
     if input.raw_body.is_empty() {
         return Err(AttemptError::InvalidInput("request body is empty".into()));
+    }
+    Ok(())
+}
+
+const HOP_BY_HOP_HEADERS: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
+const LOCAL_HEADERS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "host",
+    "content-length",
+    "x-eggpool-route-session",
+];
+
+fn add_forwarded_headers(
+    headers: &mut HeaderMap,
+    incoming: &HeaderMap,
+) -> Result<(), AttemptError> {
+    let connection_tokens = incoming
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    for (name, value) in incoming {
+        let lower = name.as_str().to_ascii_lowercase();
+        if HOP_BY_HOP_HEADERS.contains(&lower.as_str())
+            || LOCAL_HEADERS.contains(&lower.as_str())
+            || connection_tokens.contains(&lower)
+        {
+            continue;
+        }
+        headers.insert(name.clone(), value.clone());
+    }
+    Ok(())
+}
+
+fn add_request_identity_headers(
+    headers: &mut HeaderMap,
+    request_id: Option<&str>,
+    correlation_id: Option<&str>,
+) -> Result<(), AttemptError> {
+    for (name, value) in [
+        ("x-request-id", request_id),
+        ("x-correlation-id", correlation_id),
+    ] {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let value = value
+            .get(..value.len().min(128))
+            .ok_or_else(|| AttemptError::InvalidInput("request ID is not UTF-8 bounded".into()))?;
+        headers.insert(
+            HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| AttemptError::InvalidInput("invalid request ID header".into()))?,
+            HeaderValue::try_from(value)
+                .map_err(|_| AttemptError::InvalidInput("invalid request ID value".into()))?,
+        );
     }
     Ok(())
 }

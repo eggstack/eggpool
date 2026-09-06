@@ -14,12 +14,14 @@ pub use attempt::{
     AttemptBuilder, AttemptError, AttemptInput, PreparedUpstreamAttempt, UpstreamResponseEvidence,
 };
 pub use failure::{
-    EffectLedger, FailureCategory, FailureDecisionEngine, FailureEffects, FailureObservation,
-    FailureSource, NextAction, RetryPolicy, RetryScope, classify, parse_retry_after,
+    EffectLedger, EffectLedgerError, FailureCategory, FailureDecisionEngine, FailureEffects,
+    FailureObservation, FailureSource, NextAction, ProviderModelPresence, RetryPolicy, RetryScope,
+    classify, parse_retry_after,
 };
 pub use finalization::{
     DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationError, FinalizationHandle,
-    FinalizationOutcome, FinalizationResult, FinalizationSupervisor, SupervisorSnapshot,
+    FinalizationOutcome, FinalizationProgress, FinalizationResult, FinalizationSupervisor,
+    SupervisorSnapshot,
 };
 
 pub use publication::{
@@ -30,5 +32,5 @@ pub use publication::{
 
 pub use wire_resolver::{
     NegotiationLease, NegotiationResult, NegotiationRole, WireCandidate, WireResolution,
-    WireResolver, WireResolverConfig,
+    WireResolver, WireResolverConfig, WireResolverSnapshot,
 };
