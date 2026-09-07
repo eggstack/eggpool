@@ -1,6 +1,6 @@
 # C011 — Differential Qualification and M7 Closure
 
-Status: ready for handoff; C010 accepted closure
+Status: closed; see [closure record](../../closure/coordinator/011-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

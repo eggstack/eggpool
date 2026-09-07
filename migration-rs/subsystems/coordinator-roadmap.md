@@ -1,6 +1,6 @@
 # M7 Coordinator, Retry, Failover, and Durable Finalization Roadmap
 
-Status: implementation active; C011 dependency-ready
+Status: M7 closed after accepted C011 closure
 
 Repository baseline for original M7 planning: `04820555479dc3ab86622d9c658c44c45c2c07e7`
 
@@ -102,15 +102,15 @@ C001 contract + deterministic failure corpus              [closed]
     -> C008 streaming/handoff/timeouts/cancellation          [closed]
     -> C009 public inference endpoints + semantic-router dispatch [closed]
    -> C010 crash/restart reconciliation + fault injection [closed]
-   -> C011 integrated differential qualification + M7 closure
+   -> C011 integrated differential qualification + M7 closure [closed]
         |
         v
-M8 planning/implementation eligibility
+M8 planning-review eligibility (no implementation plan promoted)
 ```
 
-The append-only C012-C014 numbering is intentional. Post-closure audits found material or bounded gaps in historically accepted coordinator slices; planning history is not rewritten. C010 is closed, and C011 is now the sole dependency-ready plan.
+The append-only C012-C014 numbering is intentional. Post-closure audits found material or bounded gaps in historically accepted coordinator slices; planning history is not rewritten. M7 is closed after accepted C011 closure.
 
-Only the dependency-ready table in `../registry.md` authorizes handoff.
+Only the dependency-ready table in `../registry.md` authorizes handoff. There is no remaining ready coordinator plan.
 
 ## Post-C006 corrective findings
 
@@ -180,4 +180,4 @@ C011 remains the aggregate M7 closure plan. C014 only closes the residual core i
 
 ## Current closure state
 
-C001, C002, C007, C008, C009, C010, and C012-C014 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the findings corrected by C012-C014. C011 is now the sole dependency-ready plan. M8 remains blocked on accepted C011 closure plus its own planning review.
+M7 is closed after accepted C011 closure. C001, C002, C007, C008, C009, C010, C011, and C012-C014 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the findings corrected by C012-C014. There is no remaining ready coordinator plan. M8 is eligible for its own planning review; no M8 implementation plan is promoted by this closure.

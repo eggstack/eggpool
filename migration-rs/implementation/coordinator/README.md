@@ -1,6 +1,6 @@
 # M7 Coordinator Implementation Handoffs
 
-Status: implementation active; C011 dependency-ready
+Status: M7 closed after accepted C011 closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
@@ -19,9 +19,9 @@ Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 | C008 | [Streaming handoff, timeouts, cancellation, and terminal policy](008-streaming-handoff-timeouts-and-cancellation.md) | capability/invariant | closed; see [closure](../../closure/coordinator/008-status.md) |
 | C009 | [Public inference endpoints and semantic-router internal dispatch](009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | closed; see [closure](../../closure/coordinator/009-status.md) |
 | C010 | [Crash/restart reconciliation and fault injection](010-crash-restart-reconciliation-and-fault-injection.md) | invariant | closed; see [closure](../../closure/coordinator/010-status.md) |
-| C011 | [Differential qualification and M7 closure](011-differential-qualification-and-m7-closure.md) | invariant | **dependency-ready** |
+| C011 | [Differential qualification and M7 closure](011-differential-qualification-and-m7-closure.md) | invariant | closed; see [closure](../../closure/coordinator/011-status.md) |
 
-Only `migration-rs/registry.md` authorizes an implementation handoff. C011 is now the sole ready coordinator plan after accepted C010 closure.
+Only `migration-rs/registry.md` authorizes an implementation handoff. M7 is closed after accepted C011 closure; there is no remaining ready coordinator plan.
 
 M7 must not become a Rust copy of Python's large coordinator module. New Rust code should stay organized around explicit request/attempt state, durable publication, retry policy, terminal ownership, and small composable interfaces to M4/M5/M6.
 
