@@ -1,14 +1,16 @@
-//! Axum read-plane server for the side-by-side migration candidate.
+//! Axum server for the side-by-side migration candidate.
 //!
-//! This module intentionally owns only the first vertical slice: health and
-//! readiness, dashboard overview/summary reads, authentication, and the
-//! copied dashboard resources. Provider dispatch remains a later milestone.
+//! Health/readiness, dashboard reads, authentication, static resources, and
+//! the C009 public inference endpoints (Chat Completions, Responses,
+//! Messages) through the thin M7 coordinator boundary. Handlers invoke one
+//! coordinator entry point; routing/retry/finalization live in the
+//! coordinator, not here.
 
 use axum::{
     Router,
     body::Bytes,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -19,7 +21,14 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::{Config, db, providers::ProviderClientPool};
+use crate::{
+    Config,
+    coordinator::{InferenceState, build_inference_state, endpoint_error_body},
+    db,
+    providers::ProviderClientPool,
+    wire::ir::ClientSurface,
+};
+use std::sync::Arc;
 
 const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
@@ -95,6 +104,8 @@ pub enum ServerError {
     ProviderPool(#[from] crate::providers::ProviderClientPoolError),
     #[error("server signal handler failed: {0}")]
     Signal(std::io::Error),
+    #[error("inference state construction failed: {0}")]
+    Inference(String),
 }
 
 #[derive(Clone)]
@@ -102,6 +113,7 @@ pub struct AppState {
     pub config: Config,
     pub database: db::Database,
     pub client_pool: ProviderClientPool,
+    pub inference: Arc<InferenceState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,9 +154,18 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
             return Err(error.into());
         }
     };
+    let inference = match build_inference_state(&config, &database, client_pool.clone()).await {
+        Ok(state) => Arc::new(state),
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(ServerError::Inference(error));
+        }
+    };
 
     tracing::info!(address, "Rust development server listening");
-    let result = serve_listener(config, database.clone(), client_pool, listener).await;
+    let result =
+        serve_listener_with_inference(config, database.clone(), client_pool, inference, listener)
+            .await;
     let close_result = database.close().await;
     result.and(close_result.map_err(ServerError::Database))
 }
@@ -156,10 +177,27 @@ pub async fn serve_listener(
     client_pool: ProviderClientPool,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
+    let inference = Arc::new(
+        build_inference_state(&config, &database, client_pool.clone())
+            .await
+            .map_err(ServerError::Inference)?,
+    );
+    serve_listener_with_inference(config, database, client_pool, inference, listener).await
+}
+
+/// Serve with an explicitly built inference state (test and serve paths).
+pub async fn serve_listener_with_inference(
+    config: Config,
+    database: db::Database,
+    client_pool: ProviderClientPool,
+    inference: Arc<InferenceState>,
+    listener: TcpListener,
+) -> Result<(), ServerError> {
     let app = build_router(AppState {
         config,
         database,
         client_pool,
+        inference,
     });
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -173,18 +211,9 @@ pub fn build_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/v1/healthz", get(healthz))
         .route("/v1/readyz", get(readyz))
-        .route(
-            "/v1/chat/completions",
-            post(placeholder_inference).get(placeholder_inference),
-        )
-        .route(
-            "/v1/messages",
-            post(placeholder_inference).get(placeholder_inference),
-        )
-        .route(
-            "/v1/responses",
-            post(placeholder_inference).get(placeholder_inference),
-        )
+        .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/messages", post(messages))
+        .route("/v1/responses", post(responses))
         .route("/static/dashboard.css", get(static_css))
         .route("/static/dashboard.js", get(static_js))
         .route("/static/chart.js", get(static_chart_js))
@@ -410,12 +439,228 @@ fn normalize_period(value: Option<&str>) -> Result<&'static str, Box<Response>> 
     }
 }
 
-async fn placeholder_inference(body: Bytes) -> Response {
-    let _ = body;
-    json_response(
-        StatusCode::NOT_IMPLEMENTED,
-        json!({"detail": "inference not implemented in Rust candidate"}),
+/// Thin Axum handlers: admission/auth/body limits are existing boundaries;
+/// each handler invokes exactly one coordinator entry point and translates
+/// its typed result to the established client surface. No routing, retry,
+/// or finalization loops live here.
+async fn chat_completions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_inference(state, ClientSurface::ChatCompletions, headers, body).await
+}
+
+async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    handle_inference(state, ClientSurface::Messages, headers, body).await
+}
+
+async fn responses(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    handle_inference(state, ClientSurface::Responses, headers, body).await
+}
+
+async fn handle_inference(
+    state: AppState,
+    surface: ClientSurface,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // Peek the stream flag without consuming the body: finite and streaming
+    // coordinators own their full lifecycle and must not be mixed.
+    let is_stream = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value.get("stream").cloned())
+        .is_some_and(|value| value == serde_json::Value::Bool(true));
+    // A present-but-non-boolean stream flag is a 400 (Python parity).
+    let stream_shape_valid = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| value.get("stream").cloned())
+        .is_none_or(|value| value.is_null() || value.is_boolean());
+    if !stream_shape_valid {
+        let detail = endpoint_error_body(surface, "Invalid stream value: must be a boolean");
+        return error_body_response(StatusCode::BAD_REQUEST, surface, detail);
+    }
+    let session = headers
+        .get("x-eggpool-route-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let proxy_request_id = crate::coordinator::new_proxy_request_id();
+    if is_stream {
+        handle_stream_inference(state, surface, headers, body, session, proxy_request_id).await
+    } else {
+        handle_finite_inference(state, surface, headers, body, session, proxy_request_id).await
+    }
+}
+
+async fn handle_finite_inference(
+    state: AppState,
+    surface: ClientSurface,
+    headers: HeaderMap,
+    body: Bytes,
+    session: Option<String>,
+    proxy_request_id: String,
+) -> Response {
+    let incoming = filtered_incoming_headers(&headers);
+    match crate::coordinator::execute_finite(
+        &state.inference,
+        surface,
+        body,
+        incoming,
+        session,
+        proxy_request_id.clone(),
     )
+    .await
+    {
+        Ok((execution, _virtual)) => {
+            // Mark response start immediately before sending response start,
+            // then converge retained C006 ownership after the finite body
+            // write. The Axum body write happens after this return; a handler
+            // task cancellation before return drops the execution and
+            // converges as interrupted without replay.
+            execution.mark_started();
+            let status = execution.response.status;
+            let mut outgoing = HeaderMap::new();
+            for (name, value) in &execution.response.headers {
+                outgoing.insert(name.clone(), value.clone());
+            }
+            let body = execution.response.body.clone();
+            match execution
+                .complete(crate::coordinator::DownstreamResult::Delivered)
+                .await
+            {
+                Ok(_) => (status, outgoing, body).into_response(),
+                Err(_) => {
+                    let detail = endpoint_error_body(surface, "Finalization failed");
+                    error_body_response(StatusCode::SERVICE_UNAVAILABLE, surface, detail)
+                }
+            }
+        }
+        Err(error) => {
+            let status = error.status();
+            let detail = endpoint_error_body(surface, &error.to_string());
+            error_body_response(status, surface, detail)
+        }
+    }
+}
+
+async fn handle_stream_inference(
+    state: AppState,
+    surface: ClientSurface,
+    headers: HeaderMap,
+    body: Bytes,
+    session: Option<String>,
+    proxy_request_id: String,
+) -> Response {
+    let incoming = filtered_incoming_headers(&headers);
+    let execution = match crate::coordinator::execute_stream(
+        &state.inference,
+        surface,
+        body,
+        incoming,
+        session,
+        proxy_request_id.clone(),
+    )
+    .await
+    {
+        Ok((execution, _virtual)) => execution,
+        Err(error) => {
+            let status = error.status();
+            let detail = endpoint_error_body(surface, &error.to_string());
+            return error_body_response(status, surface, detail);
+        }
+    };
+    // Pre-handoff terminal error envelope (e.g. exhaustion without a live
+    // stream): finite JSON body with the coordinator's status/headers.
+    if let Some(error_body) = execution.error_body.clone() {
+        let status = execution.headers.status;
+        let mut outgoing = HeaderMap::new();
+        for (name, value) in &execution.headers.headers {
+            outgoing.insert(name.clone(), value.clone());
+        }
+        execution.mark_started();
+        let _ = execution
+            .complete(crate::coordinator::DownstreamResult::Delivered)
+            .await;
+        return (status, outgoing, error_body).into_response();
+    }
+    let status = execution.headers.status;
+    let mut outgoing = HeaderMap::new();
+    for (name, value) in &execution.headers.headers {
+        outgoing.insert(name.clone(), value.clone());
+    }
+    // Drive the incremental body without buffering the complete stream:
+    // each pulled chunk is forwarded as one Axum frame. Terminal ownership
+    // is stored on clean or failed terminal; failures never retry.
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    tokio::spawn(async move {
+        let mut execution = execution;
+        execution.mark_started();
+        loop {
+            match execution.next_chunk().await {
+                Some(Ok(chunk)) => {
+                    if sender.send(Ok(chunk)).await.is_err() {
+                        // Downstream disconnected: drop converges as
+                        // cancelled without replay.
+                        drop(execution);
+                        break;
+                    }
+                }
+                None => {
+                    let _ = execution
+                        .complete(crate::coordinator::DownstreamResult::Delivered)
+                        .await;
+                    break;
+                }
+                Some(Err(_)) => {
+                    // Failed terminal after handoff: end the stream without
+                    // replay; durable status already converges as error.
+                    let _ = execution
+                        .complete(crate::coordinator::DownstreamResult::Delivered)
+                        .await;
+                    break;
+                }
+            }
+        }
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
+    let body = axum::body::Body::from_stream(stream);
+    (status, outgoing, body).into_response()
+}
+
+fn error_body_response(status: StatusCode, surface: ClientSurface, detail: Vec<u8>) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    let _ = surface;
+    (status, headers, Bytes::from(detail)).into_response()
+}
+
+/// Incoming headers forwarded toward provider selection, minus credentials
+/// and hop-by-hop framing. The session header is hashed, never forwarded.
+fn filtered_incoming_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut outgoing = HeaderMap::new();
+    for (name, value) in headers {
+        let lower = name.as_str().to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "authorization"
+                | "proxy-authorization"
+                | "x-api-key"
+                | "host"
+                | "content-length"
+                | "x-eggpool-route-session"
+                | "connection"
+                | "transfer-encoding"
+                | "upgrade"
+                | "keep-alive"
+        ) {
+            continue;
+        }
+        outgoing.insert(name.clone(), value.clone());
+    }
+    outgoing
 }
 
 async fn static_css() -> Response {

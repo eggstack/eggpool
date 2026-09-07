@@ -5,10 +5,12 @@
 //! finalization are deliberately left to later coordinator slices.
 
 mod attempt;
+mod endpoints;
 mod failure;
 mod finalization;
 mod finite;
 mod publication;
+mod semantic;
 mod streaming;
 mod wire_resolver;
 
@@ -45,6 +47,18 @@ pub use streaming::{
     OUTCOME_UPSTREAM_MIDSTREAM_ERROR, StreamChunkError, StreamClientHeaders, StreamDiagnosticEvent,
     StreamDiagnostics, StreamDiagnosticsSnapshot, StreamPhase, StreamRequest, StreamTimeoutPolicy,
     StreamingCoordinator, StreamingCoordinatorError, StreamingExecution,
+};
+
+pub use endpoints::{
+    EndpointError, InferenceOutcome, InferenceState, ResolvedInference, VirtualResolution,
+    build_inference_state, build_stream_response_headers, endpoint_error_body, execute_finite,
+    execute_stream, new_proxy_request_id, parse_provider_qualified_model,
+    validate_responses_stateless,
+};
+pub use semantic::{
+    ModelSelection, SELECTOR_MAX_RESPONSE_BYTES, SelectionSource, SelectorDiagnostics,
+    SelectorFallback, SelectorPrompt, SemanticSelector, build_semantic_view, compile_repair_prompt,
+    compile_selector_prompt, normalize_selector_text, parse_route_id, truncate_utf8,
 };
 
 pub use wire_resolver::{
