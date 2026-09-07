@@ -16,7 +16,9 @@ use crate::{
     routing::{ClaimError, SelectionClaim},
 };
 
-use super::{FinalizationIdentity, PostCommitInterruption};
+use super::{
+    CoordinatorFaultInjector, CrashFaultPoint, FinalizationIdentity, PostCommitInterruption,
+};
 
 const MAX_ERROR_DETAIL: usize = 512;
 const DEFAULT_SUPERVISOR_CAPACITY: usize = 256;
@@ -133,16 +135,47 @@ pub enum FinalizationError {
     IncompatibleCommand,
     #[error("finalization worker exhausted bounded retries: {0}")]
     RetryExhausted(String),
+    #[error("injected crash fault at {point:?}")]
+    Injected { point: CrashFaultPoint },
 }
 
 #[derive(Debug, Clone)]
 pub struct DurableFinalizer {
     database: Database,
+    fault_injector: Option<CoordinatorFaultInjector>,
 }
 
 impl DurableFinalizer {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            fault_injector: None,
+        }
+    }
+
+    /// Attach a test-only crash fault injector. `None` (the default) keeps
+    /// the normal finalization path unchanged.
+    pub fn with_fault_injector(mut self, injector: CoordinatorFaultInjector) -> Self {
+        self.fault_injector = Some(injector);
+        self
+    }
+
+    fn fail_at(&self, point: CrashFaultPoint) -> Option<FinalizationError> {
+        if self
+            .fault_injector
+            .as_ref()
+            .is_some_and(|injector| injector.should_fail(point))
+        {
+            Some(FinalizationError::Injected { point })
+        } else {
+            None
+        }
+    }
+
+    fn pause_at(&self, point: CrashFaultPoint) {
+        if let Some(injector) = self.fault_injector.as_ref() {
+            injector.pause_at(point);
+        }
     }
 
     pub async fn finalize_request(
@@ -151,9 +184,25 @@ impl DurableFinalizer {
         data: FinalizationData,
         claim: Option<SelectionClaim>,
     ) -> Result<FinalizationResult, FinalizationError> {
+        self.pause_at(CrashFaultPoint::DurableFinalizerWriteBefore);
+        if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteBefore) {
+            return Err(error);
+        }
         let durable = self.finalize_durable(identity, &data, true).await?;
+        self.pause_at(CrashFaultPoint::DurableFinalizerWriteAfter);
+        if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteAfter) {
+            return Err(error);
+        }
         let runtime_cleanup_required = claim.is_some();
+        self.pause_at(CrashFaultPoint::RuntimeComponentReleaseBefore);
+        if let Some(error) = self.fail_at(CrashFaultPoint::RuntimeComponentReleaseBefore) {
+            return Err(error);
+        }
         let runtime_released = release_claim(claim.as_ref())?;
+        self.pause_at(CrashFaultPoint::RuntimeComponentReleaseAfter);
+        if let Some(error) = self.fail_at(CrashFaultPoint::RuntimeComponentReleaseAfter) {
+            return Err(error);
+        }
         let durable_converged = durable_converged(&durable.progress);
         Ok(FinalizationResult {
             runtime_released,
@@ -175,9 +224,33 @@ impl DurableFinalizer {
         data: FinalizationData,
         claim: Option<SelectionClaim>,
     ) -> Result<FinalizationResult, FinalizationError> {
+        self.pause_at(CrashFaultPoint::FailedAttemptTerminalizationBefore);
+        if let Some(error) = self.fail_at(CrashFaultPoint::FailedAttemptTerminalizationBefore) {
+            return Err(error);
+        }
+        self.pause_at(CrashFaultPoint::DurableFinalizerWriteBefore);
+        if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteBefore) {
+            return Err(error);
+        }
         let durable = self.finalize_durable(identity, &data, false).await?;
+        self.pause_at(CrashFaultPoint::DurableFinalizerWriteAfter);
+        if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteAfter) {
+            return Err(error);
+        }
+        self.pause_at(CrashFaultPoint::FailedAttemptTerminalizationAfter);
+        if let Some(error) = self.fail_at(CrashFaultPoint::FailedAttemptTerminalizationAfter) {
+            return Err(error);
+        }
         let runtime_cleanup_required = claim.is_some();
+        self.pause_at(CrashFaultPoint::RuntimeComponentReleaseBefore);
+        if let Some(error) = self.fail_at(CrashFaultPoint::RuntimeComponentReleaseBefore) {
+            return Err(error);
+        }
         let runtime_released = release_claim(claim.as_ref())?;
+        self.pause_at(CrashFaultPoint::RuntimeComponentReleaseAfter);
+        if let Some(error) = self.fail_at(CrashFaultPoint::RuntimeComponentReleaseAfter) {
+            return Err(error);
+        }
         let durable_converged = durable_converged(&durable.progress);
         Ok(FinalizationResult {
             runtime_released,
@@ -623,6 +696,7 @@ struct SupervisorInner {
     capacity: usize,
     retry_delay: Duration,
     jobs: Mutex<BTreeMap<(i64, i64), JobEntry>>,
+    fault_injector: Option<CoordinatorFaultInjector>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -748,6 +822,7 @@ impl FinalizationSupervisor {
                 capacity: capacity.max(1),
                 retry_delay: Duration::from_millis(1),
                 jobs: Mutex::new(BTreeMap::new()),
+                fault_injector: None,
             }),
         }
     }
@@ -759,10 +834,30 @@ impl FinalizationSupervisor {
         self
     }
 
+    /// Attach a test-only crash fault injector for terminal-job
+    /// registration and completion boundaries. Must be called before the
+    /// supervisor is shared.
+    pub fn with_fault_injector(mut self, injector: CoordinatorFaultInjector) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("fault injector configured before supervisor sharing")
+            .fault_injector = Some(injector);
+        self
+    }
+
     pub fn register(
         &self,
         command: FinalizationCommand,
     ) -> Result<FinalizationHandle, FinalizationError> {
+        if self.inner.fault_injector.as_ref().is_some_and(|injector| {
+            injector.should_fail(CrashFaultPoint::TerminalJobRegistrationBefore)
+        }) {
+            return Err(FinalizationError::Injected {
+                point: CrashFaultPoint::TerminalJobRegistrationBefore,
+            });
+        }
+        if let Some(injector) = self.inner.fault_injector.as_ref() {
+            injector.pause_at(CrashFaultPoint::TerminalJobRegistrationBefore);
+        }
         let key = command.key();
         let compatibility = command.compatibility();
         let (sender, receiver) = watch::channel(None);
@@ -787,9 +882,54 @@ impl FinalizationSupervisor {
                 },
             );
         }
+        if self.inner.fault_injector.as_ref().is_some_and(|injector| {
+            injector.should_fail(CrashFaultPoint::TerminalJobRegistrationAfter)
+        }) {
+            self.inner
+                .jobs
+                .lock()
+                .expect("finalization jobs lock")
+                .remove(&key);
+            return Err(FinalizationError::Injected {
+                point: CrashFaultPoint::TerminalJobRegistrationAfter,
+            });
+        }
+        if let Some(injector) = self.inner.fault_injector.as_ref() {
+            injector.pause_at(CrashFaultPoint::TerminalJobRegistrationAfter);
+        }
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move {
+            if let Some(injector) = inner.fault_injector.as_ref() {
+                injector.pause_at(CrashFaultPoint::TerminalJobCompletionBefore);
+                if injector.should_fail(CrashFaultPoint::TerminalJobCompletionBefore) {
+                    let _ = sender.send(Some(Err(format!(
+                        "injected crash fault at {:?}",
+                        CrashFaultPoint::TerminalJobCompletionBefore
+                    ))));
+                    inner
+                        .jobs
+                        .lock()
+                        .expect("finalization jobs lock")
+                        .remove(&key);
+                    return;
+                }
+            }
             let result = run_command(&inner.finalizer, command, inner.retry_delay).await;
+            if let Some(injector) = inner.fault_injector.as_ref() {
+                injector.pause_at(CrashFaultPoint::TerminalJobCompletionAfter);
+                if injector.should_fail(CrashFaultPoint::TerminalJobCompletionAfter) {
+                    let _ = sender.send(Some(Err(format!(
+                        "injected crash fault at {:?}",
+                        CrashFaultPoint::TerminalJobCompletionAfter
+                    ))));
+                    inner
+                        .jobs
+                        .lock()
+                        .expect("finalization jobs lock")
+                        .remove(&key);
+                    return;
+                }
+            }
             let output = match result {
                 Ok(value) => Ok(value),
                 Err(error) => Err(error.to_string()),

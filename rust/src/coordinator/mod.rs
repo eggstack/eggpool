@@ -10,6 +10,7 @@ mod failure;
 mod finalization;
 mod finite;
 mod publication;
+mod reconciliation;
 mod semantic;
 mod streaming;
 mod wire_resolver;
@@ -37,6 +38,12 @@ pub use publication::{
     FinalizationIdentity, PostCommitInterruption, PublicationError, PublicationFaultInjector,
     PublicationInput, PublicationOutcome, PublicationService, PublicationStage, PublishedAttempt,
     RuntimePublicationReceipt,
+};
+
+pub use reconciliation::{
+    CoordinatorFaultInjector, CrashFaultPoint, CrashReconciler, DEFAULT_RECONCILIATION_BATCH_LIMIT,
+    MAX_RECONCILIATION_BATCH_LIMIT, ReconciliationClassification, ReconciliationConfig,
+    ReconciliationError, ReconciliationReport,
 };
 
 pub use streaming::{

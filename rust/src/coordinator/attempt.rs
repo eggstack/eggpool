@@ -13,7 +13,9 @@ use crate::{
     wire::{ConfiguredWireProfile, WireRuntime, WireRuntimeContext, WireRuntimeError},
 };
 
-use super::{FinalizationIdentity, wire_resolver::WireCandidate};
+use super::{
+    CoordinatorFaultInjector, CrashFaultPoint, FinalizationIdentity, wire_resolver::WireCandidate,
+};
 
 #[derive(Debug, Clone)]
 pub struct AttemptInput {
@@ -85,6 +87,8 @@ pub enum AttemptError {
     Transport(#[from] TransportError),
     #[error("provider attempt input is invalid: {0}")]
     InvalidInput(String),
+    #[error("injected crash fault at {point:?}")]
+    Injected { point: CrashFaultPoint },
 }
 
 #[derive(Debug)]
@@ -101,11 +105,23 @@ pub struct UpstreamResponseEvidence {
 pub struct AttemptBuilder {
     clients: ProviderClientPool,
     wire: WireRuntime,
+    fault_injector: Option<CoordinatorFaultInjector>,
 }
 
 impl AttemptBuilder {
     pub fn new(clients: ProviderClientPool, wire: WireRuntime) -> Self {
-        Self { clients, wire }
+        Self {
+            clients,
+            wire,
+            fault_injector: None,
+        }
+    }
+
+    /// Attach a test-only crash fault injector for provider-send
+    /// boundaries. `None` (the default) keeps submission unchanged.
+    pub fn with_fault_injector(mut self, injector: CoordinatorFaultInjector) -> Self {
+        self.fault_injector = Some(injector);
+        self
     }
 
     pub fn prepare(&self, input: AttemptInput) -> Result<PreparedUpstreamAttempt, AttemptError> {
@@ -212,6 +228,14 @@ impl AttemptBuilder {
         &self,
         attempt: PreparedUpstreamAttempt,
     ) -> Result<UpstreamResponseEvidence, AttemptError> {
+        if let Some(injector) = self.fault_injector.as_ref() {
+            injector.pause_at(CrashFaultPoint::ProviderSendStartBefore);
+            if injector.should_fail(CrashFaultPoint::ProviderSendStartBefore) {
+                return Err(AttemptError::Injected {
+                    point: CrashFaultPoint::ProviderSendStartBefore,
+                });
+            }
+        }
         let client = self
             .clients
             .get_client(&attempt.provider_id, Some(&attempt.account_name))?;
@@ -219,6 +243,14 @@ impl AttemptBuilder {
         let response: ProviderResponse = client
             .send(attempt.method, &attempt.path, attempt.headers, attempt.body)
             .await?;
+        if let Some(injector) = self.fault_injector.as_ref() {
+            injector.pause_at(CrashFaultPoint::ProviderHeaderReceiptAfter);
+            if injector.should_fail(CrashFaultPoint::ProviderHeaderReceiptAfter) {
+                return Err(AttemptError::Injected {
+                    point: CrashFaultPoint::ProviderHeaderReceiptAfter,
+                });
+            }
+        }
         let upstream_request_id = [
             "x-request-id",
             "request-id",
