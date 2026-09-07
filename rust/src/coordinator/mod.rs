@@ -9,6 +9,7 @@ mod failure;
 mod finalization;
 mod finite;
 mod publication;
+mod streaming;
 mod wire_resolver;
 
 pub use attempt::{
@@ -34,6 +35,16 @@ pub use publication::{
     FinalizationIdentity, PostCommitInterruption, PublicationError, PublicationFaultInjector,
     PublicationInput, PublicationOutcome, PublicationService, PublicationStage, PublishedAttempt,
     RuntimePublicationReceipt,
+};
+
+pub use streaming::{
+    OUTCOME_CLIENT_CANCELLED, OUTCOME_COMPLETED_CANONICAL, OUTCOME_COMPLETED_COMPATIBILITY,
+    OUTCOME_EMPTY_EOF, OUTCOME_FIRST_BYTE_TIMEOUT, OUTCOME_IDLE_TIMEOUT, OUTCOME_MALFORMED_EOF,
+    OUTCOME_PREMATURE_EOF_BEFORE_BODY, OUTCOME_PREMATURE_EOF_MIDSTREAM,
+    OUTCOME_RESPONSE_HEADER_TIMEOUT, OUTCOME_TERMINAL_FAILURE, OUTCOME_TERMINAL_INCOMPLETE,
+    OUTCOME_UPSTREAM_MIDSTREAM_ERROR, StreamChunkError, StreamClientHeaders, StreamDiagnosticEvent,
+    StreamDiagnostics, StreamDiagnosticsSnapshot, StreamPhase, StreamRequest, StreamTimeoutPolicy,
+    StreamingCoordinator, StreamingCoordinatorError, StreamingExecution,
 };
 
 pub use wire_resolver::{
