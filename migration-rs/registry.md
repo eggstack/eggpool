@@ -25,15 +25,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
-| M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | **implementation active** | **C009 ready** |
+| M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | **implementation active** | **C010 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | accepted C008 closure | **ready for handoff** |
+| C010 | [Crash/restart reconciliation and fault injection](implementation/coordinator/010-crash-restart-reconciliation-and-fault-injection.md) | invariant | accepted C009 closure | **ready for handoff** |
 
-C010-C011 retain their existing serial dependencies. M8 implementation planning remains blocked on accepted C011 M7 closure and a separate M8 planning review.
+C011 retains its existing serial dependency. M8 implementation planning remains blocked on accepted C011 M7 closure and a separate M8 planning review.
 
 ## Completed implementation plans
 
@@ -50,6 +50,7 @@ C010-C011 retain their existing serial dependencies. M8 implementation planning 
 | C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | `7607237d533e5e3f6ae33d2ecd504acff5732959` | [closed](closure/coordinator/014-status.md) |
 | C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | capability/invariant | `a7a119ed` | [closed](closure/coordinator/007-status.md) |
 | C008 | [Streaming handoff, timeouts, cancellation](implementation/coordinator/008-streaming-handoff-timeouts-and-cancellation.md) | capability/invariant | `ecce4212` | [closed](closure/coordinator/008-status.md) |
+| C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | `0813ba62` | [closed](closure/coordinator/009-status.md) |
 | F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | `573e081f` | [closed](closure/foundation/001-status.md) |
 | F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | `a8c3621` | [closed](closure/foundation/002-status.md) |
 | F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | `5afbbdd` | [closed](closure/foundation/003-status.md) |
@@ -109,11 +110,11 @@ C012/C013 closed the major post-C006 coordinator-core gaps. A post-C013 audit fo
 | C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | closed; see [closure](closure/coordinator/014-status.md) |
 | C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | **closed** |
 | C008 | [Streaming handoff, timeouts, cancellation, terminal policy](implementation/coordinator/008-streaming-handoff-timeouts-and-cancellation.md) | **closed**; see [closure](closure/coordinator/008-status.md) |
-| C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | **dependency-ready**; C008 |
-| C010 | [Crash/restart reconciliation and fault injection](implementation/coordinator/010-crash-restart-reconciliation-and-fault-injection.md) | queued; C009 |
+| C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | **closed**; see [closure](closure/coordinator/009-status.md) |
+| C010 | [Crash/restart reconciliation and fault injection](implementation/coordinator/010-crash-restart-reconciliation-and-fault-injection.md) | **dependency-ready**; C009 |
 | C011 | [Differential qualification and M7 closure](implementation/coordinator/011-differential-qualification-and-m7-closure.md) | queued; C010 |
 
-Only the dependency-ready table authorizes implementation. Accepted C008 closure promotes C009 directly; no broader defect was exposed.
+Only the dependency-ready table authorizes implementation. Accepted C009 closure promotes C010 directly; no broader defect was exposed.
 
 ## M7 boundary decisions
 
@@ -129,4 +130,4 @@ M8 runtime generations/background lifecycle remains blocked on accepted C011 M7 
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, and M6 W001-W012 remain closed. M7 remains active toward C011: C001-C002, C007-C008, and C012-C014 are closed, C003-C006 are historical for the named findings, C009 is dependency-ready, C010-C011 remain serially blocked, and M8 remains blocked on accepted C011 closure plus its separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, and M6 W001-W012 remain closed. M7 remains active toward C011: C001-C002, C007-C009, and C012-C014 are closed, C003-C006 are historical for the named findings, C010 is dependency-ready, C011 remains serially blocked, and M8 remains blocked on accepted C011 closure plus its separate planning review.

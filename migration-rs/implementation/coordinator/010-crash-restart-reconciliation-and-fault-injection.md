@@ -1,6 +1,6 @@
 # C010 — Crash/Restart Reconciliation and Fault Injection
 
-Status: planned; blocked on C009 accepted closure
+Status: ready for handoff; C009 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
