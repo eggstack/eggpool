@@ -1,7 +1,7 @@
 # Phase 6 — Transactional Rehash and Compensatable Commit
 
 Date: 2026-07-19
-Status: complete (2026-09-06)
+Status: complete (2026-09-07 exact-head revalidation)
 Roadmap: `plans/001-reload-correctness-performance-roadmap.md`
 Prerequisites: Phases 1–5.
 
@@ -441,3 +441,44 @@ uv run pytest tests/smoke/ -q --tb=short --maxfail=1
 This revalidation confirms the staged transaction, pre-acceptance rollback,
 post-acceptance finalization ownership, cancellation/shutdown handling, and
 diagnostic state-machine evidence recorded above remain green at closure.
+
+## Exact-head closure audit
+
+Revalidated on 2026-09-07 at `69d8ec78` before the formal closure commit.
+The C007-focused transaction and reload suites remain green at the current
+head:
+
+```text
+uv run pytest \
+  tests/unit/test_process_transition_plan.py \
+  tests/unit/test_reload_manager.py \
+  tests/unit/test_reload_failure_injection.py \
+  tests/unit/test_reload_post_publication_failures.py \
+  tests/unit/test_reload_resource_failure_paths.py \
+  tests/unit/test_reload_diagnostics_matrix.py \
+  tests/integration/reload/ \
+  -q --tb=short --maxfail=1
+402 passed in 48.15s
+
+uv run ruff format --check src/ tests/ scripts/  # 728 files already formatted
+uv run ruff check src/ tests/ scripts/           # All checks passed
+uv run pyright src/ scripts/                     # 0 errors, 0 warnings, 0 informations
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+14 passed in 0.70s
+```
+
+The full-suite audit reached 680 passed and 1 skipped before stopping at the
+unrelated, deterministic provider-routing assertion
+`tests/integration/test_provider_routing_e2e.py::test_collapsed_models_endpoint_emits_providers_and_max_priority`
+(`routing_priority_max` expected `2`, received `0`). Its test setup mutates
+the deprecated `app.state`/catalog configuration directly, while the current
+C008 implementation correctly reads active-generation state. The isolated
+failure is outside the C007 transaction/reload ownership boundary and does not
+fail any C007-focused or smoke verification.
+
+The final dependency audit found no future plan explicitly blocked by C007.
+Phase 7 is complete, Phase 8 is not applicable because its writer was removed
+by Plan 091, and Phases 9–10 are complete. Phase 11 remains an available
+implementation handoff, with Phase 12 correctly remaining gated on Phase 11;
+neither status requires a change from this closure. No follow-up C007 plan is
+needed.
