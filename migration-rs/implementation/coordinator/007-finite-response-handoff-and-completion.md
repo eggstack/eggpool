@@ -1,6 +1,6 @@
 # C007 — Finite Response Handoff and Completion
 
-Status: ready for handoff; C014 accepted closure
+Status: closed; see [closure](../../closure/coordinator/007-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

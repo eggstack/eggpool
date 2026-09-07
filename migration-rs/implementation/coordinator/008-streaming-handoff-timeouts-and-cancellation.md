@@ -1,6 +1,6 @@
 # C008 — Streaming Handoff, Timeouts, Cancellation, and Terminal Policy
 
-Status: planned; blocked on C007 accepted closure
+Status: ready for handoff; C007 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
