@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::{
     config::{ProviderAuthConfig, ProviderConfig, ProviderStaticHeaderConfig},
     providers::{ProviderClientPool, ProviderClientPoolError, ProviderResponse, TransportError},
+    request::AdmittedRequest,
     wire::ir::ClientSurface,
     wire::{ConfiguredWireProfile, WireRuntime, WireRuntimeContext, WireRuntimeError},
 };
@@ -109,6 +110,26 @@ impl AttemptBuilder {
 
     pub fn prepare(&self, input: AttemptInput) -> Result<PreparedUpstreamAttempt, AttemptError> {
         validate_input(&input)?;
+        self.prepare_with_admission(input, None)
+    }
+
+    /// Prepare an attempt from the admission result already used to build
+    /// routing facts.  This keeps request decoding at the M6 boundary exactly
+    /// once on the finite coordinator path.
+    pub fn prepare_admitted(
+        &self,
+        input: AttemptInput,
+        admission: AdmittedRequest,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        validate_input(&input)?;
+        self.prepare_with_admission(input, Some(admission))
+    }
+
+    fn prepare_with_admission(
+        &self,
+        input: AttemptInput,
+        admission: Option<AdmittedRequest>,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
         let mut context = WireRuntimeContext::new(
             input.client_surface,
             input.profile.clone(),
@@ -117,7 +138,13 @@ impl AttemptBuilder {
         );
         context.provider_id = Some(input.identity.provider_id.clone());
         context.provider_kind = input.provider.kind.clone();
-        let prepared = self.wire.prepare_request(&input.raw_body, &context)?;
+        let prepared = match admission {
+            Some(admission) => {
+                self.wire
+                    .prepare_admitted_request(admission, &input.raw_body, &context)?
+            }
+            None => self.wire.prepare_request(&input.raw_body, &context)?,
+        };
         let path_template = if input.stream {
             input
                 .profile

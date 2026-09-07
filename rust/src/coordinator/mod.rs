@@ -7,6 +7,7 @@
 mod attempt;
 mod failure;
 mod finalization;
+mod finite;
 mod publication;
 mod wire_resolver;
 
@@ -22,6 +23,11 @@ pub use finalization::{
     DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationError, FinalizationHandle,
     FinalizationOutcome, FinalizationProgress, FinalizationResult, FinalizationSupervisor,
     SupervisorSnapshot,
+};
+pub use finite::{
+    ClientResponseHeaders, DownstreamResult, FiniteClientResponse, FiniteCoordinator,
+    FiniteCoordinatorError, FiniteExecution, FiniteRequest, ResponseHandoffState,
+    filter_response_headers,
 };
 
 pub use publication::{

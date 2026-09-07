@@ -379,6 +379,19 @@ impl WireRuntime {
             },
         )
         .map_err(|error| WireRuntimeError::ClientAdmission(map_admission_error(error, context)))?;
+        self.prepare_admitted_request(admission, raw_body, context)
+    }
+
+    /// Complete request preparation from an admission result that has already
+    /// parsed and validated the client body.  The coordinator uses this bridge
+    /// to preserve the one-parse M6 contract while deriving M5 routing facts.
+    pub fn prepare_admitted_request(
+        &self,
+        admission: AdmittedRequest,
+        raw_body: &[u8],
+        context: &WireRuntimeContext,
+    ) -> Result<PreparedRequest, WireRuntimeError> {
+        self.validate_context(context)?;
         if admission.canonical.model != context.canonical_model_id {
             return Err(self.profile_error(context, ProfileMismatchReason::CanonicalModelMismatch));
         }

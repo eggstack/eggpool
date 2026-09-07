@@ -18,6 +18,7 @@ use crate::{
 pub enum RequestSurface {
     ChatCompletions,
     Responses,
+    Messages,
 }
 
 impl RequestSurface {
@@ -25,6 +26,7 @@ impl RequestSurface {
         match self {
             Self::ChatCompletions => "chat_completions",
             Self::Responses => "responses",
+            Self::Messages => "messages",
         }
     }
 }
@@ -357,6 +359,17 @@ fn request_surfaces(provider: &crate::config::ProviderConfig) -> Vec<RequestSurf
         )
     }) {
         surfaces.push(RequestSurface::Responses);
+    }
+    // C007 finite matrix requires the Anthropic Messages client surface to
+    // route when the provider speaks the anthropic protocol. Previously the
+    // routing domain only advertised ChatCompletions/Responses, so Messages
+    // requests had zero eligible candidates before any coordinator logic ran.
+    if provider
+        .protocols
+        .iter()
+        .any(|protocol| protocol == "anthropic")
+    {
+        surfaces.push(RequestSurface::Messages);
     }
     surfaces
 }

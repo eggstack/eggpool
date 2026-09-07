@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use tokio::sync::Mutex as AsyncMutex;
@@ -11,7 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::{
     accounts::AccountRegistry,
     catalog::ModelCatalogCache,
-    health::{HealthManager, ModelQuarantine},
+    health::{BackoffReason, HealthManager, ModelQuarantine},
     quota::QuotaEstimator,
 };
 
@@ -225,6 +225,32 @@ impl RoutingRouter {
         facts: &RoutingRequestFacts,
         exclude_accounts: &std::collections::BTreeSet<String>,
     ) -> Result<Option<SelectionClaim>, ClaimError> {
+        self.select_and_claim_with_preference(facts, exclude_accounts, None)
+            .await
+    }
+
+    /// Select a new claim for one specific account.  C007 uses this only for
+    /// an authorized alternate-wire retry: the account is held constant while
+    /// the failed wire candidate is retired and its attempt is finalized.
+    pub async fn select_and_claim_for_account(
+        &self,
+        facts: &RoutingRequestFacts,
+        account_name: &str,
+    ) -> Result<Option<SelectionClaim>, ClaimError> {
+        self.select_and_claim_with_preference(
+            facts,
+            &std::collections::BTreeSet::new(),
+            Some(account_name),
+        )
+        .await
+    }
+
+    async fn select_and_claim_with_preference(
+        &self,
+        facts: &RoutingRequestFacts,
+        exclude_accounts: &std::collections::BTreeSet<String>,
+        preferred_account: Option<&str>,
+    ) -> Result<Option<SelectionClaim>, ClaimError> {
         self.maybe_recover_missing_support(facts, exclude_accounts);
         let _guard = self.selection_lock.lock().await;
         let active = claim::active_snapshot(&self.state.claims);
@@ -240,6 +266,9 @@ impl RoutingRouter {
             &active,
         );
         candidates.retain(|candidate| !exclude_accounts.contains(&candidate.account_name));
+        if let Some(preferred_account) = preferred_account {
+            candidates.retain(|candidate| candidate.account_name == preferred_account);
+        }
         candidates.retain(|candidate| self.probe_available_read_only(candidate, facts));
         let (ordered, fairness) = self.fairness_order(facts, &mut candidates, true);
         let mut accepted = None;
@@ -336,6 +365,53 @@ impl RoutingRouter {
             return claim.selection_snapshot().clone();
         }
         claim::SelectionSnapshot::from_plan(self.build_routing_plan(facts))
+    }
+
+    /// Apply the one success transition owned by a completed finite request.
+    /// The coordinator calls this before handing the claim to C006; duplicate
+    /// finalization never repeats the health transition.
+    pub fn record_success(&self, claim: &SelectionClaim) {
+        if let Some(health) = self.state.health.as_ref() {
+            health.record_success(claim.account_name(), Some(claim.canonical_model_id()));
+        }
+    }
+
+    /// Apply the bounded, typed portion of C005 effects available at the M5
+    /// boundary. Model-scoped failures never advance the account circuit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_failure_effects(
+        &self,
+        claim: &SelectionClaim,
+        apply_account_penalty: bool,
+        quarantine_model: bool,
+        model_effect: &str,
+        backoff_reason: Option<&str>,
+        backoff_until: Option<Duration>,
+        circuit_penalty: bool,
+    ) {
+        let Some(health) = self.state.health.as_ref() else {
+            return;
+        };
+        if quarantine_model {
+            let delay = backoff_until.map(|value| value.as_secs_f64());
+            health.disable_model(
+                claim.account_name(),
+                claim.canonical_model_id(),
+                delay,
+                model_effect == "terminal_withdrawal",
+            );
+        }
+        if !apply_account_penalty {
+            return;
+        }
+        let reason = backoff_reason
+            .and_then(|value| BackoffReason::try_from(value).ok())
+            .unwrap_or(BackoffReason::Unknown);
+        if let Some(delay) = backoff_until {
+            health.record_cooldown(claim.account_name(), reason, delay.as_secs_f64());
+        } else if circuit_penalty {
+            health.record_failure(claim.account_name(), reason);
+        }
     }
 
     fn fairness_order(
