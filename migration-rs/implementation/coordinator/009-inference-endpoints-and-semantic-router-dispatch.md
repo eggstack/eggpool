@@ -1,6 +1,6 @@
 # C009 — Public Inference Endpoints and Semantic-Router Internal Dispatch
 
-Status: planned; blocked on C008 accepted closure
+Status: ready for handoff; C008 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
