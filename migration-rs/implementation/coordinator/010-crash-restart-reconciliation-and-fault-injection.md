@@ -1,6 +1,6 @@
 # C010 — Crash/Restart Reconciliation and Fault Injection
 
-Status: ready for handoff; C009 accepted closure
+Status: closed; see [closure record](../../closure/coordinator/010-status.md)
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 

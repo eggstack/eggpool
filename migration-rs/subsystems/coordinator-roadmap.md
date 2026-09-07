@@ -1,6 +1,6 @@
 # M7 Coordinator, Retry, Failover, and Durable Finalization Roadmap
 
-Status: implementation active; C010 dependency-ready
+Status: implementation active; C011 dependency-ready
 
 Repository baseline for original M7 planning: `04820555479dc3ab86622d9c658c44c45c2c07e7`
 
@@ -101,14 +101,14 @@ C001 contract + deterministic failure corpus              [closed]
     -> C007 finite response/handoff completion               [closed]
     -> C008 streaming/handoff/timeouts/cancellation          [closed]
     -> C009 public inference endpoints + semantic-router dispatch [closed]
-   -> C010 crash/restart reconciliation + fault injection
+   -> C010 crash/restart reconciliation + fault injection [closed]
    -> C011 integrated differential qualification + M7 closure
         |
         v
 M8 planning/implementation eligibility
 ```
 
-The append-only C012-C014 numbering is intentional. Post-closure audits found material or bounded gaps in historically accepted coordinator slices; planning history is not rewritten. C009 is closed, and C010 is now the sole dependency-ready plan.
+The append-only C012-C014 numbering is intentional. Post-closure audits found material or bounded gaps in historically accepted coordinator slices; planning history is not rewritten. C010 is closed, and C011 is now the sole dependency-ready plan.
 
 Only the dependency-ready table in `../registry.md` authorizes handoff.
 
@@ -180,4 +180,4 @@ C011 remains the aggregate M7 closure plan. C014 only closes the residual core i
 
 ## Current closure state
 
-C001, C002, C007, C008, C009, and C012-C014 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the findings corrected by C012-C014. C010 is now the sole dependency-ready plan. C011 retains its serial dependency. M8 remains blocked on accepted C011 closure plus its own planning review.
+C001, C002, C007, C008, C009, C010, and C012-C014 are accepted and remain closed. C003-C006 retain append-only closure records but are historical for the findings corrected by C012-C014. C011 is now the sole dependency-ready plan. M8 remains blocked on accepted C011 closure plus its own planning review.

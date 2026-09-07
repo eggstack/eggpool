@@ -1,6 +1,6 @@
 # C011 — Differential Qualification and M7 Closure
 
-Status: planned; blocked on C010 accepted closure
+Status: ready for handoff; C010 accepted closure
 
 Source roadmap: `migration-rs/subsystems/coordinator-roadmap.md`
 
