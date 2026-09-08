@@ -1,6 +1,6 @@
 # M9 Operational CLI, Lifecycle, Update, and Deployment Roadmap
 
-Status: active planning; O001 dependency-ready
+Status: active planning; O002 dependency-ready
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350` (accepted R013 / M8 re-closure).
 

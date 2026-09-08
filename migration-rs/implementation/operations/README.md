@@ -1,6 +1,6 @@
 # M9 Operational CLI Implementation Plans
 
-Status: active; O001 dependency-ready
+Status: active; O002 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
@@ -8,8 +8,8 @@ These plans implement M9 only. They compose the closed M4-M8 Rust services into 
 
 ## Sequence
 
-1. [O001 — Operational CLI contract and deterministic oracle freeze](001-operational-cli-contract-and-oracle-freeze.md) — **ready for handoff**.
-2. [O002 — Local control, runtime paths, and process-state boundary](002-local-control-runtime-paths-and-process-state.md) — queued behind O001.
+1. [O001 — Operational CLI contract and deterministic oracle freeze](001-operational-cli-contract-and-oracle-freeze.md) — **closed**.
+2. [O002 — Local control, runtime paths, and process-state boundary](002-local-control-runtime-paths-and-process-state.md) — **ready for handoff**.
 3. [O003 — Serve/daemon, lifecycle control, rehash, status, and watchdog commands](003-process-lifecycle-control-and-watchdog-commands.md) — queued behind O002.
 4. [O004 — Config/key/provider onboarding and live-apply mutations](004-config-key-provider-onboarding-and-live-apply.md) — queued behind O003.
 5. [O005 — Agent integration and `configsetup` generation](005-agent-integration-config-generation.md) — queued behind O004.

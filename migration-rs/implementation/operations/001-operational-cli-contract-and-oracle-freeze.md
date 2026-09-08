@@ -1,10 +1,12 @@
 # O001 — Operational CLI Contract and Deterministic Oracle Freeze
 
-Status: ready for handoff
+Status: closed
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350`
+
+Implementation commit: `db3a11085689f608a64c95079c5481b45b1d9911`
 
 Primary class: invariant/infrastructure
 
