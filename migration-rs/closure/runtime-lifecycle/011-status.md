@@ -5,7 +5,7 @@ Status: closed
 Recommendation: closed; M8 is closed and M9 is eligible for its own
 planning/implementation review
 
-Implementation commit: `ac35f5c`
+Implementation commit: `31b32c4`
 
 Plan: [R011 — differential qualification and M8 closure](../../implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md)
 
