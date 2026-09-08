@@ -22,6 +22,7 @@ pub mod routing;
 mod runtime;
 pub mod runtime_lifecycle;
 pub mod server;
+pub mod task_supervisor;
 pub mod version;
 pub mod wire;
 

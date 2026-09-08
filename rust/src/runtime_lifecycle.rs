@@ -30,6 +30,14 @@ use crate::{
     providers::{ProviderClientPool, ProviderClientPoolCloseReport, ProviderClientPoolError},
 };
 
+pub use crate::task_supervisor::{
+    PreparedTaskDiff, RUNTIME_TASK_NAMES, RuntimeTaskSnapshot, RuntimeTaskSpec,
+    RuntimeTaskSupervisor, TaskCallback, TaskCallbackError, TaskCallbackFuture,
+    TaskCallbackRegistry, TaskOutcome, TaskOwnership, TaskShutdownReport, TaskSpecDiff,
+    TaskSpecError, TaskTickContext, TaskTransition, runtime_task_inventory,
+    runtime_task_specs_for_config, task_callback,
+};
+
 pub const MAX_RETIRING_GENERATIONS: usize = 4;
 const MAX_RETIREMENT_DIAGNOSTICS: usize = 16;
 pub const DEFAULT_GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -67,6 +75,7 @@ pub struct ProcessRuntime {
     model_router_affinity: Arc<ModelRouterAffinity>,
     wire_profile_resolver: WireResolver,
     config_path: Option<PathBuf>,
+    task_supervisor: RuntimeTaskSupervisor,
 }
 
 impl Clone for ProcessRuntime {
@@ -76,6 +85,7 @@ impl Clone for ProcessRuntime {
             model_router_affinity: Arc::clone(&self.model_router_affinity),
             wire_profile_resolver: self.wire_profile_resolver.clone(),
             config_path: self.config_path.clone(),
+            task_supervisor: self.task_supervisor.clone(),
         }
     }
 }
@@ -103,11 +113,15 @@ impl std::fmt::Debug for ProcessRuntime {
 
 impl ProcessRuntime {
     pub fn new(database: Database) -> Self {
+        let checkpoint_database = database.clone();
         Self {
             database,
             model_router_affinity: Arc::new(ModelRouterAffinity::new()),
             wire_profile_resolver: WireResolver::new(WireResolverConfig::default()),
             config_path: None,
+            task_supervisor: RuntimeTaskSupervisor::with_callbacks(
+                crate::task_supervisor::TaskCallbackRegistry::with_checkpoint(checkpoint_database),
+            ),
         }
     }
 
@@ -131,6 +145,10 @@ impl ProcessRuntime {
 
     pub fn config_path(&self) -> Option<&Path> {
         self.config_path.as_deref()
+    }
+
+    pub fn task_supervisor(&self) -> RuntimeTaskSupervisor {
+        self.task_supervisor.clone()
     }
 }
 

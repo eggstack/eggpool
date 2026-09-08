@@ -341,6 +341,20 @@ impl Database {
         }
     }
 
+    /// Run a passive WAL checkpoint for the process-owned maintenance task.
+    /// SQLite returns checkpoint counters; the supervisor intentionally keeps
+    /// only the success/failure category and does not retain database detail.
+    pub async fn checkpoint(&self) -> Result<(), DatabaseError> {
+        self.call(|connection| {
+            let _: (i64, i64, i64) =
+                connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn configure(&self) -> Result<(), DatabaseError> {
         let config = self.inner.config.clone();
         self.call(move |connection| {
