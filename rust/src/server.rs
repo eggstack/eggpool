@@ -265,16 +265,17 @@ impl BodyTaskTracker {
     }
 
     fn abort_all(&self) -> usize {
-        let handles = self
-            .inner
-            .active
-            .lock()
-            .expect("body task lock")
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let handles = {
+            let mut active = self.inner.active.lock().expect("body task lock");
+            let handles = active.values().cloned().collect::<Vec<_>>();
+            active.clear();
+            handles
+        };
         for handle in &handles {
             handle.abort();
+        }
+        if !handles.is_empty() {
+            self.inner.notify.notify_waiters();
         }
         handles.len()
     }
