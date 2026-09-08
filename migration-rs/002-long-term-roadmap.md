@@ -148,27 +148,29 @@ R001 runtime/reload oracle freeze
  -> R009 server startup/signals/shutdown
  -> R010 active-generation authority/diagnostics
  -> R011 differential qualification/initial M8 closure
- -> R012 wire-negotiation runtime authority + reload-diagnostics corrective re-closure
+ -> R012 wire-negotiation runtime authority + reload-diagnostics historical corrective re-closure
+ -> R013 wire-policy validation/acceptance + boundary requalification
 ```
 
-R011 remains historical aggregate closure evidence. A post-close audit found that live `routing.wire_negotiation.*` fields were classified correctly but the one process-owned resolver still used its default policy, and that reload diagnostics were finalized by the caller future rather than the retained reload transaction. R012 is the bounded corrective pass for those defects.
+R011 and R012 remain append-only historical closure evidence. R012 fixed the headline process wire-policy and retained-diagnostic ownership defects, but post-R012 audit found four remaining closure blockers: Rust omitted Python's exact upper bounds and could panic on huge finite duration conversion; candidate process wire policy became authoritative before durable SQLite acceptance; rollback did not prove immediate restoration of old policy bounds; and R012's claimed production request-path proof used `/v1/healthz` rather than the M7 inference path. The M8 subsystem roadmap file was also accidentally replaced with registry content and is restored by the R013 planning pass.
 
-Only `registry.md` authorizes handoff. R012 has re-closed M8. M9 is eligible for its own planning and implementation review; no M9 plan is promoted automatically.
+Only `registry.md` authorizes handoff. M8 is corrective-active and R013 is the sole dependency-ready plan. M9 is blocked until accepted R013 closure re-closes M8; no M9 plan is promoted automatically.
 
-M8 keeps M9 operational surfaces out of scope. It exposes the server-side typed reload/runtime/task/shutdown APIs that M9 will use, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
+M8 keeps M9 operational surfaces out of scope. It exposes server-side typed reload/runtime/task/shutdown APIs, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
 
-A major M8 closure condition is elimination of stale authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, process-owned live wire-negotiation policy, and generation-dependent diagnostics must reflect the accepted runtime state. Constructor-owned fields explicitly classified restart-required may remain startup-owned.
+A major M8 closure condition is elimination of stale or premature authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, process-owned live wire-negotiation policy, and generation-dependent diagnostics must reflect the coherently accepted runtime state. Constructor-owned fields explicitly classified restart-required remain startup-owned.
 
-Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task/wire-policy state coherent; every live wire-negotiation field affects the shared resolver without discarding compatible bounded learning; retirement waits for request leases and retained finalization; background generation-dependent ticks cannot stay stale across publication; startup recovery and graceful/forced shutdown converge without provider replay or DB reset; retained reload diagnostics cannot be stranded or falsely cleared by caller cancellation/`Busy` races; diagnostics remain bounded/secret-free; no unresolved high/medium M8 finding remains. Satisfied only by accepted R012 closure.
+R013 also freezes exact Python wire-negotiation bounds: concurrency `1..=8`, negotiation interval `0..=1800s`, rejection cooldown `0..=1800s`, learned preference TTL `0..=604800s`, and cache entries `1..=65536`. Invalid user config must fail validation rather than clamp or panic; runtime conversion must remain non-panicking for invalid programmatic input.
+
+Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task/wire-policy authority coherent throughout; candidate process policy is not request-visible before durable acceptance; rollback restores old policy and bounds immediately; every accepted live wire-negotiation field affects the shared resolver without discarding compatible bounded learning; real Axum/M7 inference proves accepted policy visibility and rejected-policy non-visibility; retirement/finalization/background/recovery/shutdown invariants remain qualified; retained reload diagnostics cannot be stranded or falsely cleared; no unresolved high/medium M8 finding remains. Satisfied only by accepted R013 closure.
 
 ## M9 — Operational CLI and lifecycle completeness
 
 Primary class: capability
 
-Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the re-closed M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
+Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the finally re-closed M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
 
-M9 is eligible for its own planning and implementation review now that R012 has
-re-closed M8. No M9 implementation plan is promoted automatically by R012.
+M9 is currently blocked on accepted R013 M8 re-closure and its own separate planning/implementation review. No M9 implementation plan exists or is promoted by the R013 planning pass.
 
 Exit condition: documented CLI workflow parity on supported targets.
 
