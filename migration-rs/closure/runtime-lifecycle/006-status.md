@@ -60,6 +60,7 @@ rtk cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings  #
 rtk cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r006 -- --test-threads=1  # 10 passed
 rtk cargo test --manifest-path rust/Cargo.toml --all-targets          # passed
 rtk uv run pytest tests/migration_rs -q --tb=short --maxfail=1       # 89 passed, 3 skipped
+rtk uv run pytest tests/migration_rs/test_r001_runtime_lifecycle.py tests/unit/test_d2_transitions.py -q --tb=short --maxfail=1  # 21 passed
 rtk git diff --check                                                   # passed
 ```
 
