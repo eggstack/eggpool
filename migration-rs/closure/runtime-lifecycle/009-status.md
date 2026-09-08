@@ -4,7 +4,7 @@ Status: closed
 
 Recommendation: closed; R010 promoted to dependency-ready
 
-Implementation commit: `5f34e90`
+Implementation commits: `5f34e90` + `d04967d`
 
 Plan: [R009 — server startup, signals, graceful drain, and forced shutdown](../../implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md)
 
