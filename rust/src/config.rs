@@ -1346,6 +1346,32 @@ impl Config {
                 "server.max_request_body_bytes must be greater than zero",
             ));
         }
+        let wire = &self.routing.wire_negotiation;
+        if wire.max_concurrent_per_provider == 0 || wire.cache_max_entries == 0 {
+            return Err(ConfigError::validation(
+                "routing.wire_negotiation limits must be greater than zero",
+            ));
+        }
+        for (name, value) in [
+            (
+                "routing.wire_negotiation.min_negotiation_interval_s",
+                wire.min_negotiation_interval_s,
+            ),
+            (
+                "routing.wire_negotiation.rejection_cooldown_s",
+                wire.rejection_cooldown_s,
+            ),
+            (
+                "routing.wire_negotiation.learned_preference_ttl_s",
+                wire.learned_preference_ttl_s,
+            ),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(ConfigError::validation(format!(
+                    "{name} must be finite and non-negative",
+                )));
+            }
+        }
         validate_positive_pair(
             self.upstream.max_keepalive,
             self.upstream.max_connections,

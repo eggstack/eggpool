@@ -32,8 +32,10 @@ The closure pass enables the following families of fields as `LIVE`:
   policy, including strategy, fairness, scoring penalties, retry limits,
   quota advisory mode, routing trace policy, and the bounded
   ``wire_negotiation`` limits. The process-owned resolver applies these
-  settings to new requests while learned state remains safe to reuse only
-  when the generation's structural candidate fingerprint is unchanged.
+  settings to new requests while learned/rejected state remains safe to reuse
+  only when the generation's structural candidate fingerprint is unchanged.
+  The resolver is staged with the accepted reload transaction, so rejected or
+  failed reloads leave its policy and compatible bounded state unchanged.
 - **Model overrides and per-model capability overrides**:
   ``[model_overrides.<id>]`` and ``[model_capabilities.<id>]``.
 - **Model-router definitions**: the complete ``[model_routers.<id>]`` mapping
@@ -426,6 +428,10 @@ A reload transaction is already in progress
 
 Only one reload can execute at a time. Wait for the current reload to
 complete, then retry.
+
+Reload diagnostic ownership follows the retained reload transaction. A
+cancelled caller cannot strand `reload_in_progress`, and a concurrent busy
+caller cannot clear the active operation's diagnostic state.
 
 ### Restart-required changes
 

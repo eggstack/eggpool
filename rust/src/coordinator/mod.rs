@@ -74,5 +74,5 @@ pub use semantic::{
 
 pub use wire_resolver::{
     NegotiationLease, NegotiationResult, NegotiationRole, WireCandidate, WireResolution,
-    WireResolver, WireResolverConfig, WireResolverSnapshot,
+    WireResolver, WireResolverConfig, WireResolverPolicyStage, WireResolverSnapshot,
 };

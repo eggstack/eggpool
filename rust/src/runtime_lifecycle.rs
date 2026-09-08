@@ -27,7 +27,7 @@ use crate::{
     coordinator::{
         CrashReconciler, FinalizationDrainError, FinalizationSupervisor, InferenceState,
         ReconciliationError, TerminalReference, TerminalReferenceOwner, WireResolver,
-        WireResolverConfig, build_inference_state_with_shared,
+        WireResolverConfig, WireResolverPolicyStage, build_inference_state_with_shared,
         build_inference_state_with_shared_and_accounts, compile_provider_profiles,
     },
     db::{Account, Database, DatabaseError},
@@ -165,6 +165,7 @@ struct RuntimeDiagnosticState {
     reload_phase: String,
     last_reload: Option<ReloadDiagnosticRecord>,
     reload_started_at: Option<Instant>,
+    reload_owner: Option<u64>,
     counters: RuntimeDiagnosticCounters,
     shutdown: ShutdownDiagnostics,
 }
@@ -176,6 +177,7 @@ impl Default for RuntimeDiagnosticState {
             reload_phase: "idle".to_owned(),
             last_reload: None,
             reload_started_at: None,
+            reload_owner: None,
             counters: RuntimeDiagnosticCounters::default(),
             shutdown: ShutdownDiagnostics {
                 phase: "running".to_owned(),
@@ -228,6 +230,7 @@ pub struct ProcessRuntime {
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
     reload_lock: Arc<AsyncMutex<()>>,
+    next_reload_owner: Arc<AtomicU64>,
     startup_recovery_report: Arc<Mutex<Option<StartupRecoveryReport>>>,
     diagnostics: Arc<Mutex<RuntimeDiagnosticState>>,
 }
@@ -241,6 +244,7 @@ impl Clone for ProcessRuntime {
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
             reload_lock: Arc::clone(&self.reload_lock),
+            next_reload_owner: Arc::clone(&self.next_reload_owner),
             startup_recovery_report: Arc::clone(&self.startup_recovery_report),
             diagnostics: Arc::clone(&self.diagnostics),
         }
@@ -282,13 +286,35 @@ impl ProcessRuntime {
                 ),
             ),
             reload_lock: Arc::new(AsyncMutex::new(())),
+            next_reload_owner: Arc::new(AtomicU64::new(1)),
             startup_recovery_report: Arc::new(Mutex::new(None)),
             diagnostics: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
         }
     }
 
+    /// Production startup authority: the process-owned resolver is created
+    /// with the validated wire-negotiation policy before the first generation
+    /// can serve a request.
+    pub fn new_with_config(database: Database, config: &Config) -> Self {
+        let mut runtime = Self::new(database);
+        runtime.wire_profile_resolver = WireResolver::new(WireResolverConfig::from_config(
+            &config.routing.wire_negotiation,
+        ));
+        runtime
+    }
+
     pub fn with_config_path(database: Database, config_path: impl Into<PathBuf>) -> Self {
         let mut runtime = Self::new(database);
+        runtime.config_path = Some(config_path.into());
+        runtime
+    }
+
+    pub fn with_config_path_and_config(
+        database: Database,
+        config_path: impl Into<PathBuf>,
+        config: &Config,
+    ) -> Self {
+        let mut runtime = Self::new_with_config(database, config);
         runtime.config_path = Some(config_path.into());
         runtime
     }
@@ -303,6 +329,13 @@ impl ProcessRuntime {
 
     pub fn wire_profile_resolver(&self) -> WireResolver {
         self.wire_profile_resolver.clone()
+    }
+
+    pub(crate) fn stage_wire_resolver_policy(&self, config: &Config) -> WireResolverPolicyStage {
+        self.wire_profile_resolver
+            .stage_config(WireResolverConfig::from_config(
+                &config.routing.wire_negotiation,
+            ))
     }
 
     pub fn config_path(&self) -> Option<&Path> {
@@ -391,17 +424,31 @@ impl ProcessRuntime {
         Arc::clone(&self.reload_lock)
     }
 
-    pub(crate) fn begin_reload_diagnostics(&self) {
+    pub(crate) fn begin_reload_diagnostics(
+        &self,
+        manager: &RuntimeManager,
+    ) -> ReloadDiagnosticGuard {
         let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        let owner = self.next_reload_owner.fetch_add(1, Ordering::Relaxed);
         diagnostics.reload_in_progress = true;
         diagnostics.reload_phase = "running".to_owned();
         diagnostics.reload_started_at = Some(Instant::now());
+        diagnostics.reload_owner = Some(owner);
         diagnostics.counters.reload_attempts =
             diagnostics.counters.reload_attempts.saturating_add(1);
+        ReloadDiagnosticGuard {
+            process: self.clone(),
+            manager: manager.clone(),
+            owner,
+            finished: false,
+        }
     }
 
-    pub(crate) fn record_reload_diagnostics(&self, result: &crate::reload::ReloadResult) {
+    fn record_reload_diagnostics(&self, owner: u64, result: &crate::reload::ReloadResult) {
         let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        if diagnostics.reload_owner != Some(owner) {
+            return;
+        }
         let duration_ms = diagnostics.reload_started_at.take().map_or(0, |started| {
             started.elapsed().as_millis().min(u64::MAX as u128) as u64
         });
@@ -424,6 +471,16 @@ impl ProcessRuntime {
         });
         diagnostics.reload_in_progress = false;
         diagnostics.reload_phase = "idle".to_owned();
+        diagnostics.reload_owner = None;
+    }
+
+    fn abort_reload_diagnostics(&self, owner: u64, manager: &RuntimeManager) {
+        let result = crate::reload::ReloadResult::from_active(
+            manager,
+            crate::reload::ReloadResultCategory::Aborted,
+            "worker_aborted",
+        );
+        self.record_reload_diagnostics(owner, &result);
     }
 
     pub(crate) fn set_shutdown_diagnostics(&self, phase: &str, forced: bool) {
@@ -498,6 +555,32 @@ impl ProcessRuntime {
             startup_recovery: self.startup_recovery_report(),
             shutdown: diagnostics.shutdown,
             counters: diagnostics.counters,
+        }
+    }
+}
+
+/// Owns one reload diagnostic lifecycle for the retained reload worker. A
+/// caller dropping its join future cannot clear another operation's marker;
+/// dropping this guard is the final cleanup path for worker abort/panic.
+pub(crate) struct ReloadDiagnosticGuard {
+    process: ProcessRuntime,
+    manager: RuntimeManager,
+    owner: u64,
+    finished: bool,
+}
+
+impl ReloadDiagnosticGuard {
+    pub(crate) fn finish(mut self, result: &crate::reload::ReloadResult) {
+        self.process.record_reload_diagnostics(self.owner, result);
+        self.finished = true;
+    }
+}
+
+impl Drop for ReloadDiagnosticGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.process
+                .abort_reload_diagnostics(self.owner, &self.manager);
         }
     }
 }

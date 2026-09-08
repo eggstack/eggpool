@@ -59,7 +59,17 @@ state container. It survives safe generation swaps, while each generation
 passes immutable resolved provider profiles to its coordinator. Candidate
 fingerprints include structural surface/path/auth-shape/header facts but never
 credential values, so a rehash with changed wire definitions cannot reuse the
-old learned preference.
+old learned preference. Its validated `routing.wire_negotiation` policy is
+installed before startup request admission and staged with live rehash
+acceptance; rejected reloads cannot change the resolver. Learned/rejected
+observations retain their timestamps so accepted TTL/cooldown changes take
+effect without discarding compatible state, and one shared per-provider limit
+converges across existing in-flight negotiations.
+
+Reload diagnostics are owned by the retained reload worker rather than the
+caller future. An operation token is the only authority allowed to clear
+`reload_in_progress`; a concurrent busy caller cannot overwrite the active
+phase, and worker abort/drop cleanup records a bounded terminal result.
 
 `ProcessRuntime.model_router_affinity` is a separate process-owned bounded
 TTL/LRU cache for sticky virtual-model decisions. It stores only a route ID,

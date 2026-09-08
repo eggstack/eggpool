@@ -101,7 +101,7 @@ pub struct ReloadResult {
 }
 
 impl ReloadResult {
-    fn from_active(
+    pub(crate) fn from_active(
         manager: &RuntimeManager,
         category: ReloadResultCategory,
         reason_code: &str,
@@ -303,19 +303,16 @@ impl ReloadService {
     /// Run reload work in an owned task. Caller cancellation therefore never
     /// drops a staged candidate or leaves the admission gate unresolved.
     pub async fn reload(&self, request: ReloadRequest) -> ReloadResult {
-        self.process.begin_reload_diagnostics();
         let service = self.clone();
         let join = tokio::spawn(async move { service.reload_owned(request).await });
-        let result = match join.await {
+        match join.await {
             Ok(result) => result,
             Err(_) => ReloadResult::from_active(
                 &self.manager,
                 ReloadResultCategory::Aborted,
                 "worker_failed",
             ),
-        };
-        self.process.record_reload_diagnostics(&result);
-        result
+        }
     }
 
     async fn reload_owned(&self, request: ReloadRequest) -> ReloadResult {
@@ -326,6 +323,13 @@ impl ReloadService {
                 "reload_busy",
             );
         };
+        let diagnostics = self.process.begin_reload_diagnostics(&self.manager);
+        let result = self.reload_owned_transaction(request).await;
+        diagnostics.finish(&result);
+        result
+    }
+
+    async fn reload_owned_transaction(&self, request: ReloadRequest) -> ReloadResult {
         if self.manager.is_shutting_down() {
             return ReloadResult::from_active(
                 &self.manager,
@@ -469,6 +473,7 @@ impl ReloadService {
                 );
             }
         };
+        let mut wire_policy = self.process.stage_wire_resolver_policy(&candidate_config);
         let transaction = match self.process.database().begin_transaction().await {
             Ok(transaction) => transaction,
             Err(_) => {
@@ -496,6 +501,7 @@ impl ReloadService {
                 .abort_staged(staged, task_diff, &diff, "task_commit_failed")
                 .await;
         }
+        wire_policy.commit();
         if transaction.commit().await.is_err() {
             let mut compensation_failed = false;
             if let Ok(repair_transaction) = self.process.database().begin_transaction().await {
@@ -507,10 +513,17 @@ impl ReloadService {
             } else {
                 compensation_failed = true;
             }
-            if staged.rollback_pointer().is_err() || task_diff.rollback_committed().await.is_err() {
+            let pointer_rolled_back = staged.rollback_pointer().is_ok();
+            if pointer_rolled_back {
+                wire_policy.rollback();
+            }
+            if !pointer_rolled_back || task_diff.rollback_committed().await.is_err() {
                 compensation_failed = true;
             }
             if compensation_failed {
+                if !pointer_rolled_back {
+                    wire_policy.finalize();
+                }
                 return self.result_with_diff(
                     ReloadResultCategory::CompensationFailed,
                     "compensation_failed",
@@ -533,6 +546,7 @@ impl ReloadService {
                 Ok(publication) => publication,
                 Err(_) => {
                     return self.acceptance_failure_after_commit(
+                        &mut wire_policy,
                         staged,
                         &diff,
                         "shutdown_acceptance_failed",
@@ -548,6 +562,7 @@ impl ReloadService {
                             Ok(publication) => publication,
                             Err(_) => {
                                 return self.acceptance_failure_after_commit(
+                                    &mut wire_policy,
                                     staged,
                                     &diff,
                                     "shutdown_acceptance_failed",
@@ -556,6 +571,7 @@ impl ReloadService {
                         }
                     } else {
                         return self.acceptance_failure_after_commit(
+                            &mut wire_policy,
                             staged,
                             &diff,
                             "acceptance_failed",
@@ -564,6 +580,7 @@ impl ReloadService {
                 }
             }
         };
+        wire_policy.finalize();
         let mut result =
             self.result_with_diff(ReloadResultCategory::Applied, "applied", &diff, true);
         result.active_generation_id = publication.new_slot.generation_id();
@@ -588,6 +605,7 @@ impl ReloadService {
 
     fn acceptance_failure_after_commit(
         &self,
+        wire_policy: &mut crate::coordinator::WireResolverPolicyStage,
         staged: StagedGenerationSwap,
         diff: &ConfigDiff,
         reason: &str,
@@ -595,6 +613,7 @@ impl ReloadService {
         // The database is already committed here. Keep the new pointer
         // fail-closed rather than allowing Drop to restore the old runtime.
         staged.fail_closed();
+        wire_policy.finalize();
         self.result_with_diff(ReloadResultCategory::CompensationFailed, reason, diff, true)
     }
 

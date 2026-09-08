@@ -12,8 +12,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-
+use crate::config::WireNegotiationConfig;
 use crate::wire::{ConfiguredWireProfile, WireSurface};
 
 const DEFAULT_CACHE_CAPACITY: usize = 2_048;
@@ -23,6 +22,7 @@ const DEFAULT_NEGOTIATION_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct WireResolverConfig {
+    pub enabled: bool,
     pub cache_capacity: usize,
     pub learned_ttl: Duration,
     pub rejection_ttl: Duration,
@@ -35,6 +35,7 @@ pub struct WireResolverConfig {
 impl Default for WireResolverConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             cache_capacity: DEFAULT_CACHE_CAPACITY,
             learned_ttl: DEFAULT_LEARNED_TTL,
             rejection_ttl: DEFAULT_REJECTION_TTL,
@@ -62,6 +63,23 @@ impl WireCandidate {
 
     pub fn surface(&self) -> WireSurface {
         self.profile.definition.surface
+    }
+}
+
+impl WireResolverConfig {
+    /// Convert the validated configuration surface into the process-owned
+    /// resolver policy. The provider-state and metric-label bounds remain
+    /// implementation-owned safety limits.
+    pub fn from_config(config: &WireNegotiationConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            cache_capacity: config.cache_max_entries as usize,
+            learned_ttl: duration_from_seconds(config.learned_preference_ttl_s),
+            rejection_ttl: duration_from_seconds(config.rejection_cooldown_s),
+            min_negotiation_interval: duration_from_seconds(config.min_negotiation_interval_s),
+            max_concurrent_per_provider: usize::from(config.max_concurrent_per_provider),
+            ..Self::default()
+        }
     }
 }
 
@@ -97,13 +115,13 @@ type FlightKey = (String, String);
 #[derive(Debug, Clone)]
 struct Learned {
     surface: WireSurface,
-    expires_at: Instant,
+    observed_at: Instant,
 }
 
 #[derive(Debug, Default)]
 struct CacheEntry {
     learned: Option<Learned>,
-    rejected_until: BTreeMap<WireSurface, Instant>,
+    rejected_at: BTreeMap<WireSurface, Instant>,
 }
 
 #[derive(Debug)]
@@ -130,7 +148,7 @@ pub struct NegotiationLease {
     key: CacheKey,
     flight_key: FlightKey,
     role: NegotiationRole,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Option<ProviderPermit>,
     flight: Arc<Flight>,
     finished: bool,
 }
@@ -174,17 +192,133 @@ impl Drop for NegotiationLease {
 
 #[derive(Debug, Clone)]
 pub struct WireResolver {
-    config: WireResolverConfig,
+    config: Arc<Mutex<WireResolverConfig>>,
     state: Arc<Mutex<ResolverState>>,
-    provider_gates: Arc<Mutex<BTreeMap<String, Arc<Semaphore>>>>,
+    provider_gates: Arc<Mutex<BTreeMap<String, Arc<ProviderGate>>>>,
+}
+
+#[derive(Debug)]
+struct ProviderGate {
+    limit: std::sync::atomic::AtomicUsize,
+    in_flight: std::sync::atomic::AtomicUsize,
+}
+
+impl ProviderGate {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit: std::sync::atomic::AtomicUsize::new(limit.max(1)),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn set_limit(&self, limit: usize) {
+        self.limit
+            .store(limit.max(1), std::sync::atomic::Ordering::Release);
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<ProviderPermit> {
+        let limit = self.limit.load(std::sync::atomic::Ordering::Acquire);
+        let mut current = self.in_flight.load(std::sync::atomic::Ordering::Acquire);
+        loop {
+            if current >= limit {
+                return None;
+            }
+            match self.in_flight.compare_exchange_weak(
+                current,
+                current + 1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(ProviderPermit {
+                        gate: Arc::clone(self),
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        self.in_flight.load(std::sync::atomic::Ordering::Acquire) == 0
+    }
+}
+
+#[derive(Debug)]
+struct ProviderPermit {
+    gate: Arc<ProviderGate>,
+}
+
+impl Drop for ProviderPermit {
+    fn drop(&mut self) {
+        self.gate
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// A policy change prepared outside the reload admission gate and committed
+/// only during the short R007 acceptance window.
+#[derive(Debug)]
+pub struct WireResolverPolicyStage {
+    resolver: WireResolver,
+    previous: WireResolverConfig,
+    next: WireResolverConfig,
+    committed: bool,
+    finalized: bool,
+}
+
+impl WireResolverPolicyStage {
+    pub fn commit(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.resolver.apply_config(self.next.clone());
+        self.committed = true;
+    }
+
+    pub fn rollback(&mut self) {
+        if self.committed && !self.finalized {
+            self.resolver.apply_config(self.previous.clone());
+            self.committed = false;
+        }
+    }
+
+    pub fn finalize(&mut self) {
+        self.resolver.enforce_bounds();
+        self.finalized = true;
+    }
+}
+
+impl Drop for WireResolverPolicyStage {
+    fn drop(&mut self) {
+        self.rollback();
+    }
 }
 
 impl WireResolver {
     pub fn new(config: WireResolverConfig) -> Self {
         Self {
-            config,
+            config: Arc::new(Mutex::new(config)),
             state: Arc::new(Mutex::new(ResolverState::default())),
             provider_gates: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn config(&self) -> WireResolverConfig {
+        self.config
+            .lock()
+            .expect("wire resolver config lock")
+            .clone()
+    }
+
+    pub fn stage_config(&self, next: WireResolverConfig) -> WireResolverPolicyStage {
+        WireResolverPolicyStage {
+            resolver: self.clone(),
+            previous: self.config(),
+            next,
+            committed: false,
+            finalized: false,
         }
     }
 
@@ -225,28 +359,37 @@ impl WireResolver {
             model_id: model_id.to_owned(),
             fingerprint: fingerprint.clone(),
         };
+        let config = self.config();
         let mut state = self.state.lock().expect("wire resolver lock");
         let entry = state.entries.entry(key.clone()).or_default();
-        entry.rejected_until.retain(|_, until| *until > now);
+        entry.rejected_at.retain(|_, rejected_at| {
+            now.saturating_duration_since(*rejected_at) < config.rejection_ttl
+        });
         let learned = entry
             .learned
             .as_ref()
-            .filter(|learned| learned.expires_at > now)
+            .filter(|learned| {
+                now.saturating_duration_since(learned.observed_at) < config.learned_ttl
+            })
             .map(|learned| learned.surface);
-        candidates.retain(|candidate| {
-            entry
-                .rejected_until
-                .get(&candidate.surface())
-                .is_none_or(|until| *until <= now)
-        });
+        if config.enabled {
+            candidates.retain(|candidate| {
+                entry
+                    .rejected_at
+                    .get(&candidate.surface())
+                    .is_none_or(|rejected_at| {
+                        now.saturating_duration_since(*rejected_at) >= config.rejection_ttl
+                    })
+            });
+        }
         let fixed = preference
             .0
             .filter(|(_, fixed)| *fixed)
             .map(|(surface, _)| surface);
         let preferred = fixed
-            .or(learned)
+            .or(config.enabled.then_some(learned).flatten())
             .or_else(|| preference.0.map(|(surface, _)| surface))
-            .or(preference.1);
+            .or(config.enabled.then_some(preference.1).flatten());
         candidates.sort_by_key(|candidate| {
             let rank = if Some(candidate.surface()) == preferred {
                 0
@@ -263,8 +406,8 @@ impl WireResolver {
                 candidates.truncate(1);
             }
         }
-        increment_metric(&mut state, "wire_selection", self.config.max_metric_labels);
-        touch_lru(&mut state, key, self.config.cache_capacity);
+        increment_metric(&mut state, "wire_selection", config.max_metric_labels);
+        touch_lru(&mut state, key, config.cache_capacity);
         WireResolution {
             candidates,
             fingerprint,
@@ -285,15 +428,20 @@ impl WireResolver {
         };
         let flight_key = (provider_id.to_owned(), model_id.to_owned());
         let throttled_by_interval = {
+            let config = self.config();
             let state = self.state.lock().expect("wire resolver lock");
-            !state.flights.contains_key(&flight_key)
-                && (state
-                    .negotiation_delay_until
-                    .get(provider_id)
-                    .is_some_and(|until| *until > now)
-                    || state.last_negotiation.get(provider_id).is_some_and(|last| {
-                        now.saturating_duration_since(*last) < self.config.min_negotiation_interval
-                    }))
+            if !config.enabled {
+                true
+            } else {
+                !state.flights.contains_key(&flight_key)
+                    && (state
+                        .negotiation_delay_until
+                        .get(provider_id)
+                        .is_some_and(|until| *until > now)
+                        || state.last_negotiation.get(provider_id).is_some_and(|last| {
+                            now.saturating_duration_since(*last) < config.min_negotiation_interval
+                        }))
+            }
         };
         if throttled_by_interval {
             let flight = Arc::new(Flight {
@@ -336,19 +484,16 @@ impl WireResolver {
                 finished: true,
             };
         }
+        let config = self.config();
         let gate = {
             let mut gates = self.provider_gates.lock().expect("wire gates lock");
             gates
                 .entry(provider_id.to_owned())
-                .or_insert_with(|| {
-                    Arc::new(Semaphore::new(
-                        self.config.max_concurrent_per_provider.max(1),
-                    ))
-                })
+                .or_insert_with(|| Arc::new(ProviderGate::new(config.max_concurrent_per_provider)))
                 .clone()
         };
-        let permitted = gate.try_acquire_owned();
-        let role = if permitted.is_ok() {
+        let permitted = gate.try_acquire();
+        let role = if permitted.is_some() {
             NegotiationRole::Leader
         } else {
             self.cancel_leader(&flight_key, &flight);
@@ -368,14 +513,14 @@ impl WireResolver {
         {
             let mut state = self.state.lock().expect("wire resolver lock");
             state.last_negotiation.insert(provider_id.to_owned(), now);
-            trim_provider_state(&mut state, self.config.max_provider_state);
+            trim_provider_state(&mut state, config.max_provider_state);
         }
         NegotiationLease {
             resolver: self.clone(),
             key,
             flight_key,
             role,
-            permit: permitted.ok(),
+            permit: permitted,
             flight,
             finished: false,
         }
@@ -405,15 +550,19 @@ impl WireResolver {
             model_id: model_id.to_owned(),
             fingerprint: fingerprint.to_owned(),
         };
+        let config = self.config();
+        if !config.enabled {
+            return;
+        }
         let mut state = self.state.lock().expect("wire resolver lock");
         state
             .entries
             .entry(key.clone())
             .or_default()
-            .rejected_until
-            .insert(surface, now + self.config.rejection_ttl);
-        touch_lru(&mut state, key, self.config.cache_capacity);
-        increment_metric(&mut state, "wire_rejection", self.config.max_metric_labels);
+            .rejected_at
+            .insert(surface, now);
+        touch_lru(&mut state, key, config.cache_capacity);
+        increment_metric(&mut state, "wire_rejection", config.max_metric_labels);
     }
 
     pub fn set_operator_preference(
@@ -423,31 +572,34 @@ impl WireResolver {
         surface: WireSurface,
         fixed: bool,
     ) {
+        let config = self.config();
         let mut state = self.state.lock().expect("wire resolver lock");
         state.operator_preferences.insert(
             (provider_id.to_owned(), model_id.to_owned()),
             (surface, fixed),
         );
-        trim_preference_state(&mut state, self.config.max_provider_state);
+        trim_preference_state(&mut state, config.max_provider_state);
     }
 
     pub fn set_metadata_hint(&self, provider_id: &str, model_id: &str, surface: WireSurface) {
+        let config = self.config();
         let mut state = self.state.lock().expect("wire resolver lock");
         state
             .metadata_hints
             .insert((provider_id.to_owned(), model_id.to_owned()), surface);
-        trim_preference_state(&mut state, self.config.max_provider_state);
+        trim_preference_state(&mut state, config.max_provider_state);
     }
 
     /// C005 supplies rate-limit evidence; the resolver only stores the
     /// bounded provider-wide negotiation delay and never interprets HTTP.
     pub fn delay_provider_negotiation(&self, provider_id: &str, delay: Duration, now: Instant) {
         let bounded = delay.min(Duration::from_secs(1_800));
+        let config = self.config();
         let mut state = self.state.lock().expect("wire resolver lock");
         state
             .negotiation_delay_until
             .insert(provider_id.to_owned(), now + bounded);
-        trim_provider_state(&mut state, self.config.max_provider_state);
+        trim_provider_state(&mut state, config.max_provider_state);
     }
 
     pub fn snapshot_size(&self) -> usize {
@@ -481,17 +633,21 @@ impl WireResolver {
         surface: WireSurface,
         now: Instant,
     ) {
+        if !self.config().enabled {
+            return;
+        }
         let key = CacheKey {
             provider_id: provider_id.to_owned(),
             model_id: model_id.to_owned(),
             fingerprint: fingerprint.to_owned(),
         };
         let mut state = self.state.lock().expect("wire resolver lock");
+        let config = self.config();
         state.entries.entry(key.clone()).or_default().learned = Some(Learned {
             surface,
-            expires_at: now + self.config.learned_ttl,
+            observed_at: now,
         });
-        touch_lru(&mut state, key, self.config.cache_capacity);
+        touch_lru(&mut state, key, config.cache_capacity);
     }
 
     fn finish_leader(
@@ -506,13 +662,15 @@ impl WireResolver {
         let mut state = self.state.lock().expect("wire resolver lock");
         let flight_key = (key.provider_id.clone(), key.model_id.clone());
         state.flights.remove(&flight_key);
-        if let NegotiationResult::Accepted(surface) = result {
-            state.entries.entry(key.clone()).or_default().learned = Some(Learned {
-                surface,
-                expires_at: now + self.config.learned_ttl,
-            });
+        if self.config().enabled {
+            if let NegotiationResult::Accepted(surface) = result {
+                state.entries.entry(key.clone()).or_default().learned = Some(Learned {
+                    surface,
+                    observed_at: now,
+                });
+            }
         }
-        touch_lru(&mut state, key.clone(), self.config.cache_capacity);
+        touch_lru(&mut state, key.clone(), self.config().cache_capacity);
     }
 
     fn cancel_leader(&self, key: &FlightKey, flight: &Arc<Flight>) {
@@ -534,11 +692,26 @@ impl WireResolver {
             .keys()
             .any(|key| key.0 == provider_id);
         if !has_flight {
-            self.provider_gates
-                .lock()
-                .expect("wire gates lock")
-                .remove(provider_id);
+            let mut gates = self.provider_gates.lock().expect("wire gates lock");
+            if gates.get(provider_id).is_some_and(|gate| gate.is_idle()) {
+                gates.remove(provider_id);
+            }
         }
+    }
+
+    fn apply_config(&self, config: WireResolverConfig) {
+        *self.config.lock().expect("wire resolver config lock") = config.clone();
+        let gates = self.provider_gates.lock().expect("wire gates lock");
+        for gate in gates.values() {
+            gate.set_limit(config.max_concurrent_per_provider);
+        }
+    }
+
+    fn enforce_bounds(&self) {
+        let config = self.config();
+        let mut state = self.state.lock().expect("wire resolver lock");
+        trim_cache(&mut state, config.cache_capacity);
+        trim_provider_state(&mut state, config.max_provider_state);
     }
 }
 
@@ -608,5 +781,23 @@ fn touch_lru(state: &mut ResolverState, key: CacheKey, capacity: usize) {
             break;
         };
         state.entries.remove(&oldest);
+    }
+}
+
+fn trim_cache(state: &mut ResolverState, capacity: usize) {
+    while state.entries.len() > capacity.max(1) {
+        let Some(oldest) = state.lru.pop_front() else {
+            break;
+        };
+        state.entries.remove(&oldest);
+    }
+    state.lru.retain(|key| state.entries.contains_key(key));
+}
+
+fn duration_from_seconds(seconds: f64) -> Duration {
+    if seconds.is_finite() && seconds > 0.0 {
+        Duration::from_secs_f64(seconds)
+    } else {
+        Duration::ZERO
     }
 }
