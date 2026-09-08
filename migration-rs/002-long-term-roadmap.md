@@ -132,9 +132,9 @@ Primary class: infrastructure/capability/invariant
 
 Subsystem roadmap: [Runtime Generations, Rehash, Background Tasks, and Process Lifecycle](subsystems/runtime-lifecycle-roadmap.md).
 
-M8 replaces static Rust server state and Python/Granian generation/process machinery with a Rust-native process runtime. It owns immutable generation snapshots, one shared startup/reload generation factory, explicit candidate abort, `ArcSwap` active publication, linearizable request/stream leases, old-generation retirement after M7 retained-finalization drain, exhaustive fail-closed reload policy, serialized transactional rehash, one bounded process task supervisor, generation-leased recurring maintenance, startup crash-recovery scheduling, process signals/graceful/forced shutdown, process-owned wire-negotiation policy authority, and active-generation runtime diagnostics.
+M8 replaced static Rust server state and Python/Granian generation/process machinery with a Rust-native process runtime. It owns immutable generation snapshots, shared startup/reload generation factory, explicit candidate abort, `ArcSwap` active publication, linearizable request/stream leases, old-generation retirement after retained-finalization drain, exhaustive fail-closed reload policy, serialized transactional rehash, one bounded process task supervisor, generation-leased maintenance, startup crash reconciliation, process signals/graceful/forced shutdown, process-owned wire policy, and runtime/reload diagnostics.
 
-Sequence and corrective history:
+Accepted sequence and corrective history:
 
 ```text
 R001 runtime/reload oracle freeze
@@ -148,31 +148,48 @@ R001 runtime/reload oracle freeze
  -> R009 server startup/signals/shutdown
  -> R010 active-generation authority/diagnostics
  -> R011 differential qualification/initial M8 closure
- -> R012 wire-negotiation runtime authority + reload-diagnostics historical corrective re-closure
+ -> R012 wire-negotiation runtime authority + reload-diagnostics historical corrective closure
  -> R013 wire-policy validation/acceptance + boundary requalification
 ```
 
-R011 and R012 remain append-only historical closure evidence. R012 fixed the headline process wire-policy and retained-diagnostic ownership defects, but post-R012 audit found four remaining closure blockers: Rust omitted Python's exact upper bounds and could panic on huge finite duration conversion; candidate process wire policy became authoritative before durable SQLite acceptance; rollback did not prove immediate restoration of old policy bounds; and R012's claimed production request-path proof used `/v1/healthz` rather than the M7 inference path. The M8 subsystem roadmap file was also accidentally replaced with registry content and is restored by the R013 planning pass.
+R011/R012 remain append-only historical closure evidence. Accepted R013 fixed the remaining process wire-policy validation/acceptance/rollback and real-inference qualification defects and re-closed M8. R013 closure recorded no unresolved high/medium M8 finding.
 
-Only `registry.md` authorizes handoff. M8 is corrective-active and R013 is the sole dependency-ready plan. M9 is blocked until accepted R013 closure re-closes M8; no M9 plan is promoted automatically.
+R008 left exactly three business capabilities intentionally deferred and unregistered for M9: `metrics_flush`, `update_checker`, and `automatic_backup`. M8 owns their scheduler/task-spec machinery; M9 owns the real callbacks.
 
-M8 keeps M9 operational surfaces out of scope. It exposes server-side typed reload/runtime/task/shutdown APIs, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
-
-A major M8 closure condition is elimination of stale or premature authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, process-owned live wire-negotiation policy, and generation-dependent diagnostics must reflect the coherently accepted runtime state. Constructor-owned fields explicitly classified restart-required remain startup-owned.
-
-R013 also freezes exact Python wire-negotiation bounds: concurrency `1..=8`, negotiation interval `0..=1800s`, rejection cooldown `0..=1800s`, learned preference TTL `0..=604800s`, and cache entries `1..=65536`. Invalid user config must fail validation rather than clamp or panic; runtime conversion must remain non-panicking for invalid programmatic input.
-
-Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task/wire-policy authority coherent throughout; candidate process policy is not request-visible before durable acceptance; rollback restores old policy and bounds immediately; every accepted live wire-negotiation field affects the shared resolver without discarding compatible bounded learning; real Axum/M7 inference proves accepted policy visibility and rejected-policy non-visibility; retirement/finalization/background/recovery/shutdown invariants remain qualified; retained reload diagnostics cannot be stranded or falsely cleared; no unresolved high/medium M8 finding remains. Satisfied only by accepted R013 closure.
+Exit condition satisfied after accepted R013 closure.
 
 ## M9 — Operational CLI and lifecycle completeness
 
-Primary class: capability
+Primary class: capability/invariant
 
-Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the finally re-closed M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
+Subsystem roadmap: [Operational CLI, Lifecycle, Update, and Deployment](subsystems/operational-cli-lifecycle-roadmap.md).
 
-M9 is currently blocked on accepted R013 M8 re-closure and its own separate planning/implementation review. No M9 implementation plan exists or is promoted by the R013 planning pass.
+M9 converts the complete F003 Rust parser surface into real operational behavior and wires it to the closed M4-M8 services. It owns local control/runtime paths/process state, daemon lifecycle commands, live rehash/status/watchdogs, config/key/provider onboarding mutations, agent integration rendering, migrations/DB/backup/recover, operator inspection/model/stats maintenance, the three R008 deferred background callbacks, update/version behavior, local deployment artifacts, and uninstall.
 
-Exit condition: documented CLI workflow parity on supported targets.
+Initial planned sequence:
+
+```text
+O001 operational CLI contract + deterministic oracle freeze
+ -> O002 local control/runtime paths/process state
+ -> O003 lifecycle/daemon/rehash/status/watchdog commands
+ -> O004 config/key/provider onboarding + live apply
+ -> O005 agent integration/configsetup generation
+ -> O006 migrations/DB/backup/recover + automatic backup
+ -> O007 operator inspection/maintenance + metrics flush
+ -> O008 update/version + update checker
+ -> O009 deploy/install artifacts + uninstall
+ -> O010 differential qualification + M9 closure
+```
+
+Only `registry.md` authorizes handoff. At initial M9 registration O001 is the sole dependency-ready plan.
+
+M9 preserves the command/option shape already frozen in F003 and avoids recreating Python's large `cli_full.py` structurally. CLI handlers are thin adapters over small Rust operation services. Supported Rust commands may not shell out to Python as a fallback.
+
+M9 uses one bounded local Unix control socket for the control behavior proven by the Python oracle, the one M8 process task supervisor, the existing Hyper/Rustls and SQLite stacks, and existing generation/reload/shutdown APIs. It does not add a public management port, second scheduler, second HTTP stack, workflow/daemon framework, ORM, or Rust-only schema.
+
+M9 prepares safe Rust-side update/deploy/install behavior but does not make Rust the canonical public install/release path; M11 owns that cutover. M10 still owns broad OS/architecture/SBC characterization, live-provider smoke, dashboard visual review, and complete cross-system qualification.
+
+Exit condition: every current documented/F003 command has real Rust behavior (or a frozen explicit unsupported-platform outcome), migration-stage `NotImplemented` is unreachable for supported commands, CLI/effect parity passes the O001 corpus, lifecycle/config/backup/update/deploy fault matrices converge safely, all three R008 deferred callbacks are real bounded singleton M8 tasks, and no unresolved high/medium M9 correctness/security/resource/data-loss/compatibility finding remains. Satisfied only by accepted O010 closure.
 
 ## M10 — Full differential qualification and SBC characterization
 
