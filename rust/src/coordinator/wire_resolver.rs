@@ -454,6 +454,13 @@ impl WireResolver {
         self.state.lock().expect("wire resolver lock").entries.len()
     }
 
+    /// Return whether two handles observe the same process-owned resolver
+    /// state.  This is intentionally an identity check, not a comparison of
+    /// bounded diagnostics.
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     pub fn snapshot(&self) -> WireResolverSnapshot {
         let state = self.state.lock().expect("wire resolver lock");
         WireResolverSnapshot {

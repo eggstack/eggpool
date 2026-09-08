@@ -5,7 +5,13 @@
 //! account with a resolved proxy.  Routing and account eligibility are
 //! deliberately outside this boundary.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -43,6 +49,9 @@ pub enum ProviderClientPoolError {
     /// The requested provider is not part of this immutable pool.
     #[error("No client for provider {provider_id:?}")]
     ProviderNotFound { provider_id: String },
+    /// The generation has explicitly closed this pool.
+    #[error("provider client pool is closed")]
+    Closed,
 }
 
 /// A safe account-client identity used by operator diagnostics.
@@ -61,11 +70,35 @@ pub struct ProviderClientPoolSnapshot {
     pub account_clients: Vec<AccountClientIdentity>,
 }
 
+/// Result of the idempotent generation-owned pool close operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderClientPoolCloseReport {
+    pub closed_now: bool,
+    pub close_count: usize,
+}
+
+#[derive(Debug)]
+struct ProviderClientPoolInner {
+    clients: Mutex<BTreeMap<String, ProviderHttpClient>>,
+    account_clients: Mutex<BTreeMap<(String, String), ProviderHttpClient>>,
+    closed: AtomicBool,
+    close_count: AtomicUsize,
+}
+
 /// Immutable provider/account client topology for one configuration snapshot.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ProviderClientPool {
-    clients: BTreeMap<String, ProviderHttpClient>,
-    account_clients: BTreeMap<(String, String), ProviderHttpClient>,
+    inner: Arc<ProviderClientPoolInner>,
+}
+
+impl std::fmt::Debug for ProviderClientPool {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderClientPool")
+            .field("providers", &self.providers())
+            .field("closed", &self.is_closed())
+            .finish()
+    }
 }
 
 impl Default for ProviderClientPool {
@@ -79,8 +112,12 @@ impl ProviderClientPool {
     /// configuration and is also useful for read-only callers.
     pub fn new() -> Self {
         Self {
-            clients: BTreeMap::new(),
-            account_clients: BTreeMap::new(),
+            inner: Arc::new(ProviderClientPoolInner {
+                clients: Mutex::new(BTreeMap::new()),
+                account_clients: Mutex::new(BTreeMap::new()),
+                closed: AtomicBool::new(false),
+                close_count: AtomicUsize::new(0),
+            }),
         }
     }
 
@@ -89,7 +126,7 @@ impl ProviderClientPool {
     /// Construction is all-or-nothing: if a later provider or account fails,
     /// the partially built local pool is dropped before the error returns.
     pub fn from_config(config: &Config) -> Result<Self, ProviderClientPoolError> {
-        let mut pool = Self::new();
+        let pool = Self::new();
         for (provider_id, provider) in &config.providers {
             let provider_config = ProviderHttpConfig::try_from(provider).map_err(|kind| {
                 ProviderClientPoolError::ProviderTransport {
@@ -104,7 +141,11 @@ impl ProviderClientPool {
                         kind,
                     }
                 })?;
-            pool.clients.insert(provider_id.clone(), direct_client);
+            pool.inner
+                .clients
+                .lock()
+                .expect("provider clients lock")
+                .insert(provider_id.clone(), direct_client);
 
             for account in &provider.accounts {
                 let proxy_url =
@@ -126,7 +167,10 @@ impl ProviderClientPool {
                             account_name: account.name.clone(),
                             kind,
                         })?;
-                pool.account_clients
+                pool.inner
+                    .account_clients
+                    .lock()
+                    .expect("provider account clients lock")
                     .insert((provider_id.clone(), account.name.clone()), account_client);
             }
         }
@@ -141,42 +185,70 @@ impl ProviderClientPool {
         provider_id: &str,
         account_name: Option<&str>,
     ) -> Result<ProviderHttpClient, ProviderClientPoolError> {
+        if self.is_closed() {
+            return Err(ProviderClientPoolError::Closed);
+        }
         if let Some(account_name) = account_name
             && let Some(client) = self
+                .inner
                 .account_clients
+                .lock()
+                .expect("provider account clients lock")
                 .get(&(provider_id.to_owned(), account_name.to_owned()))
         {
             return Ok(client.clone());
         }
-        self.clients.get(provider_id).cloned().ok_or_else(|| {
-            ProviderClientPoolError::ProviderNotFound {
+        self.inner
+            .clients
+            .lock()
+            .expect("provider clients lock")
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| ProviderClientPoolError::ProviderNotFound {
                 provider_id: provider_id.to_owned(),
-            }
-        })
+            })
     }
 
     /// Return the legacy default provider client when it is configured.
     pub fn get_default_client(&self) -> Option<ProviderHttpClient> {
-        self.clients.get(DEFAULT_PROVIDER_ID).cloned()
+        if self.is_closed() {
+            return None;
+        }
+        self.inner
+            .clients
+            .lock()
+            .expect("provider clients lock")
+            .get(DEFAULT_PROVIDER_ID)
+            .cloned()
     }
 
     /// Return provider IDs in stable order.
     pub fn providers(&self) -> Vec<String> {
-        self.clients.keys().cloned().collect()
+        self.inner
+            .clients
+            .lock()
+            .expect("provider clients lock")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Return the operator-facing topology snapshot without secrets or URLs.
     pub fn snapshot(&self) -> ProviderClientPoolSnapshot {
-        let mut providers: BTreeMap<String, usize> = self
-            .clients
+        let clients = self.inner.clients.lock().expect("provider clients lock");
+        let account_clients = self
+            .inner
+            .account_clients
+            .lock()
+            .expect("provider account clients lock");
+        let mut providers: BTreeMap<String, usize> = clients
             .keys()
             .map(|provider_id| (provider_id.clone(), 1))
             .collect();
-        for (provider_id, _account_name) in self.account_clients.keys() {
+        for (provider_id, _account_name) in account_clients.keys() {
             *providers.entry(provider_id.clone()).or_default() += 1;
         }
-        let account_clients = self
-            .account_clients
+        let account_clients = account_clients
             .keys()
             .map(|(provider_id, account_name)| AccountClientIdentity {
                 provider_id: provider_id.clone(),
@@ -184,10 +256,44 @@ impl ProviderClientPool {
             })
             .collect::<Vec<_>>();
         ProviderClientPoolSnapshot {
-            build_count: self.clients.len() + self.account_clients.len(),
+            build_count: clients.len() + account_clients.len(),
             providers,
             account_client_count: account_clients.len(),
             account_clients,
         }
+    }
+
+    /// Mark this generation's transports closed and drop the pool-owned
+    /// client handles.  A request that already cloned an individual client
+    /// may finish under the R004 lease boundary; no new submission can enter
+    /// through this pool.  Repeated calls are harmless and report the same
+    /// monotonic close count.
+    pub fn close(&self) -> ProviderClientPoolCloseReport {
+        let closed_now = !self.inner.closed.swap(true, Ordering::AcqRel);
+        if closed_now {
+            self.inner.close_count.fetch_add(1, Ordering::AcqRel);
+            self.inner
+                .clients
+                .lock()
+                .expect("provider clients lock")
+                .clear();
+            self.inner
+                .account_clients
+                .lock()
+                .expect("provider account clients lock")
+                .clear();
+        }
+        ProviderClientPoolCloseReport {
+            closed_now,
+            close_count: self.inner.close_count.load(Ordering::Acquire),
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::Acquire)
+    }
+
+    pub fn close_count(&self) -> usize {
+        self.inner.close_count.load(Ordering::Acquire)
     }
 }

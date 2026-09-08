@@ -19,6 +19,7 @@ pub mod quota;
 pub mod request;
 pub mod routing;
 mod runtime;
+pub mod runtime_lifecycle;
 pub mod server;
 pub mod version;
 pub mod wire;

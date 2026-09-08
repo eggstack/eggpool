@@ -58,10 +58,10 @@ pub use streaming::{
 
 pub use endpoints::{
     EndpointError, InferenceOutcome, InferenceState, ResolvedInference, VirtualResolution,
-    build_inference_state, build_stream_response_headers, endpoint_error_body, execute_finite,
-    execute_stream, new_proxy_request_id, parse_provider_qualified_model,
-    validate_responses_stateless,
+    build_stream_response_headers, endpoint_error_body, execute_finite, execute_stream,
+    new_proxy_request_id, parse_provider_qualified_model, validate_responses_stateless,
 };
+pub(crate) use endpoints::{build_inference_state_with_shared, compile_provider_profiles};
 pub use semantic::{
     ModelSelection, SELECTOR_MAX_RESPONSE_BYTES, SelectionSource, SelectorDiagnostics,
     SelectorFallback, SelectorPrompt, SemanticSelector, build_semantic_view, compile_repair_prompt,

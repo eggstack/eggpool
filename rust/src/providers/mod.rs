@@ -8,7 +8,8 @@ mod client_pool;
 mod transport;
 
 pub use client_pool::{
-    AccountClientIdentity, ProviderClientPool, ProviderClientPoolError, ProviderClientPoolSnapshot,
+    AccountClientIdentity, ProviderClientPool, ProviderClientPoolCloseReport,
+    ProviderClientPoolError, ProviderClientPoolSnapshot,
 };
 pub use transport::{
     ProviderBody, ProviderHttpClient, ProviderHttpConfig, ProviderResponse, TransportError,

@@ -956,6 +956,13 @@ impl FinalizationSupervisor {
         }
     }
 
+    /// Return whether two coordinator handles share one retained-finalization
+    /// boundary.  The generation factory uses this to make the finite and
+    /// streaming paths observably share one supervisor.
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub async fn drain(&self) {
         while self.snapshot().active_jobs != 0 {
             tokio::task::yield_now().await;

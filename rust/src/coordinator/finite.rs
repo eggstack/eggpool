@@ -295,6 +295,14 @@ impl FiniteCoordinator {
         self
     }
 
+    pub fn finalization_supervisor(&self) -> FinalizationSupervisor {
+        self.finalization.clone()
+    }
+
+    pub fn wire_resolver(&self) -> WireResolver {
+        self.wire_resolver.clone()
+    }
+
     /// Execute the finite upstream lifecycle.  Only pre-handoff failures enter
     /// this loop; terminal results carry a retained completion owner back to
     /// the caller.

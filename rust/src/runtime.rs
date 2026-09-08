@@ -31,7 +31,8 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Serve(args)) => {
             validate_serve_args(&args)?;
             let config = config::Config::from_toml(&config_path)?;
-            crate::server::run(config)
+            let digest = config::content_digest(&config_path)?;
+            crate::server::run_with_digest(config, digest, Some(config_path.clone()))
                 .await
                 .map_err(|error| BootstrapError::Server {
                     detail: error.to_string(),

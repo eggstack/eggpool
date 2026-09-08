@@ -505,6 +505,14 @@ impl StreamingCoordinator {
         }
     }
 
+    pub fn finalization_supervisor(&self) -> FinalizationSupervisor {
+        self.finalization.clone()
+    }
+
+    pub fn wire_resolver(&self) -> WireResolver {
+        self.wire_resolver.clone()
+    }
+
     pub fn with_max_provider_body_bytes(mut self, limit: usize) -> Self {
         self.max_provider_body_bytes = limit.max(1);
         self

@@ -52,7 +52,7 @@ use crate::{
 use super::{
     AttemptBuilder, DurableFinalizer, FinalizationSupervisor, FiniteCoordinator, FiniteExecution,
     FiniteRequest, PublicationService, RetryPolicy, StreamRequest, StreamingCoordinator,
-    StreamingExecution, WireResolver, WireResolverConfig,
+    StreamingExecution, WireResolver,
     semantic::{SelectionSource, SemanticSelector},
 };
 
@@ -256,6 +256,10 @@ impl InferenceState {
         &self.affinity
     }
 
+    pub fn affinity_handle(&self) -> Arc<ModelRouterAffinity> {
+        Arc::clone(&self.affinity)
+    }
+
     pub fn known_providers(&self) -> &BTreeSet<String> {
         &self.known_providers
     }
@@ -270,6 +274,14 @@ impl InferenceState {
 
     pub fn streaming_coordinator(&self) -> StreamingCoordinator {
         self.streaming.clone()
+    }
+
+    pub fn finalization_supervisor(&self) -> FinalizationSupervisor {
+        self.finite.finalization_supervisor()
+    }
+
+    pub fn wire_resolver(&self) -> WireResolver {
+        self.finite.wire_resolver()
     }
 
     pub fn router_handle(&self) -> RoutingRouter {
@@ -698,10 +710,14 @@ pub async fn execute_stream(
 /// account registry from durable accounts, and wires the finite/streaming
 /// coordinators with the configured retry budget. Failures to resolve
 /// provider wire profiles are fail-closed.
-pub async fn build_inference_state(
+pub(crate) async fn build_inference_state_with_shared(
     config: &Config,
     database: &Database,
     client_pool: ProviderClientPool,
+    wire_resolver: WireResolver,
+    affinity: Arc<ModelRouterAffinity>,
+    model_registry: ModelRouterRegistry,
+    provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
 ) -> Result<InferenceState, String> {
     let credentials = CredentialStore::from_config(config);
     let durable_accounts: Vec<Account> = database
@@ -810,25 +826,8 @@ pub async fn build_inference_state(
     let attempts = AttemptBuilder::new(client_pool, wire.clone());
     let publication = PublicationService::new(database.clone());
     let supervisor = FinalizationSupervisor::new(DurableFinalizer::new(database.clone()));
-    let wire_registry = WireProfileRegistry::embedded()
-        .map_err(|error| format!("wire registry failed: {error}"))?;
-    let mut provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>> = BTreeMap::new();
     let mut providers: BTreeMap<String, ProviderConfig> = BTreeMap::new();
     for (provider_id, provider) in &config.providers {
-        let profiles = wire_registry
-            .configured_profiles(&provider.wire_surfaces)
-            .map_err(|error| format!("wire profiles for {provider_id:?} failed: {error}"))?;
-        if profiles.is_empty() {
-            // Fall back to the static default surface for the provider's
-            // first protocol so single-protocol fixtures without explicit
-            // wire surfaces remain routable.
-            let fallback = fallback_profiles(provider_id, provider);
-            if !fallback.is_empty() {
-                provider_profiles.insert(provider_id.clone(), fallback);
-            }
-        } else {
-            provider_profiles.insert(provider_id.clone(), profiles);
-        }
         providers.insert(provider_id.clone(), provider.clone());
     }
     let retry_policy = RetryPolicy {
@@ -844,7 +843,7 @@ pub async fn build_inference_state(
         publication.clone(),
         attempts.clone(),
         wire.clone(),
-        WireResolver::new(WireResolverConfig::default()),
+        wire_resolver.clone(),
         provider_profiles.clone(),
         providers.clone(),
         credentials.clone(),
@@ -856,25 +855,48 @@ pub async fn build_inference_state(
         publication,
         attempts,
         wire,
-        WireResolver::new(WireResolverConfig::default()),
+        wire_resolver,
         provider_profiles,
         providers.clone(),
         credentials,
         supervisor,
         retry_policy,
     );
-    let model_registry = ModelRouterRegistry::from_config(&config.model_routers)
-        .map_err(|error| format!("model-router registry failed: {error}"))?;
     let known_providers: BTreeSet<String> = config.providers.keys().cloned().collect();
     Ok(InferenceState::from_parts(
         finite,
         streaming,
         model_registry,
-        Arc::new(ModelRouterAffinity::new()),
+        affinity,
         known_providers,
         config.server.max_request_body_bytes as usize,
         router,
     ))
+}
+
+/// Compile all immutable provider wire candidates before allocating the
+/// generation's client pool.  The fallback preserves the M7 behavior for
+/// simple single-protocol fixtures that omit explicit wire surfaces.
+pub(crate) fn compile_provider_profiles(
+    config: &Config,
+) -> Result<BTreeMap<String, Vec<ConfiguredWireProfile>>, String> {
+    let wire_registry = WireProfileRegistry::embedded()
+        .map_err(|error| format!("wire registry failed: {error}"))?;
+    let mut provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>> = BTreeMap::new();
+    for (provider_id, provider) in &config.providers {
+        let profiles = wire_registry
+            .configured_profiles(&provider.wire_surfaces)
+            .map_err(|error| format!("wire profiles for {provider_id:?} failed: {error}"))?;
+        if profiles.is_empty() {
+            let fallback = fallback_profiles(provider_id, provider);
+            if !fallback.is_empty() {
+                provider_profiles.insert(provider_id.clone(), fallback);
+            }
+        } else {
+            provider_profiles.insert(provider_id.clone(), profiles);
+        }
+    }
+    Ok(provider_profiles)
 }
 
 fn fallback_profiles(provider_id: &str, provider: &ProviderConfig) -> Vec<ConfiguredWireProfile> {

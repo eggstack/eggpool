@@ -23,9 +23,12 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     Config,
-    coordinator::{InferenceState, build_inference_state, endpoint_error_body},
+    coordinator::{InferenceState, endpoint_error_body},
     db,
     providers::ProviderClientPool,
+    runtime_lifecycle::{
+        GenerationBuildError, ProcessRuntime, RuntimeGeneration, RuntimeGenerationFactory,
+    },
     wire::ir::ClientSurface,
 };
 use std::sync::Arc;
@@ -102,6 +105,10 @@ pub enum ServerError {
     InvalidApiKey,
     #[error("provider client pool construction failed: {0}")]
     ProviderPool(#[from] crate::providers::ProviderClientPoolError),
+    #[error("runtime generation construction failed: {0}")]
+    Generation(#[from] GenerationBuildError),
+    #[error("prepared generation transfer failed: {0}")]
+    CandidateTransfer(String),
     #[error("server signal handler failed: {0}")]
     Signal(std::io::Error),
     #[error("inference state construction failed: {0}")]
@@ -124,6 +131,17 @@ struct PeriodQuery {
 
 /// Start the development server using the configured address and database.
 pub async fn run(config: Config) -> Result<(), ServerError> {
+    run_with_digest(config, "runtime-config".to_owned(), None).await
+}
+
+/// Start the server through the R002 process/generation factory.  The normal
+/// CLI supplies the file digest and path; the compatibility wrapper above is
+/// used by direct Rust callers that already hold an in-memory config.
+pub async fn run_with_digest(
+    config: Config,
+    content_digest: String,
+    config_path: Option<std::path::PathBuf>,
+) -> Result<(), ServerError> {
     validate_server_key(&config)?;
     if config.server.threads != 1 {
         tracing::warn!(
@@ -147,25 +165,31 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
         let _ = database.close().await;
         return Err(error);
     }
-    let client_pool = match ProviderClientPool::from_config(&config) {
-        Ok(pool) => pool,
+    let process = match config_path {
+        Some(path) => ProcessRuntime::with_config_path(database.clone(), path),
+        None => ProcessRuntime::new(database.clone()),
+    };
+    let prepared = match RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        content_digest,
+        1,
+    )
+    .await
+    {
+        Ok(candidate) => candidate,
         Err(error) => {
             let _ = database.close().await;
-            return Err(error.into());
+            return Err(map_generation_error(error));
         }
     };
-    let inference = match build_inference_state(&config, &database, client_pool.clone()).await {
-        Ok(state) => Arc::new(state),
-        Err(error) => {
-            let _ = database.close().await;
-            return Err(ServerError::Inference(error));
-        }
-    };
+    let generation = prepared
+        .transfer()
+        .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
 
     tracing::info!(address, "Rust development server listening");
-    let result =
-        serve_listener_with_inference(config, database.clone(), client_pool, inference, listener)
-            .await;
+    let result = serve_listener_with_generation(&process, generation.clone(), listener).await;
+    let _ = generation.close().await;
     let close_result = database.close().await;
     result.and(close_result.map_err(ServerError::Database))
 }
@@ -174,15 +198,34 @@ pub async fn run(config: Config) -> Result<(), ServerError> {
 pub async fn serve_listener(
     config: Config,
     database: db::Database,
-    client_pool: ProviderClientPool,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let inference = Arc::new(
-        build_inference_state(&config, &database, client_pool.clone())
+    let process = ProcessRuntime::new(database);
+    let prepared =
+        RuntimeGenerationFactory::prepare(&process, config, "runtime-config".to_owned(), 1)
             .await
-            .map_err(ServerError::Inference)?,
-    );
-    serve_listener_with_inference(config, database, client_pool, inference, listener).await
+            .map_err(map_generation_error)?;
+    let generation = prepared
+        .transfer()
+        .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
+    let result = serve_listener_with_generation(&process, generation.clone(), listener).await;
+    let _ = generation.close().await;
+    result
+}
+
+async fn serve_listener_with_generation(
+    process: &ProcessRuntime,
+    generation: Arc<RuntimeGeneration>,
+    listener: TcpListener,
+) -> Result<(), ServerError> {
+    serve_listener_with_inference(
+        generation.config().clone(),
+        process.database(),
+        generation.provider_client_pool().clone(),
+        generation.inference().clone(),
+        listener,
+    )
+    .await
 }
 
 /// Serve with an explicitly built inference state (test and serve paths).
@@ -286,6 +329,13 @@ fn valid_key_shape(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn map_generation_error(error: GenerationBuildError) -> ServerError {
+    match error {
+        GenerationBuildError::ProviderPool(error) => ServerError::ProviderPool(error),
+        error => ServerError::Generation(error),
+    }
 }
 
 fn verify_api_key(headers: &HeaderMap, expected: &str) -> bool {
