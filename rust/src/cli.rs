@@ -1,6 +1,6 @@
 use std::{ffi::OsString, path::PathBuf};
 
-use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand, error::ErrorKind};
 
 use crate::version::PACKAGE_VERSION;
 
@@ -168,8 +168,10 @@ pub enum DashboardCommand {
 }
 #[derive(Debug, clap::Args)]
 pub struct DashboardPublicArgs {
-    #[arg(long)]
+    #[arg(long, conflicts_with = "off")]
     pub on: bool,
+    #[arg(long, conflicts_with = "on")]
+    pub off: bool,
 }
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
@@ -224,8 +226,10 @@ pub struct StatsExplainDashboardArgs {
 }
 #[derive(Debug, clap::Args)]
 pub struct StatsRecomputeCostsArgs {
-    #[arg(long)]
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "apply")]
     pub dry_run: bool,
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "dry_run")]
+    pub apply: bool,
     #[arg(long)]
     pub limit: Option<u32>,
 }
@@ -235,8 +239,10 @@ pub struct StatsRepairCostsArgs {
     pub provider: Option<String>,
     #[arg(long)]
     pub since: Option<String>,
-    #[arg(long)]
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "apply")]
     pub dry_run: bool,
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "dry_run")]
+    pub apply: bool,
     #[arg(long)]
     pub limit: Option<u32>,
 }
