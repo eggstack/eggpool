@@ -13,6 +13,7 @@ default = []
 test-support = []
 
 [dependencies]
+arc-swap = "1.9"
 axum = "0.8"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }

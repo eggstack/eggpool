@@ -27,7 +27,8 @@ use crate::{
     db,
     providers::ProviderClientPool,
     runtime_lifecycle::{
-        GenerationBuildError, ProcessRuntime, RuntimeGeneration, RuntimeGenerationFactory,
+        GenerationAcquireError, GenerationBuildError, GenerationLease, ProcessRuntime,
+        RuntimeGeneration, RuntimeGenerationFactory, RuntimeManager,
     },
     wire::ir::ClientSurface,
 };
@@ -119,8 +120,32 @@ pub enum ServerError {
 pub struct AppState {
     pub config: Config,
     pub database: db::Database,
-    pub client_pool: ProviderClientPool,
-    pub inference: Arc<InferenceState>,
+    pub runtime: Arc<RuntimeManager>,
+}
+
+impl AppState {
+    /// Build application state around a manager-owned generation. The direct
+    /// graph arguments remain for existing test/integration callers; request
+    /// handlers still acquire through the manager.
+    pub fn from_inference(
+        config: Config,
+        database: db::Database,
+        client_pool: ProviderClientPool,
+        inference: Arc<InferenceState>,
+    ) -> Self {
+        let generation = RuntimeGeneration::from_inference(
+            1,
+            config.clone(),
+            "runtime-config".to_owned(),
+            inference,
+            client_pool,
+        );
+        Self {
+            config,
+            database,
+            runtime: Arc::new(RuntimeManager::new(generation)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,8 +213,9 @@ pub async fn run_with_digest(
         .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
 
     tracing::info!(address, "Rust development server listening");
-    let result = serve_listener_with_generation(&process, generation.clone(), listener).await;
-    let _ = generation.close().await;
+    let manager = Arc::new(RuntimeManager::new(generation));
+    let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
+    let _ = manager.active_generation().close().await;
     let close_result = database.close().await;
     result.and(close_result.map_err(ServerError::Database))
 }
@@ -202,30 +228,33 @@ pub async fn serve_listener(
 ) -> Result<(), ServerError> {
     let process = ProcessRuntime::new(database);
     let prepared =
-        RuntimeGenerationFactory::prepare(&process, config, "runtime-config".to_owned(), 1)
+        RuntimeGenerationFactory::prepare(&process, config.clone(), "runtime-config".to_owned(), 1)
             .await
             .map_err(map_generation_error)?;
     let generation = prepared
         .transfer()
         .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
-    let result = serve_listener_with_generation(&process, generation.clone(), listener).await;
-    let _ = generation.close().await;
+    let manager = Arc::new(RuntimeManager::new(generation));
+    let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
+    let _ = manager.active_generation().close().await;
     result
 }
 
-async fn serve_listener_with_generation(
+async fn serve_listener_with_manager(
     process: &ProcessRuntime,
-    generation: Arc<RuntimeGeneration>,
+    config: Config,
+    manager: Arc<RuntimeManager>,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    serve_listener_with_inference(
-        generation.config().clone(),
-        process.database(),
-        generation.provider_client_pool().clone(),
-        generation.inference().clone(),
-        listener,
-    )
-    .await
+    let app = build_router(AppState {
+        config,
+        database: process.database(),
+        runtime: manager,
+    });
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(ServerError::Bind)
 }
 
 /// Serve with an explicitly built inference state (test and serve paths).
@@ -237,10 +266,15 @@ pub async fn serve_listener_with_inference(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     let app = build_router(AppState {
+        runtime: Arc::new(RuntimeManager::new(RuntimeGeneration::from_inference(
+            1,
+            config.clone(),
+            "runtime-config".to_owned(),
+            inference,
+            client_pool,
+        ))),
         config,
         database,
-        client_pool,
-        inference,
     });
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -535,24 +569,47 @@ async fn handle_inference(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let proxy_request_id = crate::coordinator::new_proxy_request_id();
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(error) => return runtime_acquire_error(surface, error),
+    };
     if is_stream {
-        handle_stream_inference(state, surface, headers, body, session, proxy_request_id).await
+        handle_stream_inference(
+            state,
+            surface,
+            headers,
+            body,
+            session,
+            proxy_request_id,
+            lease,
+        )
+        .await
     } else {
-        handle_finite_inference(state, surface, headers, body, session, proxy_request_id).await
+        handle_finite_inference(
+            state,
+            surface,
+            headers,
+            body,
+            session,
+            proxy_request_id,
+            lease,
+        )
+        .await
     }
 }
 
 async fn handle_finite_inference(
-    state: AppState,
+    _state: AppState,
     surface: ClientSurface,
     headers: HeaderMap,
     body: Bytes,
     session: Option<String>,
     proxy_request_id: String,
+    lease: GenerationLease,
 ) -> Response {
     let incoming = filtered_incoming_headers(&headers);
     match crate::coordinator::execute_finite(
-        &state.inference,
+        lease.generation().inference(),
         surface,
         body,
         incoming,
@@ -594,16 +651,17 @@ async fn handle_finite_inference(
 }
 
 async fn handle_stream_inference(
-    state: AppState,
+    _state: AppState,
     surface: ClientSurface,
     headers: HeaderMap,
     body: Bytes,
     session: Option<String>,
     proxy_request_id: String,
+    lease: GenerationLease,
 ) -> Response {
     let incoming = filtered_incoming_headers(&headers);
     let execution = match crate::coordinator::execute_stream(
-        &state.inference,
+        lease.generation().inference(),
         surface,
         body,
         incoming,
@@ -643,6 +701,7 @@ async fn handle_stream_inference(
     // is stored on clean or failed terminal; failures never retry.
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(32);
     tokio::spawn(async move {
+        let _lease = lease;
         let mut execution = execution;
         execution.mark_started();
         loop {
@@ -675,6 +734,15 @@ async fn handle_stream_inference(
     let stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
     let body = axum::body::Body::from_stream(stream);
     (status, outgoing, body).into_response()
+}
+
+fn runtime_acquire_error(surface: ClientSurface, error: GenerationAcquireError) -> Response {
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    error_body_response(
+        status,
+        surface,
+        endpoint_error_body(surface, &error.to_string()),
+    )
 }
 
 fn error_body_response(status: StatusCode, surface: ClientSurface, detail: Vec<u8>) -> Response {

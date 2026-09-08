@@ -912,6 +912,7 @@ dependencies = [
 name = "eggpool"
 version = "0.7.4"
 dependencies = [
+ "arc-swap",
  "axum",
  "bytes",
  "clap",

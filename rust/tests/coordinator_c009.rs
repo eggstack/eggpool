@@ -1627,10 +1627,10 @@ async fn axum_endpoints_preserve_auth_body_limits_and_surfaces() {
     let mut config = Config::default();
     config.server.api_key = Some("test-key-123".to_owned());
     config.server.max_request_body_bytes = 10 * 1024 * 1024;
-    let app = eggpool::server::build_router(eggpool::server::AppState {
+    let app = eggpool::server::build_router(eggpool::server::AppState::from_inference(
         config,
-        database: fixture.database.clone(),
-        client_pool: ProviderClientPool::from_config(&{
+        fixture.database.clone(),
+        ProviderClientPool::from_config(&{
             let mut config = Config::default();
             config.providers.insert(
                 "provider-a".to_owned(),
@@ -1648,8 +1648,8 @@ async fn axum_endpoints_preserve_auth_body_limits_and_surfaces() {
             config
         })
         .expect("client pool"),
-        inference: Arc::new(fixture.state.clone()),
-    });
+        Arc::new(fixture.state.clone()),
+    ));
     // No credentials -> 401 without touching upstream.
     let request = http::Request::builder()
         .method("POST")
