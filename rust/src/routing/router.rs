@@ -216,6 +216,19 @@ impl RoutingRouter {
             .len()
     }
 
+    /// Return bounded, secret-free counts for runtime diagnostics. The
+    /// catalog is read only long enough to take its compact snapshot; no
+    /// routing claim or fairness state is mutated.
+    pub fn catalog_model_count(&self) -> usize {
+        self.state
+            .catalog
+            .lock()
+            .expect("catalog lock")
+            .snapshot()
+            .model_ids
+            .len()
+    }
+
     /// Select, acquire any required half-open probe, and publish active plus
     /// pending quota ownership while holding one async mutex. There is no
     /// await after the mutex is acquired and no SQLite/network operation in

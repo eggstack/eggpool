@@ -303,16 +303,19 @@ impl ReloadService {
     /// Run reload work in an owned task. Caller cancellation therefore never
     /// drops a staged candidate or leaves the admission gate unresolved.
     pub async fn reload(&self, request: ReloadRequest) -> ReloadResult {
+        self.process.begin_reload_diagnostics();
         let service = self.clone();
         let join = tokio::spawn(async move { service.reload_owned(request).await });
-        match join.await {
+        let result = match join.await {
             Ok(result) => result,
             Err(_) => ReloadResult::from_active(
                 &self.manager,
                 ReloadResultCategory::Aborted,
                 "worker_failed",
             ),
-        }
+        };
+        self.process.record_reload_diagnostics(&result);
+        result
     }
 
     async fn reload_owned(&self, request: ReloadRequest) -> ReloadResult {

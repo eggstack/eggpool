@@ -1,6 +1,6 @@
 # M8 Runtime Generations, Rehash, Background Tasks, and Process Lifecycle Roadmap
 
-Status: active implementation; R010 dependency-ready
+Status: active implementation; R011 dependency-ready
 
 Repository baseline for M8 planning: `e2be716018c365030ab06e648af71ed7588d9ad3` (accepted C011 / M7 closure).
 
@@ -78,14 +78,14 @@ R001 runtime/reload contract + deterministic oracle freeze
  -> R007 transactional live rehash + persistence/task/runtime commit (closed)
  -> R008 generation-leased maintenance/recovery/background integration (closed)
  -> R009 server startup, signals, graceful/forced shutdown (closed)
- -> R010 active-generation authority audit + runtime/reload diagnostics (ready)
- -> R011 integrated differential qualification + M8 closure
+ -> R010 active-generation authority audit + runtime/reload diagnostics (closed)
+ -> R011 integrated differential qualification + M8 closure (ready)
    |
    v
 M9 planning/implementation eligibility
 ```
 
-Only the dependency-ready table in `../registry.md` authorizes implementation. R010 is the sole ready plan after accepted R009 closure.
+Only the dependency-ready table in `../registry.md` authorizes implementation. R011 is the sole ready plan after accepted R010 closure.
 
 ## Structural design
 
@@ -105,7 +105,8 @@ Rust should converge on a small runtime surface, names adjustable but responsibi
 
 ## Active-generation authority conversion
 
-Current Rust `AppState` captures startup `Config`, `ProviderClientPool`, and one `Arc<InferenceState>`. M8 must remove those as live authorities. In particular:
+R010 removes the former direct generation authorities from Rust `AppState`.
+In particular:
 
 - inference handlers acquire one generation and hold it through finite completion or the spawned streaming body task;
 - readiness/model/routing/account-dependent reads use the active generation;

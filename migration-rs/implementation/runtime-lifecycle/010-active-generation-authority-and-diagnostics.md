@@ -1,6 +1,6 @@
 # R010 — Active-Generation Authority Audit and Runtime/Reload Diagnostics
 
-Status: dependency-ready; accepted R009 closure
+Status: closed; see [closure record](../../closure/runtime-lifecycle/010-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

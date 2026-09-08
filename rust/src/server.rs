@@ -8,13 +8,14 @@
 
 use axum::{
     Router,
-    body::Bytes,
-    extract::{Query, State},
+    body::{Body, Bytes},
+    extract::{Extension, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use http_body_util::{BodyExt, Limited};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -22,7 +23,6 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, oneshot};
-use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     Config,
@@ -30,9 +30,8 @@ use crate::{
     db,
     providers::ProviderClientPool,
     runtime_lifecycle::{
-        GenerationAcquireError, GenerationBuildError, GenerationLease, ProcessRuntime,
-        RuntimeGeneration, RuntimeGenerationFactory, RuntimeManager, StartupRecoveryError,
-        TaskSpecError,
+        GenerationBuildError, GenerationLease, ProcessRuntime, RuntimeGeneration,
+        RuntimeGenerationFactory, RuntimeManager, StartupRecoveryError, TaskSpecError,
     },
     wire::ir::ClientSurface,
 };
@@ -294,7 +293,7 @@ struct ServerRuntimeInner {
 /// Explicit owner for the complete foreground process lifecycle.
 pub struct ServerRuntime {
     inner: Arc<ServerRuntimeInner>,
-    config: Config,
+    server_state: ServerState,
     shutdown_timeout: Duration,
 }
 
@@ -315,7 +314,7 @@ impl ServerRuntime {
                 signal_failure: std::sync::Mutex::new(None),
                 notify: Notify::new(),
             }),
-            config,
+            server_state: ServerState::from_config(&config),
             shutdown_timeout: GRACEFUL_SHUTDOWN_TIMEOUT,
         }
     }
@@ -340,12 +339,19 @@ impl ServerRuntime {
         &self.inner.manager
     }
 
+    /// Return one bounded process/runtime diagnostic projection. Generation
+    /// metadata is read through the manager at call time; no generation graph
+    /// is retained by the server state.
+    pub fn diagnostics(&self) -> crate::runtime_lifecycle::RuntimeDiagnosticsSnapshot {
+        self.inner.process.diagnostics(&self.inner.manager)
+    }
+
     pub async fn serve_listener(
         &self,
         listener: TcpListener,
     ) -> Result<ShutdownReport, ServerError> {
         let app = build_router(AppState {
-            config: self.config.clone(),
+            server: self.server_state.clone(),
             database: self.inner.process.database(),
             runtime: Arc::clone(&self.inner.manager),
             body_tasks: self.inner.body_tasks.clone(),
@@ -448,6 +454,14 @@ async fn close_runtime_resources(
     } else {
         ShutdownPhase::Draining
     });
+    inner.process.set_shutdown_diagnostics(
+        if initially_forced {
+            "forced_closing"
+        } else {
+            "draining"
+        },
+        initially_forced,
+    );
     let task_supervisor = inner.process.task_supervisor();
     let task_started = task_supervisor.task_count();
     let task_report = task_supervisor
@@ -467,6 +481,9 @@ async fn close_runtime_resources(
     } else {
         ShutdownPhase::Closing
     });
+    inner
+        .process
+        .set_shutdown_diagnostics(if forced { "forced_closing" } else { "closing" }, forced);
     if forced {
         inner.body_tasks.abort_all();
     }
@@ -483,6 +500,7 @@ async fn close_runtime_resources(
     let database_closed = database_result.is_ok();
     let database_error = database_result.err().map(|error| error.to_string());
     handle.set_phase(ShutdownPhase::Stopped);
+    inner.process.set_shutdown_diagnostics("stopped", forced);
     ShutdownReport {
         phase: ShutdownPhase::Stopped,
         reason: *inner
@@ -526,6 +544,9 @@ impl ServerRuntimeHandle {
         *self.inner.reason.lock().expect("shutdown reason lock") = Some(reason);
         self.inner.manager.shutdown();
         self.inner.process.task_supervisor().begin_shutdown();
+        self.inner
+            .process
+            .set_shutdown_diagnostics("quiescing", false);
         self.inner.notify.notify_waiters();
         true
     }
@@ -537,6 +558,9 @@ impl ServerRuntimeHandle {
 
     fn begin_forced_close(&self) {
         self.set_phase(ShutdownPhase::ForcedClosing);
+        self.inner
+            .process
+            .set_shutdown_diagnostics("forced_closing", true);
         self.inner.body_tasks.abort_all();
     }
 
@@ -561,14 +585,51 @@ impl ServerRuntimeHandle {
 }
 
 #[derive(Clone)]
+pub struct ServerState {
+    api_key: Option<String>,
+    dashboard_enabled: bool,
+    dashboard_public: bool,
+    dashboard_theme: String,
+    dashboard_refresh_interval_s: u64,
+}
+
+impl ServerState {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            api_key: config.resolved_server_api_key(),
+            dashboard_enabled: config.dashboard.enabled,
+            dashboard_public: config.dashboard.public,
+            dashboard_theme: config.dashboard.theme.clone(),
+            dashboard_refresh_interval_s: config.dashboard.refresh_interval_s,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct AppState {
-    pub config: Config,
+    pub server: ServerState,
     pub database: db::Database,
     pub runtime: Arc<RuntimeManager>,
     body_tasks: BodyTaskTracker,
 }
 
 impl AppState {
+    /// Construct router state around an already published manager. This is
+    /// intended for embedded/test callers; production startup constructs the
+    /// manager in `run_with_digest` before creating `ServerRuntime`.
+    pub fn from_runtime(
+        config: Config,
+        database: db::Database,
+        runtime: Arc<RuntimeManager>,
+    ) -> Self {
+        Self {
+            server: ServerState::from_config(&config),
+            database,
+            runtime,
+            body_tasks: BodyTaskTracker::new(),
+        }
+    }
+
     /// Build application state around a manager-owned generation. The direct
     /// graph arguments remain for existing test/integration callers; request
     /// handlers still acquire through the manager.
@@ -586,7 +647,7 @@ impl AppState {
             client_pool,
         );
         Self {
-            config,
+            server: ServerState::from_config(&config),
             database,
             runtime: Arc::new(RuntimeManager::new(generation)),
             body_tasks: BodyTaskTracker::new(),
@@ -777,7 +838,7 @@ pub async fn serve_listener_with_inference(
 
 /// Build the testable Axum application for an already-open database.
 pub fn build_router(state: AppState) -> Router {
-    let dashboard = state.config.dashboard.enabled;
+    let dashboard = state.server.dashboard_enabled;
     let mut router = Router::new()
         .route("/v1/healthz", get(healthz))
         .route("/v1/readyz", get(readyz))
@@ -797,9 +858,7 @@ pub fn build_router(state: AppState) -> Router {
     }
 
     router
-        .layer(RequestBodyLimitLayer::new(
-            state.config.server.max_request_body_bytes as usize,
-        ))
+        .layer(from_fn_with_state(state.clone(), admit_inference_body))
         .layer(from_fn_with_state(state.clone(), authenticate))
         .with_state(state)
 }
@@ -809,11 +868,12 @@ async fn authenticate(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    if !requires_auth(request.uri().path(), &state.config) {
+    if !requires_auth(request.uri().path(), &state.server) {
         return next.run(request).await;
     }
-    let expected = state.config.resolved_server_api_key();
-    if expected
+    if state
+        .server
+        .api_key
         .as_deref()
         .is_none_or(|key| verify_api_key(request.headers(), key))
     {
@@ -828,16 +888,65 @@ async fn authenticate(
         .into_response()
 }
 
-fn requires_auth(path: &str, config: &Config) -> bool {
+fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path == "/v1/healthz" || path == "/v1/readyz" || path.starts_with("/static/") {
         return false;
     }
     if path.starts_with("/v1/") {
         return true;
     }
-    config.dashboard.enabled
-        && !config.dashboard.public
+    server.dashboard_enabled
+        && !server.dashboard_public
         && (path == "/" || path.starts_with("/api/"))
+}
+
+/// Acquire the active generation before collecting an inference body. Axum's
+/// `Bytes` extractor is intentionally downstream of this middleware, so a
+/// live per-generation limit is enforced while the body is still streaming.
+/// The lease is moved into request extensions and consumed by the handler,
+/// keeping body admission and routing on one generation.
+async fn admit_inference_body(
+    State(state): State<AppState>,
+    mut request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    if !is_inference_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(error) => {
+            return error_body_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ClientSurface::ChatCompletions,
+                format!(r#"{{"detail":"{}"}}"#, error).into_bytes(),
+            );
+        }
+    };
+    let limit = usize::try_from(lease.generation().config().server.max_request_body_bytes)
+        .unwrap_or(usize::MAX);
+    let body = std::mem::replace(request.body_mut(), Body::empty());
+    let collected = match Limited::new(body, limit).collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(_) => {
+            return json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                json!({
+                    "detail": "Request body too large"
+                }),
+            );
+        }
+    };
+    request.extensions_mut().insert(Arc::new(lease));
+    *request.body_mut() = Body::from(collected);
+    next.run(request).await
+}
+
+fn is_inference_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/v1/chat/completions" | "/v1/messages" | "/v1/responses"
+    )
 }
 
 fn validate_server_key(config: &Config) -> Result<(), ServerError> {
@@ -916,6 +1025,11 @@ async fn healthz() -> Response {
 }
 
 async fn readyz(State(state): State<AppState>) -> Response {
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(_) => return degraded("runtime unavailable"),
+    };
+    let generation_config = lease.generation().config();
     let accounts = match db::AccountRepository::new(&state.database)
         .list_enabled()
         .await
@@ -923,17 +1037,25 @@ async fn readyz(State(state): State<AppState>) -> Response {
         Ok(accounts) => accounts,
         Err(_) => return degraded("database not writable"),
     };
-    if state.config.all_accounts().is_empty() {
+    if generation_config.all_accounts().is_empty() {
         return degraded("no accounts configured");
     }
     if accounts.is_empty() {
         return degraded("no enabled accounts");
     }
-    if !has_loaded_credentials(&state.config) {
+    if !has_loaded_credentials(generation_config) {
         return degraded("no loaded credentials");
     }
+    let active_catalog_has_models = lease
+        .generation()
+        .inference()
+        .router_handle()
+        .catalog_model_count()
+        > 0;
     match db::ModelRepository::new(&state.database).list(None).await {
-        Ok(models) if !models.is_empty() => json_response(StatusCode::OK, json!({"status": "ok"})),
+        Ok(models) if active_catalog_has_models && !models.is_empty() => {
+            json_response(StatusCode::OK, json!({"status": "ok"}))
+        }
         Ok(_) => degraded("no usable model catalog"),
         Err(_) => degraded("database not writable"),
     }
@@ -976,14 +1098,14 @@ async fn overview(State(state): State<AppState>, Query(query): Query<PeriodQuery
         query
             .theme
             .as_deref()
-            .unwrap_or(&state.config.dashboard.theme),
+            .unwrap_or(&state.server.dashboard_theme),
     );
     let html = render_overview(
         &summary,
         &accounts,
         period,
         theme_name,
-        state.config.dashboard.refresh_interval_s,
+        state.server.dashboard_refresh_interval_s,
     );
     html_response(html)
 }
@@ -1022,18 +1144,29 @@ fn normalize_period(value: Option<&str>) -> Result<&'static str, Box<Response>> 
 /// or finalization loops live here.
 async fn chat_completions(
     State(state): State<AppState>,
+    Extension(lease): Extension<Arc<GenerationLease>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_inference(state, ClientSurface::ChatCompletions, headers, body).await
+    handle_inference(state, ClientSurface::ChatCompletions, headers, body, lease).await
 }
 
-async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    handle_inference(state, ClientSurface::Messages, headers, body).await
+async fn messages(
+    State(state): State<AppState>,
+    Extension(lease): Extension<Arc<GenerationLease>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_inference(state, ClientSurface::Messages, headers, body, lease).await
 }
 
-async fn responses(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    handle_inference(state, ClientSurface::Responses, headers, body).await
+async fn responses(
+    State(state): State<AppState>,
+    Extension(lease): Extension<Arc<GenerationLease>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    handle_inference(state, ClientSurface::Responses, headers, body, lease).await
 }
 
 async fn handle_inference(
@@ -1041,6 +1174,7 @@ async fn handle_inference(
     surface: ClientSurface,
     headers: HeaderMap,
     body: Bytes,
+    lease: Arc<GenerationLease>,
 ) -> Response {
     // Peek the stream flag without consuming the body: finite and streaming
     // coordinators own their full lifecycle and must not be mixed.
@@ -1062,10 +1196,6 @@ async fn handle_inference(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let proxy_request_id = crate::coordinator::new_proxy_request_id();
-    let lease = match state.runtime.acquire().await {
-        Ok(lease) => lease,
-        Err(error) => return runtime_acquire_error(surface, error),
-    };
     if is_stream {
         handle_stream_inference(
             state,
@@ -1098,7 +1228,7 @@ async fn handle_finite_inference(
     body: Bytes,
     session: Option<String>,
     proxy_request_id: String,
-    lease: GenerationLease,
+    lease: Arc<GenerationLease>,
 ) -> Response {
     let incoming = filtered_incoming_headers(&headers);
     match crate::coordinator::execute_finite(
@@ -1150,7 +1280,7 @@ async fn handle_stream_inference(
     body: Bytes,
     session: Option<String>,
     proxy_request_id: String,
-    lease: GenerationLease,
+    lease: Arc<GenerationLease>,
 ) -> Response {
     let incoming = filtered_incoming_headers(&headers);
     let execution = match crate::coordinator::execute_stream(
@@ -1227,15 +1357,6 @@ async fn handle_stream_inference(
     let stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
     let body = axum::body::Body::from_stream(stream);
     (status, outgoing, body).into_response()
-}
-
-fn runtime_acquire_error(surface: ClientSurface, error: GenerationAcquireError) -> Response {
-    let status = StatusCode::SERVICE_UNAVAILABLE;
-    error_body_response(
-        status,
-        surface,
-        endpoint_error_body(surface, &error.to_string()),
-    )
 }
 
 fn error_body_response(status: StatusCode, surface: ClientSurface, detail: Vec<u8>) -> Response {

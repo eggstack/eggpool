@@ -47,6 +47,8 @@ pub const MAX_RETIRING_GENERATIONS: usize = 4;
 const MAX_RETIREMENT_DIAGNOSTICS: usize = 16;
 pub const DEFAULT_GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_STARTUP_RECONCILIATION_PASSES: usize = 1024;
+const MAX_DIAGNOSTIC_PATHS: usize = 32;
+const MAX_DIAGNOSTIC_TEXT_BYTES: usize = 96;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StartupRecoveryReport {
@@ -56,6 +58,131 @@ pub struct StartupRecoveryReport {
     pub attempts_terminalized: usize,
     pub last_classification: crate::coordinator::ReconciliationClassification,
     pub converged: bool,
+}
+
+/// Secret-free, bounded process/runtime diagnostics.  This is deliberately a
+/// projection of lifecycle state rather than a serialized `Config` or an M7
+/// service graph.  M9 can expose this type through its own control surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeDiagnosticsSnapshot {
+    pub active_generation: ActiveGenerationDiagnostics,
+    pub publication: PublicationDiagnostics,
+    pub retiring_generations: Vec<RetiringGenerationDiagnostics>,
+    pub reload: ReloadDiagnostics,
+    pub tasks: Vec<TaskDiagnostics>,
+    pub startup_recovery: Option<StartupRecoveryReport>,
+    pub shutdown: ShutdownDiagnostics,
+    pub counters: RuntimeDiagnosticCounters,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveGenerationDiagnostics {
+    pub generation_id: u64,
+    pub digest_prefix: String,
+    pub published_elapsed_ms: Option<u128>,
+    pub active_leases: usize,
+    pub provider_count: usize,
+    pub account_count: usize,
+    pub model_count: usize,
+    pub finalization_active_jobs: usize,
+    pub finalization_capacity: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicationDiagnostics {
+    pub publication_epoch: u64,
+    pub admission_closed: bool,
+    pub reload_gate_closed: bool,
+    pub reload_gate_waiters: usize,
+    pub reload_in_progress: bool,
+    pub reload_phase: String,
+    pub retirement_pending: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RetiringGenerationDiagnostics {
+    pub generation_id: u64,
+    pub digest_prefix: String,
+    pub state: GenerationSlotState,
+    pub active_leases: usize,
+    pub terminal_references: usize,
+    pub finalization_active_jobs: usize,
+    pub published_elapsed_ms: Option<u128>,
+    pub failed_close: bool,
+    pub close_error_category: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReloadDiagnostics {
+    pub in_progress: bool,
+    pub phase: String,
+    pub last_result: Option<ReloadDiagnosticRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReloadDiagnosticRecord {
+    pub category: String,
+    pub active_generation_id: u64,
+    pub active_digest_prefix: String,
+    pub changed_sections: Vec<String>,
+    pub restart_required_paths: Vec<String>,
+    pub duration_ms: u64,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskDiagnostics {
+    pub name: String,
+    pub ownership: String,
+    pub enabled: bool,
+    pub running: bool,
+    pub tick_count: u64,
+    pub last_outcome: Option<String>,
+    pub last_elapsed_ms: Option<u64>,
+    pub in_tick: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ShutdownDiagnostics {
+    pub phase: String,
+    pub forced: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct RuntimeDiagnosticCounters {
+    pub reload_attempts: u64,
+    pub reload_accepted: u64,
+    pub reload_failures: u64,
+    pub retirement_completed: u64,
+    pub retirement_failed: u64,
+    pub task_transitions: u64,
+    pub shutdowns: u64,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeDiagnosticState {
+    reload_in_progress: bool,
+    reload_phase: String,
+    last_reload: Option<ReloadDiagnosticRecord>,
+    reload_started_at: Option<Instant>,
+    counters: RuntimeDiagnosticCounters,
+    shutdown: ShutdownDiagnostics,
+}
+
+impl Default for RuntimeDiagnosticState {
+    fn default() -> Self {
+        Self {
+            reload_in_progress: false,
+            reload_phase: "idle".to_owned(),
+            last_reload: None,
+            reload_started_at: None,
+            counters: RuntimeDiagnosticCounters::default(),
+            shutdown: ShutdownDiagnostics {
+                phase: "running".to_owned(),
+                forced: false,
+            },
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -102,6 +229,7 @@ pub struct ProcessRuntime {
     task_supervisor: RuntimeTaskSupervisor,
     reload_lock: Arc<AsyncMutex<()>>,
     startup_recovery_report: Arc<Mutex<Option<StartupRecoveryReport>>>,
+    diagnostics: Arc<Mutex<RuntimeDiagnosticState>>,
 }
 
 impl Clone for ProcessRuntime {
@@ -114,6 +242,7 @@ impl Clone for ProcessRuntime {
             task_supervisor: self.task_supervisor.clone(),
             reload_lock: Arc::clone(&self.reload_lock),
             startup_recovery_report: Arc::clone(&self.startup_recovery_report),
+            diagnostics: Arc::clone(&self.diagnostics),
         }
     }
 }
@@ -154,6 +283,7 @@ impl ProcessRuntime {
             ),
             reload_lock: Arc::new(AsyncMutex::new(())),
             startup_recovery_report: Arc::new(Mutex::new(None)),
+            diagnostics: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
         }
     }
 
@@ -259,6 +389,116 @@ impl ProcessRuntime {
 
     pub(crate) fn reload_lock(&self) -> Arc<AsyncMutex<()>> {
         Arc::clone(&self.reload_lock)
+    }
+
+    pub(crate) fn begin_reload_diagnostics(&self) {
+        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        diagnostics.reload_in_progress = true;
+        diagnostics.reload_phase = "running".to_owned();
+        diagnostics.reload_started_at = Some(Instant::now());
+        diagnostics.counters.reload_attempts =
+            diagnostics.counters.reload_attempts.saturating_add(1);
+    }
+
+    pub(crate) fn record_reload_diagnostics(&self, result: &crate::reload::ReloadResult) {
+        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        let duration_ms = diagnostics.reload_started_at.take().map_or(0, |started| {
+            started.elapsed().as_millis().min(u64::MAX as u128) as u64
+        });
+        let accepted = result.category == crate::reload::ReloadResultCategory::Applied;
+        if accepted {
+            diagnostics.counters.reload_accepted =
+                diagnostics.counters.reload_accepted.saturating_add(1);
+        } else {
+            diagnostics.counters.reload_failures =
+                diagnostics.counters.reload_failures.saturating_add(1);
+        }
+        diagnostics.last_reload = Some(ReloadDiagnosticRecord {
+            category: format_reload_category(result.category),
+            active_generation_id: result.active_generation_id,
+            active_digest_prefix: digest_prefix(&result.active_digest_prefix),
+            changed_sections: bounded_strings(&result.changed_sections),
+            restart_required_paths: bounded_strings(&result.restart_required_paths),
+            duration_ms,
+            reason_code: bounded_text(&result.reason_code),
+        });
+        diagnostics.reload_in_progress = false;
+        diagnostics.reload_phase = "idle".to_owned();
+    }
+
+    pub(crate) fn set_shutdown_diagnostics(&self, phase: &str, forced: bool) {
+        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        if diagnostics.shutdown.phase != phase && phase == "quiescing" {
+            diagnostics.counters.shutdowns = diagnostics.counters.shutdowns.saturating_add(1);
+        }
+        diagnostics.shutdown = ShutdownDiagnostics {
+            phase: bounded_text(phase),
+            forced,
+        };
+    }
+
+    /// Build one coherent diagnostics projection. The manager owns the active
+    /// pointer and slot counters; this method never caches generation-owned
+    /// services or configuration between calls.
+    pub fn diagnostics(&self, manager: &RuntimeManager) -> RuntimeDiagnosticsSnapshot {
+        let manager_snapshot = manager.publication_diagnostics();
+        let active_slot = manager_snapshot.active.clone();
+        let active_generation = active_slot.generation().clone();
+        let finalization = active_generation.finalization_supervisor().snapshot();
+        let retiring_generations = manager_snapshot
+            .retiring
+            .iter()
+            .map(retiring_diagnostic)
+            .collect();
+        let task_supervisor = self.task_supervisor();
+        let task_count = task_supervisor.transition_count() as u64;
+        let mut diagnostics = self
+            .diagnostics
+            .lock()
+            .expect("runtime diagnostics lock")
+            .clone();
+        diagnostics.counters.task_transitions = task_count;
+        diagnostics.counters.retirement_completed = manager_snapshot.retirement_completed;
+        diagnostics.counters.retirement_failed = manager_snapshot.retirement_failed;
+        RuntimeDiagnosticsSnapshot {
+            active_generation: ActiveGenerationDiagnostics {
+                generation_id: active_slot.generation_id(),
+                digest_prefix: active_slot.digest_prefix().to_owned(),
+                published_elapsed_ms: active_slot.snapshot().published_elapsed_ms,
+                active_leases: active_slot.active_lease_count(),
+                provider_count: active_generation.config().providers.len(),
+                account_count: active_generation.config().all_accounts().len(),
+                model_count: active_generation
+                    .inference()
+                    .router_handle()
+                    .catalog_model_count(),
+                finalization_active_jobs: finalization.active_jobs,
+                finalization_capacity: finalization.capacity,
+            },
+            publication: PublicationDiagnostics {
+                publication_epoch: manager_snapshot.publication_epoch,
+                admission_closed: manager_snapshot.admission_closed,
+                reload_gate_closed: manager_snapshot.admission_closed,
+                reload_gate_waiters: manager_snapshot.gate_waiters,
+                reload_in_progress: diagnostics.reload_in_progress,
+                reload_phase: diagnostics.reload_phase.clone(),
+                retirement_pending: manager_snapshot.retiring.len(),
+            },
+            retiring_generations,
+            reload: ReloadDiagnostics {
+                in_progress: diagnostics.reload_in_progress,
+                phase: diagnostics.reload_phase,
+                last_result: diagnostics.last_reload,
+            },
+            tasks: task_supervisor
+                .snapshot()
+                .into_iter()
+                .map(task_diagnostic)
+                .collect(),
+            startup_recovery: self.startup_recovery_report(),
+            shutdown: diagnostics.shutdown,
+            counters: diagnostics.counters,
+        }
     }
 }
 
@@ -822,12 +1062,69 @@ fn digest_prefix(digest: &str) -> String {
     digest.chars().take(12).collect()
 }
 
+fn bounded_text(value: &str) -> String {
+    value.chars().take(MAX_DIAGNOSTIC_TEXT_BYTES).collect()
+}
+
+fn bounded_strings(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .take(MAX_DIAGNOSTIC_PATHS)
+        .map(|value| bounded_text(value))
+        .collect()
+}
+
+fn format_reload_category(category: crate::reload::ReloadResultCategory) -> String {
+    match category {
+        crate::reload::ReloadResultCategory::Applied => "applied",
+        crate::reload::ReloadResultCategory::Noop => "noop",
+        crate::reload::ReloadResultCategory::RestartRequired => "restart_required",
+        crate::reload::ReloadResultCategory::ValidationFailed => "validation_failed",
+        crate::reload::ReloadResultCategory::StaleDigest => "stale_digest",
+        crate::reload::ReloadResultCategory::Busy => "busy",
+        crate::reload::ReloadResultCategory::RetirementBacklog => "retirement_backlog",
+        crate::reload::ReloadResultCategory::Aborted => "aborted",
+        crate::reload::ReloadResultCategory::CompensationFailed => "compensation_failed",
+    }
+    .to_owned()
+}
+
+fn task_diagnostic(task: RuntimeTaskSnapshot) -> TaskDiagnostics {
+    TaskDiagnostics {
+        name: bounded_text(&task.name),
+        ownership: task.ownership.as_str().to_owned(),
+        enabled: task.enabled,
+        running: task.running,
+        tick_count: task.tick_count,
+        last_outcome: task.last_outcome.map(|outcome| outcome.as_str().to_owned()),
+        last_elapsed_ms: task.last_elapsed_ms,
+        in_tick: task.in_tick,
+    }
+}
+
+fn retiring_diagnostic(slot: &Arc<GenerationSlot>) -> RetiringGenerationDiagnostics {
+    let finalization = slot.generation().finalization_supervisor().snapshot();
+    let state = slot.state();
+    RetiringGenerationDiagnostics {
+        generation_id: slot.generation_id(),
+        digest_prefix: slot.digest_prefix().to_owned(),
+        state,
+        active_leases: slot.active_lease_count(),
+        terminal_references: slot.terminal_reference_count(),
+        finalization_active_jobs: finalization.active_jobs,
+        published_elapsed_ms: slot.snapshot().published_elapsed_ms,
+        failed_close: state == GenerationSlotState::FailedClose,
+        close_error_category: (state == GenerationSlotState::FailedClose)
+            .then(|| "generation_close_failed".to_owned()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Active-generation publication and request leases (R003)
 // ---------------------------------------------------------------------------
 
 /// Monotonic lifecycle state exposed by a generation slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum GenerationSlotState {
     Active,
     Retiring,
@@ -1236,6 +1533,9 @@ struct RuntimeManagerInner {
     retirement_tasks: Mutex<BTreeMap<u64, JoinHandle<()>>>,
     retirement_diagnostics: Mutex<VecDeque<RetirementDiagnostic>>,
     close_timeout: Mutex<Duration>,
+    gate_waiters: AtomicUsize,
+    retirement_completed: AtomicU64,
+    retirement_failed: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1260,11 +1560,23 @@ pub enum RetirementFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetirementDiagnostic {
     pub generation_id: u64,
+    pub digest_prefix: String,
     pub state: GenerationSlotState,
     pub active_leases: usize,
     pub terminal_references: usize,
     pub close_report: Option<GenerationCloseReport>,
     pub failure: Option<RetirementFailure>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PublicationManagerDiagnostics {
+    pub active: Arc<GenerationSlot>,
+    pub retiring: Vec<Arc<GenerationSlot>>,
+    pub publication_epoch: u64,
+    pub admission_closed: bool,
+    pub gate_waiters: usize,
+    pub retirement_completed: u64,
+    pub retirement_failed: u64,
 }
 
 /// Bounded process-shutdown evidence.  The report contains structural
@@ -1310,6 +1622,9 @@ impl RuntimeManager {
                 retirement_tasks: Mutex::new(BTreeMap::new()),
                 retirement_diagnostics: Mutex::new(VecDeque::new()),
                 close_timeout: Mutex::new(DEFAULT_GENERATION_CLOSE_TIMEOUT),
+                gate_waiters: AtomicUsize::new(0),
+                retirement_completed: AtomicU64::new(0),
+                retirement_failed: AtomicU64::new(0),
             }),
         }
     }
@@ -1336,6 +1651,19 @@ impl RuntimeManager {
 
     pub fn publication_epoch(&self) -> u64 {
         self.inner.publication_epoch.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn publication_diagnostics(&self) -> PublicationManagerDiagnostics {
+        let state = self.inner.state.lock().expect("runtime manager state lock");
+        PublicationManagerDiagnostics {
+            active: self.active_slot(),
+            retiring: self.retiring_slots(),
+            publication_epoch: self.publication_epoch(),
+            admission_closed: state.admission_closed || state.pending_swap,
+            gate_waiters: self.inner.gate_waiters.load(Ordering::Acquire),
+            retirement_completed: self.inner.retirement_completed.load(Ordering::Relaxed),
+            retirement_failed: self.inner.retirement_failed.load(Ordering::Relaxed),
+        }
     }
 
     pub fn admission_closed(&self) -> bool {
@@ -1538,6 +1866,7 @@ impl RuntimeManager {
             if let Some(lease) = maybe_lease {
                 return Ok(lease);
             }
+            let _waiter = GateWaiter::new(&self.inner.gate_waiters);
             notified.await;
         }
     }
@@ -1696,6 +2025,7 @@ impl RuntimeManager {
         close_report: Option<GenerationCloseReport>,
         failure: Option<RetirementFailure>,
     ) {
+        let failed = failure.is_some();
         let mut diagnostics = self
             .inner
             .retirement_diagnostics
@@ -1703,15 +2033,40 @@ impl RuntimeManager {
             .expect("retirement diagnostics lock");
         diagnostics.push_back(RetirementDiagnostic {
             generation_id: slot.generation_id(),
+            digest_prefix: slot.digest_prefix().to_owned(),
             state: slot.state(),
             active_leases: slot.active_lease_count(),
             terminal_references: slot.terminal_reference_count(),
             close_report,
             failure,
         });
+        if failed {
+            self.inner.retirement_failed.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.inner
+                .retirement_completed
+                .fetch_add(1, Ordering::Relaxed);
+        }
         while diagnostics.len() > MAX_RETIREMENT_DIAGNOSTICS {
             diagnostics.pop_front();
         }
+    }
+}
+
+struct GateWaiter<'a> {
+    count: &'a AtomicUsize,
+}
+
+impl<'a> GateWaiter<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self { count }
+    }
+}
+
+impl Drop for GateWaiter<'_> {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
