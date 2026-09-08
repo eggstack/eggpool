@@ -14,8 +14,11 @@ Expected records:
 - `008-status.md` — R008 generation-leased background/recovery integration
 - `009-status.md` — R009 startup/signals/shutdown
 - `010-status.md` — R010 active-generation authority/diagnostics
-- `011-status.md` — R011 aggregate M8 qualification and closure
+- `011-status.md` — R011 historical aggregate M8 qualification/initial closure
+- `012-status.md` — R012 wire-negotiation runtime-authority and reload-diagnostics corrective re-closure
 
 Closure records must include implementation commit(s), failing-before/passing-after evidence where applicable, exact verification commands, unresolved findings, and the registry transition they authorize.
 
-If a post-close defect is found, add a new corrective plan and closure record. Do not rewrite the historical closure that originally accepted the work.
+The accepted R011 record remains append-only historical evidence. A post-close audit found two unqualified M8 defects, so M8 is corrective-active until R012 closes. Do not rewrite `011-status.md` to hide the earlier acceptance.
+
+If another post-close defect is found, add a new corrective plan and closure record. Do not rewrite the historical closure that originally accepted the work.

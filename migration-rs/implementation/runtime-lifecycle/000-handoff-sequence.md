@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: closed after R011; M9 eligible for separate planning/implementation review
+Status: corrective pass active; R012 ready
 
 Execute and accept in this order:
 
@@ -14,7 +14,8 @@ Execute and accept in this order:
 8. R008 — wire generation-dependent maintenance/background ticks through active-generation leases and schedule C010 startup recovery at the correct process boundary (**closed**).
 9. R009 — own server startup/shutdown, signal handling, graceful drain, forced close, and reload/shutdown exclusion (**closed**).
 10. R010 — eliminate stale startup-generation authority from handlers and expose bounded secret-free runtime/reload diagnostics (**closed**).
-11. R011 — run integrated Python/Rust differential, concurrency, fault, leak, reload, and shutdown qualification; close M8 (**closed**).
+11. R011 — run integrated Python/Rust differential, concurrency, fault, leak, reload, and shutdown qualification (**historical aggregate closure; post-close audit found R012 defects**).
+12. R012 — correct live process-owned wire-negotiation policy authority and retained reload-diagnostic ownership; re-run focused/aggregate qualification and re-close M8 (**ready**).
 
 ## Rules that apply to every handoff
 
@@ -26,6 +27,8 @@ Execute and accept in this order:
 - No provider/network work occurs while the publication admission gate is closed.
 - Background callbacks that need generation services acquire the active generation for the tick; they do not capture a stale `InferenceState`.
 - Startup/static server state is allowed only for fields explicitly classified restart-required.
-- M9 owns the user-facing reload/control/daemon CLI. M8 exposes the typed runtime/reload interfaces it will invoke.
+- The process-owned wire resolver must consume the accepted live `routing.wire_negotiation.*` policy at startup and rehash without becoming generation-local.
+- Reload diagnostic `in_progress` ownership follows the retained reload transaction, not the lifetime of the calling future.
+- M9 owns the user-facing reload/control/daemon CLI. M8 exposes the typed runtime/reload interfaces it will invoke only after accepted R012 re-closure.
 
-R011 must audit the complete repository for direct startup `Config`/`InferenceState` authority before it can close M8.
+R012 is the sole dependency-ready M8 handoff. M9 remains blocked until R012 closure is accepted.

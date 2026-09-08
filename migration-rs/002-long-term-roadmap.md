@@ -132,9 +132,9 @@ Primary class: infrastructure/capability/invariant
 
 Subsystem roadmap: [Runtime Generations, Rehash, Background Tasks, and Process Lifecycle](subsystems/runtime-lifecycle-roadmap.md).
 
-M8 replaces static Rust server state and Python/Granian generation/process machinery with a Rust-native process runtime. It owns immutable generation snapshots, one shared startup/reload generation factory, explicit candidate abort, `ArcSwap` active publication, linearizable request/stream leases, old-generation retirement after M7 retained-finalization drain, exhaustive fail-closed reload policy, serialized transactional rehash, one bounded process task supervisor, generation-leased recurring maintenance, startup crash-recovery scheduling, process signals/graceful/forced shutdown, and active-generation runtime diagnostics.
+M8 replaces static Rust server state and Python/Granian generation/process machinery with a Rust-native process runtime. It owns immutable generation snapshots, one shared startup/reload generation factory, explicit candidate abort, `ArcSwap` active publication, linearizable request/stream leases, old-generation retirement after M7 retained-finalization drain, exhaustive fail-closed reload policy, serialized transactional rehash, one bounded process task supervisor, generation-leased recurring maintenance, startup crash-recovery scheduling, process signals/graceful/forced shutdown, process-owned wire-negotiation policy authority, and active-generation runtime diagnostics.
 
-Planned sequence:
+Sequence and corrective history:
 
 ```text
 R001 runtime/reload oracle freeze
@@ -147,23 +147,27 @@ R001 runtime/reload oracle freeze
  -> R008 generation-leased maintenance/recovery/background integration
  -> R009 server startup/signals/shutdown
  -> R010 active-generation authority/diagnostics
- -> R011 differential qualification/M8 closure
+ -> R011 differential qualification/initial M8 closure
+ -> R012 wire-negotiation runtime authority + reload-diagnostics corrective re-closure
 ```
 
-Only `registry.md` authorizes handoff. R011 is closed, and M8 is complete;
-M9 is eligible for its own planning and implementation review.
+R011 remains historical aggregate closure evidence. A post-close audit found that live `routing.wire_negotiation.*` fields were classified correctly but the one process-owned resolver still used its default policy, and that reload diagnostics were finalized by the caller future rather than the retained reload transaction. R012 is the bounded corrective pass for those defects.
+
+Only `registry.md` authorizes handoff. R012 is the sole dependency-ready M8 plan. M9 is re-blocked until accepted R012 closure and its own planning/implementation review.
 
 M8 keeps M9 operational surfaces out of scope. It exposes the server-side typed reload/runtime/task/shutdown APIs that M9 will use, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
 
-A major M8 closure condition is elimination of stale startup-generation authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, and generation-dependent diagnostics must use one acquired generation for the relevant async operation. Constructor-owned fields explicitly classified restart-required may remain startup-owned.
+A major M8 closure condition is elimination of stale authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, process-owned live wire-negotiation policy, and generation-dependent diagnostics must reflect the accepted runtime state. Constructor-owned fields explicitly classified restart-required may remain startup-owned.
 
-Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task state coherent; retirement waits for request leases and retained finalization; background generation-dependent ticks cannot stay stale across publication; startup recovery and graceful/forced shutdown converge without provider replay or DB reset; diagnostics remain bounded/secret-free; no unresolved high/medium M8 finding remains. Satisfied by accepted R011 closure.
+Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task/wire-policy state coherent; every live wire-negotiation field affects the shared resolver without discarding compatible bounded learning; retirement waits for request leases and retained finalization; background generation-dependent ticks cannot stay stale across publication; startup recovery and graceful/forced shutdown converge without provider replay or DB reset; retained reload diagnostics cannot be stranded or falsely cleared by caller cancellation/`Busy` races; diagnostics remain bounded/secret-free; no unresolved high/medium M8 finding remains. Satisfied only by accepted R012 closure.
 
 ## M9 — Operational CLI and lifecycle completeness
 
 Primary class: capability
 
-Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
+Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the re-closed M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
+
+M9 is currently blocked on accepted R012 M8 re-closure.
 
 Exit condition: documented CLI workflow parity on supported targets.
 

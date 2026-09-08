@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Implementation Plans
 
-Status: closed after R011; M9 is eligible for separate planning/implementation review
+Status: corrective pass active; R012 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
@@ -18,23 +18,23 @@ These plans implement M8 only. They do not authorize M9 operational CLI/control/
 8. [R008 — Generation-leased maintenance, recovery, and background integration](008-generation-leased-maintenance-recovery-and-background.md)
 9. [R009 — Server startup, signals, graceful drain, and forced shutdown](009-server-startup-signals-and-shutdown.md)
 10. [R010 — Active-generation authority audit and runtime/reload diagnostics](010-active-generation-authority-and-diagnostics.md)
-11. [R011 — Differential qualification and M8 closure](011-differential-qualification-and-m8-closure.md)
+11. [R011 — Differential qualification and initial M8 closure](011-differential-qualification-and-m8-closure.md) — historical aggregate closure after the post-close audit found two unqualified runtime-authority gaps.
+12. [R012 — Wire-negotiation runtime authority and reload-diagnostics re-closure](012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) — **ready for handoff**.
 
-Only `migration-rs/registry.md` authorizes implementation. R001-R007 are
-R001-R011 are closed, and R011 closes the M8 implementation sequence. M9 remains outside
-this sequence and requires its own planning/implementation review.
+Only `migration-rs/registry.md` authorizes implementation. R001-R010 remain closed. R011 remains append-only historical aggregate evidence; R012 is the sole dependency-ready corrective plan and is the only plan that may re-close M8 and restore M9 eligibility.
 
 ## Hard boundaries
 
 - M7 coordinator semantics are closed and are composed, not redesigned.
 - `InferenceState` remains the generation request-service graph.
+- The process continues to own one shared wire resolver; R012 corrects its live-policy authority rather than moving it into each generation.
 - No Rust-only DB schema is introduced.
-- No daemon/control socket/`eggpool rehash` CLI is implemented here; M9 consumes M8's reload API.
+- No daemon/control socket/`eggpool rehash` CLI is implemented here; M9 consumes M8's reload API after M8 re-closes.
 - No broad platform/release CI matrix is added; M10 owns that work.
-- Candidate construction, publication, retirement, tasks, and shutdown must remain bounded and secret-free.
+- Candidate construction, publication, retirement, tasks, shutdown, wire-policy reconfiguration, and reload diagnostics must remain bounded and secret-free.
 
 ## Closure discipline
 
 Each accepted plan writes `migration-rs/closure/runtime-lifecycle/<NNN>-status.md`. A later defect gets a new corrective plan; historical closure records are never rewritten.
 
-R011 is the only plan allowed to mark M8 closed or make M9 eligible for its separate planning/implementation review.
+R011's closure record remains historical evidence. Only accepted R012 closure may mark M8 closed again or make M9 eligible for its separate planning/implementation review.

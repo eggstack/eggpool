@@ -1,175 +1,153 @@
-# M8 Runtime Generations, Rehash, Background Tasks, and Process Lifecycle Roadmap
+# EggPool Rust Migration Registry
 
-Status: closed after R011
+Status: active
 
-Repository baseline for M8 planning: `e2be716018c365030ab06e648af71ed7588d9ad3` (accepted C011 / M7 closure).
+Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
-Canonical sources: `../000-long-term-specification.md`, `../001-terminology-and-domain-model.md`, `../002-long-term-roadmap.md`, `../003-planning-process.md`, accepted ADR-0001 through ADR-0003, the closed M4-M7 roadmaps, and the accepted C011 M7 closure.
+## Canonical documents
 
-## Purpose
+- [Long-term specification](000-long-term-specification.md)
+- [Terminology and domain model](001-terminology-and-domain-model.md)
+- [Long-term roadmap](002-long-term-roadmap.md)
+- [Planning process](003-planning-process.md)
 
-M8 replaces Python/Granian generation and process-lifecycle machinery with a smaller Rust-native runtime without weakening the behavior that makes live rehash safe. M8 owns immutable generation snapshots, linearizable request leases, atomic generation publication, candidate abort/retirement, live config classification and rehash, process/background task ownership, startup recovery scheduling, graceful/forced shutdown, and runtime diagnostics.
+## Accepted ADRs
 
-The Python runtime is a behavioral oracle, not a structural template. Rust should preserve the observable lifecycle and safety invariants while using a compact set of Rust primitives (`Arc`, `ArcSwap`, Tokio tasks/signals, SQLite transactions, and narrow synchronization) rather than porting Python's large manager/reload modules line-for-line.
+- [ADR-0001 — Side-by-side migration with Python as behavioral oracle](adrs/ADR-0001-side-by-side-python-oracle.md)
+- [ADR-0002 — Rust runtime, HTTP stack, SSR parity, and implementation location](adrs/ADR-0002-rust-runtime-http-ssr.md)
+- [ADR-0003 — Eggress in-process outbound connector replaces pproxy](adrs/ADR-0003-eggress-outbound-connector.md)
 
-## Ownership boundary
+## Subsystem roadmaps
 
-### Process-owned
+| Subsystem | Roadmap | Status | Current milestone |
+|---|---|---|---|
+| Migration foundation | [foundation-roadmap](subsystems/foundation-roadmap.md) | closed after F006 corrective pass | F006 closed |
+| M4 provider transport | [provider-transport-roadmap](subsystems/provider-transport-roadmap.md) | closed after T006 corrective pass | T006 closed |
+| M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
+| M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
+| M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
+| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **corrective pass active after post-R011 audit** | **R012 ready** |
 
-The process lifetime owns resources that must survive generation swaps:
+## Dependency-ready implementation plans
 
-- the primary SQLite `Database` and repositories over it;
-- the active-generation `RuntimeManager` and reload serialization state;
-- `ModelRouterAffinity`, so valid sticky decisions can survive a rehash and be revalidated against the new compiled router;
-- one shared `WireResolver`, so learned/rejected wire state can survive when candidate fingerprints remain compatible;
-- the process task supervisor and task-spec registry;
-- the C010 crash reconciler entry point and startup recovery report;
-- reload diagnostics/last-result metadata;
-- listener/server constructor state whose config is explicitly `RESTART_REQUIRED`;
-- future M9 control/CLI adapters, which are not implemented by M8.
+| ID | Plan | Class | Dependencies | Status |
+|---|---|---|---|---|
+| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | invariant/corrective | accepted historical R011 aggregate closure | **ready for handoff** |
 
-### Generation-owned
+M9 is re-blocked on accepted R012 M8 re-closure and its own planning/implementation review. No M9 plan is promoted automatically.
 
-Each immutable generation owns the configuration-dependent service graph used by requests:
+## Completed implementation plans
 
-- validated `Config` snapshot plus content digest and monotonic generation id;
-- the M7 `InferenceState` and its finite/streaming coordinators;
-- provider/account client pool and generation-scoped transport configuration;
-- account/catalog/routing/quota/health state embedded in the M5/M7 graph;
-- compiled model-router registry and other immutable routing facts;
-- generation-scoped finalization supervisor and any generation-local diagnostics needed by M7;
-- closeable resources constructed from live configuration.
+| ID | Plan | Class | Implementation commit | Closure |
+|---|---|---|---|---|
+| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | invariant/infrastructure | `56492759e40d4bbc8febef36dce22ee0a07e6760` | [closed](closure/runtime-lifecycle/001-status.md) |
+| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | infrastructure/invariant | `ded541f4a576928015ecf5f1be1b1a96b0b1539c` | [closed](closure/runtime-lifecycle/002-status.md) |
+| R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | invariant/infrastructure | `af794eaa92eb767c837b10c9f01dc3f962181c3e` | [closed](closure/runtime-lifecycle/003-status.md) |
+| R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | invariant/infrastructure | `fa3ab9d` | [closed](closure/runtime-lifecycle/004-status.md) |
+| R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | invariant/capability | `c9ee3656a097addaec0982ec0d0128b1d3d2ad7d` | [closed](closure/runtime-lifecycle/005-status.md) |
+| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | infrastructure/invariant | `bc1220f` | [closed](closure/runtime-lifecycle/006-status.md) |
+| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | invariant/capability | `1b03ade393e7caa532d71ee3b9ce9b3989c49612` | [closed](closure/runtime-lifecycle/007-status.md) |
+| R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | capability/invariant | `a814ea8` | [closed](closure/runtime-lifecycle/008-status.md) |
+| R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | capability/invariant | `5f34e90` + `d04967d` | [closed](closure/runtime-lifecycle/009-status.md) |
+| R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | invariant | `1e784d03` | [closed](closure/runtime-lifecycle/010-status.md) |
+| R011 | [Differential qualification and initial M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | invariant | `31b32c4` | [historical aggregate closure](closure/runtime-lifecycle/011-status.md) |
+| C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
+| C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
+| C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
+| C004 | [Provider-bound attempt construction and upstream submission](implementation/coordinator/004-provider-attempt-construction-and-submission.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/004-status.md) |
+| C005 | [Failure effects, retry budget, and failover](implementation/coordinator/005-failure-effects-retry-and-failover.md) | invariant/capability | `97a4846` | [historical closure](closure/coordinator/005-status.md) |
+| C006 | [Durable finalization and retained terminal ownership](implementation/coordinator/006-durable-finalization-and-retained-ownership.md) | invariant | `97a4846` | [historical closure](closure/coordinator/006-status.md) |
+| C012 | [Coordinator core contract correction](implementation/coordinator/012-coordinator-core-contract-correction.md) | invariant/corrective | `5495f72` + `2f37f7b` | [closed](closure/coordinator/012-status.md) |
+| C013 | [Coordinator core differential requalification](implementation/coordinator/013-coordinator-core-differential-requalification.md) | invariant/corrective | `85ad837b` | [closed](closure/coordinator/013-status.md) |
+| C014 | [Finalization idempotency and Retry-After closure](implementation/coordinator/014-finalization-idempotency-and-retry-after-closure.md) | invariant/corrective | `7607237d533e5e3f6ae33d2ecd504acff5732959` | [closed](closure/coordinator/014-status.md) |
+| C007 | [Finite response handoff and completion](implementation/coordinator/007-finite-response-handoff-and-completion.md) | capability/invariant | `a7a119ed` | [closed](closure/coordinator/007-status.md) |
+| C008 | [Streaming handoff, timeouts, cancellation](implementation/coordinator/008-streaming-handoff-timeouts-and-cancellation.md) | capability/invariant | `ecce4212` | [closed](closure/coordinator/008-status.md) |
+| C009 | [Public inference endpoints and semantic-router dispatch](implementation/coordinator/009-inference-endpoints-and-semantic-router-dispatch.md) | capability/invariant | `0813ba62` | [closed](closure/coordinator/009-status.md) |
+| C010 | [Crash/restart reconciliation and fault injection](implementation/coordinator/010-crash-restart-reconciliation-and-fault-injection.md) | invariant | `d1d7f5a2` | [closed](closure/coordinator/010-status.md) |
+| C011 | [Differential qualification and M7 closure](implementation/coordinator/011-differential-qualification-and-m7-closure.md) | invariant | `0216410f` | [closed](closure/coordinator/011-status.md) |
+| F001 | [Rust workspace and build scaffold](implementation/foundation/001-rust-workspace-and-build-scaffold.md) | infrastructure | `573e081f` | [closed](closure/foundation/001-status.md) |
+| F002 | [Contract inventory and differential oracle harness](implementation/foundation/002-contract-inventory-and-oracle-harness.md) | invariant/infrastructure | `a8c3621` | [closed](closure/foundation/002-status.md) |
+| F003 | [Config and CLI compatibility foundation](implementation/foundation/003-config-and-cli-compatibility.md) | capability | `5afbbdd` | [closed](closure/foundation/003-status.md) |
+| F004 | [SQLite schema and repository compatibility baseline](implementation/foundation/004-sqlite-schema-and-repository-baseline.md) | invariant/infrastructure | `9cc9fc4` | [closed](closure/foundation/004-status.md) |
+| F005 | [Axum SSR shell and static-asset parity baseline](implementation/foundation/005-axum-ssr-shell-and-static-assets.md) | capability | `9d272b8` | [closed](closure/foundation/005-status.md) |
+| F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | `df902b5` | [closed](closure/foundation/006-status.md) |
+| T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | `50d7ff4` | [closed](closure/provider-transport/001-status.md) |
+| T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | `c9f448a` + `2696e52` | [closed](closure/provider-transport/002-status.md) |
+| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-egress-connector-and-proxy-parity.md) | infrastructure/capability | `5b34d8b` | [historical closure](closure/provider-transport/003-status.md) |
+| T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | `71ef03d` | [closed](closure/provider-transport/004-status.md) |
+| T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | `c89e645` | [historical closure](closure/provider-transport/005-status.md) |
+| T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | `4b3a95a` | [closed](closure/provider-transport/006-status.md) |
+| D001 | [Routing-domain contract and deterministic fixture freeze](implementation/routing-domain/001-contract-and-fixture-freeze.md) | invariant/infrastructure | `40be1bf` | [closed](closure/routing-domain/001-status.md) |
+| D002 | [Account registry and catalog cache/hydration](implementation/routing-domain/002-account-registry-and-catalog-cache.md) | capability/invariant | `966ca1b` + `4110d23` + `3916c84` + `b661705` | [closed](closure/routing-domain/002-status.md) |
+| D003 | [Catalog refresh, normalization, and persistence](implementation/routing-domain/003-catalog-refresh-normalization-and-persistence.md) | capability/invariant | `c956e89` | [closed](closure/routing-domain/003-status.md) |
+| D004 | [Quota, claims, and fair-share scoring](implementation/routing-domain/004-quota-claims-and-fair-scoring.md) | capability/invariant | `d649e8a` | [closed](closure/routing-domain/004-status.md) |
+| D005 | [Health, backoff, circuit, and quarantine](implementation/routing-domain/005-health-backoff-circuit-and-quarantine.md) | invariant/capability | `d5dd16d` | [closed](closure/routing-domain/005-status.md) |
+| D006 | [Routing eligibility, fairness, and local claims](implementation/routing-domain/006-routing-eligibility-fairness-and-claims.md) | capability/invariant | `b009023` | [historical closure](closure/routing-domain/006-status.md) |
+| D007 | [Model-router registry and affinity](implementation/routing-domain/007-model-router-registry-and-affinity.md) | capability/invariant | `43ce484` | [closed](closure/routing-domain/007-status.md) |
+| D008 | [Differential qualification and initial M5 closure](implementation/routing-domain/008-differential-qualification-and-closure.md) | invariant | `477aade` | [historical aggregate closure](closure/routing-domain/008-status.md) |
+| D009 | [Selection fairness and frozen routing-trace correction](implementation/routing-domain/009-selection-fairness-and-trace-snapshot-correction.md) | invariant/corrective | `1557d59` | [closed](closure/routing-domain/009-status.md) |
+| W001 | [Canonical wire contract and deterministic fixture freeze](implementation/canonical-wire/001-contract-and-fixture-freeze.md) | invariant/infrastructure | `52f1dfac` | [closed](closure/canonical-wire/001-status.md) |
+| W002 | [Canonical IR, request admission, limits, and M5 fact bridge](implementation/canonical-wire/002-canonical-ir-request-admission-and-limits.md) | capability/invariant | `2096727b` | [closed](closure/canonical-wire/002-status.md) |
+| W003 | [Static wire-profile registry and codec contract](implementation/canonical-wire/003-wire-profile-registry-and-codec-contract.md) | capability/invariant | `f0ab286` | [closed](closure/canonical-wire/003-status.md) |
+| W004 | [OpenAI Chat Completions and Anthropic Messages codecs](implementation/canonical-wire/004-openai-chat-anthropic-messages-codecs.md) | capability | `f851f62` | [closed](closure/canonical-wire/004-status.md) |
+| W005 | [OpenAI Responses and Gemini generateContent codecs](implementation/canonical-wire/005-openai-responses-gemini-codecs.md) | capability | `42200327` | [closed](closure/canonical-wire/005-status.md) |
+| W006 | [Reasoning, tools, structured output, and loss policy](implementation/canonical-wire/006-reasoning-tools-structured-output-and-loss-policy.md) | capability/invariant | `2835e8c` | [closed](closure/canonical-wire/006-status.md) |
+| W007 | [Multimodal, documents, cache controls, and provider adaptation](implementation/canonical-wire/007-multimodal-documents-cache-and-provider-adaptation.md) | capability/invariant | `b11bf5b` | [closed](closure/canonical-wire/007-status.md) |
+| W008 | [SSE, canonical stream events, usage, and terminal evidence](implementation/canonical-wire/008-sse-eof-utf8-correction.md) | capability/invariant | `6cf01595` | [historical closure](closure/canonical-wire/008-status.md) |
+| W009 | [Selected-profile codec runtime boundary](implementation/canonical-wire/009-selected-profile-codec-runtime-boundary.md) | capability/invariant | `0acbccb` | [closed](closure/canonical-wire/009-status.md) |
+| W010 | [Differential qualification and initial M6 closure](implementation/canonical-wire/010-differential-qualification-and-m6-closure.md) | invariant | `77e4dde` | [historical aggregate closure](closure/canonical-wire/010-status.md) |
+| W011 | [SSE EOF UTF-8 finalization correction](implementation/canonical-wire/011-sse-eof-utf8-correction.md) | invariant/corrective | `35cdd04` | [closed](closure/canonical-wire/011-status.md) |
+| W012 | [Cross-surface differential requalification and M6 re-closure](implementation/canonical-wire/012-cross-surface-differential-requalification-and-m6-reclosure.md) | invariant/corrective | `1e0bb712` | [closed](closure/canonical-wire/012-status.md) |
 
-A generation may not mutate another generation's service graph. Process-owned caches may be shared only when the cache itself revalidates entries against generation-specific structure/fingerprints.
+## M5 closure state
 
-## M8 invariants
+M5 is closed after D009. D009 corrected accepted random-fairness execution and froze the pre-publication selection snapshot used by routing traces. D001-D008 remain append-only historical evidence.
 
-1. **One generation per request lifetime.** A finite request uses one generation from admission through terminal registration. A stream holds the same generation until stream completion/disconnect and retained terminal ownership has been registered.
-2. **Linearizable acquisition/publication.** No lease can be admitted to the old generation after the publication commit point, and no request may observe a half-published candidate.
-3. **Immutable request authority.** Await-capable handlers do not read mutable startup copies of live config/services after acquiring a generation.
-4. **Candidate isolation.** Candidate construction may allocate candidate-owned resources but cannot change the active runtime, process task schedule, or durable config-derived rows before the commit phase.
-5. **Abort closes everything it owns.** A failed/cancelled candidate is closed exactly once in deterministic reverse dependency order. Async cleanup is explicit; `Drop` is not the primary cleanup mechanism.
-6. **Rehash is fail-closed.** Unknown config fields default to restart-required. Invalid config, mixed live/restart-required diffs, digest mismatch, retirement backlog, or candidate/preflight failure leave the active generation unchanged.
-7. **No old/new mixing.** A request never combines the old router/coordinator with the new provider pool/config/body limit or vice versa.
-8. **Retirement preserves accepted work.** Live rehash never force-closes a generation with active leases or retained M7 finalization work merely to finish retirement faster.
-9. **Retirement is bounded as manager state.** Completed retirement tasks/slots are reaped; an unresolved retirement backlog has an explicit small cap and blocks additional rehash rather than growing without bound.
-10. **M7 terminal work drains before transport close.** Retirement waits for request leases, then retained finalization convergence, before closing provider transport/resources.
-11. **Process tasks are singleton and non-overlapping.** A process-owned recurring task cannot duplicate across generations. Generation-dependent ticks acquire the active generation for that tick and never retain stale service references between ticks.
-12. **Reload transaction is serialized.** At most one live rehash transaction owns candidate/publication state at a time.
-13. **The publication gate is narrow.** Config parsing, validation, diffing, candidate construction, persistence-delta preparation, and task-diff preflight occur before request admission is gated.
-14. **Restart-required fields never partially apply.** Host/port/API-auth/listener/DB-constructor and other frozen fields require restart; M8 does not silently apply a subset of a mixed diff.
-15. **Shutdown is monotonic.** Once shutdown starts, no new generation publication is accepted. Existing accepted requests/finalization work get a bounded graceful drain before any forced close.
-16. **Crash recovery never replays provider work.** M8 schedules C010 reconciliation at startup; it does not reinterpret or expand C010's semantics.
-17. **Diagnostics are secret-free.** Generation IDs, digest prefixes, counts, durations, states, and task names are allowed; API keys, proxy credentials, raw request/provider bodies, session values, and full secret-bearing config are not.
-18. **No Rust-only schema fork.** Rehash persistence uses the existing SQLite schema and remains readable by the Python reference.
+## M6 closure state
 
-## Implementation sequence
+M6 is closed after W011/W012. W011 corrected SSE EOF UTF-8 finalization; W012 replaced the under-asserted W010 cross-surface qualification with full Python-derived request/finite/stream comparisons. W008/W010 remain historical evidence.
 
-```text
-M7 C011 closed
-   |
-   v
-R001 runtime/reload contract + deterministic oracle freeze
- -> R002 process runtime + shared generation factory + candidate ownership
- -> R003 active generation manager + ArcSwap publication + request/stream leases
- -> R004 retirement + retained-finalization drain + resource close
- -> R005 config diff/reload policy + redacted change model
- -> R006 process task supervisor + authoritative task-spec staging
- -> R007 transactional live rehash + persistence/task/runtime commit (closed)
- -> R008 generation-leased maintenance/recovery/background integration (closed)
- -> R009 server startup, signals, graceful/forced shutdown (closed)
- -> R010 active-generation authority audit + runtime/reload diagnostics (closed)
- -> R011 integrated differential qualification + M8 closure (closed)
-   |
-   v
-M9 planning/implementation eligibility
-```
+## M7 closure state
 
-Only the dependency-ready table in `../registry.md` authorizes implementation.
-R011 is closed and M8 is complete; M9 requires its own planning and
-implementation review.
+M7 is closed after C011. C011 aggregated the full coordinator qualification (integrated finite/streaming matrix, failure corpus, concurrency/leak pass, restart reconciliation, security review) with no unresolved high/medium finding. C001-C002, C007-C011, and C012-C014 are closed; C003-C006 remain append-only historical evidence for the findings corrected by C012-C014.
 
-## Structural design
+## M8 sequence and corrective state
 
-Rust should converge on a small runtime surface, names adjustable but responsibilities fixed:
+M8 starts from the stable interfaces documented by C011. It owns immutable generation snapshots, linearizable leases, atomic publication, live reload, retirement/finalization drain, background task ownership, process signals/shutdown, process wire-policy authority, and active-generation diagnostics. It does not own the M9 control/daemon CLI.
 
-- `ProcessRuntime`: process-owned database/shared caches/task supervisor/reload metadata.
-- `RuntimeGeneration`: immutable generation snapshot and closeable generation resources.
-- `PreparedGeneration`: candidate owner that can `abort().await` or transfer ownership.
-- `GenerationSlot`: lifecycle/lease/retirement metadata around one `Arc<RuntimeGeneration>`.
-- `GenerationLease`: explicit request/stream lease; local counter release may use `Drop` because it is synchronous process-local ownership, unlike durable finalization.
-- `RuntimeManager`: `ArcSwap` active pointer plus a narrow publication lock/gate, retiring-slot table, and shutdown state.
-- `ReloadPolicy`: exhaustive fail-closed config diff classification.
-- `RuntimeTaskSupervisor`: one process-owned scheduler with staged spec diffs.
-- `ReloadService`: serialized validate/diff/build/preflight/stage/commit/retire transaction.
+| ID | Plan | Dependency state |
+|---|---|---|
+| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | closed; see [closure](closure/runtime-lifecycle/001-status.md) |
+| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | closed; see [closure](closure/runtime-lifecycle/002-status.md) |
+| R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | closed; see [closure](closure/runtime-lifecycle/003-status.md) |
+| R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | closed; see [closure](closure/runtime-lifecycle/004-status.md) |
+| R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | closed; see [closure](closure/runtime-lifecycle/005-status.md) |
+| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | closed; see [closure](closure/runtime-lifecycle/006-status.md) |
+| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | closed; see [closure](closure/runtime-lifecycle/007-status.md) |
+| R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | closed; see [closure](closure/runtime-lifecycle/008-status.md) |
+| R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | closed; see [closure](closure/runtime-lifecycle/009-status.md) |
+| R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | closed; see [closure](closure/runtime-lifecycle/010-status.md) |
+| R011 | [Differential qualification and initial M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | historical aggregate closure; see [closure](closure/runtime-lifecycle/011-status.md) |
+| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | **ready; sole dependency-ready M8 plan** |
 
-`arc-swap` is the one expected new runtime dependency. Do not add a lifecycle framework, actor system, async trait framework, DI container, job queue, ORM, or second web/client stack.
+Only the dependency-ready table authorizes implementation. R012 is the only M8 plan currently dependency-ready.
 
-## Active-generation authority conversion
+## M8 boundary decisions
 
-R010 removes the former direct generation authorities from Rust `AppState`.
-In particular:
+M8 composes the closed M7 `InferenceState`, finalization supervisor/drain interface, crash reconciler, routing claims, and finite/stream lifecycle. M8 may refactor construction/ownership to inject process-owned affinity/wire state, but it must not redesign M7 retry/handoff/finalization semantics.
 
-- inference handlers acquire one generation and hold it through finite completion or the spawned streaming body task;
-- readiness/model/routing/account-dependent reads use the active generation;
-- live `server.max_request_body_bytes` is enforced using the acquired generation before unbounded body buffering, not only by a startup `RequestBodyLimitLayer`;
-- constructor-owned auth/listener/dashboard-route topology remains startup-owned only where the reload policy marks it restart-required;
-- process-level DB/dashboard rollup reads may use process-owned repositories but must acquire a generation when their rendering/selection behavior depends on live config.
+M8 uses one process-owned recurring-task supervisor. Generation-dependent ticks acquire the active generation for each tick instead of capturing a generation across reload. Deferred backup/update business callbacks owned by M9 must be explicit and unregistered, never silent placeholders.
 
-A direct `Arc<InferenceState>` escape from `RuntimeManager` into long-lived Axum state is a closure blocker.
+The process owns exactly one shared wire resolver. R012 changes its accepted live policy without moving learned/rejected state into generations or creating a second resolver.
 
-## Live rehash transaction
+`arc-swap` remains the expected small dependency for active `Arc` publication. A tiny synchronization section around lease claim/publication and resolver-policy staging is acceptable; a lifecycle/actor/workflow framework is not.
 
-The intended Rust transaction is smaller than Python's implementation but keeps the important boundaries:
+No new database schema is planned. Any discovered need for a Rust-only schema fork is a stop condition.
 
-1. serialize rehash and snapshot expected active id/digest;
-2. read/validate candidate config and verify optional expected digest;
-3. compute redacted typed diff; no-op when identical; reject any restart-required change;
-4. build candidate and prepare durable/task deltas without changing active state;
-5. preflight staged process-task changes;
-6. close the short lease-admission gate and stage the candidate against the expected active generation;
-7. in one bounded acceptance window, apply the existing-schema config-derived persistence delta, commit the staged runtime pointer, and commit the staged task-spec state; rollback/compensate while the gate is still closed if any mandatory step fails;
-8. reopen admission only after the accepted state is coherent;
-9. transfer candidate ownership and schedule old-generation retirement;
-10. publish a secret-free structured result.
+## Future work and block state
 
-No provider/network call, catalog refresh, backup, or other unbounded work belongs inside the publication gate.
+M9 operational CLI/control/lifecycle work is blocked on accepted R012 M8 re-closure and its own planning/implementation review. No M9 plan is promoted automatically. M10-M12 remain sequenced by `002-long-term-roadmap.md`.
 
-## Background ownership
+## Closure state
 
-M8 builds the scheduler/runtime ownership needed for Python's inventory without dragging M9 CLI surfaces forward.
-
-- Process-owned task loops exist once per process and are reconfigured transactionally from task specs.
-- Generation-dependent callbacks acquire the active generation for each tick and release it before sleeping.
-- Startup crash reconciliation is a one-shot process lifecycle action, not a recurring provider replay mechanism.
-- A task whose underlying business capability is intentionally owned by M9 may remain unregistered until that capability exists, but its inventory/spec semantics must be explicit so M9 plugs into one scheduler instead of creating a second one. M8 closure must identify any such deferred callbacks; it may not silently run placeholders.
-
-## M8/M9 boundary
-
-M8 owns the server-side/runtime capability for live reload and shutdown. M9 owns the user-facing operational CLI/control transport and packaging around it.
-
-M8 therefore exposes typed APIs such as `ReloadService::reload(...)`, runtime snapshots, shutdown handles, and task-supervisor diagnostics. It does **not** implement `eggpool rehash`, daemon control sockets, `stop/restart`, install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
-
-## Verification posture
-
-Every handoff uses deterministic local fixtures. No paid/live provider is a normal closure prerequisite. The primary qualification is Python-oracle fixtures plus Rust concurrency/fault tests over the actual Axum/M7 runtime.
-
-Do not create a broad OS/architecture CI matrix in M8. M10 owns release/SBC characterization.
-
-## M8 closure
-
-R011 may close M8 only when:
-
-- startup and reload build the same generation-owned graph;
-- candidate failure/cancellation cannot change active state or leak resources;
-- acquisition/publication is linearizable under concurrency;
-- finite and streaming requests survive rehash on their original generation while new requests use the new generation;
-- no live handler reads stale startup generation state;
-- all Rust config fields are classified fail-closed and secret changes are redacted;
-- live and restart-required/no-op/invalid/mixed reload cases match the accepted oracle;
-- task specs are singleton, non-overlapping, reload-safe, and generation-dependent callbacks never use a retired generation;
-- old generations retire only after leases and retained finalization converge;
-- startup C010 recovery, graceful shutdown, forced shutdown, and reload/shutdown races converge without DB reset or provider replay;
-- runtime/reload diagnostics remain bounded and secret-free;
-- no unresolved high/medium M8 correctness/security issue remains;
-- M9 receives explicit stable reload/lifecycle/task interfaces and no M9 implementation is promoted automatically.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 R001-R010 remain closed; R011 is historical aggregate closure evidence after the post-close audit. M8 is corrective-active with R012 ready. Only accepted R012 closure may mark M8 closed again and restore M9 eligibility.
