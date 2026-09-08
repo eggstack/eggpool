@@ -1,6 +1,6 @@
 # R002 — Process Runtime, Generation Factory, and Candidate Ownership
 
-Status: dependency-ready; R001 closure accepted
+Status: closed; see [closure record](../../closure/runtime-lifecycle/002-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

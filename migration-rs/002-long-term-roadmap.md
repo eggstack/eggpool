@@ -150,7 +150,8 @@ R001 runtime/reload oracle freeze
  -> R011 differential qualification/M8 closure
 ```
 
-Only `registry.md` authorizes handoff. R001 is the sole initial dependency-ready M8 plan.
+Only `registry.md` authorizes handoff. R003 is the current dependency-ready M8
+plan after accepted R001 and R002 closures.
 
 M8 keeps M9 operational surfaces out of scope. It exposes the server-side typed reload/runtime/task/shutdown APIs that M9 will use, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
 

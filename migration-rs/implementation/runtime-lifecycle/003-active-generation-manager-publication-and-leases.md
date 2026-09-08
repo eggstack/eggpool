@@ -1,6 +1,6 @@
 # R003 — Active Generation Manager, Atomic Publication, and Request Leases
 
-Status: queued; depends on accepted R002 closure
+Status: dependency-ready; R002 closure accepted
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
