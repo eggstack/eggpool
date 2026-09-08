@@ -17,8 +17,11 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tokio::sync::{Notify, oneshot};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
@@ -116,9 +119,444 @@ pub enum ServerError {
     #[error("runtime task installation failed: {0}")]
     TaskSetup(#[from] TaskSpecError),
     #[error("server signal handler failed: {0}")]
-    Signal(std::io::Error),
+    Signal(#[from] SignalError),
+    #[error("server forced shutdown exceeded its graceful deadline")]
+    ForcedShutdown(ShutdownReport),
+    #[error("database close failed during server shutdown: {detail}")]
+    ShutdownDatabase { detail: String },
     #[error("inference state construction failed: {0}")]
     Inference(String),
+}
+
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ShutdownPhase {
+    Running = 0,
+    Quiescing = 1,
+    Draining = 2,
+    Closing = 3,
+    ForcedClosing = 4,
+    Stopped = 5,
+}
+
+impl ShutdownPhase {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Quiescing,
+            2 => Self::Draining,
+            3 => Self::Closing,
+            4 => Self::ForcedClosing,
+            5 => Self::Stopped,
+            _ => Self::Running,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownReason {
+    CtrlC,
+    Sigterm,
+    ServerCompleted,
+    Requested,
+    SignalFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignalError {
+    CtrlC(String),
+    Sigterm(String),
+}
+
+impl std::fmt::Display for SignalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CtrlC(detail) => write!(formatter, "Ctrl-C registration failed: {detail}"),
+            Self::Sigterm(detail) => write!(formatter, "SIGTERM registration failed: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for SignalError {}
+
+/// Secret-free, bounded evidence for one completed process shutdown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShutdownReport {
+    pub phase: ShutdownPhase,
+    pub reason: ShutdownReason,
+    pub forced: bool,
+    pub active_leases_at_deadline: usize,
+    pub terminal_references_at_deadline: usize,
+    pub body_tasks_at_deadline: usize,
+    pub task_count_at_start: usize,
+    pub task_count_joined: usize,
+    pub database_closed: bool,
+    pub database_error: Option<String>,
+}
+
+struct BodyTaskTrackerInner {
+    next_id: AtomicU64,
+    active: std::sync::Mutex<std::collections::BTreeMap<u64, tokio::task::AbortHandle>>,
+    notify: Notify,
+}
+
+#[derive(Clone)]
+struct BodyTaskTracker {
+    inner: Arc<BodyTaskTrackerInner>,
+}
+
+impl BodyTaskTracker {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(BodyTaskTrackerInner {
+                next_id: AtomicU64::new(1),
+                active: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+                notify: Notify::new(),
+            }),
+        }
+    }
+
+    fn active_count(&self) -> usize {
+        self.inner.active.lock().expect("body task lock").len()
+    }
+
+    fn spawn<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let tracker = self.clone();
+        let (started, ready) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let _ = ready.await;
+            future.await;
+            let removed = tracker
+                .inner
+                .active
+                .lock()
+                .expect("body task lock")
+                .remove(&id)
+                .is_some();
+            if removed {
+                tracker.inner.notify.notify_waiters();
+            }
+        });
+        self.inner
+            .active
+            .lock()
+            .expect("body task lock")
+            .insert(id, handle.abort_handle());
+        let _ = started.send(());
+    }
+
+    async fn wait_empty(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let notified = self.inner.notify.notified();
+                if self.active_count() == 0 {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    fn abort_all(&self) -> usize {
+        let handles = self
+            .inner
+            .active
+            .lock()
+            .expect("body task lock")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for handle in &handles {
+            handle.abort();
+        }
+        handles.len()
+    }
+}
+
+struct ServerRuntimeInner {
+    process: ProcessRuntime,
+    manager: Arc<RuntimeManager>,
+    body_tasks: BodyTaskTracker,
+    phase: AtomicU8,
+    reason: std::sync::Mutex<Option<ShutdownReason>>,
+    signal_failure: std::sync::Mutex<Option<SignalError>>,
+    notify: Notify,
+}
+
+/// Explicit owner for the complete foreground process lifecycle.
+pub struct ServerRuntime {
+    inner: Arc<ServerRuntimeInner>,
+    config: Config,
+    shutdown_timeout: Duration,
+}
+
+#[derive(Clone)]
+pub struct ServerRuntimeHandle {
+    inner: Arc<ServerRuntimeInner>,
+}
+
+impl ServerRuntime {
+    pub fn new(process: ProcessRuntime, manager: Arc<RuntimeManager>, config: Config) -> Self {
+        Self {
+            inner: Arc::new(ServerRuntimeInner {
+                process,
+                manager,
+                body_tasks: BodyTaskTracker::new(),
+                phase: AtomicU8::new(ShutdownPhase::Running as u8),
+                reason: std::sync::Mutex::new(None),
+                signal_failure: std::sync::Mutex::new(None),
+                notify: Notify::new(),
+            }),
+            config,
+            shutdown_timeout: GRACEFUL_SHUTDOWN_TIMEOUT,
+        }
+    }
+
+    /// Use a shorter bounded window for deterministic embedding/tests.
+    pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    pub fn handle(&self) -> ServerRuntimeHandle {
+        ServerRuntimeHandle {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+
+    pub fn phase(&self) -> ShutdownPhase {
+        ShutdownPhase::from_u8(self.inner.phase.load(Ordering::Acquire))
+    }
+
+    pub fn manager(&self) -> &Arc<RuntimeManager> {
+        &self.inner.manager
+    }
+
+    pub async fn serve_listener(
+        &self,
+        listener: TcpListener,
+    ) -> Result<ShutdownReport, ServerError> {
+        let app = build_router(AppState {
+            config: self.config.clone(),
+            database: self.inner.process.database(),
+            runtime: Arc::clone(&self.inner.manager),
+            body_tasks: self.inner.body_tasks.clone(),
+        });
+        let handle = self.handle();
+        let shutdown = handle.clone();
+        let server = tokio::spawn(
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move { shutdown.wait_for_quiesce().await })
+                .into_future(),
+        );
+        let signal_handle = handle.clone();
+        let signal_task = tokio::spawn(async move {
+            if let Err(error) = shutdown_signal(signal_handle.clone()).await {
+                signal_handle.record_signal_failure(error);
+            }
+        });
+
+        let mut server = server;
+        let mut forced = false;
+        let server_result = tokio::select! {
+            result = &mut server => result.map_err(|_| ServerError::Bind(std::io::Error::other("server task failed")))?.map_err(ServerError::Bind),
+            _ = handle.wait_for_quiesce() => {
+                match tokio::time::timeout(self.shutdown_timeout, &mut server).await {
+                    Ok(result) => result.map_err(|_| ServerError::Bind(std::io::Error::other("server task failed")))?.map_err(ServerError::Bind),
+                    Err(_) => {
+                        forced = true;
+                        handle.begin_forced_close();
+                        server.abort();
+                        let _ = server.await;
+                        Ok(())
+                    }
+                }
+            }
+        };
+        signal_task.abort();
+        let _ = signal_task.await;
+
+        if self.phase() == ShutdownPhase::Running {
+            handle.request_shutdown(ShutdownReason::ServerCompleted);
+        }
+        let report = self.close_resources(forced).await;
+        if let Some(error) = self
+            .inner
+            .signal_failure
+            .lock()
+            .expect("signal failure lock")
+            .clone()
+        {
+            return Err(ServerError::Signal(error));
+        }
+        server_result?;
+        if let Some(detail) = report.database_error.clone() {
+            return Err(ServerError::ShutdownDatabase { detail });
+        }
+        if report.forced {
+            return Err(ServerError::ForcedShutdown(report));
+        }
+        Ok(report)
+    }
+
+    async fn close_resources(&self, initially_forced: bool) -> ShutdownReport {
+        close_runtime_resources(
+            Arc::clone(&self.inner),
+            initially_forced,
+            self.shutdown_timeout,
+        )
+        .await
+    }
+}
+
+impl Drop for ServerRuntime {
+    fn drop(&mut self) {
+        if self.phase() >= ShutdownPhase::Stopped {
+            return;
+        }
+        let handle = self.handle();
+        handle.request_shutdown(ShutdownReason::Requested);
+        let inner = Arc::clone(&self.inner);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = close_runtime_resources(inner, false, GRACEFUL_SHUTDOWN_TIMEOUT).await;
+            });
+        }
+    }
+}
+
+async fn close_runtime_resources(
+    inner: Arc<ServerRuntimeInner>,
+    initially_forced: bool,
+    shutdown_timeout: Duration,
+) -> ShutdownReport {
+    let handle = ServerRuntimeHandle {
+        inner: Arc::clone(&inner),
+    };
+    let deadline = tokio::time::Instant::now() + shutdown_timeout;
+    handle.request_shutdown(ShutdownReason::Requested);
+    handle.set_phase(if initially_forced {
+        ShutdownPhase::ForcedClosing
+    } else {
+        ShutdownPhase::Draining
+    });
+    let task_supervisor = inner.process.task_supervisor();
+    let task_started = task_supervisor.task_count();
+    let task_report = task_supervisor
+        .shutdown_with_timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
+        .await;
+    let body_empty = if initially_forced {
+        false
+    } else {
+        inner
+            .body_tasks
+            .wait_empty(deadline.saturating_duration_since(tokio::time::Instant::now()))
+            .await
+    };
+    let mut forced = initially_forced || task_report.timed_out || !body_empty;
+    handle.set_phase(if forced {
+        ShutdownPhase::ForcedClosing
+    } else {
+        ShutdownPhase::Closing
+    });
+    if forced {
+        inner.body_tasks.abort_all();
+    }
+    let manager_report = inner
+        .manager
+        .close_for_shutdown(
+            deadline.saturating_duration_since(tokio::time::Instant::now()),
+            forced,
+        )
+        .await;
+    forced |= manager_report.forced;
+    let body_tasks_at_deadline = inner.body_tasks.active_count();
+    let database_result = inner.process.database().close().await;
+    let database_closed = database_result.is_ok();
+    let database_error = database_result.err().map(|error| error.to_string());
+    handle.set_phase(ShutdownPhase::Stopped);
+    ShutdownReport {
+        phase: ShutdownPhase::Stopped,
+        reason: *inner
+            .reason
+            .lock()
+            .expect("shutdown reason lock")
+            .get_or_insert(ShutdownReason::Requested),
+        forced,
+        active_leases_at_deadline: manager_report.active_leases_at_deadline,
+        terminal_references_at_deadline: manager_report.terminal_references_at_deadline,
+        body_tasks_at_deadline,
+        task_count_at_start: task_started,
+        task_count_joined: task_report.joined,
+        database_closed,
+        database_error,
+    }
+}
+
+impl ServerRuntimeHandle {
+    pub fn phase(&self) -> ShutdownPhase {
+        ShutdownPhase::from_u8(self.inner.phase.load(Ordering::Acquire))
+    }
+
+    pub fn request_shutdown(&self, reason: ShutdownReason) -> bool {
+        if self.inner.phase.load(Ordering::Acquire) >= ShutdownPhase::Quiescing as u8 {
+            return false;
+        }
+        if self
+            .inner
+            .phase
+            .compare_exchange(
+                ShutdownPhase::Running as u8,
+                ShutdownPhase::Quiescing as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        *self.inner.reason.lock().expect("shutdown reason lock") = Some(reason);
+        self.inner.manager.shutdown();
+        self.inner.process.task_supervisor().begin_shutdown();
+        self.inner.notify.notify_waiters();
+        true
+    }
+
+    fn set_phase(&self, phase: ShutdownPhase) {
+        self.inner.phase.store(phase as u8, Ordering::Release);
+        self.inner.notify.notify_waiters();
+    }
+
+    fn begin_forced_close(&self) {
+        self.set_phase(ShutdownPhase::ForcedClosing);
+        self.inner.body_tasks.abort_all();
+    }
+
+    fn record_signal_failure(&self, error: SignalError) {
+        *self
+            .inner
+            .signal_failure
+            .lock()
+            .expect("signal failure lock") = Some(error);
+        self.request_shutdown(ShutdownReason::SignalFailure);
+    }
+
+    async fn wait_for_quiesce(&self) {
+        loop {
+            let notified = self.inner.notify.notified();
+            if self.phase() >= ShutdownPhase::Quiescing {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -126,6 +564,7 @@ pub struct AppState {
     pub config: Config,
     pub database: db::Database,
     pub runtime: Arc<RuntimeManager>,
+    body_tasks: BodyTaskTracker,
 }
 
 impl AppState {
@@ -149,6 +588,7 @@ impl AppState {
             config,
             database,
             runtime: Arc::new(RuntimeManager::new(generation)),
+            body_tasks: BodyTaskTracker::new(),
         }
     }
 }
@@ -217,11 +657,15 @@ pub async fn run_with_digest(
             return Err(map_generation_error(error));
         }
     };
-    let generation = prepared
-        .transfer()
-        .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
+    let generation = match prepared.transfer() {
+        Ok(generation) => generation,
+        Err(error) => {
+            let _ = prepared.abort().await;
+            let _ = database.close().await;
+            return Err(ServerError::CandidateTransfer(error.to_string()));
+        }
+    };
 
-    tracing::info!(address, "Rust development server listening");
     let manager = Arc::new(RuntimeManager::new(generation));
     if let Err(error) = process
         .install_initial_tasks((*manager).clone(), &config)
@@ -229,16 +673,15 @@ pub async fn run_with_digest(
     {
         manager.shutdown();
         let _ = process.task_supervisor().shutdown().await;
-        let _ = manager.active_generation().close().await;
+        let _ = manager
+            .close_for_shutdown(GRACEFUL_SHUTDOWN_TIMEOUT, true)
+            .await;
         let _ = database.close().await;
         return Err(error.into());
     }
-    let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
-    manager.shutdown();
-    let _ = process.task_supervisor().shutdown().await;
-    let _ = manager.active_generation().close().await;
-    let close_result = database.close().await;
-    result.and(close_result.map_err(ServerError::Database))
+    tracing::info!(address, "Rust development server listening");
+    let runtime = ServerRuntime::new(process, manager, config);
+    runtime.serve_listener(listener).await.map(|_| ())
 }
 
 /// Serve a prepared database on a caller-owned listener.
@@ -247,42 +690,56 @@ pub async fn serve_listener(
     database: db::Database,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let process = ProcessRuntime::new(database);
-    process.reconcile_startup().await?;
-    let prepared =
-        RuntimeGenerationFactory::prepare(&process, config.clone(), "runtime-config".to_owned(), 1)
-            .await
-            .map_err(map_generation_error)?;
-    let generation = prepared
-        .transfer()
-        .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
+    let process = ProcessRuntime::new(database.clone());
+    if let Err(error) = db::MigrationRunner::new(&database).run().await {
+        let _ = database.close().await;
+        return Err(error.into());
+    }
+    if let Err(error) = sync_accounts(&config, &database).await {
+        let _ = database.close().await;
+        return Err(error);
+    }
+    if let Err(error) = process.reconcile_startup().await {
+        let _ = database.close().await;
+        return Err(error.into());
+    }
+    let prepared = match RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "runtime-config".to_owned(),
+        1,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(map_generation_error(error));
+        }
+    };
+    let generation = match prepared.transfer() {
+        Ok(generation) => generation,
+        Err(error) => {
+            let _ = prepared.abort().await;
+            let _ = database.close().await;
+            return Err(ServerError::CandidateTransfer(error.to_string()));
+        }
+    };
     let manager = Arc::new(RuntimeManager::new(generation));
-    process
+    if let Err(error) = process
         .install_initial_tasks((*manager).clone(), &config)
         .await
-        .map_err(ServerError::TaskSetup)?;
-    let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
-    manager.shutdown();
-    let _ = process.task_supervisor().shutdown().await;
-    let _ = manager.active_generation().close().await;
-    result
-}
-
-async fn serve_listener_with_manager(
-    process: &ProcessRuntime,
-    config: Config,
-    manager: Arc<RuntimeManager>,
-    listener: TcpListener,
-) -> Result<(), ServerError> {
-    let app = build_router(AppState {
-        config,
-        database: process.database(),
-        runtime: manager,
-    });
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(ServerError::Bind)
+    {
+        manager.shutdown();
+        let _ = process.task_supervisor().shutdown().await;
+        let _ = manager
+            .close_for_shutdown(GRACEFUL_SHUTDOWN_TIMEOUT, true)
+            .await;
+        let _ = database.close().await;
+        return Err(ServerError::TaskSetup(error));
+    }
+    let runtime = ServerRuntime::new(process, manager, config);
+    runtime.serve_listener(listener).await.map(|_| ())
 }
 
 /// Serve with an explicitly built inference state (test and serve paths).
@@ -293,21 +750,28 @@ pub async fn serve_listener_with_inference(
     inference: Arc<InferenceState>,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let app = build_router(AppState {
-        runtime: Arc::new(RuntimeManager::new(RuntimeGeneration::from_inference(
-            1,
-            config.clone(),
-            "runtime-config".to_owned(),
-            inference,
-            client_pool,
-        ))),
-        config,
-        database,
-    });
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+    let process = ProcessRuntime::new(database.clone());
+    let manager = Arc::new(RuntimeManager::new(RuntimeGeneration::from_inference(
+        1,
+        config.clone(),
+        "runtime-config".to_owned(),
+        inference,
+        client_pool,
+    )));
+    if let Err(error) = process
+        .install_initial_tasks((*manager).clone(), &config)
         .await
-        .map_err(ServerError::Bind)
+    {
+        manager.shutdown();
+        let _ = process.task_supervisor().shutdown().await;
+        let _ = manager
+            .close_for_shutdown(GRACEFUL_SHUTDOWN_TIMEOUT, true)
+            .await;
+        let _ = database.close().await;
+        return Err(ServerError::TaskSetup(error));
+    }
+    let runtime = ServerRuntime::new(process, manager, config);
+    runtime.serve_listener(listener).await.map(|_| ())
 }
 
 /// Build the testable Axum application for an already-open database.
@@ -679,7 +1143,7 @@ async fn handle_finite_inference(
 }
 
 async fn handle_stream_inference(
-    _state: AppState,
+    state: AppState,
     surface: ClientSurface,
     headers: HeaderMap,
     body: Bytes,
@@ -728,7 +1192,7 @@ async fn handle_stream_inference(
     // each pulled chunk is forwarded as one Axum frame. Terminal ownership
     // is stored on clean or failed terminal; failures never retry.
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-    tokio::spawn(async move {
+    state.body_tasks.spawn(async move {
         let _lease = lease;
         let mut execution = execution;
         execution.mark_started();
@@ -894,25 +1358,31 @@ async fn sync_accounts(config: &Config, database: &db::Database) -> Result<(), S
         .map_err(ServerError::Database)
 }
 
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+async fn shutdown_signal(handle: ServerRuntimeHandle) -> Result<(), SignalError> {
+    let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|error| SignalError::Sigterm(error.to_string()))?;
+        tokio::select! {
+            result = ctrl_c => {
+                result.map_err(|error| SignalError::CtrlC(error.to_string()))?;
+                handle.request_shutdown(ShutdownReason::CtrlC);
+            },
+            _ = terminate.recv() => {
+                handle.request_shutdown(ShutdownReason::Sigterm);
+            },
         }
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
     }
+    #[cfg(not(unix))]
+    {
+        ctrl_c
+            .await
+            .map_err(|error| SignalError::CtrlC(error.to_string()))?;
+        handle.request_shutdown(ShutdownReason::CtrlC);
+    }
+    Ok(())
 }
 
 fn selected_theme(configured: &str) -> &str {

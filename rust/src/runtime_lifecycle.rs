@@ -382,6 +382,19 @@ impl RuntimeGeneration {
         self.shutdown_generation_tasks().await;
         self.resources.close(self.generation_id, timeout).await
     }
+
+    /// Close process-exit resources after the graceful window has expired.
+    ///
+    /// A live rehash must leave a failed generation open so accepted work can
+    /// finish.  Process shutdown is the one exception: the process is
+    /// exiting, so the provider handles are closed even when retained
+    /// finalization could not converge in its last bounded window.
+    pub async fn force_close_with_timeout(&self, timeout: Duration) -> GenerationCloseReport {
+        self.shutdown_generation_tasks().await;
+        self.resources
+            .force_close(self.generation_id, timeout)
+            .await
+    }
 }
 
 struct GenerationResources {
@@ -452,6 +465,34 @@ impl GenerationResources {
                 self.close_notify.notified().await;
             }
         }
+    }
+
+    async fn force_close(&self, generation_id: u64, timeout: Duration) -> GenerationCloseReport {
+        let report = self.close(generation_id, timeout).await;
+        if report.provider_clients.closed_now || report.provider_clients.close_count > 0 {
+            return report;
+        }
+
+        // `close` records a failed finalization drain and intentionally keeps
+        // transports open for live retirement.  A process exit is allowed to
+        // finish that close boundary deterministically.
+        let provider_clients = self.provider_clients.close();
+        let mut forced = report;
+        forced.provider_clients = provider_clients;
+        if !forced
+            .close_order
+            .contains(&GenerationCloseStep::ProviderClientsClosed)
+        {
+            forced
+                .close_order
+                .push(GenerationCloseStep::ProviderClientsClosed);
+        }
+        *self
+            .close_report
+            .lock()
+            .expect("generation close report lock") = Some(forced.clone());
+        self.close_notify.notify_waiters();
+        forced
     }
 
     fn finish_close(
@@ -1226,6 +1267,17 @@ pub struct RetirementDiagnostic {
     pub failure: Option<RetirementFailure>,
 }
 
+/// Bounded process-shutdown evidence.  The report contains structural
+/// generation identifiers and close outcomes only; it never serializes
+/// configuration or provider error bodies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeManagerShutdownReport {
+    pub forced: bool,
+    pub active_leases_at_deadline: usize,
+    pub terminal_references_at_deadline: usize,
+    pub closed_generations: Vec<GenerationCloseReport>,
+}
+
 impl std::fmt::Debug for RuntimeManager {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1360,6 +1412,103 @@ impl RuntimeManager {
                 return;
             }
             tokio::task::yield_now().await;
+        }
+    }
+
+    /// Adopt every generation for process shutdown and close it exactly once.
+    /// Live retirement deliberately keeps failed old generations resident;
+    /// process exit may force that final boundary because no accepted work can
+    /// outlive the process.
+    pub async fn close_for_shutdown(
+        &self,
+        timeout: Duration,
+        initially_forced: bool,
+    ) -> RuntimeManagerShutdownReport {
+        self.shutdown();
+        let mut slots = vec![self.active_slot()];
+        for slot in self.retiring_slots() {
+            if !slots.iter().any(|existing| Arc::ptr_eq(existing, &slot)) {
+                slots.push(slot);
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut forced = initially_forced;
+        let mut active_leases_at_deadline: usize = 0;
+        let mut terminal_references_at_deadline: usize = 0;
+        for slot in &slots {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if tokio::time::timeout(remaining, slot.wait_for_drain())
+                .await
+                .is_err()
+            {
+                forced = true;
+                active_leases_at_deadline =
+                    active_leases_at_deadline.saturating_add(slot.active_lease_count());
+                terminal_references_at_deadline =
+                    terminal_references_at_deadline.saturating_add(slot.terminal_reference_count());
+            }
+        }
+
+        if !forced {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if tokio::time::timeout(remaining, self.drain_retirements())
+                .await
+                .is_err()
+            {
+                forced = true;
+            }
+        }
+
+        if forced {
+            self.abort_retirement_tasks().await;
+        }
+
+        let mut closed_generations = Vec::new();
+        for slot in slots {
+            if slot.state() == GenerationSlotState::Closed {
+                continue;
+            }
+            slot.set_state(GenerationSlotState::Closing);
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let report = if forced {
+                slot.generation().force_close_with_timeout(remaining).await
+            } else {
+                slot.generation().close_with_timeout(remaining).await
+            };
+            if report.failure.is_some() {
+                forced = true;
+                // A failed graceful finalization boundary must not leave
+                // process-owned transports open.  The second call is
+                // idempotent and only completes the forced provider close.
+                let report = slot.generation().force_close_with_timeout(remaining).await;
+                slot.set_state(GenerationSlotState::FailedClose);
+                closed_generations.push(report);
+            } else {
+                slot.set_state(GenerationSlotState::Closed);
+                closed_generations.push(report);
+            }
+        }
+
+        RuntimeManagerShutdownReport {
+            forced,
+            active_leases_at_deadline,
+            terminal_references_at_deadline,
+            closed_generations,
+        }
+    }
+
+    async fn abort_retirement_tasks(&self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .inner
+                .retirement_tasks
+                .lock()
+                .expect("retirement tasks lock"),
+        );
+        for (_, task) in tasks {
+            task.abort();
+            let _ = task.await;
         }
     }
 

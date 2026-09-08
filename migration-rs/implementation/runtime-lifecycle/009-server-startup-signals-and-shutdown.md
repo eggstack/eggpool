@@ -1,6 +1,6 @@
 # R009 — Server Startup, Signals, Graceful Drain, and Forced Shutdown
 
-Status: dependency-ready; accepted R008 closure
+Status: closed; see [closure record](../../closure/runtime-lifecycle/009-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

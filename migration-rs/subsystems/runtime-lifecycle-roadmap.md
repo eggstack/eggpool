@@ -1,6 +1,6 @@
 # M8 Runtime Generations, Rehash, Background Tasks, and Process Lifecycle Roadmap
 
-Status: active implementation; R009 dependency-ready
+Status: active implementation; R010 dependency-ready
 
 Repository baseline for M8 planning: `e2be716018c365030ab06e648af71ed7588d9ad3` (accepted C011 / M7 closure).
 
@@ -77,15 +77,15 @@ R001 runtime/reload contract + deterministic oracle freeze
  -> R006 process task supervisor + authoritative task-spec staging
  -> R007 transactional live rehash + persistence/task/runtime commit (closed)
  -> R008 generation-leased maintenance/recovery/background integration (closed)
- -> R009 server startup, signals, graceful/forced shutdown (ready)
- -> R010 active-generation authority audit + runtime/reload diagnostics
+ -> R009 server startup, signals, graceful/forced shutdown (closed)
+ -> R010 active-generation authority audit + runtime/reload diagnostics (ready)
  -> R011 integrated differential qualification + M8 closure
    |
    v
 M9 planning/implementation eligibility
 ```
 
-Only the dependency-ready table in `../registry.md` authorizes implementation. R009 is the sole ready plan after accepted R008 closure.
+Only the dependency-ready table in `../registry.md` authorizes implementation. R010 is the sole ready plan after accepted R009 closure.
 
 ## Structural design
 

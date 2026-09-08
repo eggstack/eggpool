@@ -832,6 +832,24 @@ impl RuntimeTaskSupervisor {
         self.inner.shutting_down.load(Ordering::Acquire)
     }
 
+    /// Quiesce scheduling synchronously.  The lifecycle owner calls this at
+    /// the shutdown admission point; [`Self::shutdown_with_timeout`] later
+    /// joins the already-cancelled callbacks during the drain phase.
+    pub fn begin_shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::Release);
+        let tasks = self
+            .inner
+            .tasks
+            .lock()
+            .expect("task map lock")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for task in tasks {
+            cancel_task(&task);
+        }
+    }
+
     pub fn task_snapshot(&self, name: &str) -> Option<RuntimeTaskSnapshot> {
         self.inner
             .tasks
@@ -953,7 +971,7 @@ impl RuntimeTaskSupervisor {
     }
 
     pub async fn shutdown_with_timeout(&self, timeout: Duration) -> TaskShutdownReport {
-        self.inner.shutting_down.store(true, Ordering::Release);
+        self.begin_shutdown();
         let tasks = {
             let mut map = self.inner.tasks.lock().expect("task map lock");
             std::mem::take(&mut *map).into_values().collect::<Vec<_>>()
@@ -961,12 +979,14 @@ impl RuntimeTaskSupervisor {
         let started = tasks.len();
         let deadline = tokio::time::Instant::now() + timeout;
         let mut joined = 0;
+        let mut timed_out = false;
         for task in tasks {
             cancel_task(&task);
             let join = task.join.lock().expect("task join lock").take();
             let Some(mut join) = join else { continue };
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if tokio::time::timeout(remaining, &mut join).await.is_err() {
+                timed_out = true;
                 join.abort();
                 let _ = join.await;
             }
@@ -977,6 +997,7 @@ impl RuntimeTaskSupervisor {
             started,
             joined,
             remaining: self.task_count(),
+            timed_out,
         }
     }
 }
@@ -1130,6 +1151,7 @@ pub struct TaskShutdownReport {
     pub started: usize,
     pub joined: usize,
     pub remaining: usize,
+    pub timed_out: bool,
 }
 
 async fn stop_task(task: Arc<TaskState>) {
