@@ -681,6 +681,17 @@ impl RuntimeTaskSupervisor {
             .register(callback_kind, callback);
     }
 
+    /// Return callback capabilities available to the current process. Reload
+    /// preflight uses this to keep deferred R008/M9 business callbacks
+    /// explicit rather than silently installing no-op loops.
+    pub fn available_callback_kinds(&self) -> Vec<String> {
+        self.inner
+            .callbacks
+            .lock()
+            .expect("task callback registry lock")
+            .available_kinds()
+    }
+
     pub fn task_count(&self) -> usize {
         self.inner.tasks.lock().expect("task map lock").len()
     }
@@ -807,6 +818,7 @@ impl RuntimeTaskSupervisor {
             diff,
             prepared,
             state: PreparedDiffState::Prepared,
+            previous_specs: current_specs.to_vec(),
         })
     }
 
@@ -856,6 +868,7 @@ pub struct PreparedTaskDiff {
     diff: TaskSpecDiff,
     prepared: Vec<Arc<TaskState>>,
     state: PreparedDiffState,
+    previous_specs: Vec<RuntimeTaskSpec>,
 }
 
 impl std::fmt::Debug for PreparedTaskDiff {
@@ -927,6 +940,22 @@ impl PreparedTaskDiff {
                 .map(|spec| spec.name.clone())
                 .collect(),
         })
+    }
+
+    /// Restore the pre-commit spec set after a later acceptance step fails.
+    /// The normal commit path is fail-fast before mutation; this inverse path
+    /// is retained for the rare SQLite commit/compensation boundary.
+    pub async fn rollback_committed(&mut self) -> Result<(), TaskSpecError> {
+        if self.state != PreparedDiffState::Committed {
+            return Err(TaskSpecError::AlreadyFinalized);
+        }
+        let current = self.supervisor.active_specs();
+        let mut inverse = self
+            .supervisor
+            .prepare_diff(&current, &self.previous_specs)?;
+        inverse.commit().await?;
+        self.state = PreparedDiffState::Discarded;
+        Ok(())
     }
 
     fn remove_task(&self, name: &str) -> Option<Arc<TaskState>> {

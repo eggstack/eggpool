@@ -8,7 +8,7 @@ mod connection;
 pub mod migrations;
 pub mod repositories;
 
-pub use connection::{Database, DatabaseConfig, DatabaseError, DatabaseStats};
+pub use connection::{Database, DatabaseConfig, DatabaseError, DatabaseStats, DatabaseTransaction};
 pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{
     Account, AccountConfig, AccountModelSupport, AccountRepository, CatalogModel,

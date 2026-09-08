@@ -16,16 +16,20 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio::{sync::Notify, task::JoinHandle};
+use tokio::{
+    sync::{Mutex as AsyncMutex, Notify},
+    task::JoinHandle,
+};
 
 use crate::{
     Config,
     coordinator::{
         FinalizationDrainError, FinalizationSupervisor, InferenceState, TerminalReference,
         TerminalReferenceOwner, WireResolver, WireResolverConfig,
-        build_inference_state_with_shared, compile_provider_profiles,
+        build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,
+        compile_provider_profiles,
     },
-    db::{Database, DatabaseError},
+    db::{Account, Database, DatabaseError},
     model_router::ModelRouterAffinity,
     providers::{ProviderClientPool, ProviderClientPoolCloseReport, ProviderClientPoolError},
 };
@@ -76,6 +80,7 @@ pub struct ProcessRuntime {
     wire_profile_resolver: WireResolver,
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
+    reload_lock: Arc<AsyncMutex<()>>,
 }
 
 impl Clone for ProcessRuntime {
@@ -86,6 +91,7 @@ impl Clone for ProcessRuntime {
             wire_profile_resolver: self.wire_profile_resolver.clone(),
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
+            reload_lock: Arc::clone(&self.reload_lock),
         }
     }
 }
@@ -122,6 +128,7 @@ impl ProcessRuntime {
             task_supervisor: RuntimeTaskSupervisor::with_callbacks(
                 crate::task_supervisor::TaskCallbackRegistry::with_checkpoint(checkpoint_database),
             ),
+            reload_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 
@@ -149,6 +156,18 @@ impl ProcessRuntime {
 
     pub fn task_supervisor(&self) -> RuntimeTaskSupervisor {
         self.task_supervisor.clone()
+    }
+
+    /// Bind the process-owned reload coordinator to the active-generation
+    /// authority. The returned handle is cheap to clone and remains tied to
+    /// this process runtime's database, affinity, wire resolver, and task
+    /// supervisor.
+    pub fn reload_service(&self, manager: RuntimeManager) -> crate::reload::ReloadService {
+        crate::reload::ReloadService::new(self.clone(), manager)
+    }
+
+    pub(crate) fn reload_lock(&self) -> Arc<AsyncMutex<()>> {
+        Arc::clone(&self.reload_lock)
     }
 }
 
@@ -567,6 +586,37 @@ impl RuntimeGenerationFactory {
         digest: String,
         generation_id: u64,
     ) -> Result<PreparedGeneration, GenerationBuildError> {
+        Self::prepare_with_durable_accounts_inner(process, config, digest, generation_id, None)
+            .await
+    }
+
+    /// Prepare a candidate using a preflighted durable-account projection.
+    /// This lets reload construct a complete graph for newly configured
+    /// accounts without mutating SQLite before the acceptance window.
+    pub async fn prepare_with_durable_accounts(
+        process: &ProcessRuntime,
+        config: Config,
+        digest: String,
+        generation_id: u64,
+        durable_accounts: Vec<Account>,
+    ) -> Result<PreparedGeneration, GenerationBuildError> {
+        Self::prepare_with_durable_accounts_inner(
+            process,
+            config,
+            digest,
+            generation_id,
+            Some(durable_accounts),
+        )
+        .await
+    }
+
+    async fn prepare_with_durable_accounts_inner(
+        process: &ProcessRuntime,
+        config: Config,
+        digest: String,
+        generation_id: u64,
+        durable_accounts: Option<Vec<Account>>,
+    ) -> Result<PreparedGeneration, GenerationBuildError> {
         if generation_id == 0 {
             return Err(GenerationBuildError::InvalidGenerationId);
         }
@@ -588,17 +638,33 @@ impl RuntimeGenerationFactory {
         let affinity = process.model_router_affinity();
         let wire_resolver = process.wire_profile_resolver();
         let provider_clients = ProviderClientPool::from_config(&config)?;
-        let inference = match build_inference_state_with_shared(
-            &config,
-            &process.database,
-            provider_clients.clone(),
-            wire_resolver,
-            affinity,
-            model_registry,
-            provider_profiles,
-        )
-        .await
-        {
+        let inference = match match durable_accounts {
+            Some(accounts) => {
+                build_inference_state_with_shared_and_accounts(
+                    &config,
+                    &process.database,
+                    provider_clients.clone(),
+                    wire_resolver,
+                    affinity,
+                    model_registry,
+                    provider_profiles,
+                    Some(accounts),
+                )
+                .await
+            }
+            None => {
+                build_inference_state_with_shared(
+                    &config,
+                    &process.database,
+                    provider_clients.clone(),
+                    wire_resolver,
+                    affinity,
+                    model_registry,
+                    provider_profiles,
+                )
+                .await
+            }
+        } {
             Ok(inference) => inference,
             Err(detail) => {
                 return Err(GenerationBuildError::Graph {
@@ -1537,6 +1603,83 @@ impl StagedGenerationSwap {
             old_slot: Arc::clone(&self.old),
             new_slot: Arc::clone(&self.new),
         })
+    }
+
+    /// Finalize a transaction that reached durable commit after shutdown
+    /// began. The new pointer is accepted as the shutdown-era active pointer,
+    /// but admission remains closed and no new request can acquire it.
+    pub fn accept_during_shutdown(
+        &mut self,
+    ) -> Result<AcceptedGenerationPublication, GenerationSwapError> {
+        if self.phase != SwapPhase::PointerCommitted {
+            return Err(GenerationSwapError::InvalidPhase);
+        }
+        let mut state = self
+            .manager
+            .inner
+            .state
+            .lock()
+            .expect("runtime manager state lock");
+        if !state.shutdown || !self.manager.active_matches(&self.new) {
+            return Err(GenerationSwapError::ActivePointerChanged);
+        }
+        self.new.set_state(GenerationSlotState::Active);
+        self.new.set_accepting(false);
+        state.pending_swap = false;
+        state.admission_closed = true;
+        let epoch = self
+            .manager
+            .inner
+            .publication_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
+        self.manager
+            .inner
+            .retiring
+            .lock()
+            .expect("retiring slots lock")
+            .push(Arc::clone(&self.old));
+        self.inner_notify();
+        self.phase = SwapPhase::Accepted;
+        drop(state);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.manager.schedule_retirement(Arc::clone(&self.old));
+        }
+        Ok(AcceptedGenerationPublication {
+            epoch,
+            old_slot: Arc::clone(&self.old),
+            new_slot: Arc::clone(&self.new),
+        })
+    }
+
+    /// Keep a pointer-committed swap active while leaving admission closed
+    /// after an unrecoverable post-commit failure. This is the explicit
+    /// fail-closed terminal state consumed by reload compensation diagnostics.
+    pub fn fail_closed(mut self) {
+        let mut state = self
+            .manager
+            .inner
+            .state
+            .lock()
+            .expect("runtime manager state lock");
+        state.pending_swap = false;
+        state.admission_closed = true;
+        self.manager
+            .inner
+            .retiring
+            .lock()
+            .expect("retiring slots lock")
+            .push(Arc::clone(&self.old));
+        self.phase = SwapPhase::Accepted;
+        self.manager.inner.gate_notify.notify_waiters();
+        drop(state);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.manager.schedule_retirement(Arc::clone(&self.old));
+        }
+    }
+
+    fn inner_notify(&self) {
+        self.manager.inner.gate_notify.notify_waiters();
     }
 
     /// Abort the staged publication and return the candidate Arc for explicit

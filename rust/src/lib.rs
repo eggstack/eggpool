@@ -17,6 +17,7 @@ pub mod health;
 pub mod model_router;
 pub mod providers;
 pub mod quota;
+pub mod reload;
 pub mod request;
 pub mod routing;
 mod runtime;

@@ -1215,6 +1215,17 @@ impl Config {
         let content = fs::read_to_string(path).map_err(|_| ConfigError::Read {
             path: path.display().to_string(),
         })?;
+        Self::from_toml_bytes(path, content.as_bytes())
+    }
+
+    /// Parse and validate already-read TOML while retaining the canonical
+    /// path in secret-free diagnostics.  Reload callers use this to avoid a
+    /// second read between digest verification and candidate construction.
+    pub fn from_toml_bytes(path: impl AsRef<Path>, content: &[u8]) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
+        let content = std::str::from_utf8(content).map_err(|_| ConfigError::Parse {
+            path: path.display().to_string(),
+        })?;
         let value: toml::Value = content.parse().map_err(|_| ConfigError::Parse {
             path: path.display().to_string(),
         })?;

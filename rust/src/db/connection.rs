@@ -323,6 +323,45 @@ impl Database {
         }
     }
 
+    /// Begin a transaction whose lifetime is controlled by the caller.
+    ///
+    /// The connection gate remains held until `commit` or `rollback`.  This
+    /// is intentionally a small primitive for the runtime reload acceptance
+    /// window: candidate work happens before the transaction, and the caller
+    /// can commit the staged runtime pointer while SQLite is still
+    /// uncommitted.  Ordinary repository writes should continue to use
+    /// `with_transaction`.
+    pub async fn begin_transaction(&self) -> Result<DatabaseTransaction, DatabaseError> {
+        if self.inner.config.read_only {
+            return Err(DatabaseError::ReadOnly);
+        }
+        let permit = self.acquire_permit().await?;
+        self.inner.calls.fetch_add(1, Ordering::Relaxed);
+        self.inner.transactions.fetch_add(1, Ordering::Relaxed);
+        let timeout = self.inner.config.busy_timeout_ms;
+        if let Err(error) = self
+            .inner
+            .connection
+            .clone()
+            .call(|connection| connection.execute_batch("BEGIN IMMEDIATE"))
+            .await
+        {
+            drop(permit);
+            return Err(match error {
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite("begin transaction", timeout, source)
+                }
+                _ => DatabaseError::WorkerClosed,
+            });
+        }
+        Ok(DatabaseTransaction {
+            database: self.clone(),
+            permit: Some(permit),
+            finished: false,
+        })
+    }
+
     pub async fn quick_check(&self) -> Result<(), DatabaseError> {
         let checks = self
             .call(|connection| {
@@ -382,6 +421,130 @@ impl Database {
             .acquire_owned()
             .await
             .map_err(|_| DatabaseError::WorkerClosed)
+    }
+}
+
+/// A caller-controlled SQLite transaction.  It is deliberately not a general
+/// transaction abstraction: it exists to keep the runtime acceptance gate and
+/// the durable config-derived state under one explicit owner.
+pub struct DatabaseTransaction {
+    database: Database,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    finished: bool,
+}
+
+impl std::fmt::Debug for DatabaseTransaction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseTransaction")
+            .field("finished", &self.finished)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DatabaseTransaction {
+    pub async fn call<F, R>(&self, operation: F) -> Result<R, DatabaseError>
+    where
+        F: FnOnce(&mut SqliteConnection) -> Result<R, SqliteError> + Send + 'static,
+        R: Send + 'static,
+    {
+        if self.finished {
+            return Err(DatabaseError::Closed);
+        }
+        self.database
+            .inner
+            .connection
+            .clone()
+            .call(operation)
+            .await
+            .map_err(|error| match error {
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite(
+                        "transaction operation",
+                        self.database.inner.config.busy_timeout_ms,
+                        source,
+                    )
+                }
+                _ => DatabaseError::WorkerClosed,
+            })
+    }
+
+    pub async fn commit(mut self) -> Result<(), DatabaseError> {
+        if self.finished {
+            return Err(DatabaseError::Closed);
+        }
+        let result = self
+            .database
+            .inner
+            .connection
+            .clone()
+            .call(|connection| connection.execute_batch("COMMIT"))
+            .await;
+        match result {
+            Ok(()) => {
+                self.finished = true;
+                self.permit.take();
+                Ok(())
+            }
+            Err(error) => {
+                let commit = match error {
+                    AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                        source
+                    }
+                    AsyncSqliteError::ConnectionClosed => {
+                        return Err(DatabaseError::Closed);
+                    }
+                    _ => return Err(DatabaseError::WorkerClosed),
+                };
+                let rollback_error =
+                    self.database
+                        .inner
+                        .connection
+                        .clone()
+                        .call(|connection| connection.execute_batch("ROLLBACK"))
+                        .await
+                        .err()
+                        .and_then(|error| match error {
+                            AsyncSqliteError::Close((_, source))
+                            | AsyncSqliteError::Error(source) => Some(source),
+                            _ => None,
+                        });
+                self.finished = true;
+                self.permit.take();
+                Err(DatabaseError::CommitFailed {
+                    source: Box::new(commit),
+                    rollback_error: rollback_error.map(Box::new),
+                })
+            }
+        }
+    }
+
+    pub async fn rollback(mut self) -> Result<(), DatabaseError> {
+        if self.finished {
+            return Ok(());
+        }
+        let result = self
+            .database
+            .inner
+            .connection
+            .clone()
+            .call(|connection| connection.execute_batch("ROLLBACK"))
+            .await;
+        self.finished = true;
+        self.permit.take();
+        match result {
+            Ok(()) => Ok(()),
+            Err(AsyncSqliteError::ConnectionClosed) => Err(DatabaseError::Closed),
+            Err(AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source)) => {
+                Err(map_sqlite(
+                    "rollback",
+                    self.database.inner.config.busy_timeout_ms,
+                    source,
+                ))
+            }
+            Err(_) => Err(DatabaseError::WorkerClosed),
+        }
     }
 }
 

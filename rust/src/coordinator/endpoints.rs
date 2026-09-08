@@ -719,38 +719,71 @@ pub(crate) async fn build_inference_state_with_shared(
     model_registry: ModelRouterRegistry,
     provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
 ) -> Result<InferenceState, String> {
+    build_inference_state_with_shared_and_accounts(
+        config,
+        database,
+        client_pool,
+        wire_resolver,
+        affinity,
+        model_registry,
+        provider_profiles,
+        None,
+    )
+    .await
+}
+
+/// Variant used by the reload transaction after it has preflighted the
+/// durable account identities but before the SQLite acceptance transaction.
+/// New account ids are therefore part of the candidate snapshot without
+/// mutating the active database during candidate construction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn build_inference_state_with_shared_and_accounts(
+    config: &Config,
+    database: &Database,
+    client_pool: ProviderClientPool,
+    wire_resolver: WireResolver,
+    affinity: Arc<ModelRouterAffinity>,
+    model_registry: ModelRouterRegistry,
+    provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>>,
+    durable_accounts_override: Option<Vec<Account>>,
+) -> Result<InferenceState, String> {
     let credentials = CredentialStore::from_config(config);
-    let durable_accounts: Vec<Account> = database
-        .call(|connection| {
-            let mut statement = connection
-                .prepare("SELECT id, name, api_key_env, enabled, provider_id FROM accounts")
-                .map_err(|error| {
-                    tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
-                })?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok(Account {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        api_key_env: row.get(2)?,
-                        enabled: row.get(3)?,
-                        weight: 1.0,
-                        provider_id: row.get(4)?,
+    let durable_accounts: Vec<Account> = match durable_accounts_override {
+        Some(accounts) => accounts,
+        None => database
+            .call(|connection| {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT id, name, api_key_env, enabled, weight, provider_id FROM accounts",
+                    )
+                    .map_err(|error| {
+                        tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+                    })?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok(Account {
+                            id: row.get(0)?,
+                            name: row.get(1)?,
+                            api_key_env: row.get(2)?,
+                            enabled: row.get(3)?,
+                            weight: row.get(4)?,
+                            provider_id: row.get(5)?,
+                        })
                     })
-                })
-                .map_err(|error| {
-                    tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
-                })?;
-            let mut accounts = Vec::new();
-            for row in rows {
-                accounts.push(row.map_err(|error| {
-                    tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
-                })?);
-            }
-            Ok(accounts)
-        })
-        .await
-        .map_err(|error| format!("inference account load failed: {error}"))?;
+                    .map_err(|error| {
+                        tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+                    })?;
+                let mut accounts = Vec::new();
+                for row in rows {
+                    accounts.push(row.map_err(|error| {
+                        tokio_rusqlite::rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+                    })?);
+                }
+                Ok(accounts)
+            })
+            .await
+            .map_err(|error| format!("inference account load failed: {error}"))?,
+    };
     let registry = AccountRegistry::from_config(config, &durable_accounts, &credentials)
         .map_err(|error| format!("inference registry failed: {error}"))?;
     let mut catalog = ModelCatalogCache::default();
