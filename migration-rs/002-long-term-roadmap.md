@@ -150,14 +150,14 @@ R001 runtime/reload oracle freeze
  -> R011 differential qualification/M8 closure
 ```
 
-Only `registry.md` authorizes handoff. R011 is the current dependency-ready M8
-plan after accepted R010 closure.
+Only `registry.md` authorizes handoff. R011 is closed, and M8 is complete;
+M9 is eligible for its own planning and implementation review.
 
 M8 keeps M9 operational surfaces out of scope. It exposes the server-side typed reload/runtime/task/shutdown APIs that M9 will use, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
 
 A major M8 closure condition is elimination of stale startup-generation authority: finite/streaming requests, live request-body limits, readiness, model/routing reads, and generation-dependent diagnostics must use one acquired generation for the relevant async operation. Constructor-owned fields explicitly classified restart-required may remain startup-owned.
 
-Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task state coherent; retirement waits for request leases and retained finalization; background generation-dependent ticks cannot stay stale across publication; startup recovery and graceful/forced shutdown converge without provider replay or DB reset; diagnostics remain bounded/secret-free; no unresolved high/medium M8 finding remains. Satisfied only by accepted R011 closure.
+Exit condition: live rehash does not interrupt/mix in-flight work; invalid/restart/mixed/failed reloads leave old runtime/DB/task state coherent; retirement waits for request leases and retained finalization; background generation-dependent ticks cannot stay stale across publication; startup recovery and graceful/forced shutdown converge without provider replay or DB reset; diagnostics remain bounded/secret-free; no unresolved high/medium M8 finding remains. Satisfied by accepted R011 closure.
 
 ## M9 — Operational CLI and lifecycle completeness
 

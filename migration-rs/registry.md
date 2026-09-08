@@ -26,16 +26,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
-| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **active implementation** | **R011 ready** |
+| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **closed after R011** | **M8 closed** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | invariant | accepted R010 closure | **dependency-ready** |
-
-M9 remains blocked on accepted R011 M8 closure and its own planning/implementation
-review.
+No implementation plan is currently dependency-ready. M9 is eligible for its
+own planning/implementation review after accepted R011 closure; no M9 plan is
+promoted automatically.
 
 ## Completed implementation plans
 
@@ -50,6 +49,8 @@ review.
 | R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | invariant/capability | `1b03ade393e7caa532d71ee3b9ce9b3989c49612` | [closed](closure/runtime-lifecycle/007-status.md) |
 | R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | capability/invariant | `a814ea8` | [closed](closure/runtime-lifecycle/008-status.md) |
 | R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | capability/invariant | `5f34e90` + `d04967d` | [closed](closure/runtime-lifecycle/009-status.md) |
+| R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | invariant | `1e784d03` | [closed](closure/runtime-lifecycle/010-status.md) |
+| R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | invariant | `ac35f5c` | [closed](closure/runtime-lifecycle/011-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -126,9 +127,10 @@ M8 starts from the stable interfaces documented by C011. It owns immutable gener
 | R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | closed; see [closure](closure/runtime-lifecycle/008-status.md) |
 | R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | closed; see [closure](closure/runtime-lifecycle/009-status.md) |
 | R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | closed; see [closure](closure/runtime-lifecycle/010-status.md) |
-| R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | **dependency-ready**; accepted R010 closure |
+| R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | closed; see [closure](closure/runtime-lifecycle/011-status.md) |
 
-Only the dependency-ready table authorizes implementation. R011 is the sole current M8 handoff.
+Only the dependency-ready table authorizes implementation. No M8 plan remains
+dependency-ready; R011 is recorded in the completed table above.
 
 ## M8 boundary decisions
 
@@ -142,8 +144,13 @@ No new database schema is planned. Any discovered need for a Rust-only schema fo
 
 ## Future work and block state
 
-M9 operational CLI/control/lifecycle work remains blocked on accepted R011 M8 closure and its separate planning/implementation review. M10-M12 remain sequenced by `002-long-term-roadmap.md`.
+M9 operational CLI/control/lifecycle work is eligible for its own
+planning/implementation review after accepted R011 closure. No M9 plan is
+promoted automatically. M10-M12 remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 is active with R001-R010 closed and R011 dependency-ready. No M9 plan is promoted automatically by R010; it remains gated on R011.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011
+with C012-C014 corrective passes remain closed. M8 is closed after accepted
+R011 closure. No M9 plan is promoted automatically; M9 is eligible only for
+its separate planning and implementation review.

@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Implementation Plans
 
-Status: active; R011 dependency-ready
+Status: closed after R011; M9 is eligible for separate planning/implementation review
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
@@ -21,7 +21,8 @@ These plans implement M8 only. They do not authorize M9 operational CLI/control/
 11. [R011 — Differential qualification and M8 closure](011-differential-qualification-and-m8-closure.md)
 
 Only `migration-rs/registry.md` authorizes implementation. R001-R007 are
-closed, R010 is closed, and R011 is the sole current dependency-ready plan.
+R001-R011 are closed, and R011 closes the M8 implementation sequence. M9 remains outside
+this sequence and requires its own planning/implementation review.
 
 ## Hard boundaries
 

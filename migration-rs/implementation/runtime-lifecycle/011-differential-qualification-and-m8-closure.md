@@ -1,6 +1,6 @@
 # R011 — Differential Qualification and M8 Closure
 
-Status: queued; depends on accepted R010 closure
+Status: closed; see [closure record](../../closure/runtime-lifecycle/011-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
