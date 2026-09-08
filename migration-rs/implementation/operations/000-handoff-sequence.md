@@ -1,12 +1,12 @@
 # M9 Operational CLI Handoff Sequence
 
-Status: active; O001 ready
+Status: active; O003 ready
 
 Execute and accept in this order:
 
-1. O001 — freeze exact operational CLI/filesystem/process/archive/update/deploy contracts and deterministic oracle corpus (**ready**).
-2. O002 — implement local Unix control protocol/client/server, runtime paths, PID/process-state primitives (**queued**).
-3. O003 — implement daemon serve, stop/restart, rehash, runtime-status, croncheck and ensure-running on O002/M8 (**queued**).
+1. O001 — freeze exact operational CLI/filesystem/process/archive/update/deploy contracts and deterministic oracle corpus (**closed**).
+2. O002 — implement local Unix control protocol/client/server, runtime paths, PID/process-state primitives (**closed**).
+3. O003 — implement daemon serve, stop/restart, rehash, runtime-status, croncheck and ensure-running on O002/M8 (**ready**).
 4. O004 — implement config/key/provider/onboarding mutations with validation and live-apply/restart decisions (**queued**).
 5. O005 — implement all `configsetup` target generators and safe output/write/clipboard behavior (**queued**).
 6. O006 — implement migrate/vacuum/backup/recover and register the real automatic-backup M8 task (**queued**).
@@ -31,4 +31,4 @@ Execute and accept in this order:
 - Secrets may be printed only on explicit existing surfaces whose contract requires it.
 - No M10 broad matrix, M11 default-cutover, or M12 retirement work is pulled forward.
 
-Only `migration-rs/registry.md` authorizes implementation. O001 is the sole ready plan.
+Only `migration-rs/registry.md` authorizes implementation. O003 is the sole ready plan.

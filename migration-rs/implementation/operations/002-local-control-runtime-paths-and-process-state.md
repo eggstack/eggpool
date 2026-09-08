@@ -1,6 +1,6 @@
 # O002 — Local Control, Runtime Paths, and Process-State Boundary
 
-Status: ready for handoff
+Status: closed
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
