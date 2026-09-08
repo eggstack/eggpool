@@ -1,6 +1,6 @@
 # R007 — Transactional Live Rehash and Coherent Acceptance
 
-Status: queued; depends on accepted R006 closure
+Status: closed; see [closure record](../../closure/runtime-lifecycle/007-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

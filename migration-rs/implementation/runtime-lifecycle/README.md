@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Implementation Plans
 
-Status: active; R007 dependency-ready
+Status: active; R008 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
@@ -20,8 +20,8 @@ These plans implement M8 only. They do not authorize M9 operational CLI/control/
 10. [R010 — Active-generation authority audit and runtime/reload diagnostics](010-active-generation-authority-and-diagnostics.md)
 11. [R011 — Differential qualification and M8 closure](011-differential-qualification-and-m8-closure.md)
 
-Only `migration-rs/registry.md` authorizes implementation. R001-R006 are
-closed, and R007 is the sole current dependency-ready plan; R008-R011 remain
+Only `migration-rs/registry.md` authorizes implementation. R001-R007 are
+closed, and R008 is the sole current dependency-ready plan; R009-R011 remain
 queued serially.
 
 ## Hard boundaries

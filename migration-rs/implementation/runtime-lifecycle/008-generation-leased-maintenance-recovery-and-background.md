@@ -1,6 +1,6 @@
 # R008 — Generation-Leased Maintenance, Recovery, and Background Integration
 
-Status: queued; depends on accepted R007 closure
+Status: dependency-ready; R007 closure accepted
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

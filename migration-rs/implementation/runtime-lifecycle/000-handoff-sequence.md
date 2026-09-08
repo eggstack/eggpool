@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: active; R006 ready
+Status: active; R008 ready
 
 Execute and accept in this order:
 
@@ -9,9 +9,9 @@ Execute and accept in this order:
 3. R003 — add `ArcSwap` active publication, linearizable generation leases, and hold leases for full finite/stream lifetimes (**closed**).
 4. R004 — add retirement state, M7 retained-finalization drain, close ordering, and retirement-backlog bounds (**closed**).
 5. R005 — port exhaustive fail-closed config reload classification, typed diffs, and secret redaction (**closed**).
-6. R006 — build one process task supervisor and staged authoritative task-spec diffs (**ready**).
-7. R007 — implement serialized transactional rehash across candidate, SQLite config-derived state, task specs, and active publication.
-8. R008 — wire generation-dependent maintenance/background ticks through active-generation leases and schedule C010 startup recovery at the correct process boundary.
+6. R006 — build one process task supervisor and staged authoritative task-spec diffs (**closed**).
+7. R007 — implement serialized transactional rehash across candidate, SQLite config-derived state, task specs, and active publication (**closed**).
+8. R008 — wire generation-dependent maintenance/background ticks through active-generation leases and schedule C010 startup recovery at the correct process boundary (**ready**).
 9. R009 — own server startup/shutdown, signal handling, graceful drain, forced close, and reload/shutdown exclusion.
 10. R010 — eliminate stale startup-generation authority from handlers and expose bounded secret-free runtime/reload diagnostics.
 11. R011 — run integrated Python/Rust differential, concurrency, fault, leak, reload, and shutdown qualification; close M8.
