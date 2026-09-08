@@ -92,7 +92,7 @@ R001 runtime/reload contract + deterministic oracle freeze
 M9 planning eligibility only after accepted R013 closure
 ```
 
-Only the dependency-ready table in `../registry.md` authorizes implementation. R013 is the sole ready plan.
+Only the dependency-ready table in `../registry.md` authorizes implementation. No M8 plan is currently dependency-ready because R013 has closed the milestone.
 
 ## Structural design
 
@@ -160,7 +160,7 @@ M9 is eligible for its own separate planning/implementation review after accepte
 
 ## Verification posture
 
-Use deterministic local fixtures. No paid/live provider is a normal closure prerequisite. R013 must include a local deterministic provider and a real public inference request to prove request-visible process wire-policy authority. `/healthz` or policy snapshots alone are not sufficient evidence.
+Use deterministic local fixtures. No paid/live provider is a normal closure prerequisite. R013 includes a local deterministic provider and a real public inference request proving request-visible process wire-policy authority. `/healthz` or policy snapshots alone are not sufficient evidence.
 
 M8 does not add broad OS/architecture CI; M10 owns system/SBC characterization.
 
@@ -180,7 +180,7 @@ These findings make R011/R012 historical closure evidence rather than current M8
 
 ## M8 closure
 
-Only R013 may now re-close M8. It must prove:
+The accepted R013 closure re-closes M8 and records proof of:
 
 - exact Python wire-policy bounds and non-panicking invalid conversion;
 - no request-visible candidate policy before coherent durable acceptance;

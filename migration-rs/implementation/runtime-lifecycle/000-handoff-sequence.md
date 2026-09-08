@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: corrective pass active; R013 ready
+Status: closed after R013 corrective pass; M9 eligible for separate planning/implementation review
 
 Execute and accept in this order:
 
@@ -16,7 +16,7 @@ Execute and accept in this order:
 10. R010 — active-generation authority audit and bounded diagnostics (**closed**).
 11. R011 — integrated M8 qualification (**historical aggregate closure**).
 12. R012 — process wire-policy authority and retained reload diagnostics (**historical corrective closure; post-close audit found remaining acceptance/validation/evidence gaps**).
-13. R013 — exact wire-policy bounds, coherent acceptance/rollback, real inference qualification and boundary requalification (**ready**).
+13. R013 — exact wire-policy bounds, coherent acceptance/rollback, real inference qualification and boundary requalification (**closed**).
 
 ## Rules that apply to every handoff
 
@@ -31,6 +31,6 @@ Execute and accept in this order:
 - The process owns exactly one shared wire resolver. Its accepted policy must match validated config and rejected reloads must never be request-visible.
 - Wire-policy rollback restores old policy and bounds immediately.
 - Reload diagnostic `in_progress` ownership follows the retained reload transaction, not the calling future.
-- M9 owns user-facing reload/control/daemon/update/deploy surfaces and remains blocked during R013.
+- M9 owns user-facing reload/control/daemon/update/deploy surfaces and remains outside the closed M8 scope.
 
-Only `migration-rs/registry.md` authorizes implementation. R013 is the sole ready plan. Accepted R013 closure may re-close M8 and make M9 eligible for a separate planning/implementation review; it must not auto-promote M9 work.
+Only `migration-rs/registry.md` authorizes implementation. R013 is accepted and re-closes M8. M9 is eligible for a separate planning/implementation review; it must not be auto-promoted from this closure.

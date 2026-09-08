@@ -169,11 +169,16 @@ The reload follows a strict transactional pipeline:
    lists the offending fields in the response.
 6. **Candidate generation** — A new `RuntimeGeneration` is built
    (router, DB connections, app state) without touching the active one.
-7. **Persistence reconciliation** — Database state is reconciled in a
+7. **Acceptance staging** — The candidate generation, task diff, and shared
+   process wire policy are prepared while request admission remains reversible;
+   preparation does not publish resolver behavior.
+8. **Persistence reconciliation** — Database state is reconciled in a
    transaction; failures trigger rollback.
-8. **Atomic publication** — The new generation is installed via
-   `RuntimeManager`; new requests immediately use it.
-9. **Old generation retirement** — Active streams continue on their
+9. **Durable publication boundary** — After the database commit succeeds, the
+   shared wire policy is published and the matching generation/task state is
+   accepted while admission remains closed. Pre-accept failures leave the old
+   process policy and generation authoritative.
+10. **Old generation retirement** — Active streams continue on their
    original generation. Old resources close only after all leases
    drain (timeout: 300s default).
 

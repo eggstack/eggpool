@@ -60,10 +60,13 @@ passes immutable resolved provider profiles to its coordinator. Candidate
 fingerprints include structural surface/path/auth-shape/header facts but never
 credential values, so a rehash with changed wire definitions cannot reuse the
 old learned preference. Its validated `routing.wire_negotiation` policy is
-installed before startup request admission and staged with live rehash
-acceptance; rejected reloads cannot change the resolver. Learned/rejected
-observations retain their timestamps so accepted TTL/cooldown changes take
-effect without discarding compatible state, and one shared per-provider limit
+installed before startup request admission and prepared with live rehash
+acceptance. During reload, the durable config transaction commits before the
+shared policy is published, and admission stays closed until the matching
+generation/task state is accepted; rejected reloads cannot change the resolver.
+Learned/rejected observations retain their timestamps so accepted TTL/cooldown
+changes take effect without discarding compatible state, and one shared
+per-provider limit
 converges across existing in-flight negotiations.
 
 Reload diagnostics are owned by the retained reload worker rather than the

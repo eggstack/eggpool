@@ -400,4 +400,6 @@ Only then may the closure mark M8 re-closed and make M9 eligible for its separat
 
 ## Handoff
 
-R013 is the sole dependency-ready M8 plan. M9 remains blocked. After accepted R013 closure, update the registry/roadmaps to re-close M8 and make M9 eligible for planning; do **not** auto-create or auto-promote M9 implementation work from the R013 implementation commit.
+R013 is accepted and formally closed. The registry and roadmaps re-close M8 and
+make M9 eligible for its separate planning/implementation review; no M9
+implementation work is auto-created or auto-promoted from the R013 commit.
