@@ -1,6 +1,6 @@
 # M9 Operational CLI Implementation Plans
 
-Status: active; O003 dependency-ready
+Status: active; O004 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
@@ -10,8 +10,8 @@ These plans implement M9 only. They compose the closed M4-M8 Rust services into 
 
 1. [O001 — Operational CLI contract and deterministic oracle freeze](001-operational-cli-contract-and-oracle-freeze.md) — **closed**.
 2. [O002 — Local control, runtime paths, and process-state boundary](002-local-control-runtime-paths-and-process-state.md) — **closed**.
-3. [O003 — Serve/daemon, lifecycle control, rehash, status, and watchdog commands](003-process-lifecycle-control-and-watchdog-commands.md) — **dependency-ready**.
-4. [O004 — Config/key/provider onboarding and live-apply mutations](004-config-key-provider-onboarding-and-live-apply.md) — queued behind O003.
+3. [O003 — Serve/daemon, lifecycle control, rehash, status, and watchdog commands](003-process-lifecycle-control-and-watchdog-commands.md) — **closed**.
+4. [O004 — Config/key/provider onboarding and live-apply mutations](004-config-key-provider-onboarding-and-live-apply.md) — **dependency-ready; O003 closure accepted**.
 5. [O005 — Agent integration and `configsetup` generation](005-agent-integration-config-generation.md) — queued behind O004.
 6. [O006 — Migrations, DB maintenance, backup/recover, and automatic backup](006-database-backup-recovery-and-automatic-backup.md) — queued behind O005.
 7. [O007 — Operator inspection, model/stats maintenance, and metrics flush](007-operator-inspection-maintenance-and-metrics-flush.md) — queued behind O006.
@@ -19,7 +19,7 @@ These plans implement M9 only. They compose the closed M4-M8 Rust services into 
 9. [O009 — Deployment artifacts, systemd/cron/logrotate, and uninstall](009-deployment-install-artifacts-and-uninstall.md) — queued behind O008.
 10. [O010 — Differential qualification and M9 closure](010-differential-qualification-and-m9-closure.md) — queued behind O009.
 
-Only `migration-rs/registry.md` authorizes implementation. At initial registration O001 is the sole dependency-ready plan.
+Only `migration-rs/registry.md` authorizes implementation. O004 is the current dependency-ready plan; O005-O010 remain queued behind their direct predecessors.
 
 ## Hard boundaries
 

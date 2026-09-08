@@ -1,6 +1,6 @@
 # O003 — Process Lifecycle Control and Watchdog Commands
 
-Status: dependency-ready; O002 closure accepted
+Status: closed; implementation commit 35f089f2; closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

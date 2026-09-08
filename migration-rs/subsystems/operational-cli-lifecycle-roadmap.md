@@ -1,6 +1,6 @@
 # M9 Operational CLI, Lifecycle, Update, and Deployment Roadmap
 
-Status: active implementation; O003 dependency-ready
+Status: active implementation; O004 dependency-ready
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350` (accepted R013 / M8 re-closure).
 
@@ -14,9 +14,9 @@ Python remains the behavioral oracle until M11 cutover. M9 preserves command nam
 
 ## Current baseline
 
-F003 already represents the complete Python Click command tree in `rust/src/cli.rs`, but the runtime dispatcher implements only `version`, `check-config`, and foreground `serve --verbose`; nearly every other command returns migration-stage `NotImplemented`.
+F003 represents the complete Python Click command tree in `rust/src/cli.rs`. O003 now gives the Rust dispatcher real foreground/daemon lifecycle, stop/restart, rehash, runtime-status, and watchdog behavior; the remaining onboarding, inspection, data-safety, update, and deployment commands still return explicit migration-stage `NotImplemented` until their plans land.
 
-M8 exposes stable server-side authority for startup, reload, active-generation snapshots, task supervision, diagnostics, and shutdown. R008 intentionally left exactly three background capabilities unregistered for M9:
+M8 exposes stable server-side authority for startup, reload, active-generation snapshots, task supervision, diagnostics, and shutdown. O003 now composes that authority into the Rust process lifecycle/control/watchdog commands. R008 intentionally left exactly three background capabilities unregistered for M9:
 
 - `metrics_flush`;
 - `update_checker`;
@@ -79,8 +79,8 @@ M8 R013 accepted
   v
 O001 operational contract + oracle freeze
  -> O002 local control/runtime-path/process-state boundary
- -> O003 serve/daemon/stop/restart/rehash/status/watchdog lifecycle
- -> O004 config/key/provider onboarding and live-apply mutations
+ -> O003 serve/daemon/stop/restart/rehash/status/watchdog lifecycle (closed)
+ -> O004 config/key/provider onboarding and live-apply mutations (dependency-ready)
  -> O005 agent integration/configsetup generation
  -> O006 migrations/DB maintenance/backup/recover + automatic backup task
  -> O007 operator inspection/stats/model maintenance + metrics flush task
@@ -92,7 +92,7 @@ O001 operational contract + oracle freeze
 M10 eligibility
 ```
 
-Only `../registry.md` authorizes implementation. O001 is the sole dependency-ready plan at initial registration.
+Only `../registry.md` authorizes implementation. O004 is the current dependency-ready plan; O005-O010 remain queued behind their direct predecessors.
 
 ## Structural design
 
