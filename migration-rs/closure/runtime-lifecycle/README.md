@@ -15,12 +15,11 @@ Expected records:
 - `009-status.md` — R009 startup/signals/shutdown
 - `010-status.md` — R010 active-generation authority/diagnostics
 - `011-status.md` — R011 historical aggregate M8 qualification/initial closure
-- `012-status.md` — R012 wire-negotiation runtime-authority and reload-diagnostics corrective re-closure
+- `012-status.md` — R012 historical wire-negotiation authority/reload-diagnostics corrective closure
+- `013-status.md` — R013 wire-policy acceptance/bounds and boundary requalification
 
-Closure records must include implementation commit(s), failing-before/passing-after evidence where applicable, exact verification commands, unresolved findings, and the registry transition they authorize.
+Closure records must include implementation commit(s), failing-before/passing-after evidence where applicable, exact verification commands/results, unresolved findings, and the registry transition they authorize.
 
-The accepted R011 record remains append-only historical evidence. A post-close
-audit found two unqualified M8 defects; R012 corrects them and re-closes M8.
-Do not rewrite `011-status.md` to hide the earlier acceptance.
+R011 and R012 remain append-only historical closure evidence. Post-R012 audit found exact Python-bound validation, policy-acceptance ordering, rollback-bound, and real-inference qualification gaps. R013 is the active corrective closure plan; do not rewrite `011-status.md` or `012-status.md` to hide earlier acceptance.
 
-If another post-close defect is found, add a new corrective plan and closure record. Do not rewrite the historical closure that originally accepted the work.
+Only an accepted `013-status.md` may re-close M8 and restore M9 eligibility for separate planning/implementation review.
