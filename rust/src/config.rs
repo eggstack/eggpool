@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -56,7 +56,7 @@ impl ConfigError {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ServerConfig {
     pub host: String,
@@ -83,7 +83,7 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct UpstreamConfig {
     pub base_url: String,
@@ -110,7 +110,7 @@ impl Default for UpstreamConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct DatabaseConfig {
     pub path: String,
@@ -133,7 +133,7 @@ impl Default for DatabaseConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ReadinessProbeConfig {
     pub enabled: bool,
@@ -154,7 +154,7 @@ impl Default for ReadinessProbeConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelsConfig {
     pub refresh_interval_s: u64,
@@ -181,7 +181,7 @@ impl Default for ModelsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RoutingTraceConfig {
     pub mode: String,
@@ -214,7 +214,7 @@ impl Default for RoutingTraceConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct WireNegotiationConfig {
     pub enabled: bool,
@@ -237,7 +237,7 @@ impl Default for WireNegotiationConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RoutingConfig {
     pub strategy: String,
@@ -276,7 +276,7 @@ impl Default for RoutingConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PricingCatalogEntry {
     pub enabled: bool,
@@ -300,14 +300,14 @@ impl Default for PricingCatalogEntry {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct PricingCatalogsConfig {
     pub openrouter: PricingCatalogEntry,
     pub opencode_zen: PricingCatalogEntry,
     pub aliases: Vec<BTreeMap<String, toml::Value>>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PricingConfig {
     pub catalogs: PricingCatalogsConfig,
@@ -322,7 +322,7 @@ impl Default for PricingConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct LimitsConfig {
     pub five_hour_microdollars: u64,
@@ -338,7 +338,7 @@ impl Default for LimitsConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct DispatchSpansConfig {
     pub sample_rate: f64,
@@ -352,7 +352,7 @@ impl Default for DispatchSpansConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MetricsConfig {
     pub write_mode: String,
@@ -391,7 +391,7 @@ impl Default for MetricsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct DashboardConfig {
     pub enabled: bool,
@@ -417,7 +417,7 @@ impl Default for DashboardConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SecurityConfig {
     pub allowed_hosts: Vec<String>,
@@ -438,13 +438,13 @@ impl Default for SecurityConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
     pub url: Option<String>,
     pub url_env: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AccountConfig {
     pub name: String,
@@ -477,7 +477,7 @@ impl Default for AccountConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderAdditionalAuthConfig {
     pub mode: String,
@@ -493,7 +493,7 @@ impl Default for ProviderAdditionalAuthConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderAuthConfig {
     pub mode: String,
@@ -511,14 +511,14 @@ impl Default for ProviderAuthConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderStaticHeaderConfig {
     pub name: String,
     pub value: Option<String>,
     pub value_env: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderWireSurfaceConfig {
     pub path_template: String,
@@ -538,13 +538,13 @@ impl Default for ProviderWireSurfaceConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelWirePreference {
     pub preferred_surface: String,
     pub fixed: bool,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderModelsEndpointConfig {
     pub method: String,
@@ -564,7 +564,7 @@ impl Default for ProviderModelsEndpointConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderStaticModelConfig {
     pub id: String,
@@ -577,7 +577,7 @@ pub struct ProviderStaticModelConfig {
     pub supports_vision: Option<bool>,
     pub source_metadata: BTreeMap<String, toml::Value>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderVerifyConfig {
     pub probe_model: Option<String>,
@@ -593,7 +593,7 @@ impl Default for ProviderVerifyConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderStreamTimeoutConfig {
     pub first_byte_timeout_s: Option<f64>,
@@ -601,7 +601,7 @@ pub struct ProviderStreamTimeoutConfig {
     pub max_lifetime_s: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderConfig {
     pub id: String,
@@ -670,7 +670,7 @@ impl Default for ProviderConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelLimitOverrideConfig {
     pub max_context_tokens: Option<u64>,
@@ -688,7 +688,7 @@ impl Default for ModelLimitOverrideConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelOverrideConfig {
     pub max_context_tokens: Option<u64>,
@@ -716,7 +716,7 @@ impl Default for ModelOverrideConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ThinkingCapabilityOverrideConfig {
     pub status: Option<String>,
@@ -731,14 +731,14 @@ pub struct ThinkingCapabilityOverrideConfig {
     pub budget: Option<String>,
     pub notes: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct MediaCapabilityOverrideConfig {
     pub base64: Option<bool>,
     pub url: Option<bool>,
     pub max_source_bytes: Option<u64>,
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct MultimodalCapabilityOverrideConfig {
     pub image_input: Option<MediaCapabilityOverrideConfig>,
@@ -747,7 +747,7 @@ pub struct MultimodalCapabilityOverrideConfig {
     pub non_text_tool_result: Option<bool>,
     pub max_serialized_request_bytes: Option<u64>,
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelCapabilitiesOverrideConfig {
     pub thinking: Option<ThinkingCapabilityOverrideConfig>,
@@ -755,7 +755,7 @@ pub struct ModelCapabilitiesOverrideConfig {
     pub multimodal: Option<MultimodalCapabilityOverrideConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct NetworkConfig {
     pub connect_timeout_s: f64,
@@ -775,7 +775,7 @@ impl Default for NetworkConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MaintenanceBudgetConfig {
     pub max_rows_per_batch: u32,
@@ -801,7 +801,7 @@ impl Default for MaintenanceBudgetConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BackupConfig {
     pub enabled: bool,
@@ -823,13 +823,13 @@ impl Default for BackupConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct UpdateCheckerConfig {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoSourceConfig {
     pub enabled: bool,
@@ -855,7 +855,7 @@ impl Default for ModelInfoSourceConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoSourcesConfig {
     pub provider_catalog: ModelInfoSourceConfig,
@@ -886,7 +886,7 @@ impl Default for ModelInfoSourcesConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoAliasConfig {
     pub provider_id: String,
@@ -908,7 +908,7 @@ impl Default for ModelInfoAliasConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoOverrideConfig {
     pub summary: Option<String>,
@@ -918,7 +918,7 @@ pub struct ModelInfoOverrideConfig {
     pub hide_benchmark_sources: bool,
     pub status_override: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoConfig {
     pub enabled: bool,
@@ -959,7 +959,7 @@ impl Default for ModelInfoConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ProviderControlPolicyConfig {
     pub unsupported_control: String,
@@ -975,7 +975,7 @@ impl Default for ProviderControlPolicyConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CapabilityPolicy {
     pub unsupported_thinking: String,
@@ -991,7 +991,7 @@ impl Default for CapabilityPolicy {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TranscoderFeatures {
     pub tools: bool,
@@ -1011,7 +1011,7 @@ impl Default for TranscoderFeatures {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ThinkingBudgetDefaults {
     pub low: u64,
@@ -1027,7 +1027,7 @@ impl Default for ThinkingBudgetDefaults {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct OpenaiReasoningFields {
     pub non_stream: Vec<String>,
@@ -1043,7 +1043,7 @@ impl Default for OpenaiReasoningFields {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TranscoderPolicy {
     pub enabled: bool,
@@ -1072,13 +1072,13 @@ impl Default for TranscoderPolicy {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelRouteConfig {
     pub model: String,
     pub description: String,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelRouterConfig {
     pub selector_model: String,
@@ -1105,7 +1105,7 @@ impl Default for ModelRouterConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
     pub server: ServerConfig,

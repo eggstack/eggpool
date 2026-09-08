@@ -9,6 +9,7 @@ pub mod accounts;
 pub mod catalog;
 mod cli;
 pub mod config;
+pub mod config_reload_policy;
 pub mod coordinator;
 pub mod db;
 mod error;
