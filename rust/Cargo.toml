@@ -50,6 +50,7 @@ hyper-util = { version = "0.1", default-features = false, features = [
     "http1",
     "tokio",
 ] }
+nix = { version = "0.31.3", default-features = false, features = ["signal", "user"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

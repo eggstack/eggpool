@@ -15,6 +15,7 @@ pub mod db;
 mod error;
 pub mod health;
 pub mod model_router;
+pub mod operations;
 pub mod providers;
 pub mod quota;
 pub mod reload;

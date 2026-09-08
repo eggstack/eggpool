@@ -930,6 +930,7 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
+ "nix",
  "rcgen",
  "rustls",
  "serde",

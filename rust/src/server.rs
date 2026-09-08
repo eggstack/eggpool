@@ -35,7 +35,7 @@ use crate::{
     },
     wire::ir::ClientSurface,
 };
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
@@ -117,6 +117,8 @@ pub enum ServerError {
     StartupRecovery(#[from] StartupRecoveryError),
     #[error("runtime task installation failed: {0}")]
     TaskSetup(#[from] TaskSpecError),
+    #[error("local control listener failed: {0}")]
+    Control(#[from] crate::operations::control::ControlError),
     #[error("server signal handler failed: {0}")]
     Signal(#[from] SignalError),
     #[error("server forced shutdown exceeded its graceful deadline")]
@@ -295,6 +297,7 @@ pub struct ServerRuntime {
     inner: Arc<ServerRuntimeInner>,
     server_state: ServerState,
     shutdown_timeout: Duration,
+    control_server: Option<crate::operations::control::ControlServerHandle>,
 }
 
 #[derive(Clone)]
@@ -316,12 +319,23 @@ impl ServerRuntime {
             }),
             server_state: ServerState::from_config(&config),
             shutdown_timeout: GRACEFUL_SHUTDOWN_TIMEOUT,
+            control_server: None,
         }
     }
 
     /// Use a shorter bounded window for deterministic embedding/tests.
     pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    /// Attach the one process-owned local control listener.  The listener is
+    /// closed before M8 resources begin shutting down.
+    pub fn with_control_server(
+        mut self,
+        control_server: crate::operations::control::ControlServerHandle,
+    ) -> Self {
+        self.control_server = Some(control_server);
         self
     }
 
@@ -393,7 +407,15 @@ impl ServerRuntime {
         if self.phase() == ShutdownPhase::Running {
             handle.request_shutdown(ShutdownReason::ServerCompleted);
         }
+        let control_error = if let Some(control_server) = &self.control_server {
+            control_server.close().await.err()
+        } else {
+            None
+        };
         let report = self.close_resources(forced).await;
+        if let Some(error) = control_error {
+            return Err(ServerError::Control(error));
+        }
         if let Some(error) = self
             .inner
             .signal_failure
@@ -748,8 +770,41 @@ pub async fn run_with_digest(
         let _ = database.close().await;
         return Err(error.into());
     }
+    let reload_service = process.reload_service((*manager).clone());
+    let config_path_for_control = process.config_path().map(Path::to_path_buf);
+    let control_path = crate::operations::paths::RuntimePaths::resolve().control_socket;
+    let control_server = match crate::operations::control::start(control_path, move |request| {
+        let reload_service = reload_service.clone();
+        let config_path = config_path_for_control.clone();
+        async move {
+            let Some(config_path) = config_path else {
+                return crate::operations::control::ControlResponse::error(
+                    request.request_id,
+                    "validation",
+                    "config file path is unavailable",
+                );
+            };
+            let result = reload_service
+                .reload_path(config_path, request.validated_digest)
+                .await;
+            crate::operations::control::ControlResponse::from_reload(request.request_id, result)
+        }
+    })
+    .await
+    {
+        Ok(control_server) => control_server,
+        Err(error) => {
+            manager.shutdown();
+            let _ = process.task_supervisor().shutdown().await;
+            let _ = manager
+                .close_for_shutdown(GRACEFUL_SHUTDOWN_TIMEOUT, true)
+                .await;
+            let _ = database.close().await;
+            return Err(ServerError::Control(error));
+        }
+    };
     tracing::info!(address, "Rust development server listening");
-    let runtime = ServerRuntime::new(process, manager, config);
+    let runtime = ServerRuntime::new(process, manager, config).with_control_server(control_server);
     runtime.serve_listener(listener).await.map(|_| ())
 }
 
