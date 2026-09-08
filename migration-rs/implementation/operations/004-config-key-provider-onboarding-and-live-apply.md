@@ -1,6 +1,6 @@
 # O004 — Config, Key, Provider Onboarding, and Live-Apply Mutations
 
-Status: dependency-ready; O003 closure accepted
+Status: closed; implementation commit 3d1b63c; closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

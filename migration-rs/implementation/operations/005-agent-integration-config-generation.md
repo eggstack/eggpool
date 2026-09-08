@@ -1,6 +1,6 @@
 # O005 — Agent Integration and `configsetup` Generation
 
-Status: queued behind O004
+Status: dependency-ready; O004 closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

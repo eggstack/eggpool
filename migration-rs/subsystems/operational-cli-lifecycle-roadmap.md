@@ -1,6 +1,6 @@
 # M9 Operational CLI, Lifecycle, Update, and Deployment Roadmap
 
-Status: active implementation; O004 dependency-ready
+Status: active implementation; O005 dependency-ready
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350` (accepted R013 / M8 re-closure).
 
@@ -80,8 +80,8 @@ M8 R013 accepted
 O001 operational contract + oracle freeze
  -> O002 local control/runtime-path/process-state boundary
  -> O003 serve/daemon/stop/restart/rehash/status/watchdog lifecycle (closed)
- -> O004 config/key/provider onboarding and live-apply mutations (dependency-ready)
- -> O005 agent integration/configsetup generation
+ -> O004 config/key/provider onboarding and live-apply mutations (closed)
+ -> O005 agent integration/configsetup generation (dependency-ready)
  -> O006 migrations/DB maintenance/backup/recover + automatic backup task
  -> O007 operator inspection/stats/model maintenance + metrics flush task
  -> O008 update/version/release resolution + update-checker task
@@ -92,7 +92,7 @@ O001 operational contract + oracle freeze
 M10 eligibility
 ```
 
-Only `../registry.md` authorizes implementation. O004 is the current dependency-ready plan; O005-O010 remain queued behind their direct predecessors.
+Only `../registry.md` authorizes implementation. O005 is the current dependency-ready plan; O006-O010 remain queued behind their direct predecessors.
 
 ## Structural design
 
