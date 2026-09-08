@@ -1,34 +1,36 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: M8 closed after R012 corrective pass
+Status: corrective pass active; R013 ready
 
 Execute and accept in this order:
 
-1. R001 — freeze the runtime/reload/task/shutdown oracle and ownership matrix (**closed**).
-2. R002 — create process-owned shared state, one generation factory, and explicit candidate ownership (**closed**).
-3. R003 — add `ArcSwap` active publication, linearizable generation leases, and hold leases for full finite/stream lifetimes (**closed**).
-4. R004 — add retirement state, M7 retained-finalization drain, close ordering, and retirement-backlog bounds (**closed**).
-5. R005 — port exhaustive fail-closed config reload classification, typed diffs, and secret redaction (**closed**).
-6. R006 — build one process task supervisor and staged authoritative task-spec diffs (**closed**).
-7. R007 — implement serialized transactional rehash across candidate, SQLite config-derived state, task specs, and active publication (**closed**).
-8. R008 — wire generation-dependent maintenance/background ticks through active-generation leases and schedule C010 startup recovery at the correct process boundary (**closed**).
-9. R009 — own server startup/shutdown, signal handling, graceful drain, forced close, and reload/shutdown exclusion (**closed**).
-10. R010 — eliminate stale startup-generation authority from handlers and expose bounded secret-free runtime/reload diagnostics (**closed**).
-11. R011 — run integrated Python/Rust differential, concurrency, fault, leak, reload, and shutdown qualification (**historical aggregate closure; post-close audit found R012 defects**).
-12. R012 — correct live process-owned wire-negotiation policy authority and retained reload-diagnostic ownership; re-run focused/aggregate qualification and re-close M8 (**closed**).
+1. R001 — freeze runtime/reload/task/shutdown oracle and ownership matrix (**closed**).
+2. R002 — process-owned shared state, generation factory, candidate ownership (**closed**).
+3. R003 — `ArcSwap` active publication and linearizable generation leases (**closed**).
+4. R004 — retirement, M7 retained-finalization drain, close ordering and bounds (**closed**).
+5. R005 — exhaustive fail-closed reload classification and redaction (**closed**).
+6. R006 — singleton process task supervisor and staged task-spec diffs (**closed**).
+7. R007 — serialized transactional rehash across SQLite/runtime/task authority (**closed**).
+8. R008 — generation-leased maintenance/background work and startup recovery (**closed**).
+9. R009 — startup/signals/graceful and forced shutdown (**closed**).
+10. R010 — active-generation authority audit and bounded diagnostics (**closed**).
+11. R011 — integrated M8 qualification (**historical aggregate closure**).
+12. R012 — process wire-policy authority and retained reload diagnostics (**historical corrective closure; post-close audit found remaining acceptance/validation/evidence gaps**).
+13. R013 — exact wire-policy bounds, coherent acceptance/rollback, real inference qualification and boundary requalification (**ready**).
 
 ## Rules that apply to every handoff
 
 - One finite request or stream remains on one generation for its accepted lifetime.
-- The M7 response-start/no-replay and retained-finalization invariants cannot be weakened.
-- No live rehash may force-close an old generation merely to finish retirement.
-- Unknown or unclassified config changes are restart-required.
-- Mixed live/restart-required diffs fail before candidate publication.
-- No provider/network work occurs while the publication admission gate is closed.
-- Background callbacks that need generation services acquire the active generation for the tick; they do not capture a stale `InferenceState`.
-- Startup/static server state is allowed only for fields explicitly classified restart-required.
-- The process-owned wire resolver must consume the accepted live `routing.wire_negotiation.*` policy at startup and rehash without becoming generation-local.
-- Reload diagnostic `in_progress` ownership follows the retained reload transaction, not the lifetime of the calling future.
-- M9 owns the user-facing reload/control/daemon CLI. M8 exposes the typed runtime/reload interfaces it may now review for its own planning/implementation handoff.
+- M7 response-start/no-replay and retained-finalization invariants cannot be weakened.
+- Live rehash never force-closes accepted old-generation work merely to retire faster.
+- Unknown/unclassified config changes are restart-required; mixed live/restart-required diffs fail closed.
+- Candidate state cannot become externally authoritative before the coherent acceptance boundary.
+- No provider/network operation belongs inside the publication admission gate except deterministic local test fixtures exercising already-built request paths.
+- Background callbacks requiring generation services acquire the active generation per tick.
+- Startup/static server state is allowed only for fields classified restart-required.
+- The process owns exactly one shared wire resolver. Its accepted policy must match validated config and rejected reloads must never be request-visible.
+- Wire-policy rollback restores old policy and bounds immediately.
+- Reload diagnostic `in_progress` ownership follows the retained reload transaction, not the calling future.
+- M9 owns user-facing reload/control/daemon/update/deploy surfaces and remains blocked during R013.
 
-R012 is closed. M9 is eligible for its own planning/implementation review; no M9 plan is promoted automatically.
+Only `migration-rs/registry.md` authorizes implementation. R013 is the sole ready plan. Accepted R013 closure may re-close M8 and make M9 eligible for a separate planning/implementation review; it must not auto-promote M9 work.
