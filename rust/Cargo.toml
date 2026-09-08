@@ -36,6 +36,7 @@ eggress-server = { version = "=1.0.2", default-features = false, features = [
 ] }
 eggress-uri = { version = "=1.0.2" }
 eggress-transport-ssh = { version = "=1.0.2" }
+getrandom = "0.3.4"
 http = "1"
 http-body-util = "0.1"
 hyper = "1"
@@ -50,7 +51,7 @@ hyper-util = { version = "0.1", default-features = false, features = [
     "http1",
     "tokio",
 ] }
-nix = { version = "0.31.3", default-features = false, features = ["signal", "user"] }
+nix = { version = "0.31.3", default-features = false, features = ["signal", "term", "user"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

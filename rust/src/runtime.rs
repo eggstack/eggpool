@@ -1,5 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     process::{Command as OsCommand, Stdio},
     time::Duration,
@@ -16,7 +17,11 @@ use crate::{
     BootstrapError, Cli, Command,
     cli::ServeArgs,
     config,
-    operations::{paths::RuntimePaths, process},
+    operations::{
+        config_mutation::{self, ApplyMode, ApplyOutcome},
+        paths::RuntimePaths,
+        process,
+    },
     version::PACKAGE_VERSION,
 };
 
@@ -52,6 +57,23 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::RuntimeStatus { json }) => runtime_status(&config_path, json).await?,
         Some(Command::Croncheck) => croncheck(),
         Some(Command::EnsureRunning) => ensure_running(&config_path).await?,
+        Some(Command::Connect(args)) => connect(&config_path, args).await?,
+        Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
+        Some(Command::Edit) => edit(&config_path)?,
+        Some(Command::Getkey) => getkey(&config_path)?,
+        Some(Command::Newkey(args)) => newkey(&config_path, args.show_old).await?,
+        Some(Command::InitConfig { target, force }) => {
+            init_config(target.as_deref(), &config_path, force)?
+        }
+        Some(Command::Set { key, value }) => set_config(&config_path, &key, &value).await?,
+        Some(Command::Dashboard(crate::cli::DashboardCommand::Public(args))) => {
+            dashboard_public(
+                &config_path,
+                args.on.then_some(true).or(args.off.then_some(false)),
+            )
+            .await?
+        }
+        Some(Command::Onboard(args)) => onboard(&config_path, args).await?,
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());
@@ -87,6 +109,291 @@ fn check_config(path: &Path) -> Result<(), BootstrapError> {
         digest
     );
     Ok(())
+}
+
+fn mutation_error(error: config_mutation::MutationError, code: u8) -> BootstrapError {
+    command_error(code, error.to_string())
+}
+
+fn render_apply(outcome: ApplyOutcome) {
+    match outcome {
+        ApplyOutcome::ServerNotRunning => println!("Server is not running."),
+        ApplyOutcome::RehashApplied => println!("Configuration applied live."),
+        ApplyOutcome::RehashNoop => println!("Configuration unchanged."),
+        ApplyOutcome::RestartRequired(paths) => {
+            println!("Restart required for: {}", paths.join(", "));
+        }
+        ApplyOutcome::ControlUnavailable => println!(
+            "Server is healthy but the control socket is unavailable.\n  Check socket permissions, or restart manually with `eggpool restart`."
+        ),
+        ApplyOutcome::RehashFailed(message) => {
+            println!("Configuration was written; live apply failed: {message}")
+        }
+        ApplyOutcome::Restarted => println!("Server restarted."),
+    }
+}
+
+async fn connect(path: &Path, args: crate::cli::ConnectArgs) -> Result<(), BootstrapError> {
+    if let Some(crate::cli::ConnectCommand::List) = args.command {
+        let templates = config_mutation::load_provider_templates(args.providers.as_deref())
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        let config = config::Config::from_toml(path).ok();
+        println!("Available providers:");
+        for (id, template) in templates {
+            let marker = if template.recommended { "*" } else { " " };
+            let priority = config
+                .as_ref()
+                .and_then(|value| value.providers.get(&id))
+                .map_or_else(
+                    || {
+                        if matches!(template.status.as_str(), "verified" | "experimental") {
+                            " (priority 0)".to_owned()
+                        } else {
+                            String::new()
+                        }
+                    },
+                    |provider| format!(" (priority {})", provider.routing_priority),
+                );
+            let notes = if template.notes.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", template.notes)
+            };
+            println!(
+                "  {marker} {id}: {} ({}) [{}]{priority}{notes}",
+                template.display, template.url, template.status
+            );
+        }
+        return Ok(());
+    }
+    let provider = config_mutation::connect(path, args.providers.as_deref())
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    if provider.is_some() {
+        let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
+            .await
+            .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+        render_apply(outcome);
+    }
+    Ok(())
+}
+
+async fn logout(path: &Path, target: Option<&str>) -> Result<(), BootstrapError> {
+    let account = config_mutation::logout(path, target)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let Some(account) = account else {
+        if let Some(target) = target {
+            println!("No configured provider or API key found for {target:?}.");
+        } else {
+            println!("No configured accounts found.");
+        }
+        return Ok(());
+    };
+    println!(
+        "Removed {}/{} from {}.",
+        account.provider_id,
+        account.name,
+        path.display()
+    );
+    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
+        .await
+        .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+    render_apply(outcome);
+    Ok(())
+}
+
+fn edit(path: &Path) -> Result<(), BootstrapError> {
+    if !path.exists() {
+        config_mutation::init_config(path, false)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    }
+    let editor = std::env::var_os("EDITOR")
+        .or_else(|| std::env::var_os("VISUAL"))
+        .or_else(|| {
+            ["hx", "vim", "vi", "nano"]
+                .iter()
+                .find_map(|name| which(name).map(Into::into))
+        })
+        .ok_or_else(|| {
+            command_error(
+                EXIT_VALIDATION,
+                "No editor found. Set $EDITOR or install vim/helix.",
+            )
+        })?;
+    let status = OsCommand::new(&editor)
+        .arg(path)
+        .status()
+        .map_err(|error| {
+            command_error(
+                EXIT_VALIDATION,
+                format!("editor could not be started: {error}"),
+            )
+        })?;
+    if !status.success() {
+        return Err(command_error(EXIT_VALIDATION, "editor process failed"));
+    }
+    Ok(())
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn getkey(path: &Path) -> Result<(), BootstrapError> {
+    let key = config_mutation::read_server_key(path)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let Some(key) = key else {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "No API key configured. Run `eggpool newkey` to generate one.",
+        ));
+    };
+    print!("{key}");
+    std::io::stdout()
+        .flush()
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    Ok(())
+}
+
+async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
+    let old = config_mutation::read_server_key(path)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let key =
+        config_mutation::generate_key().map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let written = config_mutation::write_server_key(path, &key)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    if let Some(old) = old {
+        if show_old {
+            println!("Old key (expired): {old}");
+        } else {
+            println!(
+                "Old key (expired, redacted): {}",
+                config_mutation::redact_key(&old)
+            );
+        }
+    }
+    println!("New key (use this): {key}");
+    if !written {
+        eprintln!(
+            "Warning: [server] api_key_env owns the server key; rotate that environment variable instead."
+        );
+    }
+    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
+        .await
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    render_apply(outcome);
+    Ok(())
+}
+
+fn init_config(target: Option<&Path>, resolved: &Path, force: bool) -> Result<(), BootstrapError> {
+    let target = target.unwrap_or_else(|| Path::new("config.toml"));
+    config_mutation::init_config(target, force)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let _ = resolved;
+    println!("Config written to {}", target.display());
+    Ok(())
+}
+
+async fn set_config(path: &Path, key: &str, value: &str) -> Result<(), BootstrapError> {
+    config_mutation::set_server_value(path, key, value)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    println!("Set {key} = {value} in {}.", path.display());
+    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
+        .await
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    render_apply(outcome);
+    Ok(())
+}
+
+async fn dashboard_public(path: &Path, setting: Option<bool>) -> Result<(), BootstrapError> {
+    let current = config_mutation::read_dashboard_public(path)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let new_value = setting.unwrap_or(!current);
+    config_mutation::set_dashboard_public(path, Some(new_value))
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    if new_value {
+        println!("Dashboard is now public (no API key required).");
+    } else {
+        println!("Dashboard now requires API key authentication.");
+    }
+    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
+        .await
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    render_apply(outcome);
+    Ok(())
+}
+
+async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), BootstrapError> {
+    println!("\n=== EggPool Onboarding ===\n");
+    if !path.exists() {
+        config_mutation::init_config(path, false)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        println!("  Created configuration at {}", path.display());
+    }
+    if config_mutation::read_server_key(path)
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        .is_none()
+    {
+        let key = config_mutation::generate_key()
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        if config_mutation::write_server_key(path, &key)
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        {
+            println!("  Generated server API key");
+        }
+    }
+    config_mutation::set_server_value(path, "host", "127.0.0.1")
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let mut connected = 0_u32;
+    loop {
+        if config_mutation::connect(path, args.providers.as_deref())
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+            .is_some()
+        {
+            connected += 1;
+            let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
+                .await
+                .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+            render_apply(outcome);
+        }
+        let Some(answer) = config_mutation::read_line_prompt("Add another provider? (y/n): ")
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+        else {
+            break;
+        };
+        if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
+            break;
+        }
+    }
+    config::Config::from_toml(path)
+        .map_err(BootstrapError::from)?
+        .validate_account_credentials()
+        .map_err(BootstrapError::from)?;
+    println!("\nConnected {connected} provider(s).\n");
+    let paths = RuntimePaths::resolve();
+    if paths.pid_file.exists()
+        && process::read_pid(&paths.pid_file)
+            .ok()
+            .flatten()
+            .is_some_and(process::process_exists)
+    {
+        println!(
+            "Server is already running. Use `eggpool restart` to apply configuration changes."
+        );
+        return Ok(());
+    }
+    serve(
+        path,
+        &ServeArgs {
+            verbose: false,
+            log_file: None,
+            quiet: false,
+            as_root: false,
+        },
+    )
+    .await
 }
 
 async fn serve(path: &Path, args: &ServeArgs) -> Result<(), BootstrapError> {
@@ -295,10 +602,46 @@ async fn stop(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError> {
 
 async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError> {
     let timeout = lifecycle_timeout(timeout_seconds)?;
+    restart_server_inner(path, timeout, true, true)
+        .await
+        .map(|_| ())
+}
+
+/// Restart a running standalone server for an O004 mutation.  A missing or
+/// stopped server is a successful observation (`Ok(false)`), matching the
+/// Python mutation helpers which do not start a service as a side effect.
+pub(crate) async fn restart_for_mutation(path: &Path) -> Result<bool, BootstrapError> {
+    restart_server_inner(path, Duration::from_secs(10), false, false).await
+}
+
+async fn restart_server_inner(
+    path: &Path,
+    timeout: Duration,
+    announce: bool,
+    start_if_missing: bool,
+) -> Result<bool, BootstrapError> {
     let config = config::Config::from_toml(path)?;
     config.validate_account_credentials()?;
     let paths = RuntimePaths::resolve();
-    if let Some(pid) = process::read_pid(&paths.pid_file).map_err(process_error)? {
+    let Some(pid) = process::read_pid(&paths.pid_file).map_err(process_error)? else {
+        if !start_if_missing {
+            return Ok(false);
+        }
+        if process::probe_health(&config.server.host, config.server.port).await
+            == process::HealthProbe::Healthy
+        {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                "replacement was not started because the configured listener is still healthy",
+            ));
+        }
+        let child = spawn_detached(path, None, false)?;
+        if announce {
+            println!("Server started (PID {}).", child.id());
+        }
+        return Ok(true);
+    };
+    {
         if process::process_exists(pid) {
             let proof = identity_proof(path, &paths, pid).await;
             if !proof.proves_eggpool() {
@@ -307,19 +650,25 @@ async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError
                     "refusing to restart an unproven process associated with the PID file",
                 ));
             }
-            println!("Stopping server (PID {pid})...");
+            if announce {
+                println!("Stopping server (PID {pid})...");
+            }
             process::signal_term(pid, proof).map_err(process_error)?;
             if !process::wait_for_exit(pid, timeout).await {
                 return Err(command_error(
                     EXIT_VALIDATION,
                     format!(
-                        "server did not stop within {timeout_seconds}s; replacement was not started"
+                        "server did not stop within {}s; replacement was not started",
+                        timeout.as_secs_f64()
                     ),
                 ));
             }
             process::clear_pid_if_matches(&paths.pid_file, pid).map_err(process_error)?;
         } else {
             process::clear_stale_pid(&paths.pid_file, Some(pid)).map_err(process_error)?;
+            if !start_if_missing {
+                return Ok(false);
+            }
         }
     }
     if process::probe_health(&config.server.host, config.server.port).await
@@ -331,8 +680,10 @@ async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError
         ));
     }
     let child = spawn_detached(path, None, false)?;
-    println!("Server started (PID {}).", child.id());
-    Ok(())
+    if announce {
+        println!("Server started (PID {}).", child.id());
+    }
+    Ok(true)
 }
 
 async fn identity_proof(
