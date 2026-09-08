@@ -26,15 +26,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
-| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **active implementation** | **R006 ready** |
+| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **active implementation** | **R007 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | infrastructure/invariant | accepted R005 closure | **dependency-ready** |
+| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | invariant/capability | accepted R006 closure | **dependency-ready** |
 
-R007-R011 remain serially blocked behind the accepted closure of their immediate predecessor. M9 is blocked on accepted R011 M8 closure and its own planning/implementation review.
+R008-R011 remain serially blocked behind the accepted closure of their immediate predecessor. M9 is blocked on accepted R011 M8 closure and its own planning/implementation review.
 
 ## Completed implementation plans
 
@@ -45,6 +45,7 @@ R007-R011 remain serially blocked behind the accepted closure of their immediate
 | R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | invariant/infrastructure | `af794eaa92eb767c837b10c9f01dc3f962181c3e` | [closed](closure/runtime-lifecycle/003-status.md) |
 | R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | invariant/infrastructure | `fa3ab9d` | [closed](closure/runtime-lifecycle/004-status.md) |
 | R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | invariant/capability | `c9ee3656a097addaec0982ec0d0128b1d3d2ad7d` | [closed](closure/runtime-lifecycle/005-status.md) |
+| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | infrastructure/invariant | `bc1220f` | [closed](closure/runtime-lifecycle/006-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -116,14 +117,14 @@ M8 starts from the stable interfaces documented by C011. It owns immutable gener
 | R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | closed; see [closure](closure/runtime-lifecycle/003-status.md) |
 | R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | closed; see [closure](closure/runtime-lifecycle/004-status.md) |
 | R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | closed; see [closure](closure/runtime-lifecycle/005-status.md) |
-| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | **dependency-ready**; R005 |
-| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | queued; R006 |
+| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | closed; see [closure](closure/runtime-lifecycle/006-status.md) |
+| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | **dependency-ready**; R006 |
 | R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | queued; R007 |
 | R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | queued; R008 |
 | R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | queued; R009 |
 | R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | queued; R010 |
 
-Only the dependency-ready table authorizes implementation. R006 is the sole current M8 handoff.
+Only the dependency-ready table authorizes implementation. R007 is the sole current M8 handoff.
 
 ## M8 boundary decisions
 
@@ -141,4 +142,4 @@ M9 operational CLI/control/lifecycle work remains blocked on accepted R011 M8 cl
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 is active with R001-R005 closed, R006 ready, and R007-R011 serially blocked.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 is active with R001-R006 closed, R007 ready, and R008-R011 serially blocked.
