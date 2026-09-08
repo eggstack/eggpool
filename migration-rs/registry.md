@@ -26,15 +26,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
-| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **closed after R012 corrective pass** | **M8 closed** |
+| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **corrective pass active after post-R012 audit** | **R013 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| R013 | [Wire-policy acceptance and boundary requalification](implementation/runtime-lifecycle/013-wire-policy-acceptance-and-boundary-requalification.md) | invariant/corrective | historical R012 closure + closed R001/R005/R007/R010 contracts | **ready for handoff** |
 
-R012 is recorded in the completed implementation table below. M9 is eligible for its own planning/implementation review; no M9 plan is promoted automatically.
+M9 is blocked on accepted R013 M8 re-closure and its own separate planning/implementation review. No M9 plan is promoted automatically.
 
 ## Completed implementation plans
 
@@ -51,7 +51,7 @@ R012 is recorded in the completed implementation table below. M9 is eligible for
 | R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | capability/invariant | `5f34e90` + `d04967d` | [closed](closure/runtime-lifecycle/009-status.md) |
 | R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | invariant | `1e784d03` | [closed](closure/runtime-lifecycle/010-status.md) |
 | R011 | [Differential qualification and initial M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | invariant | `31b32c4` | [historical aggregate closure](closure/runtime-lifecycle/011-status.md) |
-| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | invariant/corrective | `37ec54b` | [closed](closure/runtime-lifecycle/012-status.md) |
+| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | invariant/corrective | `37ec54b` | [historical corrective closure](closure/runtime-lifecycle/012-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -106,49 +106,50 @@ M5 is closed after D009. D009 corrected accepted random-fairness execution and f
 
 ## M6 closure state
 
-M6 is closed after W011/W012. W011 corrected SSE EOF UTF-8 finalization; W012 replaced the under-asserted W010 cross-surface qualification with full Python-derived request/finite/stream comparisons. W008/W010 remain historical evidence.
+M6 is closed after W011/W012. W011 corrected SSE EOF UTF-8 finalization; W012 replaced under-asserted W010 cross-surface qualification with full Python-derived request/finite/stream comparisons. W008/W010 remain historical evidence.
 
 ## M7 closure state
 
-M7 is closed after C011. C011 aggregated the full coordinator qualification (integrated finite/streaming matrix, failure corpus, concurrency/leak pass, restart reconciliation, security review) with no unresolved high/medium finding. C001-C002, C007-C011, and C012-C014 are closed; C003-C006 remain append-only historical evidence for the findings corrected by C012-C014.
+M7 is closed after C011. C011 aggregated the full coordinator qualification with no unresolved high/medium finding. C001-C002, C007-C011 and C012-C014 are closed; C003-C006 remain append-only historical evidence for findings corrected by C012-C014.
 
 ## M8 sequence and corrective state
 
-M8 starts from the stable interfaces documented by C011. It owns immutable generation snapshots, linearizable leases, atomic publication, live reload, retirement/finalization drain, background task ownership, process signals/shutdown, process wire-policy authority, and active-generation diagnostics. It does not own the M9 control/daemon CLI.
+M8 owns immutable generations, linearizable leases, atomic publication, live reload, retirement/finalization drain, background-task ownership, process signals/shutdown, process wire-policy authority, and active-generation diagnostics. It does not own M9 control/daemon CLI.
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | closed; see [closure](closure/runtime-lifecycle/001-status.md) |
-| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | closed; see [closure](closure/runtime-lifecycle/002-status.md) |
-| R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | closed; see [closure](closure/runtime-lifecycle/003-status.md) |
-| R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | closed; see [closure](closure/runtime-lifecycle/004-status.md) |
-| R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | closed; see [closure](closure/runtime-lifecycle/005-status.md) |
-| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | closed; see [closure](closure/runtime-lifecycle/006-status.md) |
-| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | closed; see [closure](closure/runtime-lifecycle/007-status.md) |
-| R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | closed; see [closure](closure/runtime-lifecycle/008-status.md) |
-| R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | closed; see [closure](closure/runtime-lifecycle/009-status.md) |
-| R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | closed; see [closure](closure/runtime-lifecycle/010-status.md) |
-| R011 | [Differential qualification and initial M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | historical aggregate closure; see [closure](closure/runtime-lifecycle/011-status.md) |
-| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | **closed; see closure record** |
+| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | closed |
+| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | closed |
+| R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | closed |
+| R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | closed |
+| R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | closed |
+| R006 | [Process task supervisor and authoritative task-spec staging](implementation/runtime-lifecycle/006-process-task-supervisor-and-task-spec-staging.md) | closed |
+| R007 | [Transactional live rehash and coherent acceptance](implementation/runtime-lifecycle/007-transactional-live-rehash-and-coherent-acceptance.md) | closed |
+| R008 | [Generation-leased maintenance, recovery, and background integration](implementation/runtime-lifecycle/008-generation-leased-maintenance-recovery-and-background.md) | closed |
+| R009 | [Server startup, signals, graceful drain, and forced shutdown](implementation/runtime-lifecycle/009-server-startup-signals-and-shutdown.md) | closed |
+| R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | closed |
+| R011 | [Differential qualification and initial M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | historical aggregate closure |
+| R012 | [Wire-negotiation runtime authority and reload-diagnostics re-closure](implementation/runtime-lifecycle/012-wire-negotiation-runtime-authority-and-reload-diagnostics-reclosure.md) | historical corrective closure |
+| R013 | [Wire-policy acceptance and boundary requalification](implementation/runtime-lifecycle/013-wire-policy-acceptance-and-boundary-requalification.md) | **ready; sole dependency-ready M8 plan** |
 
-Only the dependency-ready table authorizes implementation. R012 is closed; M9 is eligible for its own planning/implementation review.
+## R013 audit findings
+
+Post-R012 review found that Rust still omitted Python's exact upper bounds for wire-negotiation configuration, allowing a huge finite duration to reach a potentially panicking `Duration` conversion. Candidate process wire policy was also committed before the durable SQLite acceptance commit, rollback did not prove immediate old-bound restoration, and R012's claimed production request evidence used `/v1/healthz` rather than the M7 inference path. The M8 subsystem roadmap path itself had also been accidentally replaced with registry content and is repaired by this planning pass.
+
+R013 corrects and requalifies only those boundaries. Historical closure records remain unchanged.
 
 ## M8 boundary decisions
 
-M8 composes the closed M7 `InferenceState`, finalization supervisor/drain interface, crash reconciler, routing claims, and finite/stream lifecycle. M8 may refactor construction/ownership to inject process-owned affinity/wire state, but it must not redesign M7 retry/handoff/finalization semantics.
+The process owns exactly one shared wire resolver; R013 must not move it into generations. Candidate wire policy may be prepared reversibly but cannot become externally authoritative until the coherent durable acceptance point. Rollback restores old policy and bounds immediately. Accepted live process policy may affect subsequent process-shared wire resolution; aborted policy may never be request-visible.
 
-M8 uses one process-owned recurring-task supervisor. Generation-dependent ticks acquire the active generation for each tick instead of capturing a generation across reload. Deferred backup/update business callbacks owned by M9 must be explicit and unregistered, never silent placeholders.
+M8 continues to use one process task supervisor. Deferred backup/update/metrics business callbacks remain explicit M9 work and unregistered until implemented.
 
-The process owns exactly one shared wire resolver. R012 changes its accepted live policy without moving learned/rejected state into generations or creating a second resolver.
-
-`arc-swap` remains the expected small dependency for active `Arc` publication. A tiny synchronization section around lease claim/publication and resolver-policy staging is acceptable; a lifecycle/actor/workflow framework is not.
-
-No new database schema is planned. Any discovered need for a Rust-only schema fork is a stop condition.
+No new database schema or architecture framework is planned. `arc-swap` remains the only M8-specific runtime dependency.
 
 ## Future work and block state
 
-M9 operational CLI/control/lifecycle work is eligible for its own planning/implementation review. No M9 plan is promoted automatically. M10-M12 remain sequenced behind `002-long-term-roadmap.md`.
+M9 operational CLI/control/lifecycle work is **blocked** on accepted R013 M8 re-closure and its own planning/implementation review. No M9 plan is promoted automatically. M10-M12 remain sequenced by `002-long-term-roadmap.md`.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 R001-R010 remain closed; R011 is historical aggregate closure evidence after the post-close audit; accepted R012 closure re-closes M8. M9 is eligible for its own planning/implementation review, with no automatic plan promotion.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 R001-R010 remain closed; R011 and R012 are historical closure evidence after post-close audits. M8 is corrective-active with R013 ready. Only accepted R013 closure may re-close M8 and restore M9 planning eligibility.
