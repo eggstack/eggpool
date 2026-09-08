@@ -1,6 +1,6 @@
 # R001 — Runtime/Reload Contract and Deterministic Oracle Freeze
 
-Status: ready for handoff
+Status: closed; see [closure record](../../closure/runtime-lifecycle/001-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

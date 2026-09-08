@@ -26,20 +26,21 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M5 routing domain/catalog state | [routing-domain-roadmap](subsystems/routing-domain-roadmap.md) | closed after D009 corrective pass | D009 closed |
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
-| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **active planning/implementation** | **R001 ready** |
+| M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | **active implementation** | **R002 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | invariant/infrastructure | accepted C011 / M7 closure | **ready for handoff** |
+| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | infrastructure/invariant | accepted R001 closure | **dependency-ready** |
 
-R002-R011 are registered but remain serially blocked behind the accepted closure of their immediate predecessor. M9 is blocked on accepted R011 M8 closure and its own planning/implementation review.
+R003-R011 remain serially blocked behind the accepted closure of their immediate predecessor. M9 is blocked on accepted R011 M8 closure and its own planning/implementation review.
 
 ## Completed implementation plans
 
 | ID | Plan | Class | Implementation commit | Closure |
 |---|---|---|---|---|
+| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | invariant/infrastructure | `56492759e40d4bbc8febef36dce22ee0a07e6760` | [closed](closure/runtime-lifecycle/001-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -106,8 +107,8 @@ M8 starts from the stable interfaces documented by C011. It owns immutable gener
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | **dependency-ready** |
-| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | queued; R001 |
+| R001 | [Runtime/reload contract and deterministic oracle freeze](implementation/runtime-lifecycle/001-runtime-reload-contract-and-oracle-freeze.md) | closed; see [closure](closure/runtime-lifecycle/001-status.md) |
+| R002 | [Process runtime, generation factory, and candidate ownership](implementation/runtime-lifecycle/002-process-runtime-generation-factory-and-candidate-ownership.md) | **dependency-ready** |
 | R003 | [Active generation manager, atomic publication, and request leases](implementation/runtime-lifecycle/003-active-generation-manager-publication-and-leases.md) | queued; R002 |
 | R004 | [Retirement, retained finalization drain, and resource close](implementation/runtime-lifecycle/004-generation-retirement-finalization-drain-and-close.md) | queued; R003 |
 | R005 | [Config diff, reload policy, and redacted change model](implementation/runtime-lifecycle/005-config-diff-reload-policy-and-redaction.md) | queued; R004 |
@@ -118,7 +119,7 @@ M8 starts from the stable interfaces documented by C011. It owns immutable gener
 | R010 | [Active-generation authority audit and runtime/reload diagnostics](implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md) | queued; R009 |
 | R011 | [Differential qualification and M8 closure](implementation/runtime-lifecycle/011-differential-qualification-and-m8-closure.md) | queued; R010 |
 
-Only the dependency-ready table authorizes implementation. R001 is the sole initial M8 handoff.
+Only the dependency-ready table authorizes implementation. R002 is the sole current M8 handoff.
 
 ## M8 boundary decisions
 
@@ -136,4 +137,4 @@ M9 operational CLI/control/lifecycle work remains blocked on accepted R011 M8 cl
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 is active with R001 ready and R002-R011 serially blocked.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, and M7 C001-C011 with C012-C014 corrective passes remain closed. M8 is active with R001 closed, R002 ready, and R003-R011 serially blocked.
