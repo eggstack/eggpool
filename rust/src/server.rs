@@ -28,6 +28,7 @@ use crate::{
     Config,
     coordinator::{InferenceState, endpoint_error_body},
     db,
+    operations::{paths::RuntimePaths, process},
     providers::ProviderClientPool,
     runtime_lifecycle::{
         GenerationBuildError, GenerationLease, ProcessRuntime, RuntimeGeneration,
@@ -35,7 +36,7 @@ use crate::{
     },
     wire::ir::ClientSurface,
 };
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Instant};
 
 const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
@@ -127,6 +128,10 @@ pub enum ServerError {
     ShutdownDatabase { detail: String },
     #[error("inference state construction failed: {0}")]
     Inference(String),
+    #[error("server lifecycle state failed: {0}")]
+    Process(#[from] crate::operations::process::ProcessError),
+    #[error("cannot bind listener: {detail}")]
+    StartupConflict { detail: String },
 }
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -368,6 +373,7 @@ impl ServerRuntime {
             server: self.server_state.clone(),
             database: self.inner.process.database(),
             runtime: Arc::clone(&self.inner.manager),
+            process: Some(self.inner.process.clone()),
             body_tasks: self.inner.body_tasks.clone(),
         });
         let handle = self.handle();
@@ -613,6 +619,9 @@ pub struct ServerState {
     dashboard_public: bool,
     dashboard_theme: String,
     dashboard_refresh_interval_s: u64,
+    configured_server_threads: u32,
+    database_path: String,
+    started_at: Instant,
 }
 
 impl ServerState {
@@ -623,6 +632,11 @@ impl ServerState {
             dashboard_public: config.dashboard.public,
             dashboard_theme: config.dashboard.theme.clone(),
             dashboard_refresh_interval_s: config.dashboard.refresh_interval_s,
+            configured_server_threads: config.server.threads,
+            database_path: Config::runtime_path(&config.database.path)
+                .to_string_lossy()
+                .into_owned(),
+            started_at: Instant::now(),
         }
     }
 }
@@ -632,6 +646,7 @@ pub struct AppState {
     pub server: ServerState,
     pub database: db::Database,
     pub runtime: Arc<RuntimeManager>,
+    process: Option<ProcessRuntime>,
     body_tasks: BodyTaskTracker,
 }
 
@@ -648,6 +663,7 @@ impl AppState {
             server: ServerState::from_config(&config),
             database,
             runtime,
+            process: None,
             body_tasks: BodyTaskTracker::new(),
         }
     }
@@ -672,6 +688,7 @@ impl AppState {
             server: ServerState::from_config(&config),
             database,
             runtime: Arc::new(RuntimeManager::new(generation)),
+            process: None,
             body_tasks: BodyTaskTracker::new(),
         }
     }
@@ -697,6 +714,7 @@ pub async fn run_with_digest(
     config_path: Option<std::path::PathBuf>,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
+    ensure_start_state(&config).await?;
     if config.server.threads != 1 {
         tracing::warn!(
             configured_threads = config.server.threads,
@@ -803,9 +821,54 @@ pub async fn run_with_digest(
             return Err(ServerError::Control(error));
         }
     };
+    let pid_path = RuntimePaths::resolve().pid_file;
+    if let Err(error) = process::write_pid_atomic(&pid_path, std::process::id() as i32) {
+        let _ = control_server.close().await;
+        manager.shutdown();
+        let _ = process.task_supervisor().shutdown().await;
+        let _ = manager
+            .close_for_shutdown(GRACEFUL_SHUTDOWN_TIMEOUT, true)
+            .await;
+        let _ = database.close().await;
+        return Err(error.into());
+    }
     tracing::info!(address, "Rust development server listening");
     let runtime = ServerRuntime::new(process, manager, config).with_control_server(control_server);
-    runtime.serve_listener(listener).await.map(|_| ())
+    let result = runtime.serve_listener(listener).await.map(|_| ());
+    let clear_result = process::clear_pid_if_matches(&pid_path, std::process::id() as i32);
+    match (result, clear_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(ServerError::Process(error)),
+        (Ok(()), Ok(_)) => Ok(()),
+    }
+}
+
+async fn ensure_start_state(config: &Config) -> Result<(), ServerError> {
+    let paths = RuntimePaths::prepare().map_err(process::ProcessError::Path)?;
+    if let Some(pid) = process::read_pid(&paths.pid_file)? {
+        if process::process_exists(pid) {
+            return Err(ServerError::StartupConflict {
+                detail: format!("server is already running (PID {pid})"),
+            });
+        }
+        process::clear_stale_pid(&paths.pid_file, Some(pid))?;
+    }
+    if process::probe_health(&config.server.host, config.server.port).await
+        == process::HealthProbe::Healthy
+    {
+        return Err(ServerError::StartupConflict {
+            detail: format!(
+                "another process is already serving {}:{}",
+                config.server.host, config.server.port
+            ),
+        });
+    }
+    if process::probe_control(&paths.control_socket).await == process::ControlProbe::Reachable {
+        return Err(ServerError::StartupConflict {
+            detail: "the local control socket is already owned".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Serve a prepared database on a caller-owned listener.
@@ -916,6 +979,7 @@ pub fn build_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/v1/healthz", get(healthz))
         .route("/v1/readyz", get(readyz))
+        .route("/api/stats/runtime", get(runtime_status))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
@@ -965,6 +1029,9 @@ async fn authenticate(
 fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path == "/v1/healthz" || path == "/v1/readyz" || path.starts_with("/static/") {
         return false;
+    }
+    if path == "/api/stats/runtime" {
+        return true;
     }
     if path.starts_with("/v1/") {
         return true;
@@ -1096,6 +1163,115 @@ fn is_loopback_host(host: &str) -> bool {
 
 async fn healthz() -> Response {
     json_response(StatusCode::OK, json!({"status": "ok"}))
+}
+
+async fn runtime_status(State(state): State<AppState>) -> Response {
+    let diagnostics = state
+        .process
+        .as_ref()
+        .map(|process| process.diagnostics(&state.runtime));
+    let db_path = &state.server.database_path;
+    let (file_size_bytes, wal_size_bytes) = if db_path == ":memory:" {
+        (None, None)
+    } else {
+        let file_size = std::fs::metadata(db_path)
+            .ok()
+            .map(|metadata| metadata.len());
+        let wal_size = std::fs::metadata(format!("{db_path}-wal"))
+            .ok()
+            .map(|metadata| metadata.len());
+        (file_size, wal_size)
+    };
+    let tasks = diagnostics
+        .as_ref()
+        .map(|snapshot| {
+            snapshot
+                .tasks
+                .iter()
+                .map(|task| {
+                    json!({
+                        "name": task.name,
+                        "running": task.running,
+                        "enabled": task.enabled,
+                        "tick_count": task.tick_count,
+                        "last_outcome": task.last_outcome,
+                        "in_tick": task.in_tick,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let active_jobs = diagnostics
+        .as_ref()
+        .map(|snapshot| snapshot.active_generation.finalization_active_jobs)
+        .unwrap_or_default();
+    let runtime_manager = diagnostics
+        .as_ref()
+        .and_then(|snapshot| serde_json::to_value(snapshot).ok());
+    json_response(
+        StatusCode::OK,
+        json!({
+            "server": {
+                "pid": std::process::id(),
+                "ppid": parent_pid(),
+                "uptime_seconds": state.server.started_at.elapsed().as_secs_f64(),
+                "configured_server_threads": state.server.configured_server_threads,
+                "python_version": serde_json::Value::Null,
+                "rust_version": env!("CARGO_PKG_VERSION"),
+            },
+            "memory": {
+                "rss_bytes": serde_json::Value::Null,
+                "vms_bytes": serde_json::Value::Null,
+                "open_fd_count": serde_json::Value::Null,
+                "thread_count": 1,
+            },
+            "processes": {
+                "eggpool_process_count": 1,
+                "expected_worker_process_count": 1,
+                "process_count_warning": false,
+            },
+            "background_tasks": tasks,
+            "db": {
+                "path": db_path,
+                "is_memory_db": db_path == ":memory:",
+                "file_size_bytes": file_size_bytes,
+                "wal_size_bytes": wal_size_bytes,
+            },
+            "routing_runtime": {
+                "active_requests_total": 0,
+                "active_requests_by_account": serde_json::Value::Null,
+                "pending_count": 0,
+                "oldest_pending_age_seconds": serde_json::Value::Null,
+                "active_reservations_count": active_jobs,
+                "reserved_microdollars": 0,
+                "health_states_by_account": serde_json::Value::Null,
+                "active_backoff_count": 0,
+            },
+            "outbound_client": {
+                "build_count": 0,
+                "request_count": 0,
+                "error_count": 0,
+                "has_client": false,
+            },
+            "provider_client_pool": {
+                "build_count": 0,
+                "providers": {},
+            },
+            "runtime_manager": runtime_manager,
+            "probe_errors": [],
+        }),
+    )
+}
+
+fn parent_pid() -> serde_json::Value {
+    #[cfg(unix)]
+    {
+        json!(nix::unistd::getppid().as_raw())
+    }
+    #[cfg(not(unix))]
+    {
+        serde_json::Value::Null
+    }
 }
 
 async fn readyz(State(state): State<AppState>) -> Response {

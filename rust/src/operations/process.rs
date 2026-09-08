@@ -5,9 +5,10 @@
 //! process is EggPool.  This prevents a reused PID from receiving a signal.
 
 use std::{
+    fs::{self, File, OpenOptions},
     io,
     net::{IpAddr, SocketAddr},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -37,6 +38,10 @@ pub enum ProcessError {
     Io(#[source] io::Error),
     #[error("private runtime path operation failed")]
     Path(#[from] PathError),
+    #[error("process lock is already held")]
+    LockHeld,
+    #[error("process lock could not be acquired")]
+    Lock(io::Error),
 }
 
 /// Resolve, read-only, the process files for the current environment.
@@ -98,6 +103,19 @@ pub fn write_pid_atomic(path: &Path, pid: i32) -> Result<(), ProcessError> {
         return Err(ProcessError::Io(error));
     }
     Ok(())
+}
+
+/// Remove a PID file only when it still belongs to the caller's process.
+/// This prevents a retiring process from deleting a replacement's PID file.
+pub fn clear_pid_if_matches(path: &Path, pid: i32) -> Result<bool, ProcessError> {
+    if pid <= 0 || !safe_pid_file(path) || read_pid(path)? != Some(pid) {
+        return Ok(false);
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ProcessError::Io(error)),
+    }
 }
 
 /// Remove a PID file only if it still contains the expected PID and that PID
@@ -184,6 +202,69 @@ pub async fn wait_for_exit(pid: i32, timeout_duration: Duration) -> bool {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     !process_exists(pid)
+}
+
+/// A create-new local guard for the watchdog start race.
+pub struct StartGuard {
+    path: PathBuf,
+    pid: i32,
+    _file: File,
+}
+
+impl Drop for StartGuard {
+    fn drop(&mut self) {
+        let Ok(contents) = fs::read_to_string(&self.path) else {
+            return;
+        };
+        if contents.trim() == self.pid.to_string() {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Acquire the bounded watchdog guard, recovering only an owner PID that is
+/// demonstrably gone.  The file is private and create-new, so two cron
+/// invocations cannot both enter the spawn section.
+pub fn acquire_start_guard(paths: &RuntimePaths) -> Result<StartGuard, ProcessError> {
+    paths.ensure_state_dir()?;
+    let path = paths.state_dir.join("eggpool.ensure-running.lock");
+    for _ in 0..2 {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                use std::io::Write;
+                let pid = std::process::id() as i32;
+                file.write_all(pid.to_string().as_bytes())
+                    .map_err(ProcessError::Lock)?;
+                file.sync_all().map_err(ProcessError::Lock)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                        .map_err(ProcessError::Lock)?;
+                }
+                return Ok(StartGuard {
+                    path,
+                    pid,
+                    _file: file,
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let owner = fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<i32>().ok());
+                if owner.is_some_and(process_exists) {
+                    return Err(ProcessError::LockHeld);
+                }
+                if owner.is_none_or(|value| !process_exists(value)) {
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
+                return Err(ProcessError::LockHeld);
+            }
+            Err(error) => return Err(ProcessError::Lock(error)),
+        }
+    }
+    Err(ProcessError::LockHeld)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

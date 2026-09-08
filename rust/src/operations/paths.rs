@@ -17,6 +17,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 const CONTROL_SOCKET_NAME: &str = "eggpool.sock";
 const PID_FILE_NAME: &str = "eggpool.pid";
 const LOG_FILE_NAME: &str = "eggpool.log";
+const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
 
 /// A snapshot of the environment values used by path resolution.
 ///
@@ -85,6 +86,15 @@ impl RuntimePaths {
     /// files or directories.
     pub fn resolve() -> Self {
         Self::resolve_with(&PathEnvironment::current())
+    }
+
+    /// Prepare the state directory and resolve again so the runtime directory
+    /// can follow the private XDG state location instead of falling back to a
+    /// shared temporary path on a first start.
+    pub fn prepare() -> Result<Self, PathError> {
+        let initial = Self::resolve();
+        initial.ensure_state_dir()?;
+        Ok(Self::resolve())
     }
 
     pub fn resolve_with(environment: &PathEnvironment) -> Self {
@@ -188,7 +198,16 @@ fn resolve_runtime_dir(environment: &PathEnvironment, state_dir: &Path, home: &P
         }
     }
     if is_private_directory(state_dir) {
-        return state_dir.join("runtime");
+        let candidate = state_dir.join("runtime");
+        if candidate
+            .join(CONTROL_SOCKET_NAME)
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            <= MAX_UNIX_SOCKET_PATH_BYTES
+        {
+            return candidate;
+        }
     }
     let _ = home; // Keeps the resolution inputs explicit for future deploy-user rules.
     uid_tmp(environment.uid, "runtime")
@@ -244,9 +263,13 @@ fn is_private_directory(_path: &Path) -> bool {
 #[cfg(unix)]
 fn ensure_private_dir(path: &Path) -> Result<(), PathError> {
     if path.exists() {
-        if !is_private_directory(path) {
+        let metadata = fs::symlink_metadata(path).map_err(PathError::Io)?;
+        if !metadata.is_dir() || metadata.uid() != current_uid() {
             return Err(PathError::UnsafeDirectory);
         }
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions).map_err(PathError::Io)?;
         return Ok(());
     }
     fs::create_dir_all(path).map_err(PathError::Io)?;

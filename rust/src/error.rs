@@ -20,7 +20,7 @@ impl AppError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Cli(error) => error.exit_code() as u8,
-            Self::Bootstrap(_) => 1,
+            Self::Bootstrap(error) => error.exit_code(),
         }
     }
 }
@@ -49,4 +49,18 @@ pub enum BootstrapError {
     /// implemented by the Rust candidate yet.
     #[error("{detail}")]
     ServeUnsupported { detail: &'static str },
+
+    /// A command-specific operational result with a stable, Python-compatible
+    /// exit category.
+    #[error("{detail}")]
+    Command { code: u8, detail: String },
+}
+
+impl BootstrapError {
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::Command { code, .. } => *code,
+            _ => 1,
+        }
+    }
 }

@@ -192,17 +192,16 @@ def test_post_bind_database_failure_releases_listener() -> None:
 
 
 @pytest.mark.parametrize(
-    ("args", "marker"),
+    "args",
     [
-        (("serve",), "deferred daemon mode"),
-        (("serve", "--verbose", "--log-file", "candidate.log"), "--log-file"),
-        (("serve", "--verbose", "--quiet"), "--quiet"),
-        (("serve", "--verbose", "--as-root"), "--as-root"),
+        ("serve",),
+        ("serve", "--verbose", "--log-file", "candidate.log"),
+        ("serve", "--verbose", "--quiet"),
+        ("serve", "--verbose", "--as-root"),
     ],
 )
-def test_unsupported_serve_modes_fail_before_state_side_effects(
-    args: tuple[str, ...], marker: str
-) -> None:
+def test_serve_modes_validate_before_state_side_effects(args: tuple[str, ...]) -> None:
+    """Every implemented serve mode rejects invalid config before startup."""
     rust = _rust_or_skip()
     with isolated_environment() as environment:
         root = environment.implementation_root(Implementation.RUST)
@@ -212,7 +211,7 @@ def test_unsupported_serve_modes_fail_before_state_side_effects(
             ["--config", str(config), *args], environment=environment, timeout=5
         )
         assert result.exit_code == 1
-        assert marker in result.stderr
+        assert "server.port must be between 1 and 65535" in result.stderr
         assert not database.exists()
         assert not (root / "candidate.log").exists()
 
