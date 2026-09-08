@@ -4,7 +4,7 @@ Status: closed
 
 Recommendation: closed; R011 promoted to dependency-ready
 
-Implementation commit: `e3a9a27`
+Implementation commit: `1e784d03`
 
 Plan: [R010 — active-generation authority audit and runtime/reload diagnostics](../../implementation/runtime-lifecycle/010-active-generation-authority-and-diagnostics.md)
 
