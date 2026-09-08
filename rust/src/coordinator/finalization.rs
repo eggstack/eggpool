@@ -658,11 +658,26 @@ impl FinalizationCommand {
 pub struct SupervisorSnapshot {
     pub active_jobs: usize,
     pub capacity: usize,
+    pub last_failure: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum FinalizationDrainError {
+    #[error("retained finalization worker failed: {detail}")]
+    WorkerFailure { detail: String },
+    #[error("retained finalization drain timed out with {active_jobs} active jobs")]
+    Timeout { active_jobs: usize },
 }
 
 #[derive(Debug, Clone)]
 pub struct FinalizationHandle {
     receiver: watch::Receiver<Option<Result<FinalizationResult, String>>>,
+}
+
+pub trait TerminalReference: std::fmt::Debug + Send + Sync {}
+
+pub trait TerminalReferenceOwner: std::fmt::Debug + Send + Sync {
+    fn retain_terminal_reference(&self) -> Option<Box<dyn TerminalReference>>;
 }
 
 impl FinalizationHandle {
@@ -683,6 +698,7 @@ impl FinalizationHandle {
 struct JobEntry {
     receiver: watch::Receiver<Option<Result<FinalizationResult, String>>>,
     compatibility: CommandCompatibility,
+    terminal_reference: Option<Box<dyn TerminalReference>>,
 }
 
 #[derive(Debug, Clone)]
@@ -696,6 +712,8 @@ struct SupervisorInner {
     capacity: usize,
     retry_delay: Duration,
     jobs: Mutex<BTreeMap<(i64, i64), JobEntry>>,
+    last_failure: Mutex<Option<String>>,
+    terminal_owner: Mutex<Option<Arc<dyn TerminalReferenceOwner>>>,
     fault_injector: Option<CoordinatorFaultInjector>,
 }
 
@@ -822,6 +840,8 @@ impl FinalizationSupervisor {
                 capacity: capacity.max(1),
                 retry_delay: Duration::from_millis(1),
                 jobs: Mutex::new(BTreeMap::new()),
+                last_failure: Mutex::new(None),
+                terminal_owner: Mutex::new(None),
                 fault_injector: None,
             }),
         }
@@ -842,6 +862,14 @@ impl FinalizationSupervisor {
             .expect("fault injector configured before supervisor sharing")
             .fault_injector = Some(injector);
         self
+    }
+
+    pub fn set_terminal_owner(&self, owner: Arc<dyn TerminalReferenceOwner>) {
+        *self
+            .inner
+            .terminal_owner
+            .lock()
+            .expect("terminal owner lock") = Some(owner);
     }
 
     pub fn register(
@@ -874,11 +902,19 @@ impl FinalizationSupervisor {
             if jobs.len() >= self.inner.capacity {
                 return Err(FinalizationError::Capacity);
             }
+            let terminal_reference = self
+                .inner
+                .terminal_owner
+                .lock()
+                .expect("terminal owner lock")
+                .as_ref()
+                .and_then(|owner| owner.retain_terminal_reference());
             jobs.insert(
                 key,
                 JobEntry {
                     receiver: receiver.clone(),
                     compatibility,
+                    terminal_reference,
                 },
             );
         }
@@ -902,15 +938,18 @@ impl FinalizationSupervisor {
             if let Some(injector) = inner.fault_injector.as_ref() {
                 injector.pause_at(CrashFaultPoint::TerminalJobCompletionBefore);
                 if injector.should_fail(CrashFaultPoint::TerminalJobCompletionBefore) {
+                    *inner
+                        .last_failure
+                        .lock()
+                        .expect("finalization failure lock") = Some(format!(
+                        "injected crash fault at {:?}",
+                        CrashFaultPoint::TerminalJobCompletionBefore
+                    ));
                     let _ = sender.send(Some(Err(format!(
                         "injected crash fault at {:?}",
                         CrashFaultPoint::TerminalJobCompletionBefore
                     ))));
-                    inner
-                        .jobs
-                        .lock()
-                        .expect("finalization jobs lock")
-                        .remove(&key);
+                    remove_job(&inner, key);
                     return;
                 }
             }
@@ -918,28 +957,34 @@ impl FinalizationSupervisor {
             if let Some(injector) = inner.fault_injector.as_ref() {
                 injector.pause_at(CrashFaultPoint::TerminalJobCompletionAfter);
                 if injector.should_fail(CrashFaultPoint::TerminalJobCompletionAfter) {
+                    *inner
+                        .last_failure
+                        .lock()
+                        .expect("finalization failure lock") = Some(format!(
+                        "injected crash fault at {:?}",
+                        CrashFaultPoint::TerminalJobCompletionAfter
+                    ));
                     let _ = sender.send(Some(Err(format!(
                         "injected crash fault at {:?}",
                         CrashFaultPoint::TerminalJobCompletionAfter
                     ))));
-                    inner
-                        .jobs
-                        .lock()
-                        .expect("finalization jobs lock")
-                        .remove(&key);
+                    remove_job(&inner, key);
                     return;
                 }
             }
             let output = match result {
                 Ok(value) => Ok(value),
-                Err(error) => Err(error.to_string()),
+                Err(error) => {
+                    let detail = sanitize_detail(&error.to_string());
+                    *inner
+                        .last_failure
+                        .lock()
+                        .expect("finalization failure lock") = Some(detail.clone());
+                    Err(detail)
+                }
             };
             let _ = sender.send(Some(output));
-            inner
-                .jobs
-                .lock()
-                .expect("finalization jobs lock")
-                .remove(&key);
+            remove_job(&inner, key);
         });
         Ok(FinalizationHandle { receiver })
     }
@@ -953,6 +998,12 @@ impl FinalizationSupervisor {
                 .expect("finalization jobs lock")
                 .len(),
             capacity: self.inner.capacity,
+            last_failure: self
+                .inner
+                .last_failure
+                .lock()
+                .expect("finalization failure lock")
+                .clone(),
         }
     }
 
@@ -964,8 +1015,37 @@ impl FinalizationSupervisor {
     }
 
     pub async fn drain(&self) {
-        while self.snapshot().active_jobs != 0 {
-            tokio::task::yield_now().await;
+        let _ = self
+            .drain_with_timeout(Duration::from_secs(365 * 24 * 60 * 60))
+            .await;
+    }
+
+    /// Drain retained terminal work while preserving a typed worker failure.
+    /// The lifecycle manager supplies its own short deadline; the compatibility
+    /// `drain` method above intentionally retains its historical unbounded
+    /// behavior for existing M7 callers.
+    pub async fn drain_with_timeout(
+        &self,
+        timeout_duration: Duration,
+    ) -> Result<SupervisorSnapshot, FinalizationDrainError> {
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                let snapshot = self.snapshot();
+                if let Some(detail) = snapshot.last_failure.clone() {
+                    return Err(FinalizationDrainError::WorkerFailure { detail });
+                }
+                if snapshot.active_jobs == 0 {
+                    return Ok(snapshot);
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        match result {
+            Ok(result) => result,
+            Err(_) => Err(FinalizationDrainError::Timeout {
+                active_jobs: self.snapshot().active_jobs,
+            }),
         }
     }
 
@@ -973,6 +1053,18 @@ impl FinalizationSupervisor {
         tokio::task::yield_now().await;
         self.snapshot()
     }
+}
+
+fn remove_job(inner: &SupervisorInner, key: (i64, i64)) {
+    let Some(entry) = inner
+        .jobs
+        .lock()
+        .expect("finalization jobs lock")
+        .remove(&key)
+    else {
+        return;
+    };
+    drop(entry.terminal_reference);
 }
 
 async fn run_command(

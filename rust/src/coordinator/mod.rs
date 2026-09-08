@@ -24,9 +24,10 @@ pub use failure::{
     classify, parse_retry_after,
 };
 pub use finalization::{
-    DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationError, FinalizationHandle,
-    FinalizationOutcome, FinalizationProgress, FinalizationResult, FinalizationSupervisor,
-    SupervisorSnapshot,
+    DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationDrainError,
+    FinalizationError, FinalizationHandle, FinalizationOutcome, FinalizationProgress,
+    FinalizationResult, FinalizationSupervisor, SupervisorSnapshot, TerminalReference,
+    TerminalReferenceOwner,
 };
 pub use finite::{
     ClientResponseHeaders, DownstreamResult, FiniteClientResponse, FiniteCoordinator,

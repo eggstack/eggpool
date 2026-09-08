@@ -3139,10 +3139,11 @@ impl Drop for PendingStreamFinalization {
         let Ok(handle) = Handle::try_current() else {
             return;
         };
+        let Ok(finalization) = supervisor.register(command) else {
+            return;
+        };
         handle.spawn(async move {
-            if let Ok(handle) = supervisor.register(command) {
-                let _ = handle.wait().await;
-            }
+            let _ = finalization.wait().await;
         });
     }
 }

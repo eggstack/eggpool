@@ -220,7 +220,9 @@ async fn retiring_placeholder_is_bounded_until_r004_reaps_it() {
     let (process, generation_a) = fixture().await;
     let manager = RuntimeManager::new(generation_a.clone());
     let mut publications = Vec::new();
+    let mut leases = Vec::new();
     for generation_id in 2..=5 {
+        leases.push(manager.acquire().await.expect("generation lease"));
         let staged_candidate = candidate(
             &process,
             &format!("digest-r003-{generation_id}"),
@@ -242,6 +244,9 @@ async fn retiring_placeholder_is_bounded_until_r004_reaps_it() {
     ));
     rejected.abort().await;
 
+    drop(leases);
+    manager.drain_retirements().await;
+    assert_eq!(manager.retiring_slot_count(), 0);
     for publication in publications {
         publication.old_slot.generation().close().await;
     }
