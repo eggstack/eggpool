@@ -27,8 +27,9 @@ use crate::{
     coordinator::{
         CrashReconciler, FinalizationDrainError, FinalizationSupervisor, InferenceState,
         ReconciliationError, TerminalReference, TerminalReferenceOwner, WireResolver,
-        WireResolverConfig, WireResolverPolicyStage, build_inference_state_with_shared,
-        build_inference_state_with_shared_and_accounts, compile_provider_profiles,
+        WireResolverConfig, WireResolverConfigError, WireResolverPolicyStage,
+        build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,
+        compile_provider_profiles,
     },
     db::{Account, Database, DatabaseError},
     model_router::ModelRouterAffinity,
@@ -210,6 +211,8 @@ pub enum GenerationBuildError {
     ProviderPool(#[from] ProviderClientPoolError),
     #[error("generation wire/model-router compilation failed: {detail}")]
     Compilation { detail: String },
+    #[error("generation wire resolver policy construction failed: {0}")]
+    WirePolicy(#[from] WireResolverConfigError),
     #[error("generation inference graph construction failed: {detail}")]
     Graph {
         detail: String,
@@ -295,12 +298,14 @@ impl ProcessRuntime {
     /// Production startup authority: the process-owned resolver is created
     /// with the validated wire-negotiation policy before the first generation
     /// can serve a request.
-    pub fn new_with_config(database: Database, config: &Config) -> Self {
+    pub fn new_with_config(
+        database: Database,
+        config: &Config,
+    ) -> Result<Self, GenerationBuildError> {
+        let wire_policy = WireResolverConfig::from_config(&config.routing.wire_negotiation)?;
         let mut runtime = Self::new(database);
-        runtime.wire_profile_resolver = WireResolver::new(WireResolverConfig::from_config(
-            &config.routing.wire_negotiation,
-        ));
-        runtime
+        runtime.wire_profile_resolver = WireResolver::new(wire_policy);
+        Ok(runtime)
     }
 
     pub fn with_config_path(database: Database, config_path: impl Into<PathBuf>) -> Self {
@@ -313,10 +318,10 @@ impl ProcessRuntime {
         database: Database,
         config_path: impl Into<PathBuf>,
         config: &Config,
-    ) -> Self {
-        let mut runtime = Self::new_with_config(database, config);
+    ) -> Result<Self, GenerationBuildError> {
+        let mut runtime = Self::new_with_config(database, config)?;
         runtime.config_path = Some(config_path.into());
-        runtime
+        Ok(runtime)
     }
 
     pub fn database(&self) -> Database {
@@ -331,11 +336,15 @@ impl ProcessRuntime {
         self.wire_profile_resolver.clone()
     }
 
-    pub(crate) fn stage_wire_resolver_policy(&self, config: &Config) -> WireResolverPolicyStage {
-        self.wire_profile_resolver
+    pub fn stage_wire_resolver_policy(
+        &self,
+        config: &Config,
+    ) -> Result<WireResolverPolicyStage, WireResolverConfigError> {
+        Ok(self
+            .wire_profile_resolver
             .stage_config(WireResolverConfig::from_config(
                 &config.routing.wire_negotiation,
-            ))
+            )?))
     }
 
     pub fn config_path(&self) -> Option<&Path> {

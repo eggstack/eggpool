@@ -697,9 +697,16 @@ pub async fn run_with_digest(
         let _ = database.close().await;
         return Err(error);
     }
-    let process = match config_path {
+    let process_result = match config_path {
         Some(path) => ProcessRuntime::with_config_path_and_config(database.clone(), path, &config),
         None => ProcessRuntime::new_with_config(database.clone(), &config),
+    };
+    let process = match process_result {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
     };
     if let Err(error) = process.reconcile_startup().await {
         let _ = database.close().await;
@@ -752,7 +759,13 @@ pub async fn serve_listener(
     database: db::Database,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let process = ProcessRuntime::new_with_config(database.clone(), &config);
+    let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
     if let Err(error) = db::MigrationRunner::new(&database).run().await {
         let _ = database.close().await;
         return Err(error.into());
@@ -812,7 +825,13 @@ pub async fn serve_listener_with_inference(
     inference: Arc<InferenceState>,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
-    let process = ProcessRuntime::new_with_config(database.clone(), &config);
+    let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
+        Ok(process) => process,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
     let manager = Arc::new(RuntimeManager::new(RuntimeGeneration::from_inference(
         1,
         config.clone(),

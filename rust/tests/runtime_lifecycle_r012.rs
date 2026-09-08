@@ -43,7 +43,8 @@ async fn fixture(config: Config) -> Fixture {
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new_with_config(database.clone(), &config);
+    let process = ProcessRuntime::new_with_config(database.clone(), &config)
+        .expect("process runtime policy prepares");
     let candidate =
         RuntimeGenerationFactory::prepare(&process, config, "r012-initial-digest".to_owned(), 1)
             .await

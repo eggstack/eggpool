@@ -1,6 +1,6 @@
 # M8 Runtime Generations, Rehash, Background Tasks, and Process Lifecycle Roadmap
 
-Status: corrective pass active; R013 dependency-ready
+Status: closed after R013 corrective pass; M9 eligible for separate planning/implementation review
 
 Repository baseline for original M8 planning: `e2be716018c365030ab06e648af71ed7588d9ad3` (accepted C011 / M7 closure).
 
@@ -141,7 +141,7 @@ Rust follows Python's exact validated bounds:
 - concurrency `1..=8`;
 - negotiation interval `0..=1800s`;
 - rejection cooldown `0..=1800s`;
-- learned preference TTL `0..=604800s`;
+- learned preference TTL `>0..=604800s` (the current Python source uses `gt=0`);
 - cache entries `1..=65536`.
 
 The conversion into runtime duration/capacity types must be non-panicking even for programmatically-constructed invalid values. Config parsing rejects invalid user values rather than clamping them silently.
@@ -156,7 +156,7 @@ M8 keeps one process task supervisor. Generation-dependent callbacks acquire the
 
 M8 owns server-side live reload, shutdown, task/runtime status and diagnostic primitives. M9 owns user-facing operational transport and CLI: `rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover, update/version, packaging and related operator workflows.
 
-M9 is currently blocked. R013 is a closure correction and must not implement M9 surfaces.
+M9 is eligible for its own separate planning/implementation review after accepted R013 closure. R013 does not implement M9 surfaces.
 
 ## Verification posture
 
@@ -192,4 +192,4 @@ Only R013 may now re-close M8. It must prove:
 - R003/R005/R007/R009/R010/R011/R012 and applicable M7 wire-resolution regressions remain green;
 - no schema fork, M9 scope creep, new architecture framework, secret leak, or unresolved high/medium M8 issue remains.
 
-Accepted R013 closure may mark M8 closed and make M9 eligible for separate planning/implementation review. It must not create or promote M9 plans automatically.
+R013 is accepted and closes M8. M9 is eligible for separate planning/implementation review; no M9 plan is created or promoted automatically.

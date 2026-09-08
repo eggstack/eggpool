@@ -1347,28 +1347,37 @@ impl Config {
             ));
         }
         let wire = &self.routing.wire_negotiation;
-        if wire.max_concurrent_per_provider == 0 || wire.cache_max_entries == 0 {
+        if !(1..=8).contains(&wire.max_concurrent_per_provider) {
             return Err(ConfigError::validation(
-                "routing.wire_negotiation limits must be greater than zero",
+                "routing.wire_negotiation.max_concurrent_per_provider must be between 1 and 8",
             ));
         }
-        for (name, value) in [
+        if !(1..=65_536).contains(&wire.cache_max_entries) {
+            return Err(ConfigError::validation(
+                "routing.wire_negotiation.cache_max_entries must be between 1 and 65536",
+            ));
+        }
+        for (name, value, maximum) in [
             (
                 "routing.wire_negotiation.min_negotiation_interval_s",
                 wire.min_negotiation_interval_s,
+                1_800.0,
             ),
             (
                 "routing.wire_negotiation.rejection_cooldown_s",
                 wire.rejection_cooldown_s,
+                1_800.0,
             ),
             (
                 "routing.wire_negotiation.learned_preference_ttl_s",
                 wire.learned_preference_ttl_s,
+                604_800.0,
             ),
         ] {
-            if !value.is_finite() || value < 0.0 {
+            let lower_bound_invalid = name.ends_with("learned_preference_ttl_s") && value <= 0.0;
+            if !value.is_finite() || value < 0.0 || value > maximum || lower_bound_invalid {
                 return Err(ConfigError::validation(format!(
-                    "{name} must be finite and non-negative",
+                    "{name} must be finite and within its supported bounds",
                 )));
             }
         }

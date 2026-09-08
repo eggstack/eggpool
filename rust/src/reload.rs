@@ -89,6 +89,19 @@ pub enum ReloadResultCategory {
     CompensationFailed,
 }
 
+/// One-shot failures used by deterministic runtime-lifecycle qualification.
+/// This is compiled only with the existing test-support feature and is never
+/// part of the normal reload surface.
+#[cfg(feature = "test-support")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadTestFault {
+    TaskPreflight,
+    TaskCommit,
+    PersistenceBegin,
+    PersistenceApply,
+    PersistenceCommit,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReloadResult {
     pub category: ReloadResultCategory,
@@ -240,6 +253,8 @@ pub struct ReloadService {
     process: crate::runtime_lifecycle::ProcessRuntime,
     manager: RuntimeManager,
     lock: Arc<Mutex<()>>,
+    #[cfg(feature = "test-support")]
+    test_fault: Arc<std::sync::Mutex<Option<ReloadTestFault>>>,
 }
 
 impl std::fmt::Debug for ReloadService {
@@ -265,6 +280,25 @@ impl ReloadService {
             process,
             manager,
             lock,
+            #[cfg(feature = "test-support")]
+            test_fault: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Arm one deterministic, one-shot reload failure for R013 qualification.
+    #[cfg(feature = "test-support")]
+    pub fn inject_test_fault(&self, fault: ReloadTestFault) {
+        *self.test_fault.lock().expect("reload test fault lock") = Some(fault);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn take_test_fault(&self, fault: ReloadTestFault) -> bool {
+        let mut armed = self.test_fault.lock().expect("reload test fault lock");
+        if *armed == Some(fault) {
+            *armed = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -441,6 +475,16 @@ impl ReloadService {
                 );
             }
         };
+        #[cfg(feature = "test-support")]
+        if self.take_test_fault(ReloadTestFault::TaskPreflight) {
+            candidate.abort().await;
+            return self.result_with_diff(
+                ReloadResultCategory::Aborted,
+                "task_preflight_failed",
+                &diff,
+                false,
+            );
+        }
         if task_diff.preflight().is_err() {
             candidate.abort().await;
             return self.result_with_diff(
@@ -473,7 +517,20 @@ impl ReloadService {
                 );
             }
         };
-        let mut wire_policy = self.process.stage_wire_resolver_policy(&candidate_config);
+        let mut wire_policy = match self.process.stage_wire_resolver_policy(&candidate_config) {
+            Ok(stage) => stage,
+            Err(_) => {
+                return self
+                    .abort_staged(staged, task_diff, &diff, "wire_policy_stage_failed")
+                    .await;
+            }
+        };
+        #[cfg(feature = "test-support")]
+        if self.take_test_fault(ReloadTestFault::PersistenceBegin) {
+            return self
+                .abort_staged(staged, task_diff, &diff, "persistence_begin_failed")
+                .await;
+        }
         let transaction = match self.process.database().begin_transaction().await {
             Ok(transaction) => transaction,
             Err(_) => {
@@ -482,7 +539,11 @@ impl ReloadService {
                     .await;
             }
         };
-        if persistence.apply(&transaction).await.is_err() {
+        #[cfg(feature = "test-support")]
+        let persistence_apply_failed = self.take_test_fault(ReloadTestFault::PersistenceApply);
+        #[cfg(not(feature = "test-support"))]
+        let persistence_apply_failed = false;
+        if persistence_apply_failed || persistence.apply(&transaction).await.is_err() {
             let _ = transaction.rollback().await;
             return self
                 .abort_staged(staged, task_diff, &diff, "persistence_apply_failed")
@@ -494,15 +555,32 @@ impl ReloadService {
                 .abort_staged(staged, task_diff, &diff, "pointer_commit_failed")
                 .await;
         }
-        if task_diff.commit().await.is_err() {
+        #[cfg(feature = "test-support")]
+        let task_commit_failed = self.take_test_fault(ReloadTestFault::TaskCommit);
+        #[cfg(not(feature = "test-support"))]
+        let task_commit_failed = false;
+        if task_commit_failed || task_diff.commit().await.is_err() {
             let _ = transaction.rollback().await;
             let _ = staged.rollback_pointer();
             return self
                 .abort_staged(staged, task_diff, &diff, "task_commit_failed")
                 .await;
         }
-        wire_policy.commit();
-        if transaction.commit().await.is_err() {
+        #[cfg(feature = "test-support")]
+        let persistence_commit_fault = self.take_test_fault(ReloadTestFault::PersistenceCommit);
+        #[cfg(feature = "test-support")]
+        let persistence_commit_failed = if persistence_commit_fault {
+            // Release the transaction before exercising the same repair path
+            // as a real commit failure; otherwise the test-only branch would
+            // retain the SQLite writer while compensation tries to begin.
+            let _ = transaction.rollback().await;
+            true
+        } else {
+            transaction.commit().await.is_err()
+        };
+        #[cfg(not(feature = "test-support"))]
+        let persistence_commit_failed = transaction.commit().await.is_err();
+        if persistence_commit_failed {
             let mut compensation_failed = false;
             if let Ok(repair_transaction) = self.process.database().begin_transaction().await {
                 if persistence.restore(&repair_transaction).await.is_err()
@@ -541,6 +619,11 @@ impl ReloadService {
                 false,
             );
         }
+        // The durable transaction is now irreversible. Publish the shared
+        // process policy while admission remains closed, immediately before
+        // the matching generation/task acceptance. A pre-accept failure can
+        // therefore never expose candidate wire behavior.
+        wire_policy.commit();
         let publication = if self.manager.is_shutting_down() {
             match staged.accept_during_shutdown() {
                 Ok(publication) => publication,

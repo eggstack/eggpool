@@ -1,6 +1,6 @@
 # R013 — Wire-Policy Acceptance and Boundary Requalification
 
-Status: ready for handoff
+Status: closed
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
@@ -34,7 +34,7 @@ Python's `WireNegotiationConfig` validates:
 - `max_concurrent_per_provider`: `1..=8`;
 - `min_negotiation_interval_s`: `0..=1800`;
 - `rejection_cooldown_s`: `0..=1800`;
-- `learned_preference_ttl_s`: `0..=604800`;
+- `learned_preference_ttl_s`: `>0..=604800` (the current Python source uses `gt=0`);
 - `cache_max_entries`: `1..=65536`.
 
 Rust currently validates the floating-point fields only as finite/non-negative and then converts them with `Duration::from_secs_f64`. A sufficiently large but finite TOML value can therefore pass configuration validation and panic the process during runtime construction/policy staging. That violates both Python parity and the migration's fail-closed configuration invariant.
@@ -96,7 +96,7 @@ Rust configuration validation must reject values outside the Python ranges:
 | `routing.wire_negotiation.max_concurrent_per_provider` | 1 | 8 |
 | `routing.wire_negotiation.min_negotiation_interval_s` | 0 | 1800 |
 | `routing.wire_negotiation.rejection_cooldown_s` | 0 | 1800 |
-| `routing.wire_negotiation.learned_preference_ttl_s` | 0 | 604800 |
+| `routing.wire_negotiation.learned_preference_ttl_s` | >0 | 604800 |
 | `routing.wire_negotiation.cache_max_entries` | 1 | 65536 |
 
 `enabled` remains boolean.

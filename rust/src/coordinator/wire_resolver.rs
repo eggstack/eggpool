@@ -11,6 +11,7 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 use crate::config::WireNegotiationConfig;
 use crate::wire::{ConfiguredWireProfile, WireSurface};
@@ -19,8 +20,13 @@ const DEFAULT_CACHE_CAPACITY: usize = 2_048;
 const DEFAULT_LEARNED_TTL: Duration = Duration::from_secs(86_400);
 const DEFAULT_REJECTION_TTL: Duration = Duration::from_secs(300);
 const DEFAULT_NEGOTIATION_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_CONCURRENT_PER_PROVIDER: u8 = 8;
+const MAX_NEGOTIATION_INTERVAL_SECS: f64 = 1_800.0;
+const MAX_REJECTION_TTL_SECS: f64 = 1_800.0;
+const MAX_LEARNED_TTL_SECS: f64 = 604_800.0;
+const MAX_CACHE_CAPACITY: u32 = 65_536;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireResolverConfig {
     pub enabled: bool,
     pub cache_capacity: usize,
@@ -70,17 +76,51 @@ impl WireResolverConfig {
     /// Convert the validated configuration surface into the process-owned
     /// resolver policy. The provider-state and metric-label bounds remain
     /// implementation-owned safety limits.
-    pub fn from_config(config: &WireNegotiationConfig) -> Self {
-        Self {
+    pub fn from_config(config: &WireNegotiationConfig) -> Result<Self, WireResolverConfigError> {
+        if !(1..=MAX_CONCURRENT_PER_PROVIDER).contains(&config.max_concurrent_per_provider) {
+            return Err(WireResolverConfigError::Concurrency);
+        }
+        if !(1..=MAX_CACHE_CAPACITY).contains(&config.cache_max_entries) {
+            return Err(WireResolverConfigError::CacheCapacity);
+        }
+        Ok(Self {
             enabled: config.enabled,
             cache_capacity: config.cache_max_entries as usize,
-            learned_ttl: duration_from_seconds(config.learned_preference_ttl_s),
-            rejection_ttl: duration_from_seconds(config.rejection_cooldown_s),
-            min_negotiation_interval: duration_from_seconds(config.min_negotiation_interval_s),
+            learned_ttl: duration_from_seconds(
+                "learned_preference_ttl_s",
+                config.learned_preference_ttl_s,
+                0.0,
+                MAX_LEARNED_TTL_SECS,
+                false,
+            )?,
+            rejection_ttl: duration_from_seconds(
+                "rejection_cooldown_s",
+                config.rejection_cooldown_s,
+                0.0,
+                MAX_REJECTION_TTL_SECS,
+                true,
+            )?,
+            min_negotiation_interval: duration_from_seconds(
+                "min_negotiation_interval_s",
+                config.min_negotiation_interval_s,
+                0.0,
+                MAX_NEGOTIATION_INTERVAL_SECS,
+                true,
+            )?,
             max_concurrent_per_provider: usize::from(config.max_concurrent_per_provider),
             ..Self::default()
-        }
+        })
     }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum WireResolverConfigError {
+    #[error("wire negotiation concurrency must be between 1 and 8")]
+    Concurrency,
+    #[error("wire negotiation cache capacity must be between 1 and 65536")]
+    CacheCapacity,
+    #[error("wire negotiation {field} is outside its supported finite range")]
+    Duration { field: &'static str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +320,7 @@ impl WireResolverPolicyStage {
     pub fn rollback(&mut self) {
         if self.committed && !self.finalized {
             self.resolver.apply_config(self.previous.clone());
+            self.resolver.enforce_bounds();
             self.committed = false;
         }
     }
@@ -712,6 +753,21 @@ impl WireResolver {
         let mut state = self.state.lock().expect("wire resolver lock");
         trim_cache(&mut state, config.cache_capacity);
         trim_provider_state(&mut state, config.max_provider_state);
+        trim_metrics(&mut state, config.max_metric_labels);
+        drop(state);
+
+        let mut gates = self.provider_gates.lock().expect("wire gates lock");
+        let capacity = config.max_provider_state.max(1);
+        while gates.len() > capacity {
+            let Some(idle_provider) = gates
+                .iter()
+                .find(|(_, gate)| gate.is_idle())
+                .map(|(provider_id, _)| provider_id.clone())
+            else {
+                break;
+            };
+            gates.remove(&idle_provider);
+        }
     }
 }
 
@@ -773,6 +829,15 @@ fn trim_preference_state(state: &mut ResolverState, capacity: usize) {
     }
 }
 
+fn trim_metrics(state: &mut ResolverState, capacity: usize) {
+    let capacity = capacity.max(1);
+    while state.metrics.len() > capacity {
+        if let Some(key) = state.metrics.keys().next().cloned() {
+            state.metrics.remove(&key);
+        }
+    }
+}
+
 fn touch_lru(state: &mut ResolverState, key: CacheKey, capacity: usize) {
     state.lru.retain(|existing| existing != &key);
     state.lru.push_back(key);
@@ -794,10 +859,20 @@ fn trim_cache(state: &mut ResolverState, capacity: usize) {
     state.lru.retain(|key| state.entries.contains_key(key));
 }
 
-fn duration_from_seconds(seconds: f64) -> Duration {
-    if seconds.is_finite() && seconds > 0.0 {
-        Duration::from_secs_f64(seconds)
+fn duration_from_seconds(
+    field: &'static str,
+    seconds: f64,
+    minimum: f64,
+    maximum: f64,
+    allow_zero: bool,
+) -> Result<Duration, WireResolverConfigError> {
+    let lower_bound_invalid = if allow_zero {
+        seconds < minimum
     } else {
-        Duration::ZERO
+        seconds <= minimum
+    };
+    if !seconds.is_finite() || lower_bound_invalid || seconds > maximum {
+        return Err(WireResolverConfigError::Duration { field });
     }
+    Duration::try_from_secs_f64(seconds).map_err(|_| WireResolverConfigError::Duration { field })
 }
