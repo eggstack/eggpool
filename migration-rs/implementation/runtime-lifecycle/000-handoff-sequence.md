@@ -1,13 +1,13 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: active; R003 ready
+Status: active; R004 ready
 
 Execute and accept in this order:
 
 1. R001 — freeze the runtime/reload/task/shutdown oracle and ownership matrix (**closed**).
 2. R002 — create process-owned shared state, one generation factory, and explicit candidate ownership (**closed**).
-3. R003 — add `ArcSwap` active publication, linearizable generation leases, and hold leases for full finite/stream lifetimes (**ready**).
-4. R004 — add retirement state, M7 retained-finalization drain, close ordering, and retirement-backlog bounds.
+3. R003 — add `ArcSwap` active publication, linearizable generation leases, and hold leases for full finite/stream lifetimes (**closed**).
+4. R004 — add retirement state, M7 retained-finalization drain, close ordering, and retirement-backlog bounds (**ready**).
 5. R005 — port exhaustive fail-closed config reload classification, typed diffs, and secret redaction.
 6. R006 — build one process task supervisor and staged authoritative task-spec diffs.
 7. R007 — implement serialized transactional rehash across candidate, SQLite config-derived state, task specs, and active publication.
