@@ -1,6 +1,6 @@
 # R005 — Config Diff, Reload Policy, and Redacted Change Model
 
-Status: queued; depends on accepted R004 closure
+Status: closed; see [closure record](../../closure/runtime-lifecycle/005-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

@@ -1,6 +1,6 @@
 # R006 — Process Task Supervisor and Authoritative Task-Spec Staging
 
-Status: queued; depends on accepted R005 closure
+Status: dependency-ready; depends on accepted R005 closure
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 
