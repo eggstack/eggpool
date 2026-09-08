@@ -1,6 +1,6 @@
 # M8 Runtime Lifecycle Handoff Sequence
 
-Status: corrective pass active; R012 ready
+Status: M8 closed after R012 corrective pass
 
 Execute and accept in this order:
 
@@ -15,7 +15,7 @@ Execute and accept in this order:
 9. R009 — own server startup/shutdown, signal handling, graceful drain, forced close, and reload/shutdown exclusion (**closed**).
 10. R010 — eliminate stale startup-generation authority from handlers and expose bounded secret-free runtime/reload diagnostics (**closed**).
 11. R011 — run integrated Python/Rust differential, concurrency, fault, leak, reload, and shutdown qualification (**historical aggregate closure; post-close audit found R012 defects**).
-12. R012 — correct live process-owned wire-negotiation policy authority and retained reload-diagnostic ownership; re-run focused/aggregate qualification and re-close M8 (**ready**).
+12. R012 — correct live process-owned wire-negotiation policy authority and retained reload-diagnostic ownership; re-run focused/aggregate qualification and re-close M8 (**closed**).
 
 ## Rules that apply to every handoff
 
@@ -29,6 +29,6 @@ Execute and accept in this order:
 - Startup/static server state is allowed only for fields explicitly classified restart-required.
 - The process-owned wire resolver must consume the accepted live `routing.wire_negotiation.*` policy at startup and rehash without becoming generation-local.
 - Reload diagnostic `in_progress` ownership follows the retained reload transaction, not the lifetime of the calling future.
-- M9 owns the user-facing reload/control/daemon CLI. M8 exposes the typed runtime/reload interfaces it will invoke only after accepted R012 re-closure.
+- M9 owns the user-facing reload/control/daemon CLI. M8 exposes the typed runtime/reload interfaces it may now review for its own planning/implementation handoff.
 
-R012 is the sole dependency-ready M8 handoff. M9 remains blocked until R012 closure is accepted.
+R012 is closed. M9 is eligible for its own planning/implementation review; no M9 plan is promoted automatically.

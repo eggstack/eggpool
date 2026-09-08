@@ -153,7 +153,7 @@ R001 runtime/reload oracle freeze
 
 R011 remains historical aggregate closure evidence. A post-close audit found that live `routing.wire_negotiation.*` fields were classified correctly but the one process-owned resolver still used its default policy, and that reload diagnostics were finalized by the caller future rather than the retained reload transaction. R012 is the bounded corrective pass for those defects.
 
-Only `registry.md` authorizes handoff. R012 is the sole dependency-ready M8 plan. M9 is re-blocked until accepted R012 closure and its own planning/implementation review.
+Only `registry.md` authorizes handoff. R012 has re-closed M8. M9 is eligible for its own planning and implementation review; no M9 plan is promoted automatically.
 
 M8 keeps M9 operational surfaces out of scope. It exposes the server-side typed reload/runtime/task/shutdown APIs that M9 will use, but does not implement `eggpool rehash`, daemon/control socket, stop/restart/install/systemd/croncheck, backup/recover CLI, update CLI, or packaging.
 
@@ -167,7 +167,8 @@ Primary class: capability
 
 Complete serve/daemon/stop/restart/deploy/croncheck, backup/recover, migrations, update/version, onboarding/connect/logout, config/key management, diagnostics, uninstall, and documented operational commands. Wire the re-closed M8 server-side reload/status/shutdown/task interfaces into the user-facing control/CLI workflow. Packaging follows only when binary behavior exists.
 
-M9 is currently blocked on accepted R012 M8 re-closure.
+M9 is eligible for its own planning and implementation review now that R012 has
+re-closed M8. No M9 implementation plan is promoted automatically by R012.
 
 Exit condition: documented CLI workflow parity on supported targets.
 

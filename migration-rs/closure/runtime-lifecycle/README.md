@@ -19,6 +19,8 @@ Expected records:
 
 Closure records must include implementation commit(s), failing-before/passing-after evidence where applicable, exact verification commands, unresolved findings, and the registry transition they authorize.
 
-The accepted R011 record remains append-only historical evidence. A post-close audit found two unqualified M8 defects, so M8 is corrective-active until R012 closes. Do not rewrite `011-status.md` to hide the earlier acceptance.
+The accepted R011 record remains append-only historical evidence. A post-close
+audit found two unqualified M8 defects; R012 corrects them and re-closes M8.
+Do not rewrite `011-status.md` to hide the earlier acceptance.
 
 If another post-close defect is found, add a new corrective plan and closure record. Do not rewrite the historical closure that originally accepted the work.
