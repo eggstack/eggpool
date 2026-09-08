@@ -1,6 +1,6 @@
 # R004 — Generation Retirement, Retained Finalization Drain, and Resource Close
 
-Status: dependency-ready; R003 closure accepted
+Status: closed; see [closure record](../../closure/runtime-lifecycle/004-status.md)
 
 Source roadmap: `migration-rs/subsystems/runtime-lifecycle-roadmap.md`
 

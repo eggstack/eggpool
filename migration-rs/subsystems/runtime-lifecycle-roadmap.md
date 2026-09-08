@@ -1,6 +1,6 @@
 # M8 Runtime Generations, Rehash, Background Tasks, and Process Lifecycle Roadmap
 
-Status: active implementation; R004 dependency-ready
+Status: active implementation; R005 dependency-ready
 
 Repository baseline for M8 planning: `e2be716018c365030ab06e648af71ed7588d9ad3` (accepted C011 / M7 closure).
 
@@ -85,7 +85,7 @@ R001 runtime/reload contract + deterministic oracle freeze
 M9 planning/implementation eligibility
 ```
 
-Only the dependency-ready table in `../registry.md` authorizes implementation. R004 is the sole ready plan after accepted R003 closure.
+Only the dependency-ready table in `../registry.md` authorizes implementation. R005 is the sole ready plan after accepted R004 closure.
 
 ## Structural design
 
