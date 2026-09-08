@@ -16,6 +16,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use serde::Serialize;
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify},
     task::JoinHandle,
@@ -24,10 +25,10 @@ use tokio::{
 use crate::{
     Config,
     coordinator::{
-        FinalizationDrainError, FinalizationSupervisor, InferenceState, TerminalReference,
-        TerminalReferenceOwner, WireResolver, WireResolverConfig,
-        build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,
-        compile_provider_profiles,
+        CrashReconciler, FinalizationDrainError, FinalizationSupervisor, InferenceState,
+        ReconciliationError, TerminalReference, TerminalReferenceOwner, WireResolver,
+        WireResolverConfig, build_inference_state_with_shared,
+        build_inference_state_with_shared_and_accounts, compile_provider_profiles,
     },
     db::{Account, Database, DatabaseError},
     model_router::ModelRouterAffinity,
@@ -35,8 +36,8 @@ use crate::{
 };
 
 pub use crate::task_supervisor::{
-    PreparedTaskDiff, RUNTIME_TASK_NAMES, RuntimeTaskSnapshot, RuntimeTaskSpec,
-    RuntimeTaskSupervisor, TaskCallback, TaskCallbackError, TaskCallbackFuture,
+    PreparedTaskDiff, RUNTIME_TASK_NAMES, RuntimeTaskCapability, RuntimeTaskSnapshot,
+    RuntimeTaskSpec, RuntimeTaskSupervisor, TaskCallback, TaskCallbackError, TaskCallbackFuture,
     TaskCallbackRegistry, TaskOutcome, TaskOwnership, TaskShutdownReport, TaskSpecDiff,
     TaskSpecError, TaskTickContext, TaskTransition, runtime_task_inventory,
     runtime_task_specs_for_config, task_callback,
@@ -45,6 +46,25 @@ pub use crate::task_supervisor::{
 pub const MAX_RETIRING_GENERATIONS: usize = 4;
 const MAX_RETIREMENT_DIAGNOSTICS: usize = 16;
 pub const DEFAULT_GENERATION_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_STARTUP_RECONCILIATION_PASSES: usize = 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartupRecoveryReport {
+    pub passes: usize,
+    pub requests_interrupted: usize,
+    pub reservations_released: usize,
+    pub attempts_terminalized: usize,
+    pub last_classification: crate::coordinator::ReconciliationClassification,
+    pub converged: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartupRecoveryError {
+    #[error("startup crash reconciliation failed: {0}")]
+    Reconciliation(#[from] ReconciliationError),
+    #[error("startup crash reconciliation exceeded the bounded pass limit")]
+    PassLimit,
+}
 
 /// Errors raised before a candidate can be published.  Messages contain only
 /// bounded structural/configuration diagnostics; credentials and proxy URLs
@@ -81,6 +101,7 @@ pub struct ProcessRuntime {
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
     reload_lock: Arc<AsyncMutex<()>>,
+    startup_recovery_report: Arc<Mutex<Option<StartupRecoveryReport>>>,
 }
 
 impl Clone for ProcessRuntime {
@@ -92,6 +113,7 @@ impl Clone for ProcessRuntime {
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
             reload_lock: Arc::clone(&self.reload_lock),
+            startup_recovery_report: Arc::clone(&self.startup_recovery_report),
         }
     }
 }
@@ -126,9 +148,12 @@ impl ProcessRuntime {
             wire_profile_resolver: WireResolver::new(WireResolverConfig::default()),
             config_path: None,
             task_supervisor: RuntimeTaskSupervisor::with_callbacks(
-                crate::task_supervisor::TaskCallbackRegistry::with_checkpoint(checkpoint_database),
+                crate::task_supervisor::TaskCallbackRegistry::with_generation_maintenance(
+                    checkpoint_database,
+                ),
             ),
             reload_lock: Arc::new(AsyncMutex::new(())),
+            startup_recovery_report: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -156,6 +181,72 @@ impl ProcessRuntime {
 
     pub fn task_supervisor(&self) -> RuntimeTaskSupervisor {
         self.task_supervisor.clone()
+    }
+
+    pub fn task_capability_inventory(&self) -> Vec<RuntimeTaskCapability> {
+        self.task_supervisor.capability_inventory()
+    }
+
+    pub fn startup_recovery_report(&self) -> Option<StartupRecoveryReport> {
+        self.startup_recovery_report
+            .lock()
+            .expect("startup recovery report lock")
+            .clone()
+    }
+
+    /// Run C010 to convergence before candidate construction or request
+    /// acceptance. Each pass is bounded per table and the aggregate report
+    /// keeps only scalar, secret-free diagnostics.
+    pub async fn reconcile_startup(&self) -> Result<StartupRecoveryReport, StartupRecoveryError> {
+        let reconciler = CrashReconciler::new(self.database.clone());
+        let mut aggregate = StartupRecoveryReport {
+            passes: 0,
+            requests_interrupted: 0,
+            reservations_released: 0,
+            attempts_terminalized: 0,
+            last_classification: Default::default(),
+            converged: false,
+        };
+        for _ in 0..MAX_STARTUP_RECONCILIATION_PASSES {
+            let report = reconciler.reconcile_once().await?;
+            aggregate.passes += 1;
+            aggregate.requests_interrupted = aggregate
+                .requests_interrupted
+                .saturating_add(report.requests_interrupted);
+            aggregate.reservations_released = aggregate
+                .reservations_released
+                .saturating_add(report.reservations_released);
+            aggregate.attempts_terminalized = aggregate
+                .attempts_terminalized
+                .saturating_add(report.attempts_terminalized);
+            aggregate.last_classification = report.classification;
+            if !report.truncated && report.converged {
+                aggregate.converged = true;
+                *self
+                    .startup_recovery_report
+                    .lock()
+                    .expect("startup recovery report lock") = Some(aggregate.clone());
+                return Ok(aggregate);
+            }
+        }
+        Err(StartupRecoveryError::PassLimit)
+    }
+
+    /// Install the initial capability-filtered task set after the active
+    /// generation exists. Deferred inventory rows are reported but never
+    /// passed to the supervisor as runnable specs.
+    pub async fn install_initial_tasks(
+        &self,
+        manager: RuntimeManager,
+        config: &Config,
+    ) -> Result<TaskTransition, TaskSpecError> {
+        self.task_supervisor.set_generation_manager(manager);
+        let current = self.task_supervisor.active_specs();
+        let candidate = self
+            .task_supervisor
+            .available_specs_for_config(config, false);
+        let mut diff = self.task_supervisor.prepare_diff(&current, &candidate)?;
+        diff.commit().await
     }
 
     /// Bind the process-owned reload coordinator to the active-generation

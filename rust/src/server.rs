@@ -28,7 +28,8 @@ use crate::{
     providers::ProviderClientPool,
     runtime_lifecycle::{
         GenerationAcquireError, GenerationBuildError, GenerationLease, ProcessRuntime,
-        RuntimeGeneration, RuntimeGenerationFactory, RuntimeManager,
+        RuntimeGeneration, RuntimeGenerationFactory, RuntimeManager, StartupRecoveryError,
+        TaskSpecError,
     },
     wire::ir::ClientSurface,
 };
@@ -110,6 +111,10 @@ pub enum ServerError {
     Generation(#[from] GenerationBuildError),
     #[error("prepared generation transfer failed: {0}")]
     CandidateTransfer(String),
+    #[error("startup crash reconciliation failed: {0}")]
+    StartupRecovery(#[from] StartupRecoveryError),
+    #[error("runtime task installation failed: {0}")]
+    TaskSetup(#[from] TaskSpecError),
     #[error("server signal handler failed: {0}")]
     Signal(std::io::Error),
     #[error("inference state construction failed: {0}")]
@@ -194,6 +199,10 @@ pub async fn run_with_digest(
         Some(path) => ProcessRuntime::with_config_path(database.clone(), path),
         None => ProcessRuntime::new(database.clone()),
     };
+    if let Err(error) = process.reconcile_startup().await {
+        let _ = database.close().await;
+        return Err(error.into());
+    }
     let prepared = match RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),
@@ -214,7 +223,19 @@ pub async fn run_with_digest(
 
     tracing::info!(address, "Rust development server listening");
     let manager = Arc::new(RuntimeManager::new(generation));
+    if let Err(error) = process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+    {
+        manager.shutdown();
+        let _ = process.task_supervisor().shutdown().await;
+        let _ = manager.active_generation().close().await;
+        let _ = database.close().await;
+        return Err(error.into());
+    }
     let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
+    manager.shutdown();
+    let _ = process.task_supervisor().shutdown().await;
     let _ = manager.active_generation().close().await;
     let close_result = database.close().await;
     result.and(close_result.map_err(ServerError::Database))
@@ -227,6 +248,7 @@ pub async fn serve_listener(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     let process = ProcessRuntime::new(database);
+    process.reconcile_startup().await?;
     let prepared =
         RuntimeGenerationFactory::prepare(&process, config.clone(), "runtime-config".to_owned(), 1)
             .await
@@ -235,7 +257,13 @@ pub async fn serve_listener(
         .transfer()
         .map_err(|error| ServerError::CandidateTransfer(error.to_string()))?;
     let manager = Arc::new(RuntimeManager::new(generation));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .map_err(ServerError::TaskSetup)?;
     let result = serve_listener_with_manager(&process, config, manager.clone(), listener).await;
+    manager.shutdown();
+    let _ = process.task_supervisor().shutdown().await;
     let _ = manager.active_generation().close().await;
     result
 }

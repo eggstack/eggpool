@@ -116,7 +116,6 @@ struct PendingRefresh {
 
 #[derive(Debug, Default)]
 struct ServiceState {
-    cache: ModelCatalogCache,
     cache_loaded: bool,
     pending_refresh: BTreeMap<String, PendingRefresh>,
     pending_pings: Vec<CatalogTransportObservation>,
@@ -129,6 +128,7 @@ pub struct CatalogService {
     credentials: CredentialStore,
     database: Database,
     client_pool: ProviderClientPool,
+    catalog: Arc<std::sync::Mutex<ModelCatalogCache>>,
     state: Arc<Mutex<ServiceState>>,
     refresh_lock: Arc<Mutex<()>>,
 }
@@ -171,17 +171,48 @@ impl CatalogService {
             credentials,
             database,
             client_pool,
+            catalog: Arc::new(std::sync::Mutex::new(cache)),
             state: Arc::new(Mutex::new(ServiceState {
-                cache,
                 ..ServiceState::default()
             })),
             refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
+    /// Construct a refresh service over the catalog used by the generation's
+    /// router.  Refreshes therefore become visible to routing atomically
+    /// under the same cache lock rather than updating a disconnected copy.
+    /// The caller supplies an already-seeded cache, so hydration is complete.
+    pub fn with_shared_cache(
+        config: Config,
+        registry: AccountRegistry,
+        database: Database,
+        client_pool: ProviderClientPool,
+        credentials: CredentialStore,
+        catalog: Arc<std::sync::Mutex<ModelCatalogCache>>,
+    ) -> Self {
+        Self {
+            config,
+            registry,
+            credentials,
+            database,
+            client_pool,
+            catalog,
+            state: Arc::new(Mutex::new(ServiceState {
+                cache_loaded: true,
+                ..ServiceState::default()
+            })),
+            refresh_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn shared_cache(&self) -> Arc<std::sync::Mutex<ModelCatalogCache>> {
+        Arc::clone(&self.catalog)
+    }
+
     /// Obtain a cheap, stable D002 snapshot for diagnostics/tests.
     pub async fn cache_snapshot(&self) -> super::CacheSnapshot {
-        self.state.lock().await.cache.snapshot()
+        self.catalog.lock().expect("catalog cache lock").snapshot()
     }
 
     pub async fn refresh(&self) -> Result<CatalogRefreshResult, CatalogRefreshError> {
@@ -330,7 +361,9 @@ impl CatalogService {
         if state.cache_loaded {
             return Ok(());
         }
-        state.cache.hydrate_from_db(&self.database).await?;
+        let mut hydrated = self.catalog.lock().expect("catalog cache lock").clone();
+        hydrated.hydrate_from_db(&self.database).await?;
+        *self.catalog.lock().expect("catalog cache lock") = hydrated;
         state.cache_loaded = true;
         Ok(())
     }
@@ -339,7 +372,8 @@ impl CatalogService {
         &self,
         only_account: Option<&str>,
     ) -> Result<(), CatalogRefreshError> {
-        let mut state = self.state.lock().await;
+        let _state = self.state.lock().await;
+        let mut cache = self.catalog.lock().expect("catalog cache lock");
         for (provider_id, provider) in &self.config.providers {
             let models = static_models(provider);
             if models.is_empty() {
@@ -349,10 +383,8 @@ impl CatalogService {
                 if !account.enabled || only_account.is_some_and(|name| name != account.name) {
                     continue;
                 }
-                state.cache.set_account_provider(&account.name, provider_id);
-                state
-                    .cache
-                    .seed_from_account(&account.name, provider_id, &models)?;
+                cache.set_account_provider(&account.name, provider_id);
+                cache.seed_from_account(&account.name, provider_id, &models)?;
             }
         }
         Ok(())
@@ -365,29 +397,27 @@ impl CatalogService {
         events: &mut Vec<CatalogModelEvent>,
     ) -> Result<RefreshOutcome, CatalogRefreshError> {
         let mut state = self.state.lock().await;
+        let mut cache = self.catalog.lock().expect("catalog cache lock");
         state.pending_pings.push(fetch.observation.clone());
         if fetch.outcome != RefreshOutcome::SuccessEmpty
             && fetch.outcome != RefreshOutcome::SuccessPartial
             && fetch.outcome != RefreshOutcome::SuccessAuthoritative
         {
-            state
-                .cache
-                .record_outcome(&fetch.account_name, fetch.outcome);
+            cache.record_outcome(&fetch.account_name, fetch.outcome);
             return Ok(fetch.outcome);
         }
-        let before_models = state.cache.models_for_account(&fetch.account_name);
+        let before_models = cache.models_for_account(&fetch.account_name);
         let before_protocols = before_models
             .iter()
             .filter_map(|model_id| {
-                state
-                    .cache
+                cache
                     .get_provider_model(model_id, &fetch.provider_id)
                     .and_then(|row| row.protocol.clone())
                     .map(|protocol| (model_id.clone(), protocol))
             })
             .collect::<BTreeMap<_, _>>();
         let provider_id = fetch.provider_id.clone();
-        let models = resolve_models(&self.config, &state.cache, &provider_id, fetch.models);
+        let models = resolve_models(&self.config, &cache, &provider_id, fetch.models);
         let outcome = if models.is_empty() {
             RefreshOutcome::SuccessEmpty
         } else if models.iter().any(|model| model.protocol.is_none()) {
@@ -398,7 +428,7 @@ impl CatalogService {
         let authoritative = outcome == RefreshOutcome::SuccessAuthoritative;
         let allow_withdrawals = authoritative
             && self.config.models.catalog_withdrawal_policy != "preserve_until_health";
-        let update = state.cache.update_from_account(
+        let update = cache.update_from_account(
             &fetch.account_name,
             &provider_id,
             &models,
@@ -408,9 +438,9 @@ impl CatalogService {
         // A destructive account update can remove the final provider/model
         // reference.  Keep the global cache projection aligned with the
         // provider rows before persistence and result diffing.
-        state.cache.prune_unused();
+        cache.prune_unused();
         emit_model_events(
-            &state.cache,
+            &cache,
             &fetch.account_name,
             &provider_id,
             account_id,
@@ -441,7 +471,7 @@ impl CatalogService {
                 .all()
                 .map(|identity| (identity.account_name.clone(), identity.account_id));
             (
-                state.cache.clone(),
+                self.catalog.lock().expect("catalog cache lock").clone(),
                 state.pending_refresh.clone(),
                 state.pending_pings.clone(),
                 accounts.collect::<BTreeMap<_, _>>(),

@@ -4,6 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -20,6 +21,31 @@ pub struct DatabaseConfig {
     pub synchronous: String,
     pub read_only: bool,
     pub journal_size_limit: Option<u64>,
+}
+
+/// Bounded, generation-selected retention work.  Each loop iteration uses a
+/// separate SQLite transaction so maintenance never holds the write lock
+/// while yielding for another batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionCleanupPolicy {
+    pub request_days: u64,
+    pub event_days: u64,
+    pub ping_days: u64,
+    pub operational_event_days: u64,
+    pub routing_decision_days: u64,
+    pub rollup_days: u64,
+    pub price_snapshot_days: u64,
+    pub model_info_observation_days: u64,
+    pub max_rows_per_batch: u32,
+    pub max_batches: u32,
+    pub max_tick_duration: Duration,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RetentionCleanupReport {
+    pub batches_completed: u32,
+    pub rows_changed: u64,
+    pub budget_exhausted: bool,
 }
 
 impl Default for DatabaseConfig {
@@ -394,6 +420,110 @@ impl Database {
         .await
     }
 
+    /// Delete only terminal/historical rows under a bounded maintenance
+    /// budget. Pending requests and active reservations are never selected.
+    pub async fn cleanup_retention(
+        &self,
+        policy: RetentionCleanupPolicy,
+    ) -> Result<RetentionCleanupReport, DatabaseError> {
+        let row_limit = i64::from(policy.max_rows_per_batch.max(1));
+        let batch_limit = policy.max_batches.max(1);
+        let started = Instant::now();
+        let mut report = RetentionCleanupReport::default();
+
+        while report.batches_completed < batch_limit
+            && started.elapsed() < policy.max_tick_duration.max(Duration::from_millis(1))
+        {
+            let changed = self
+                .with_transaction(move |connection| {
+                    let mut changed = 0_u64;
+                    changed += delete_old(
+                        connection,
+                        "reservations",
+                        "id",
+                        "request_id IN (SELECT id FROM requests WHERE status != 'pending' AND started_at < datetime('now', ?1))",
+                        policy.request_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "requests",
+                        "id",
+                        "status != 'pending' AND started_at < datetime('now', ?1)",
+                        policy.request_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "account_events",
+                        "id",
+                        "created_at < datetime('now', ?1)",
+                        policy.event_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "provider_pings",
+                        "id",
+                        "probed_at < datetime('now', ?1)",
+                        policy.ping_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "operational_events",
+                        "id",
+                        "occurred_at < datetime('now', ?1)",
+                        policy.operational_event_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "routing_decisions",
+                        "id",
+                        "decision_made_at < datetime('now', ?1)",
+                        policy.routing_decision_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "usage_rollups",
+                        "rowid",
+                        "bucket_start < datetime('now', ?1)",
+                        policy.rollup_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "model_price_snapshots",
+                        "id",
+                        "captured_at < datetime('now', ?1)",
+                        policy.price_snapshot_days,
+                        row_limit,
+                    )?;
+                    changed += delete_old(
+                        connection,
+                        "model_info_observations",
+                        "id",
+                        "observed_at < datetime('now', ?1)",
+                        policy.model_info_observation_days,
+                        row_limit,
+                    )?;
+                    Ok(changed)
+                })
+                .await?;
+            report.rows_changed = report.rows_changed.saturating_add(changed);
+            report.batches_completed = report.batches_completed.saturating_add(1);
+            if changed == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        report.budget_exhausted = report.batches_completed >= batch_limit
+            || started.elapsed() >= policy.max_tick_duration.max(Duration::from_millis(1));
+        Ok(report)
+    }
+
     async fn configure(&self) -> Result<(), DatabaseError> {
         let config = self.inner.config.clone();
         self.call(move |connection| {
@@ -422,6 +552,22 @@ impl Database {
             .await
             .map_err(|_| DatabaseError::WorkerClosed)
     }
+}
+
+fn delete_old(
+    connection: &mut SqliteConnection,
+    table: &str,
+    id_column: &str,
+    predicate: &str,
+    retain_days: u64,
+    limit: i64,
+) -> Result<u64, SqliteError> {
+    let modifier = format!("-{} days", retain_days.max(1));
+    let sql = format!(
+        "DELETE FROM {table} WHERE {id_column} IN (SELECT {id_column} FROM {table} WHERE {predicate} ORDER BY {id_column} LIMIT ?2)"
+    );
+    let changed = connection.execute(&sql, tokio_rusqlite::rusqlite::params![modifier, limit])?;
+    Ok(changed as u64)
 }
 
 /// A caller-controlled SQLite transaction.  It is deliberately not a general

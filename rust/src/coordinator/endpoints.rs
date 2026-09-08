@@ -33,7 +33,7 @@ use thiserror::Error;
 
 use crate::{
     accounts::{AccountRegistry, CredentialStore},
-    catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
+    catalog::{CatalogService, ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     config::{Config, ProviderConfig},
     db::{Account, Database},
     model_router::{
@@ -214,6 +214,7 @@ pub struct InferenceState {
     known_providers: BTreeSet<String>,
     max_body_bytes: usize,
     router: RoutingRouter,
+    catalog_service: Option<Arc<CatalogService>>,
 }
 
 impl std::fmt::Debug for InferenceState {
@@ -237,6 +238,29 @@ impl InferenceState {
         max_body_bytes: usize,
         router: RoutingRouter,
     ) -> Self {
+        Self::from_parts_with_catalog_service(
+            finite,
+            streaming,
+            registry,
+            affinity,
+            known_providers,
+            max_body_bytes,
+            router,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_catalog_service(
+        finite: FiniteCoordinator,
+        streaming: StreamingCoordinator,
+        registry: ModelRouterRegistry,
+        affinity: Arc<ModelRouterAffinity>,
+        known_providers: BTreeSet<String>,
+        max_body_bytes: usize,
+        router: RoutingRouter,
+        catalog_service: Option<Arc<CatalogService>>,
+    ) -> Self {
         Self {
             finite,
             streaming,
@@ -245,6 +269,7 @@ impl InferenceState {
             known_providers,
             max_body_bytes: max_body_bytes.max(1),
             router,
+            catalog_service,
         }
     }
 
@@ -290,6 +315,10 @@ impl InferenceState {
 
     pub fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
+    }
+
+    pub fn catalog_service(&self) -> Option<Arc<CatalogService>> {
+        self.catalog_service.clone()
     }
 }
 
@@ -848,9 +877,18 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         quotas.push(AccountQuota::new(account.account_name.clone()));
     }
     let estimator = QuotaEstimator::new(quotas);
-    let router = RoutingRouter::new(
+    let shared_catalog = Arc::new(std::sync::Mutex::new(catalog));
+    let catalog_service = Arc::new(CatalogService::with_shared_cache(
+        config.clone(),
+        registry.clone(),
+        database.clone(),
+        client_pool.clone(),
+        credentials.clone(),
+        Arc::clone(&shared_catalog),
+    ));
+    let router = RoutingRouter::with_shared_catalog(
         registry,
-        catalog,
+        shared_catalog,
         estimator,
         None,
         EligibilityPolicy::from_config(config),
@@ -896,7 +934,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         retry_policy,
     );
     let known_providers: BTreeSet<String> = config.providers.keys().cloned().collect();
-    Ok(InferenceState::from_parts(
+    Ok(InferenceState::from_parts_with_catalog_service(
         finite,
         streaming,
         model_registry,
@@ -904,6 +942,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         known_providers,
         config.server.max_request_body_bytes as usize,
         router,
+        Some(catalog_service),
     ))
 }
 

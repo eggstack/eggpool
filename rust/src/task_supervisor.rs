@@ -78,6 +78,18 @@ pub struct RuntimeTaskSpec {
     pub callback_kind: String,
 }
 
+/// Explicit capability status for every inventory row.  A deferred row is
+/// diagnostic metadata only and is never allowed to create a running loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTaskCapability {
+    pub name: String,
+    pub callback_kind: String,
+    pub ownership: TaskOwnership,
+    pub registered: bool,
+    pub future_owner: Option<String>,
+    pub reason: Option<String>,
+}
+
 impl RuntimeTaskSpec {
     fn validate(&self) -> Result<(), TaskSpecError> {
         if self.name.is_empty() || self.name.len() > MAX_TASK_NAME_BYTES {
@@ -370,8 +382,96 @@ impl TaskCallbackRegistry {
         )
     }
 
+    /// Register the M5 catalog refresh and bounded historical retention
+    /// callbacks. Both callbacks receive a fresh generation lease for each
+    /// tick; no generation service is retained by the process supervisor.
+    pub fn with_generation_maintenance(database: Database) -> Self {
+        let mut registry = Self::with_checkpoint(database.clone());
+        registry.register(
+            "catalog_refresh",
+            task_callback(|context| async move {
+                let TaskTickContext::Generation(lease) = context else {
+                    return Err(TaskCallbackError::Failed);
+                };
+                let Some(service) = lease.generation().inference().catalog_service() else {
+                    return Err(TaskCallbackError::Failed);
+                };
+                service
+                    .refresh()
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| TaskCallbackError::Failed)
+            }),
+        );
+        registry.register(
+            "retention_cleanup",
+            task_callback(move |context| {
+                let database = database.clone();
+                async move {
+                    let TaskTickContext::Generation(lease) = context else {
+                        return Err(TaskCallbackError::Failed);
+                    };
+                    let config = lease.generation().config();
+                    let policy = crate::db::RetentionCleanupPolicy {
+                        request_days: config.dashboard.retain_request_stats_days,
+                        event_days: config.dashboard.retain_event_days,
+                        ping_days: config.models.ping_retain_days,
+                        operational_event_days: config.metrics.operational_event_retain_days,
+                        routing_decision_days: config.metrics.routing_decision_retain_days,
+                        rollup_days: config.metrics.rollup_retain_days,
+                        price_snapshot_days: 180,
+                        model_info_observation_days: config.model_info.known_ttl_s,
+                        max_rows_per_batch: config.maintenance.max_rows_per_batch,
+                        max_batches: config.maintenance.max_batches_per_tick,
+                        max_tick_duration: Duration::from_secs_f64(
+                            config.maintenance.max_tick_duration_ms.max(1.0) / 1000.0,
+                        ),
+                    };
+                    database
+                        .cleanup_retention(policy)
+                        .await
+                        .map(|_| ())
+                        .map_err(|_| TaskCallbackError::Failed)
+                }
+            }),
+        );
+        registry
+    }
+
     pub fn available_kinds(&self) -> Vec<String> {
         self.callbacks.keys().cloned().collect()
+    }
+
+    pub fn capability_inventory(&self) -> Vec<RuntimeTaskCapability> {
+        let registered = self.available_kinds().into_iter().collect::<BTreeSet<_>>();
+        runtime_task_inventory()
+            .into_iter()
+            .map(|spec| {
+                let is_registered = registered.contains(&spec.callback_kind);
+                let (future_owner, reason) = if is_registered {
+                    (None, None)
+                } else {
+                    let owner = match spec.name.as_str() {
+                        "metrics_flush" => "M9 metrics/background integration",
+                        "update_checker" => "M9 operational update capability",
+                        "automatic_backup" => "M9 backup/recovery capability",
+                        _ => "future runtime maintenance plan",
+                    };
+                    (
+                        Some(owner.to_owned()),
+                        Some("Rust business capability is not implemented".to_owned()),
+                    )
+                };
+                RuntimeTaskCapability {
+                    name: spec.name,
+                    callback_kind: spec.callback_kind,
+                    ownership: spec.ownership,
+                    registered: is_registered,
+                    future_owner,
+                    reason,
+                }
+            })
+            .collect()
     }
 }
 
@@ -692,6 +792,14 @@ impl RuntimeTaskSupervisor {
             .available_kinds()
     }
 
+    pub fn capability_inventory(&self) -> Vec<RuntimeTaskCapability> {
+        self.inner
+            .callbacks
+            .lock()
+            .expect("task callback registry lock")
+            .capability_inventory()
+    }
+
     pub fn task_count(&self) -> usize {
         self.inner.tasks.lock().expect("task map lock").len()
     }
@@ -750,6 +858,24 @@ impl RuntimeTaskSupervisor {
             .expect("task map lock")
             .values()
             .map(|task| task.spec.clone())
+            .collect()
+    }
+
+    /// Resolve the authoritative inventory to the capabilities that can
+    /// actually run in this process. Deferred inventory rows remain visible
+    /// through [`Self::capability_inventory`] but own no loop.
+    pub fn available_specs_for_config(
+        &self,
+        config: &crate::Config,
+        include_update_checker: bool,
+    ) -> Vec<RuntimeTaskSpec> {
+        let available = self
+            .available_callback_kinds()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        runtime_task_specs_for_config(config, include_update_checker)
+            .into_iter()
+            .filter(|spec| available.contains(&spec.callback_kind))
             .collect()
     }
 
