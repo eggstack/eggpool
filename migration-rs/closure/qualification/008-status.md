@@ -4,7 +4,7 @@ Status: blocked; closure attempted 2026-09-09
 
 Plan: [Q008 — ARM64 SBC functional and resource characterization](../../implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md)
 
-Implementation: `scripts/qualification_sbc.py`,
+Implementation commit: `ed82ed2` — `scripts/qualification_sbc.py`,
 `tests/migration_rs/fixtures/config/q008-sbc.toml`, and
 `tests/migration_rs/test_q008_sbc.py`
 
