@@ -4,7 +4,7 @@ Status: blocked; closure attempted 2026-09-09
 
 Plan: [Q007 — bounded live-provider interoperability smoke](../../implementation/qualification/007-live-provider-interoperability-smoke.md)
 
-Implementation commit: `a0b2e75`
+Implementation commits: `a0b2e75`, `c3e045c`
 
 Machine-readable live evidence: [`007-run.json`](007-run.json)
 
