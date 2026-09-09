@@ -28,15 +28,16 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q002 ready** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q003 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | accepted Q001 | **ready for handoff** |
+| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | accepted Q001 | **complete; see closure** |
+| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | accepted Q002 | **ready** |
 
-Q002 is the sole dependency-ready implementation plan. Q003-Q010 remain registered and queued serially; later plans are promoted only by accepted closure of their direct predecessor.
+Q003 is the sole dependency-ready implementation plan. Q004-Q010 remain registered and queued serially; later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Completed implementation plans
 
@@ -66,6 +67,7 @@ Q002 is the sole dependency-ready implementation plan. Q003-Q010 remain register
 | O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | capability/invariant | `27310ff` | [closed](closure/operations/009-status.md) |
 | O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | invariant/polish | `f41489c` | [closed](closure/operations/010-status.md) |
 | Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | invariant/infrastructure | `4b5093a30a56f78c14aef3ffef8c47863fc74070` | [closed](closure/qualification/001-status.md) |
+| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | `de50b7a27aa7829a41baa5c6a8ff5e08248dd401` | [accepted](closure/qualification/002-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -143,8 +145,8 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | ID | Plan | Dependency state |
 |---|---|---|
 | Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | **accepted; see closure** |
-| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | **ready; sole dependency-ready M10 plan** |
-| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | queued behind Q002 |
+| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | **complete; see closure** |
+| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | **ready; sole dependency-ready M10 plan** |
 | Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | queued behind Q003 |
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | queued behind Q004 |
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | queued behind Q005 |
@@ -170,4 +172,4 @@ M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separat
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001 is accepted and Q002 is ready within active M10. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001 and Q002 are accepted within active M10; Q003 is the sole dependency-ready plan. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.

@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q002 dependency-ready
+Status: active planning/implementation; Q003 dependency-ready
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 
@@ -80,7 +80,7 @@ Q001 qualification contract, target matrix, and evidence schema freeze
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q001 is the sole dependency-ready M10 plan at initial registration.
+Only `../registry.md` authorizes implementation. Q003 is the sole dependency-ready M10 plan after accepted Q002 closure.
 
 ## Qualification environment classes
 
@@ -113,7 +113,7 @@ Create one reproducible aggregate runner/report over the existing Python/Rust or
 
 The runner must report missing cells and semantic mismatches distinctly from infrastructure failures. Normal CI may keep a small smoke subset; the complete runner is a deliberate qualification command.
 
-Exit: all mandatory deterministic cells in the Q001 manifest pass or have explicit blocker findings.
+Exit: all mandatory deterministic cells in the Q001 manifest pass or have explicit blocker findings. **Accepted; see `../closure/qualification/002-status.md`.**
 
 ## Q003 — Database upgrade, rollback, backup, and recovery compatibility
 

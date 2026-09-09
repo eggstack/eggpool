@@ -1,6 +1,6 @@
 # Q003 — Database Upgrade, Rollback, Backup, and Recovery Compatibility
 
-Status: queued behind Q002
+Status: ready for handoff (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -220,20 +220,26 @@ def _manifest_cells(
     manifest: dict[str, Any], root: Path
 ) -> tuple[QualificationCell, ...]:
     """Validate the frozen manifest and return exactly Q002's owned cells."""
-    required = set(manifest.get("cell_schema", {}).get("required_fields", []))
-    enums = manifest.get("enums", {})
-    cells = manifest.get("cells")
+    cell_schema = cast("dict[str, Any]", manifest.get("cell_schema", {}))
+    required = set(cast("list[str]", cell_schema.get("required_fields", [])))
+    enums = cast("dict[str, Any]", manifest.get("enums", {}))
+    cells = cast("list[Any] | None", manifest.get("cells"))
     if not required or not isinstance(cells, list):
         raise ManifestValidationError("Q001 manifest has no valid cell schema")
     valid_classes = set(enums.get("observation_class", []))
     valid_environments = set(enums.get("environment_class", []))
     valid_owners = set(enums.get("owner_plan", []))
     valid_statuses = set(enums.get("closure_status", []))
-    normalization_rules = manifest.get("normalization_rules", {})
+    normalization_rules = cast(
+        "dict[str, Any]", manifest.get("normalization_rules", {})
+    )
     ids: set[str] = set()
     selected: list[QualificationCell] = []
-    for cell in cells:
-        if not isinstance(cell, dict) or not required <= cell.keys():
+    for raw_cell in cells:
+        if not isinstance(raw_cell, dict):
+            raise ManifestValidationError("Q001 cell is missing required fields")
+        cell = cast("dict[str, Any]", raw_cell)
+        if not required <= cell.keys():
             raise ManifestValidationError("Q001 cell is missing required fields")
         cell_id = cell["id"]
         if not isinstance(cell_id, str) or cell_id in ids:
@@ -289,7 +295,10 @@ def load_q002_cells(
         raise ManifestValidationError(
             f"cannot read Q001 manifest: {manifest_path}"
         ) from error
-    if not isinstance(manifest, dict) or manifest.get("status") != "frozen":
+    if not isinstance(manifest, dict):
+        raise ManifestValidationError("Q001 manifest must be an object")
+    manifest = cast("dict[str, Any]", manifest)
+    if manifest.get("status") != "frozen":
         raise ManifestValidationError("Q001 manifest is not frozen")
     return _manifest_cells(manifest, root)
 
@@ -521,6 +530,7 @@ def run_qualification(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ManifestValidationError("Q001 manifest must be an object")
+    manifest = cast("dict[str, Any]", manifest)
     if manifest.get("status") != "frozen":
         raise ManifestValidationError("Q001 manifest is not frozen")
     cells = _manifest_cells(manifest, root)
