@@ -154,7 +154,7 @@ R001 runtime/reload oracle freeze
 
 R011/R012 remain append-only historical closure evidence. Accepted R013 fixed the remaining process wire-policy validation/acceptance/rollback and real-inference qualification defects and re-closed M8. R013 closure recorded no unresolved high/medium M8 finding.
 
-R008 left exactly three business capabilities intentionally deferred for M9: `metrics_flush`, `update_checker`, and `automatic_backup`. M8 owns their scheduler/task-spec machinery; M9 owns the real callbacks. O006 registered `automatic_backup` and O007 registered `metrics_flush`; `update_checker` remains the final deferred callback for O008.
+R008 left exactly three business capabilities intentionally deferred for M9: `metrics_flush`, `update_checker`, and `automatic_backup`. M8 owns their scheduler/task-spec machinery; M9 owns the real callbacks. O006 registered `automatic_backup`, O007 registered `metrics_flush`, and O008 registered `update_checker`; O010 accepted the complete singleton/background-task boundary.
 
 Exit condition satisfied after accepted R013 closure.
 
@@ -178,10 +178,10 @@ O001 operational CLI contract + deterministic oracle freeze
  -> O007 operator inspection/maintenance + metrics flush
  -> O008 update/version + update checker
  -> O009 deploy/install artifacts + uninstall
- -> O010 differential qualification + M9 closure
+ -> O010 differential qualification + M9 closure (**closed**)
 ```
 
-Only `registry.md` authorizes handoff. At initial M9 registration O001 is the sole dependency-ready plan.
+Only `registry.md` authorizes handoff. O010 is accepted and M9 is closed; M10 is eligible for its own planning/implementation review.
 
 M9 preserves the command/option shape already frozen in F003 and avoids recreating Python's large `cli_full.py` structurally. CLI handlers are thin adapters over small Rust operation services. Supported Rust commands may not shell out to Python as a fallback.
 
@@ -189,7 +189,7 @@ M9 uses one bounded local Unix control socket for the control behavior proven by
 
 M9 prepares safe Rust-side update/deploy/install behavior but does not make Rust the canonical public install/release path; M11 owns that cutover. M10 still owns broad OS/architecture/SBC characterization, live-provider smoke, dashboard visual review, and complete cross-system qualification.
 
-Exit condition: every current documented/F003 command has real Rust behavior (or a frozen explicit unsupported-platform outcome), migration-stage `NotImplemented` is unreachable for supported commands, CLI/effect parity passes the O001 corpus, lifecycle/config/backup/update/deploy fault matrices converge safely, all three R008 deferred callbacks are real bounded singleton M8 tasks, and no unresolved high/medium M9 correctness/security/resource/data-loss/compatibility finding remains. Satisfied only by accepted O010 closure.
+Exit condition: every current documented/F003 command has real Rust behavior (or a frozen explicit unsupported-platform outcome), migration-stage `NotImplemented` is unreachable for supported commands, CLI/effect parity passes the O001 corpus, lifecycle/config/backup/update/deploy fault matrices converge safely, all three R008 deferred callbacks are real bounded singleton M8 tasks, and no unresolved high/medium M9 correctness/security/resource/data-loss/compatibility finding remains. Satisfied by accepted O010 closure.
 
 ## M10 — Full differential qualification and SBC characterization
 

@@ -1,6 +1,6 @@
 # M9 Operational CLI, Lifecycle, Update, and Deployment Roadmap
 
-Status: active implementation; O010 dependency-ready
+Status: closed after O010; M10 eligible for separate review
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350` (accepted R013 / M8 re-closure).
 
@@ -86,13 +86,13 @@ O001 operational contract + oracle freeze
  -> O007 operator inspection/stats/model maintenance + metrics flush task
  -> O008 update/version/release resolution + update-checker task
  -> O009 deploy/systemd/cron/logrotate/install artifacts/uninstall
- -> O010 integrated differential qualification + M9 closure
+ -> O010 integrated differential qualification + M9 closure (**closed**)
   |
   v
 M10 eligibility
 ```
 
-Only `../registry.md` authorizes implementation. O010 is the current dependency-ready plan after O009 closure; M10 remains blocked until O010 is accepted.
+Only `../registry.md` authorizes implementation. O010 is closed; M10 is eligible for its own planning/implementation review, and no M10 work is promoted automatically.
 
 ## Structural design
 
@@ -190,7 +190,7 @@ Potential archive implementation is the one area that may justify a small focuse
 
 Each plan adds focused deterministic tests plus targeted Python differential fixtures. External provider calls, root systemd mutation, and public release replacement are not normal unit-test prerequisites; use temporary directories, loopback servers, fake executables, fake `systemctl`/cron environments, and local release fixtures.
 
-Rootful deployment should have a small disposable Linux acceptance check before M9 closure, but M10 owns the broader OS/SBC matrix.
+Rootful deployment should have a small disposable Linux acceptance check before M9 closure, but M10 owns the broader OS/SBC matrix. O010 accepted the bounded local qualification; the broader characterization remains M10 scope.
 
 ## M9 closure
 
@@ -208,6 +208,6 @@ O010 may close M9 only when:
 - update latest/exact/check/staging/failure behavior is complete without unsafe self-replacement;
 - deploy/uninstall workflows are deterministic and safe on supported local Linux/Unix targets;
 - no unresolved high/medium correctness, security, resource, compatibility, lifecycle, data-loss, or packaging finding remains;
-- M10 is promoted only after accepted O010 closure.
+- M10 is eligible for its own planning/implementation review after accepted O010 closure; no M10 work is promoted automatically.
 
 M9 does not require Python retirement or Rust-default public distribution; those remain M11/M12.

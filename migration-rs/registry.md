@@ -27,15 +27,17 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
-| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | **active planning/implementation** | **O010 ready** |
+| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | **closed after O010** | **M9 closed; M10 eligible for review** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | invariant/polish | accepted O009 | **dependency-ready** |
+| — | None | — | — | — |
 
-O010 is the sole dependency-ready implementation plan. Later plans are promoted only by accepted closure of their direct predecessor.
+O010 is accepted and removed from the dependency-ready queue. M10 is eligible
+for a separate planning/implementation review, but no M10 implementation plan
+is promoted automatically.
 
 ## Completed implementation plans
 
@@ -63,6 +65,7 @@ O010 is the sole dependency-ready implementation plan. Later plans are promoted 
 | O007 | [Operator inspection, maintenance, and metrics flush](implementation/operations/007-operator-inspection-maintenance-and-metrics-flush.md) | capability/invariant | `94fddcc` | [closed](closure/operations/007-status.md) |
 | O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | capability/invariant | `c9b63d5` | [closed](closure/operations/008-status.md) |
 | O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | capability/invariant | `27310ff` | [closed](closure/operations/009-status.md) |
+| O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | invariant/polish | `f41489c` | [closed](closure/operations/010-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -144,7 +147,7 @@ M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and
 | O007 | [Operator inspection, maintenance, and metrics flush](implementation/operations/007-operator-inspection-maintenance-and-metrics-flush.md) | **closed** |
 | O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | **closed** |
 | O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | **closed; 27310ff** |
-| O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | **dependency-ready; O009 closure accepted** |
+| O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | **closed; f41489c** |
 
 ### M9 boundary decisions
 
@@ -157,12 +160,14 @@ M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and
 - O007 reuses domain repositories/services and makes `metrics_flush` a real M8 task.
 - O008 uses a Rust artifact/update backend with staged integrity-checked replacement and makes `update_checker` a real M8 task; M11 owns making public Rust assets canonical.
 - O009 ports local systemd/cron/logrotate/uninstall behavior but does not perform M11 public-install cutover; its implementation and closure are accepted in `27310ff` and `closure/operations/009-status.md`.
-- O010 alone may close M9.
+- O010 alone may close M9; its accepted closure is recorded in `closure/operations/010-status.md`.
 
 ## Future work and block state
 
-M10 remains blocked on accepted O010 M9 closure and its own planning/implementation review. M11-M12 remain sequenced by `002-long-term-roadmap.md`. No M10 plan is promoted automatically.
+M10 is eligible after accepted O010 M9 closure, subject to its own
+planning/implementation review. M11-M12 remain sequenced by
+`002-long-term-roadmap.md`. No M10 plan is promoted automatically.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and O001-O009 are closed as described above. M9 is active with O009 closed, O010 dependency-ready, and M10 still blocked on accepted O010 closure.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and O001-O010 are closed as described above. M9 is closed after accepted O010 closure; M10 is eligible for its own planning/implementation review, and no later implementation plan is promoted automatically.
