@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q007 blocked on live evidence
+Status: active planning/implementation; Q007 blocked on live evidence; Q008 physical evidence complete but blocked behind Q007
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 

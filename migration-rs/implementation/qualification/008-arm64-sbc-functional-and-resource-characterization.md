@@ -1,6 +1,6 @@
 # Q008 — ARM64 SBC Functional and Resource Characterization
 
-Status: implemented; blocked pending physical SBC evidence
+Status: implemented; physical evidence complete; blocked pending Q007 acceptance
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -169,5 +169,6 @@ Implementation note: `scripts/qualification_sbc.py` and the
 `q008-sbc.toml` loopback fixture implement the guarded bounded harness and
 machine-readable `m10-q008.v1` evidence schema. The harness refuses to claim
 physical SBC evidence unless Linux/aarch64 execution and a device-tree board
-model are present; closure remains blocked until Q007 is accepted and a real
-board run is recorded.
+model are present. A real Raspberry Pi 5 run is recorded in the closure
+evidence; Q008 remains blocked only because its hard dependency Q007 is still
+formally blocked on live-provider evidence.

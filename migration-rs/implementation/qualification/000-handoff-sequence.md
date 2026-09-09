@@ -11,7 +11,7 @@ Execute and accept in this order:
 5. Q005 — qualify supported-target build and ordinary non-root runtime portability (**accepted**; see closure).
 6. Q006 — run real disposable rootful Linux/systemd/cron/logrotate/install/uninstall acceptance (**accepted**; see closure).
 7. Q007 — run bounded opt-in live-provider finite/stream/cross-surface smoke (**blocked; see closure**).
-8. Q008 — run real Linux ARM64 SBC functional and resource characterization.
+8. Q008 — run real Linux ARM64 SBC functional and resource characterization (**physical run complete; closure remains blocked behind Q007**).
 9. Q009 — run sustained deterministic failure/reload/streaming/resource-stability qualification.
 10. Q010 — aggregate all M10 evidence, close findings, and decide M11 planning readiness.
 

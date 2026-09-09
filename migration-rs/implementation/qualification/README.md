@@ -1,6 +1,6 @@
 # M10 Qualification Implementation Plans
 
-Status: active; Q007 blocked; Q008 implemented but blocked pending physical SBC evidence
+Status: active; Q007 blocked; Q008 physical evidence complete but blocked pending Q007 acceptance
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -15,7 +15,7 @@ These plans implement M10 only. They qualify the closed Rust implementation from
 5. [Q005 — Supported-target build and non-root runtime portability](005-supported-target-build-and-runtime-portability.md) — **accepted**; [closure](../../closure/qualification/005-status.md).
 6. [Q006 — Disposable rootful Linux operational acceptance](006-rootful-linux-operational-acceptance.md) — **accepted**; [closure](../../closure/qualification/006-status.md).
 7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **blocked; see closure**.
-8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **implemented; blocked behind Q007 and physical SBC evidence**.
+8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **physical evidence complete; blocked behind Q007**.
 9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — queued behind Q008.
 10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — queued behind Q009.
 
