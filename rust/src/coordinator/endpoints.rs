@@ -362,7 +362,7 @@ fn map_finite_error(error: super::FiniteCoordinatorError) -> EndpointError {
         Finite::MissingWireProfile { provider_id } => {
             EndpointError::MissingWireProfile { provider_id }
         }
-        Finite::Publication(_) => EndpointError::PublicationConflict,
+        Finite::Publication(error) => map_publication_error(error),
         Finite::Claim(_) => EndpointError::Claim,
         Finite::Attempt(_) => EndpointError::Attempt,
         Finite::Finalization(_) => EndpointError::Finalization,
@@ -379,11 +379,18 @@ fn map_stream_error(error: super::StreamingCoordinatorError) -> EndpointError {
         Stream::MissingWireProfile { provider_id } => {
             EndpointError::MissingWireProfile { provider_id }
         }
-        Stream::Publication(_) => EndpointError::PublicationConflict,
+        Stream::Publication(error) => map_publication_error(error),
         Stream::Claim(_) => EndpointError::Claim,
         Stream::Attempt(_) => EndpointError::Attempt,
         Stream::Finalization(_) => EndpointError::Finalization,
         Stream::Effects(_) => EndpointError::Attempt,
+    }
+}
+
+fn map_publication_error(error: super::PublicationError) -> EndpointError {
+    match error {
+        super::PublicationError::DuplicateConflict { .. } => EndpointError::PublicationConflict,
+        _ => EndpointError::Attempt,
     }
 }
 

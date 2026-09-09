@@ -301,12 +301,13 @@ class Launcher:
         *,
         environment: IsolatedEnvironment,
         timeout: float = 10.0,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> CommandObservation:
         return ProcessRunner().run(
             self.identity,
             self.command(args),
             cwd=environment.root,
-            env=environment.env(),
+            env=environment.env(env_overrides),
             timeout=timeout,
         )
 
@@ -315,12 +316,13 @@ class Launcher:
         args: Sequence[str],
         *,
         environment: IsolatedEnvironment,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> RunningProcess:
         return ProcessRunner().spawn(
             self.identity,
             self.command(args),
             cwd=environment.root,
-            env=environment.env(),
+            env=environment.env(env_overrides),
         )
 
 
@@ -347,8 +349,12 @@ class PythonLauncher(Launcher):
         *,
         environment: IsolatedEnvironment,
         timeout: float = 10.0,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> CommandObservation:
-        env = environment.env({"PYTHONPATH": str(self.repository / "src")})
+        overrides = {"PYTHONPATH": str(self.repository / "src")}
+        if env_overrides:
+            overrides.update(env_overrides)
+        env = environment.env(overrides)
         return ProcessRunner().run(
             self.identity,
             self.command(args),
@@ -362,8 +368,12 @@ class PythonLauncher(Launcher):
         args: Sequence[str],
         *,
         environment: IsolatedEnvironment,
+        env_overrides: Mapping[str, str] | None = None,
     ) -> RunningProcess:
-        env = environment.env({"PYTHONPATH": str(self.repository / "src")})
+        overrides = {"PYTHONPATH": str(self.repository / "src")}
+        if env_overrides:
+            overrides.update(env_overrides)
+        env = environment.env(overrides)
         return ProcessRunner().spawn(
             self.identity,
             self.command(args),
@@ -520,7 +530,14 @@ class HttpObservation:
 
 
 _STABLE_RESPONSE_HEADERS = frozenset(
-    {"cache-control", "content-type", "allow", "www-authenticate"}
+    {
+        "cache-control",
+        "content-type",
+        "allow",
+        "www-authenticate",
+        "x-proxy-request-id",
+        "x-proxy-attempt-count",
+    }
 )
 
 
