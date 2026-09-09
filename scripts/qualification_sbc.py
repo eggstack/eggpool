@@ -141,6 +141,42 @@ def _os_release() -> dict[str, str]:
     return values
 
 
+def _root_mount_source() -> str | None:
+    """Return the sanitized source device for the root filesystem."""
+    mounts = _read_text(Path("/proc/mounts")) or ""
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[1] == "/":
+            return fields[0]
+    return None
+
+
+def _root_block_device(source: str | None) -> str | None:
+    """Resolve a partition source to its parent block-device name."""
+    if not source or not source.startswith("/dev/"):
+        return None
+    name = Path(source).name
+    for pattern in (r"^(mmcblk\d+)p\d+$", r"^(nvme\d+n\d+)p\d+$"):
+        match = re.match(pattern, name)
+        if match:
+            return match.group(1)
+    match = re.match(r"^([a-z]+)\d+$", name)
+    return match.group(1) if match else name
+
+
+def _storage_device_class(device: str | None) -> str | None:
+    """Return a non-identifying class for a root block device."""
+    if not device:
+        return None
+    if device.startswith("mmcblk"):
+        return "mmc"
+    if device.startswith("nvme"):
+        return "nvme"
+    if device.startswith("sd"):
+        return "scsi-disk"
+    return "block-device"
+
+
 def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     """Return board facts, or why physical SBC evidence is unavailable."""
     if platform.system().lower() != "linux":
@@ -198,16 +234,18 @@ def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     thermal_celsius = None
     if thermal and thermal.isdigit():
         thermal_celsius = round(int(thermal) / 1000, 1)
-    rotational_values: list[str] = []
-    for path in Path("/sys/block").glob("*/queue/rotational"):
-        value = _read_text(path)
-        if value in {"0", "1"}:
-            rotational_values.append(value)
+    root_source = _root_mount_source()
+    root_device = _root_block_device(root_source)
+    rotational = (
+        _read_text(Path(f"/sys/class/block/{root_device}/queue/rotational"))
+        if root_device
+        else None
+    )
     storage = (
         "rotational"
-        if "1" in rotational_values
+        if rotational == "1"
         else "non-rotational"
-        if rotational_values
+        if rotational == "0"
         else "unavailable"
     )
     filesystem = "unavailable"
@@ -225,6 +263,7 @@ def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
         "cpu_governor": governors,
         "ram_bytes": memory_kib * 1024 if memory_kib is not None else None,
         "storage_medium_class": storage,
+        "root_storage_device_class": _storage_device_class(root_device),
         "filesystem": filesystem,
         "os": release.get("PRETTY_NAME") or release.get("NAME"),
         "os_version_id": release.get("VERSION_ID"),
@@ -367,6 +406,39 @@ def _http(
             return response.status, response.read(MAX_HTTP_BODY_BYTES)
     except urllib.error.HTTPError as error:
         return error.code, error.read(MAX_HTTP_BODY_BYTES)
+
+
+def _timed_http(
+    url: str,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+    headers: Mapping[str, str] | None = None,
+    timeout: float = 5.0,
+) -> tuple[int, bytes, int, int | None]:
+    """Return a bounded response plus total and first-byte timings."""
+    request = urllib.request.Request(
+        url, data=body, headers=dict(headers or {}), method=method
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            first = response.read(1)
+            ttft_ms = round((time.monotonic() - started) * 1000) if first else None
+            body_value = first + response.read(MAX_HTTP_BODY_BYTES - len(first))
+            return (
+                response.status,
+                body_value,
+                round((time.monotonic() - started) * 1000),
+                ttft_ms,
+            )
+    except urllib.error.HTTPError as error:
+        return (
+            error.code,
+            error.read(MAX_HTTP_BODY_BYTES),
+            round((time.monotonic() - started) * 1000),
+            None,
+        )
 
 
 def _run(
@@ -693,7 +765,9 @@ def _environment(root: Path, config: Path) -> dict[str, str]:
     return values
 
 
-def _request(port: int, surface: str, model: str, streaming: bool) -> tuple[int, bytes]:
+def _request_timed(
+    port: int, surface: str, model: str, streaming: bool
+) -> tuple[int, bytes, int, int | None]:
     paths = {
         "chat_completions": "/v1/chat/completions",
         "responses": "/v1/responses",
@@ -711,7 +785,7 @@ def _request(port: int, surface: str, model: str, streaming: bool) -> tuple[int,
         payload = {"model": model, "messages": [{"role": "user", "content": "ping"}]}
     if streaming:
         payload["stream"] = True
-    return _http(
+    return _timed_http(
         f"http://127.0.0.1:{port}{paths[surface]}",
         method="POST",
         body=json.dumps(payload).encode(),
@@ -729,6 +803,7 @@ def run_qualification(
     timeout: float = COMMAND_TIMEOUT,
     expected_sha256: str | None = None,
     candidate_origin: str = "supplied-candidate",
+    build_elapsed_ms: int | None = None,
 ) -> dict[str, Any]:
     """Run Q008 and return a bounded machine-readable report."""
     report: dict[str, Any] = {
@@ -762,6 +837,8 @@ def run_qualification(
         "build_mode": candidate_origin,
         "binary_size_bytes": binary.stat().st_size,
     }
+    if build_elapsed_ms is not None:
+        report["candidate"]["build_elapsed_ms"] = build_elapsed_ms
     if expected_sha256 and candidate_hash != expected_sha256.lower():
         report["status"] = "fail"
         report["reason"] = "candidate SHA-256 does not match --expected-sha256"
@@ -800,6 +877,14 @@ def run_qualification(
         env = _environment(root, config)
         commands: list[CommandResult] = []
         samples: list[dict[str, Any]] = []
+        workload_timings: dict[str, list[int]] = {
+            "finite_elapsed_ms": [],
+            "finite_ttft_ms": [],
+            "streaming_elapsed_ms": [],
+            "streaming_ttft_ms": [],
+            "second_workload_elapsed_ms": [],
+            "second_workload_ttft_ms": [],
+        }
         with LoopbackProvider() as provider:
             content = _render_fixture(
                 config_fixture,
@@ -877,7 +962,9 @@ def run_qualification(
                     )
                 )
                 for surface, model in MODELS.items():
-                    status, body = _request(port, surface, model, False)
+                    status, body, elapsed_ms, ttft_ms = _request_timed(
+                        port, surface, model, False
+                    )
                     passed = status == 200 and len(body) > 0
                     report["functional"].append(
                         {
@@ -885,14 +972,21 @@ def run_qualification(
                             "status": "pass" if passed else "fail",
                             "http_status": status,
                             "body_bytes": len(body),
+                            "elapsed_ms": elapsed_ms,
+                            "ttft_ms": ttft_ms,
                         }
                     )
+                    workload_timings["finite_elapsed_ms"].append(elapsed_ms)
+                    if ttft_ms is not None:
+                        workload_timings["finite_ttft_ms"].append(ttft_ms)
                     if not passed:
                         raise QualificationError(
                             f"{surface} finite request returned HTTP {status}"
                         )
                 for surface, model in MODELS.items():
-                    status, body = _request(port, surface, model, True)
+                    status, body, elapsed_ms, ttft_ms = _request_timed(
+                        port, surface, model, True
+                    )
                     markers = {
                         "chat_completions": b"[DONE]",
                         "responses": b"response.completed",
@@ -906,8 +1000,13 @@ def run_qualification(
                             "http_status": status,
                             "body_bytes": len(body),
                             "terminal_evidence": markers[surface] in body,
+                            "elapsed_ms": elapsed_ms,
+                            "ttft_ms": ttft_ms,
                         }
                     )
+                    workload_timings["streaming_elapsed_ms"].append(elapsed_ms)
+                    if ttft_ms is not None:
+                        workload_timings["streaming_ttft_ms"].append(ttft_ms)
                     if not passed:
                         raise QualificationError(
                             f"{surface} stream lacked terminal evidence"
@@ -1070,11 +1169,16 @@ def run_qualification(
                     {"id": "restart-reconcile", "status": "pass"}
                 )
                 for surface, model in list(MODELS.items())[:2]:
-                    status, body = _request(port, surface, model, False)
+                    status, body, elapsed_ms, ttft_ms = _request_timed(
+                        port, surface, model, False
+                    )
                     if status != 200 or not body:
                         raise QualificationError(
                             f"second workload {surface} failed with HTTP {status}"
                         )
+                    workload_timings["second_workload_elapsed_ms"].append(elapsed_ms)
+                    if ttft_ms is not None:
+                        workload_timings["second_workload_ttft_ms"].append(ttft_ms)
                 samples.append(
                     resource_sample(
                         "after-second-workload",
@@ -1121,6 +1225,16 @@ def run_qualification(
                         "performance threshold applied"
                     ),
                 }
+                report["request_workload_timings"] = {
+                    "sample_count": sum(
+                        len(values) for values in workload_timings.values()
+                    ),
+                    "elapsed_ms": workload_timings,
+                    "interpretation": (
+                        "bounded client-observed timings; first-byte values are "
+                        "diagnostic characterization, not an SLA"
+                    ),
+                }
             finally:
                 _stop(process, min(timeout, 5))
                 log_out.close()
@@ -1137,6 +1251,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--config-fixture", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--expected-sha256")
+    parser.add_argument(
+        "--build-elapsed-ms",
+        type=int,
+        help="Elapsed time for an on-device release build, if measured.",
+    )
     parser.add_argument(
         "--candidate-origin",
         choices=("on-device-release-build", "q005-qualified-aarch64-copy"),
@@ -1157,6 +1276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             expected_sha256=args.expected_sha256,
             candidate_origin=args.candidate_origin,
+            build_elapsed_ms=args.build_elapsed_ms,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         report = {

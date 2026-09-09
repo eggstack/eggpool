@@ -10,6 +10,8 @@ from pathlib import Path
 from scripts.qualification_sbc import (
     DEFAULT_FIXTURE,
     SCHEMA_VERSION,
+    _root_block_device,
+    _storage_device_class,
     bounded,
     main,
     run_qualification,
@@ -44,6 +46,13 @@ def test_q008_redacts_credentials_and_bounds_diagnostics() -> None:
     assert "q008-provider-key" not in value
     assert "user:pass" not in value
     assert len(value.encode()) <= 768
+
+
+def test_q008_storage_metadata_uses_root_device_without_identity() -> None:
+    assert _root_block_device("/dev/mmcblk0p2") == "mmcblk0"
+    assert _root_block_device("/dev/nvme0n1p3") == "nvme0n1"
+    assert _storage_device_class("mmcblk0") == "mmc"
+    assert _storage_device_class("nvme0n1") == "nvme"
 
 
 def test_q008_missing_candidate_is_blocked_before_mutation_on_linux_sbc(
