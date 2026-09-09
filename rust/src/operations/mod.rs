@@ -8,6 +8,7 @@
 pub mod backup;
 pub mod config_mutation;
 pub mod control;
+pub mod deploy;
 pub mod integrations;
 pub mod metrics;
 pub mod operator;

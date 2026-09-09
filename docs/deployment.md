@@ -3,6 +3,12 @@
 Two deployment modes: **personal use** (quick, current user) and
 **production** (separate user, hardened). Pick the one that fits.
 
+> Migration note: the commands below are the public Python installation and
+> release path until M11. The Rust candidate has a separate side-by-side
+> deployment path for M9/M10 qualification; see
+> [Rust candidate deployment](rust-candidate-deployment.md). Do not replace
+> `scripts/install.sh` or the quick-start commands with the Rust binary yet.
+
 ## Personal Use (Recommended for LAN/Raspberry Pi)
 
 Runs under your current user with your existing config. Not intended

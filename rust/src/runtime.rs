@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -88,18 +89,439 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
         Some(Command::Modelinfo(command)) => modelinfo(&config_path, command).await?,
         Some(Command::Stats(command)) => stats(&config_path, command).await?,
+        Some(Command::Deploy(args)) => deploy(&config_path, args).await?,
+        Some(Command::Uninstall(args)) => uninstall(&config_path, args).await?,
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());
         }
         Some(Command::Help) => println!("{}", crate::cli::help_text()),
-        Some(command) => {
-            return Err(BootstrapError::NotImplemented {
-                command: command.unavailable_name().to_string(),
-            });
+    }
+    Ok(())
+}
+
+async fn deploy(path: &Path, args: crate::cli::DeployArgs) -> Result<(), BootstrapError> {
+    let Some(command) = args.command else {
+        println!("Use `eggpool deploy systemd|cron|backup-cron|logrotate|all`.");
+        return Ok(());
+    };
+    match command {
+        crate::cli::DeployCommand::Systemd(args) => deploy_systemd(path, args).await,
+        crate::cli::DeployCommand::Cron(args) => deploy_cron(path, args),
+        crate::cli::DeployCommand::BackupCron(args) => deploy_backup_cron(path, args),
+        crate::cli::DeployCommand::Logrotate(args) => deploy_logrotate(args),
+        crate::cli::DeployCommand::All(args) => {
+            deploy_systemd(
+                path,
+                crate::cli::DeploySystemdArgs {
+                    install: args.install,
+                    production: false,
+                    as_root: false,
+                },
+            )
+            .await?;
+            deploy_logrotate(crate::cli::DeployLogrotateArgs {
+                install: args.install,
+            })?;
+            deploy_cron(
+                path,
+                crate::cli::DeployCronArgs {
+                    install: args.install,
+                    uninstall: false,
+                    interval: None,
+                    user: None,
+                },
+            )?;
+            println!(
+                "Note: nightly backups are configured separately via `eggpool deploy backup-cron --install`."
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn deploy_systemd(
+    path: &Path,
+    args: crate::cli::DeploySystemdArgs,
+) -> Result<(), BootstrapError> {
+    use crate::operations::deploy::{self as deployment, CommandRunner};
+
+    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    let mut runner = deployment::SystemCommandRunner;
+    if args.production {
+        #[cfg(unix)]
+        if args.install && !nix::unistd::geteuid().is_root() {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                "production deployment requires root privileges",
+            ));
+        }
+        let config = PathBuf::from(deployment::PRODUCTION_CONFIG_DIR).join("config.toml");
+        let unit = deployment::render_production_systemd(&deployment::ProductionSystemdSpec {
+            binary: binary.clone(),
+        });
+        println!("EggPool production systemd unit:\n\n{unit}");
+        if !args.install {
+            return Ok(());
+        }
+        if !prompt_confirmation("Provision the production EggPool layout and start the service?")? {
+            println!("Aborted.");
+            return Ok(());
+        }
+        if Path::new(deployment::SYSTEMD_UNIT_PATH).exists() {
+            let stop = vec!["stop".to_owned(), deployment::SERVICE_NAME.to_owned()];
+            let _ = runner.run("systemctl", &stop, None);
+        }
+        if RuntimePaths::resolve().pid_file.exists() {
+            stop(path, 10.0).await?;
+        }
+        let id_args = vec!["-u".to_owned(), "eggpool".to_owned()];
+        let user_exists = runner
+            .run("id", &id_args, None)
+            .map_err(deployment_error)?
+            .status
+            == 0;
+        if !user_exists {
+            let useradd = vec![
+                "-r".to_owned(),
+                "-s".to_owned(),
+                "/usr/sbin/nologin".to_owned(),
+                "-d".to_owned(),
+                deployment::PRODUCTION_DATA_DIR.to_owned(),
+                "eggpool".to_owned(),
+            ];
+            deployment::run_required(&mut runner, "useradd", &useradd, None)
+                .map_err(deployment_error)?;
+        }
+        for (directory, mode, owner) in [
+            (deployment::PRODUCTION_DATA_DIR, 0o750, "eggpool:eggpool"),
+            (deployment::PRODUCTION_LOG_DIR, 0o750, "eggpool:eggpool"),
+            (deployment::PRODUCTION_BACKUP_DIR, 0o750, "eggpool:eggpool"),
+            (deployment::PRODUCTION_CONFIG_DIR, 0o755, "root:eggpool"),
+        ] {
+            fs::create_dir_all(directory)
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            fs::set_permissions(
+                directory,
+                std::os::unix::fs::PermissionsExt::from_mode(mode),
+            )
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let chown = vec![owner.to_owned(), directory.to_owned()];
+            deployment::run_required(&mut runner, "chown", &chown, None)
+                .map_err(deployment_error)?;
+        }
+        if !config.exists() {
+            let source = fs::read(path).map_err(|error| {
+                command_error(
+                    EXIT_VALIDATION,
+                    format!("production config is missing and could not be seeded: {error}"),
+                )
+            })?;
+            deployment::write_atomic(&config, &source, 0o640).map_err(deployment_error)?;
+            println!("Seeded {} from {}.", config.display(), path.display());
+        }
+        let env_path = PathBuf::from(deployment::PRODUCTION_CONFIG_DIR).join("env");
+        if !env_path.exists() {
+            deployment::write_atomic(
+                &env_path,
+                b"# Environment for the Rust EggPool candidate.\n",
+                0o640,
+            )
+            .map_err(deployment_error)?;
+            println!("Seeded {}.", env_path.display());
+        }
+        deployment::validate_config(&config).map_err(deployment_error)?;
+        deployment::write_atomic(
+            Path::new(deployment::SYSTEMD_UNIT_PATH),
+            unit.as_bytes(),
+            0o644,
+        )
+        .map_err(deployment_error)?;
+        for args in [
+            vec!["daemon-reload".to_owned()],
+            vec!["enable".to_owned(), deployment::SERVICE_NAME.to_owned()],
+            vec!["start".to_owned(), deployment::SERVICE_NAME.to_owned()],
+        ] {
+            deployment::run_required(&mut runner, "systemctl", &args, None)
+                .map_err(deployment_error)?;
+        }
+        println!("Production systemd service installed and started.");
+        return Ok(());
+    }
+
+    let user = deployment::DeployUser::current();
+    if args.install && user.direct_root && !args.as_root {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "refusing to install a personal systemd unit as direct root; pass --as-root or --production",
+        ));
+    }
+    let paths = RuntimePaths::resolve();
+    let config = fs::canonicalize(path)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let env_file = crate::config::resolve_env_path(Some(&config));
+    let unit = deployment::render_personal_systemd(&deployment::PersonalSystemdSpec {
+        binary: binary.clone(),
+        config: config.clone(),
+        data_dir: paths.data_dir.clone(),
+        env_file,
+        user: user.name.clone(),
+        group: user.group.clone(),
+    });
+    println!("EggPool personal systemd unit:\n\n{unit}");
+    if !args.install {
+        return Ok(());
+    }
+    if !prompt_confirmation("Install the personal EggPool systemd unit and start the service?")? {
+        println!("Aborted.");
+        return Ok(());
+    }
+    if paths.pid_file.exists() {
+        stop(path, 10.0).await?;
+    }
+    let owner = format!("{}:{}", user.name, user.group);
+    let directories = vec![
+        (paths.config_dir, 0o700, owner.clone()),
+        (paths.data_dir, 0o750, owner.clone()),
+        (paths.state_dir, 0o700, owner.clone()),
+    ];
+    deployment::install_systemd(
+        &mut runner,
+        Path::new(deployment::SYSTEMD_UNIT_PATH),
+        &unit,
+        &config,
+        &directories,
+        true,
+    )
+    .map_err(deployment_error)?;
+    println!("Personal systemd service installed and started.");
+    Ok(())
+}
+
+fn deploy_cron(path: &Path, args: crate::cli::DeployCronArgs) -> Result<(), BootstrapError> {
+    use crate::operations::deploy as deployment;
+
+    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    let config = fs::canonicalize(path)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let paths = RuntimePaths::resolve();
+    let interval = args.interval.unwrap_or(5);
+    let block = deployment::render_watchdog_cron(&binary, &config, &paths.log_file, interval)
+        .map_err(deployment_error)?;
+    let user = args.user.unwrap_or_else(|| {
+        env::var("SUDO_USER")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| env::var("USER").ok())
+            .unwrap_or_else(|| "root".to_owned())
+    });
+    if args.install == args.uninstall {
+        println!("EggPool watchdog cron:\n\n{block}");
+        return Ok(());
+    }
+    if args.install {
+        if !prompt_confirmation(&format!("Install watchdog cron for user {user}?"))? {
+            println!("Aborted.");
+            return Ok(());
+        }
+        let mut runner = deployment::SystemCommandRunner;
+        deployment::install_cron_block(&mut runner, &user, &block).map_err(deployment_error)?;
+        println!("Watchdog cron installed for {user}.");
+    } else {
+        let mut runner = deployment::SystemCommandRunner;
+        deployment::uninstall_cron_blocks(&mut runner, &user).map_err(deployment_error)?;
+        println!("EggPool cron blocks removed from {user}'s crontab.");
+    }
+    Ok(())
+}
+
+fn deploy_backup_cron(
+    path: &Path,
+    args: crate::cli::DeployBackupCronArgs,
+) -> Result<(), BootstrapError> {
+    use crate::operations::deploy as deployment;
+
+    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    let config = fs::canonicalize(path)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let block = deployment::render_backup_cron(&binary, &config, args.production);
+    let script = deployment::render_backup_script(&binary, &config);
+    if args.install == args.uninstall {
+        println!("EggPool backup cron:\n\n{block}");
+        return Ok(());
+    }
+    let mut runner = deployment::SystemCommandRunner;
+    let user = args.user.unwrap_or_else(|| {
+        env::var("SUDO_USER")
+            .or_else(|_| env::var("USER"))
+            .unwrap_or_else(|_| "root".to_owned())
+    });
+    if args.production {
+        #[cfg(unix)]
+        if !nix::unistd::geteuid().is_root() {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                "production backup cron requires root privileges",
+            ));
+        }
+        if args.install {
+            deployment::write_atomic(
+                Path::new(deployment::BACKUP_SCRIPT_PATH),
+                script.as_bytes(),
+                0o755,
+            )
+            .map_err(deployment_error)?;
+            deployment::write_atomic(
+                Path::new(deployment::PRODUCTION_CRON_PATH),
+                block.as_bytes(),
+                0o644,
+            )
+            .map_err(deployment_error)?;
+            println!("Production backup cron installed.");
+        } else {
+            deployment::remove_artifact(Path::new(deployment::PRODUCTION_CRON_PATH))
+                .map_err(deployment_error)?;
+            deployment::remove_artifact(Path::new(deployment::BACKUP_SCRIPT_PATH))
+                .map_err(deployment_error)?;
+            println!("Production backup cron removed.");
+        }
+    } else if args.install {
+        if !prompt_confirmation(&format!("Install backup cron for user {user}?"))? {
+            println!("Aborted.");
+            return Ok(());
+        }
+        deployment::install_cron_block(&mut runner, &user, &block).map_err(deployment_error)?;
+        println!("Backup cron installed for {user}.");
+    } else {
+        deployment::uninstall_cron_blocks(&mut runner, &user).map_err(deployment_error)?;
+        println!("EggPool backup cron blocks removed from {user}'s crontab.");
+    }
+    Ok(())
+}
+
+fn deploy_logrotate(args: crate::cli::DeployLogrotateArgs) -> Result<(), BootstrapError> {
+    use crate::operations::deploy as deployment;
+
+    let content = deployment::render_logrotate(Path::new(deployment::PRODUCTION_LOG_DIR));
+    println!("EggPool logrotate configuration:\n\n{content}");
+    if !args.install {
+        return Ok(());
+    }
+    if !prompt_confirmation("Install the EggPool logrotate configuration?")? {
+        println!("Aborted.");
+        return Ok(());
+    }
+    let mut runner = deployment::SystemCommandRunner;
+    if let Err(error) = deployment::install_logrotate(
+        &mut runner,
+        Path::new(deployment::LOGROTATE_PATH),
+        &content,
+        true,
+    ) {
+        if matches!(error, deployment::DeployError::Command { ref program, .. } if program == "logrotate")
+            && !command_exists("logrotate")
+        {
+            eprintln!(
+                "Warning: logrotate is not installed; configuration was written but not validated."
+            );
+            return Ok(());
+        }
+        return Err(deployment_error(error));
+    }
+    println!("Logrotate configuration installed.");
+    Ok(())
+}
+
+async fn uninstall(path: &Path, args: crate::cli::UninstallArgs) -> Result<(), BootstrapError> {
+    use crate::operations::deploy as deployment;
+
+    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    if fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "refusing to uninstall through a symlinked configuration path",
+        ));
+    }
+    let config = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let runtime_paths = RuntimePaths::resolve();
+    let targets = deployment::UninstallTargets {
+        binary,
+        config: config.clone(),
+        env: crate::config::resolve_env_path(Some(&config)),
+        data_dir: runtime_paths.data_dir,
+        state_dir: runtime_paths.state_dir,
+        systemd_unit: PathBuf::from(deployment::SYSTEMD_UNIT_PATH),
+        logrotate: PathBuf::from(deployment::LOGROTATE_PATH),
+        production_cron: PathBuf::from(deployment::PRODUCTION_CRON_PATH),
+        backup_script: PathBuf::from(deployment::BACKUP_SCRIPT_PATH),
+        shell_rc_files: home_rc_files(),
+    };
+    println!("EggPool uninstall targets:");
+    println!("  binary: {}", targets.binary.display());
+    println!("  config: {}", targets.config.display());
+    println!("  data:   {}", targets.data_dir.display());
+    if !args.yes && !prompt_confirmation("Remove the Rust EggPool installation and selected data?")?
+    {
+        println!("Aborted.");
+        return Ok(());
+    }
+    let keep = deployment::KeepFlags {
+        data: args.keep_data,
+        config: args.keep_config,
+        path: args.keep_path,
+        deploy_artifacts: !args.deploy_artifacts,
+    };
+    let mut runner = deployment::SystemCommandRunner;
+    let leftovers =
+        deployment::uninstall(&mut runner, &targets, keep, true).map_err(deployment_error)?;
+    if leftovers.is_empty() {
+        println!("Rust EggPool uninstall completed; known targets are absent.");
+    } else {
+        eprintln!("Uninstall completed with leftovers; remove these after reviewing permissions:");
+        for path in leftovers {
+            eprintln!("  {}", path.display());
         }
     }
     Ok(())
+}
+
+fn deployment_error(error: crate::operations::deploy::DeployError) -> BootstrapError {
+    command_error(EXIT_VALIDATION, error.to_string())
+}
+
+fn prompt_confirmation(message: &str) -> Result<bool, BootstrapError> {
+    print!("{message} [y/N] ");
+    io::stdout()
+        .flush()
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn command_exists(name: &str) -> bool {
+    env::var_os("PATH")
+        .map(|path| env::split_paths(&path).any(|directory| directory.join(name).is_file()))
+        .unwrap_or(false)
+}
+
+fn home_rc_files() -> Vec<PathBuf> {
+    let Some(home) = env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    [".zshrc", ".bashrc", ".bash_profile", ".profile"]
+        .into_iter()
+        .map(|name| home.join(name))
+        .filter(|path| path.is_file())
+        .collect()
 }
 
 async fn open_maintenance_database(
