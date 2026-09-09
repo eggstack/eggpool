@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q003 dependency-ready
+Status: active planning/implementation; Q004 dependency-ready
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 
@@ -80,7 +80,7 @@ Q001 qualification contract, target matrix, and evidence schema freeze
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q003 is the sole dependency-ready M10 plan after accepted Q002 closure.
+Only `../registry.md` authorizes implementation. Q004 is the sole dependency-ready M10 plan after accepted Q003 closure.
 
 ## Qualification environment classes
 
@@ -123,7 +123,7 @@ Exercise the final Rust schema/repository/operations surface against Python-crea
 
 No migration reset or Rust-only convenience schema is allowed.
 
-Exit: every supported transition preserves schema checksums, required data, and rollback readability; faulted restore retains a usable prior state.
+Exit: every supported transition preserves schema checksums, required data, and rollback readability; faulted restore retains a usable prior state. **Accepted; see `../closure/qualification/003-status.md`.**
 
 ## Q004 — Dashboard SSR, DOM, static asset, and visual parity review
 

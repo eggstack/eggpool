@@ -1,6 +1,6 @@
 # Q004 — Dashboard SSR, DOM, Static Asset, and Visual Parity Review
 
-Status: queued behind Q003
+Status: ready for handoff (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
