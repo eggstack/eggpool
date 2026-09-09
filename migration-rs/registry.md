@@ -28,7 +28,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q005 ready** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q006 ready** |
 
 ## Dependency-ready implementation plans
 
@@ -36,9 +36,11 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 |---|---|---|---|---|
 | Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | accepted Q001 | **complete; see closure** |
 | Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | accepted Q002 | **complete; see closure** |
-| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | accepted Q004 | **ready** |
+| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | accepted Q004 | **accepted; see closure** |
 
-Q005 is the sole dependency-ready implementation plan. Q006-Q010 remain registered and queued serially; later plans are promoted only by accepted closure of their direct predecessor.
+| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | invariant/capability | accepted Q005 | **ready** |
+
+Q006 is the sole dependency-ready implementation plan. Q007-Q010 remain registered and queued serially; later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Completed implementation plans
 
@@ -71,6 +73,7 @@ Q005 is the sole dependency-ready implementation plan. Q006-Q010 remain register
 | Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | `de50b7a27aa7829a41baa5c6a8ff5e08248dd401` | [accepted](closure/qualification/002-status.md) |
 | Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | `482856a898c40979c70106bd29958fcc454115ca` | [accepted](closure/qualification/003-status.md) |
 | Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | invariant/polish | `73fad30f4eb79bcc75c38bd33a72c5b993f970cc` | [accepted](closure/qualification/004-status.md) |
+| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | `76d329f3` | [accepted](closure/qualification/005-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -151,8 +154,8 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | **complete; see closure** |
 | Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | **complete; see closure** |
 | Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | **accepted; see closure** |
-| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | **ready; sole dependency-ready M10 plan** |
-| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | queued behind Q005 |
+| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | **accepted; see closure** |
+| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | **ready; sole dependency-ready M10 plan** |
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | queued behind Q006 |
 | Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | queued behind Q007 |
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | queued behind Q008 |
@@ -175,4 +178,4 @@ M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separat
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q004 are accepted within active M10; Q005 is the sole dependency-ready plan. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q005 are accepted within active M10; Q006 is the sole dependency-ready plan. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.

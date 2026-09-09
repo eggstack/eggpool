@@ -1,6 +1,8 @@
 # Q005 — Supported-Target Build and Non-Root Runtime Portability
 
-Status: ready for handoff (2026-09-09)
+Status: accepted; closed 2026-09-09
+
+Closure: [005-status.md](../../closure/qualification/005-status.md)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

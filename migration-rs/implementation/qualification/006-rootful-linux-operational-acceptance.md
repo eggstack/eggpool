@@ -1,6 +1,6 @@
 # Q006 — Disposable Rootful Linux Operational Acceptance
 
-Status: queued behind Q005
+Status: ready for handoff (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

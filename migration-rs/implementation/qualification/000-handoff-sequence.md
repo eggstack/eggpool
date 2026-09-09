@@ -1,6 +1,6 @@
 # M10 Qualification Handoff Sequence
 
-Status: active; Q005 ready
+Status: active; Q006 ready
 
 Execute and accept in this order:
 
@@ -8,8 +8,8 @@ Execute and accept in this order:
 2. Q002 — build and run the migration-wide deterministic Python/Rust qualification runner (**accepted**).
 3. Q003 — qualify Python/Rust DB upgrade/rollback plus backup/recovery fault safety (**accepted**).
 4. Q004 — qualify dashboard DOM/static/escaping/navigation and representative visual parity (**accepted**).
-5. Q005 — qualify supported-target build and ordinary non-root runtime portability (**ready**).
-6. Q006 — run real disposable rootful Linux/systemd/cron/logrotate/install/uninstall acceptance.
+5. Q005 — qualify supported-target build and ordinary non-root runtime portability (**accepted**; see closure).
+6. Q006 — run real disposable rootful Linux/systemd/cron/logrotate/install/uninstall acceptance (**ready**).
 7. Q007 — run bounded opt-in live-provider finite/stream/cross-surface smoke.
 8. Q008 — run real Linux ARM64 SBC functional and resource characterization.
 9. Q009 — run sustained deterministic failure/reload/streaming/resource-stability qualification.
@@ -29,4 +29,4 @@ Execute and accept in this order:
 - No M11 release asset/public installer/default-update cutover is pulled forward.
 - No M12 Python retirement work is pulled forward.
 
-Only `migration-rs/registry.md` authorizes implementation. Q005 is now the sole ready plan; Q006-Q010 remain queued behind their direct predecessors.
+Only `migration-rs/registry.md` authorizes implementation. Q006 is now the sole ready plan; Q007-Q010 remain queued behind their direct predecessors.
