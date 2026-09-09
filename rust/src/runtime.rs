@@ -218,6 +218,9 @@ async fn deploy_systemd(
                 )
             })?;
             deployment::write_atomic(&config, &source, 0o640).map_err(deployment_error)?;
+            let chown = vec!["root:eggpool".to_owned(), config.display().to_string()];
+            deployment::run_required(&mut runner, "chown", &chown, None)
+                .map_err(deployment_error)?;
             println!("Seeded {} from {}.", config.display(), path.display());
         }
         let env_path = PathBuf::from(deployment::PRODUCTION_CONFIG_DIR).join("env");
@@ -228,6 +231,9 @@ async fn deploy_systemd(
                 0o640,
             )
             .map_err(deployment_error)?;
+            let chown = vec!["root:eggpool".to_owned(), env_path.display().to_string()];
+            deployment::run_required(&mut runner, "chown", &chown, None)
+                .map_err(deployment_error)?;
             println!("Seeded {}.", env_path.display());
         }
         deployment::validate_config(&config).map_err(deployment_error)?;
@@ -265,6 +271,7 @@ async fn deploy_systemd(
         config: config.clone(),
         data_dir: paths.data_dir.clone(),
         env_file,
+        home: user.home.clone(),
         user: user.name.clone(),
         group: user.group.clone(),
     });

@@ -36,6 +36,8 @@ def test_q005_fake_candidate_crash_is_failure_not_timeout(tmp_path: Path) -> Non
     candidate.write_text("#!/bin/sh\nexit 37\n", encoding="utf-8")
     candidate.chmod(candidate.stat().st_mode | stat.S_IXUSR)
     output = tmp_path / "report.json"
+    target_id = target_for_platform()
+    assert TARGETS[target_id]["classification"] == "supported"
     exit_code = main(
         [
             "--binary",
@@ -43,7 +45,7 @@ def test_q005_fake_candidate_crash_is_failure_not_timeout(tmp_path: Path) -> Non
             "--config-fixture",
             str(DEFAULT_FIXTURE),
             "--target-id",
-            "macos-arm64",
+            target_id,
             "--output",
             str(output),
         ]

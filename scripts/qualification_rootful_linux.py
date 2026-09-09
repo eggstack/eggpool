@@ -43,6 +43,10 @@ DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/006-run.json"
 MANIFEST_VERSION = "m10-q006.v1"
 SERVICE_NAME = "eggpool"
 MARKER = Path("/var/tmp/eggpool-q006-owned")
+CANDIDATE_ROOT = Path("/usr/local/lib/eggpool-q006")
+CANDIDATE_BINARY = CANDIDATE_ROOT / "eggpool"
+PRODUCTION_CONFIG = Path("/etc/eggpool/config.toml")
+PRODUCTION_ENV = Path("/etc/eggpool/env")
 MANAGED_PATHS = (
     Path("/etc/systemd/system/eggpool.service"),
     Path("/etc/logrotate.d/eggpool"),
@@ -52,6 +56,9 @@ MANAGED_PATHS = (
     Path("/var/log/eggpool"),
     Path("/var/backups/eggpool"),
     Path("/usr/local/bin/eggpool-backup"),
+    CANDIDATE_BINARY,
+    PRODUCTION_CONFIG,
+    PRODUCTION_ENV,
 )
 MAX_REASON = 512
 COMMAND_TIMEOUT = 45.0
@@ -278,6 +285,29 @@ def http_status(url: str) -> int:
         raise QualificationError(f"HTTP probe failed: {error}") from error
 
 
+def authenticated_get_status(url: str) -> int:
+    request = urllib.request.Request(
+        url, headers={"authorization": "Bearer q006-server-key"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return int(response.status)
+    except urllib.error.URLError as error:
+        raise QualificationError(f"HTTP probe failed: {error}") from error
+
+
+def wait_http(url: str, timeout: float = 20) -> int:
+    deadline = time.monotonic() + timeout
+    last: QualificationError | None = None
+    while time.monotonic() < deadline:
+        try:
+            return http_status(url)
+        except QualificationError as error:
+            last = error
+            time.sleep(0.5)
+    raise QualificationError(f"HTTP probe did not converge: {last}")
+
+
 def host_facts() -> dict[str, Any]:
     release = Path("/etc/os-release").read_text(encoding="utf-8", errors="replace")
     values: dict[str, str] = {}
@@ -307,6 +337,8 @@ def command_version(program: str, arg: str) -> str:
         )
     except (OSError, subprocess.TimeoutExpired):
         return "unavailable"
+    if result.returncode != 0:
+        return "unavailable"
     return bounded(result.stdout or result.stderr)
 
 
@@ -324,6 +356,8 @@ def assert_preflight() -> None:
     if missing:
         raise QualificationError(f"missing mandatory host tools: {', '.join(missing)}")
     conflicts = [str(path) for path in MANAGED_PATHS if path.exists()]
+    if CANDIDATE_ROOT.exists():
+        conflicts.append(str(CANDIDATE_ROOT))
     if conflicts:
         raise QualificationError(
             "managed paths already exist; refusing takeover: " + ", ".join(conflicts)
@@ -339,9 +373,10 @@ def assert_preflight() -> None:
 
 def cleanup_owned(runner: Runner, run_root: Path, user: str | None = None) -> None:
     """Remove only artifacts created by this runner after stopping the unit."""
-    runner.run(
-        "cleanup-stop", ["systemctl", "disable", "--now", SERVICE_NAME], timeout=15
-    )
+    if Path("/etc/systemd/system/eggpool.service").exists():
+        runner.run(
+            "cleanup-stop", ["systemctl", "disable", "--now", SERVICE_NAME], timeout=15
+        )
     runner.run("cleanup-reload", ["systemctl", "daemon-reload"], timeout=15)
     for path in (
         Path("/etc/systemd/system/eggpool.service"),
@@ -351,6 +386,8 @@ def cleanup_owned(runner: Runner, run_root: Path, user: str | None = None) -> No
     ):
         if path.is_file() or path.is_symlink():
             path.unlink()
+    if CANDIDATE_ROOT.exists() and not CANDIDATE_ROOT.is_symlink():
+        shutil.rmtree(CANDIDATE_ROOT)
     for path in (
         Path("/etc/eggpool"),
         Path("/var/lib/eggpool"),
@@ -459,6 +496,17 @@ def cli(binary: Path, config: Path, *args: str) -> list[str]:
     return [str(binary), "--config", str(config), *args]
 
 
+def user_cli(user: str, binary: Path, config: Path, *args: str) -> list[str]:
+    return [
+        "runuser",
+        "-u",
+        user,
+        "--preserve-environment",
+        "--",
+        *cli(binary, config, *args),
+    ]
+
+
 def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
     assert_preflight()
     root = Path(tempfile.mkdtemp(prefix="eggpool-q006-"))
@@ -466,11 +514,12 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
     runner = Runner(root)
     user = f"q006-{os.getpid()}"
     user_home = root / "user-home"
-    installed_binary = root / "bin/eggpool"
-    installed_binary.parent.mkdir()
+    installed_binary = CANDIDATE_BINARY
+    installed_binary.parent.mkdir(parents=True)
     shutil.copy2(binary, installed_binary)
     installed_binary.chmod(0o755)
     user_created = False
+    production_user_created = False
     facts: dict[str, Any] = {
         "schema": MANIFEST_VERSION,
         "candidate": {"path": str(binary), "sha256": sha256(binary)},
@@ -486,12 +535,27 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
             personal_config = personal_root / "config.toml"
             write_config(
                 personal_config,
-                database=personal_root / "usage.sqlite3",
-                backup=personal_root / "backups",
+                database=user_home / ".local/share/eggpool/usage.sqlite3",
+                backup=user_home / ".local/share/eggpool/backups",
                 port=pick_port(),
                 provider=provider.url,
             )
             personal_env = env_for(personal_root, user_home, personal_config)
+            personal_env.update(
+                {
+                    "XDG_CONFIG_HOME": str(user_home / ".config"),
+                    "XDG_DATA_HOME": str(user_home / ".local/share"),
+                    "XDG_STATE_HOME": str(user_home / ".local/state"),
+                    "HOME": str(user_home),
+                }
+            )
+            for key in (
+                "EGGPOOL_RUNTIME_DIR",
+                "EGGPOOL_PID_FILE",
+                "EGGPOOL_LOG_FILE",
+                "XDG_RUNTIME_DIR",
+            ):
+                personal_env.pop(key, None)
             uid = str(pwd.getpwnam(user).pw_uid)
             gid = str(pwd.getpwnam(user).pw_gid)
             personal_env.update(
@@ -518,12 +582,13 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
             wait_for(
                 runner, "personal-active", ["systemctl", "is-active", SERVICE_NAME]
             )
+            wait_http(f"http://127.0.0.1:{config_port(personal_config)}/v1/healthz")
             facts["personal_systemd"] = inspect_service(
                 runner, personal_config, personal_env, provider.url
             )
             runner.require(
                 "personal-rehash",
-                cli(installed_binary, personal_config, "rehash", "--json"),
+                user_cli(user, installed_binary, personal_config, "rehash", "--json"),
                 env=personal_env,
             )
             runner.require("personal-restart", ["systemctl", "restart", SERVICE_NAME])
@@ -533,7 +598,15 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                 ["systemctl", "is-active", SERVICE_NAME],
             )
             runner.require(
-                "personal-kill", ["systemctl", "kill", "-s", "SIGKILL", SERVICE_NAME]
+                "personal-kill",
+                [
+                    "systemctl",
+                    "kill",
+                    "--kill-who=main",
+                    "-s",
+                    "SIGKILL",
+                    SERVICE_NAME,
+                ],
             )
             wait_for(
                 runner,
@@ -541,6 +614,7 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                 ["systemctl", "is-active", SERVICE_NAME],
                 timeout=25,
             )
+            wait_http(f"http://127.0.0.1:{config_port(personal_config)}/v1/healthz")
             if available("crontab"):
                 runner.require(
                     "cron-install",
@@ -570,6 +644,20 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                     env=personal_env,
                     input_text="yes\n",
                 )
+                runner.require(
+                    "cron-runtime-path",
+                    [
+                        "runuser",
+                        "-u",
+                        user,
+                        "--preserve-environment",
+                        "--",
+                        "ls",
+                        "-la",
+                        str(user_home / ".local/state/eggpool"),
+                    ],
+                    env=personal_env,
+                )
                 cron_text = runner.require(
                     "cron-inspect", ["crontab", "-u", user, "-l"]
                 )
@@ -580,9 +668,36 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                     raise QualificationError("cron managed block was not idempotent")
                 runner.require(
                     "croncheck",
-                    cli(installed_binary, personal_config, "croncheck"),
+                    user_cli(user, installed_binary, personal_config, "croncheck"),
                     env=personal_env,
                 )
+            runner.require(
+                "personal-keep-flags",
+                cli(
+                    installed_binary,
+                    personal_config,
+                    "uninstall",
+                    "--yes",
+                    "--keep-data",
+                    "--keep-config",
+                    "--keep-path",
+                ),
+                env=personal_env,
+            )
+            facts["personal_keep_flags"] = {
+                "config": file_fact(personal_config),
+                "data": file_fact(user_home / ".local/share/eggpool"),
+                "state": file_fact(user_home / ".local/state/eggpool"),
+                "unit": file_fact(Path("/etc/systemd/system/eggpool.service")),
+            }
+            if not all(
+                item["exists"] for item in facts["personal_keep_flags"].values()
+            ):
+                raise QualificationError(
+                    "personal uninstall keep flags did not preserve targets"
+                )
+            shutil.copy2(binary, installed_binary)
+            installed_binary.chmod(0o755)
             runner.require(
                 "personal-uninstall",
                 cli(
@@ -619,6 +734,7 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
             MARKER.write_text(
                 "Q006 disposable acceptance ownership marker\n", encoding="utf-8"
             )
+            production_user_created = True
             runner.require(
                 "production-systemd-install",
                 cli(
@@ -634,6 +750,9 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
             )
             wait_for(
                 runner, "production-active", ["systemctl", "is-active", SERVICE_NAME]
+            )
+            wait_http(
+                f"http://127.0.0.1:{config_port(Path('/etc/eggpool/config.toml'))}/v1/healthz"
             )
             facts["production_systemd"] = inspect_service(
                 runner, Path("/etc/eggpool/config.toml"), production_env, provider.url
@@ -695,6 +814,9 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                 ],
                 env=production_env,
             )
+            facts["backup_artifacts"] = [
+                file_fact(path) for path in Path("/var/backups/eggpool").glob("*.zip")
+            ]
             facts["production_paths"] = [file_fact(path) for path in MANAGED_PATHS]
             runner.require(
                 "production-uninstall",
@@ -712,16 +834,45 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
                 raise QualificationError(
                     "managed production leftovers remain after uninstall"
                 )
+            shutil.copy2(binary, installed_binary)
+            installed_binary.chmod(0o755)
+            runner.require(
+                "production-uninstall-repeat",
+                cli(
+                    installed_binary,
+                    PRODUCTION_CONFIG,
+                    "uninstall",
+                    "--yes",
+                    "--deploy-artifacts",
+                ),
+                env=production_cli_env,
+            )
+            facts["after_repeat_uninstall"] = managed_facts()
+            if any(item["exists"] for item in facts["after_repeat_uninstall"]):
+                raise QualificationError(
+                    "repeated production uninstall left managed targets"
+                )
         facts["status"] = "pass"
     except Exception as error:
         facts["status"] = "fail"
         facts["reason"] = bounded(str(error))
+        runner.run(
+            "failure-status", ["systemctl", "status", SERVICE_NAME, "--no-pager"]
+        )
+        runner.run(
+            "failure-journal",
+            ["journalctl", "-u", SERVICE_NAME, "-n", "40", "--no-pager"],
+        )
         raise
     finally:
         if user_created:
             cleanup_owned(runner, root, user)
         else:
             cleanup_owned(runner, root)
+        if production_user_created:
+            runner.run(
+                "cleanup-production-user", ["userdel", "-r", "eggpool"], timeout=15
+            )
         facts["commands"] = [record.as_dict(root) for record in runner.records]
         facts["host"] = host_facts()
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -748,15 +899,59 @@ def inspect_service(
             "MainPID",
         ],
     )
-    status = http_status(f"http://127.0.0.1:{config_port(config)}/v1/healthz")
+    port = config_port(config)
+    base_url = f"http://127.0.0.1:{port}"
+    health_status = wait_http(f"{base_url}/v1/healthz")
+    ready_status = wait_http(f"{base_url}/v1/readyz")
+    models_status = authenticated_get_status(f"{base_url}/v1/models")
+    finite = inference_observation(base_url, streaming=False)
+    streaming = inference_observation(base_url, streaming=True)
     return {
         "systemd": bounded(values),
-        "health_status": status,
+        "health_status": health_status,
+        "ready_status": ready_status,
+        "models_status": models_status,
+        "finite_inference": finite,
+        "streaming_inference": streaming,
         "config": str(config),
         "provider": provider.split("://", 1)[0],
         "unit_sha256": sha256(Path("/etc/systemd/system/eggpool.service")),
         "unit_mode_uid_gid": file_fact(Path("/etc/systemd/system/eggpool.service")),
     }
+
+
+def inference_observation(base_url: str, *, streaming: bool) -> dict[str, Any]:
+    body = json.dumps(
+        {
+            "model": "q006-fixture-model",
+            "messages": [{"role": "user", "content": "q006"}],
+            "stream": streaming,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/v1/chat/completions",
+        data=body,
+        headers={
+            "authorization": "Bearer q006-server-key",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = response.read(1024 * 1024)
+            status = int(response.status)
+    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+        status = getattr(error, "code", None)
+        raise QualificationError(
+            f"inference probe failed: HTTP {status or 'connection error'}"
+        ) from error
+    if status != 200:
+        raise QualificationError(f"inference probe returned HTTP {status}")
+    terminal = b"data: [DONE]" in payload if streaming else b'"choices"' in payload
+    if not terminal:
+        raise QualificationError("inference probe lacked expected response evidence")
+    return {"status": status, "bytes": len(payload), "terminal": terminal}
 
 
 def config_port(path: Path) -> int:
@@ -806,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--binary must name an existing Rust executable")
         run_qualification(args.binary.resolve(), args.output.resolve())
     except QualificationError as error:
-        if args.output:
+        if args.output and not args.output.exists():
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(
                 json.dumps(

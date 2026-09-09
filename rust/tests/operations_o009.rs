@@ -19,6 +19,7 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
         config: config.clone(),
         data_dir: PathBuf::from("/home/operator/Egg Pool/data"),
         env_file: Some(PathBuf::from("/home/operator/Egg Pool/.env")),
+        home: PathBuf::from("/home/operator"),
         user: "operator".into(),
         group: "operator".into(),
     });
@@ -29,12 +30,14 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
             config: config.clone(),
             data_dir: PathBuf::from("/home/operator/Egg Pool/data"),
             env_file: Some(PathBuf::from("/home/operator/Egg Pool/.env")),
+            home: PathBuf::from("/home/operator"),
             user: "operator".into(),
             group: "operator".into(),
         })
     );
     assert!(personal.contains("ExecStart=\"/opt/Egg Pool/bin/eggpool\" --config \"/home/operator/My Config/config.toml\" serve --verbose"));
     assert!(personal.contains("EnvironmentFile=\"/home/operator/Egg Pool/.env\""));
+    assert!(personal.contains("Environment=HOME=/home/operator"));
 
     let cron = render_watchdog_cron(
         &binary,
@@ -51,6 +54,8 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
     assert!(production.contains("ProtectSystem=strict"));
     assert!(production.contains("User=eggpool"));
     assert!(production.contains("ExecStart=") && production.contains("serve --verbose"));
+    assert!(production.contains("StartLimitIntervalSec=300\nStartLimitBurst=5"));
+    assert!(production.contains("ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool"));
     assert!(render_logrotate(PathBuf::from("/var/log/eggpool").as_path()).contains("rotate 14"));
 }
 
@@ -252,4 +257,45 @@ fn fake_crontab_runner_receives_stdin_as_one_argv_command() {
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].program, "crontab");
     assert_eq!(writes[0].args, vec!["-u", "operator", "-"]);
+}
+
+#[test]
+fn repeated_uninstall_treats_an_absent_service_as_a_noop() {
+    let root = tempfile::tempdir().expect("temp root");
+    let binary = root.path().join("eggpool");
+    fs::write(&binary, "binary").expect("binary");
+    let targets = UninstallTargets {
+        binary,
+        config: root.path().join("config.toml"),
+        config_dir: None,
+        env: None,
+        data_dir: root.path().join("data"),
+        state_dir: root.path().join("state"),
+        backup_dir: None,
+        systemd_unit: root.path().join("service"),
+        logrotate: root.path().join("rotate"),
+        production_cron: root.path().join("cron"),
+        backup_script: root.path().join("script"),
+        shell_rc_files: Vec::new(),
+    };
+    let mut runner = RecordingCommandRunner {
+        calls: Vec::new(),
+        results: vec![CommandResult {
+            status: 1,
+            stdout: String::new(),
+            stderr: "Failed to disable unit: Unit file eggpool.service does not exist.".into(),
+        }],
+    };
+    uninstall(
+        &mut runner,
+        &targets,
+        KeepFlags {
+            data: true,
+            config: true,
+            path: true,
+            deploy_artifacts: true,
+        },
+        true,
+    )
+    .expect("absent service is an uninstall no-op");
 }

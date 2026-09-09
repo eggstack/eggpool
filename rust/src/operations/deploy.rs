@@ -235,6 +235,7 @@ pub struct PersonalSystemdSpec {
     pub config: PathBuf,
     pub data_dir: PathBuf,
     pub env_file: Option<PathBuf>,
+    pub home: PathBuf,
     pub user: String,
     pub group: String,
 }
@@ -251,12 +252,13 @@ pub fn render_personal_systemd(spec: &PersonalSystemdSpec) -> String {
         .map(|path| format!("\nEnvironmentFile={}", systemd_quote(path)))
         .unwrap_or_default();
     format!(
-        "[Unit]\nDescription=EggPool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nExecStart={} --config {} serve --verbose\nWorkingDirectory={}\nEnvironment=EGGPOOL_CONFIG={}\n# Configuration changes require: systemctl restart eggpool\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nKillSignal=SIGTERM{}\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=EggPool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nExecStart={} --config {} serve --verbose\nWorkingDirectory={}\nEnvironment=HOME={}\nEnvironment=EGGPOOL_CONFIG={}\n# Configuration changes require: systemctl restart eggpool\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nKillSignal=SIGTERM{}\n\n[Install]\nWantedBy=multi-user.target\n",
         systemd_word(&spec.user),
         systemd_word(&spec.group),
         systemd_quote(&spec.binary),
         systemd_quote(&spec.config),
         systemd_quote(&spec.data_dir),
+        systemd_quote(&spec.home),
         systemd_quote(&spec.config),
         environment_file,
     )
@@ -264,7 +266,7 @@ pub fn render_personal_systemd(spec: &PersonalSystemdSpec) -> String {
 
 pub fn render_production_systemd(spec: &ProductionSystemdSpec) -> String {
     format!(
-        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve --verbose\nRestart=on-failure\nRestartSec=5\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve --verbose\nRestart=on-failure\nRestartSec=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
         systemd_quote(&spec.binary),
     )
 }
@@ -591,7 +593,11 @@ fn stop_owned_service<R: CommandRunner>(runner: &mut R) -> Result<(), DeployErro
         SERVICE_NAME.to_owned(),
     ];
     let result = runner.run("systemctl", &stop, None)?;
-    if result.status != 0 && !result.stderr.contains("not loaded") {
+    let detail = result.stderr.to_ascii_lowercase();
+    let absent = detail.contains("not loaded")
+        || detail.contains("does not exist")
+        || detail.contains("not found");
+    if result.status != 0 && !absent {
         return Err(DeployError::Command {
             program: "systemctl".to_owned(),
             args: stop.join(" "),
