@@ -27,17 +27,16 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
-| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | **closed after O010** | **M9 closed; M10 eligible for review** |
+| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q001 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| — | None | — | — | — |
+| Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | invariant/infrastructure | accepted O010 / M9 closure | **ready for handoff** |
 
-O010 is accepted and removed from the dependency-ready queue. M10 is eligible
-for a separate planning/implementation review, but no M10 implementation plan
-is promoted automatically.
+Q001 is the sole dependency-ready implementation plan. Q002-Q010 are registered and queued serially; later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Completed implementation plans
 
@@ -132,42 +131,42 @@ M8 is closed after accepted R013. R001-R010 remain closed; R011/R012 remain hist
 
 M8 owns one process task supervisor. R008 intentionally left exactly `metrics_flush`, `update_checker`, and `automatic_backup` as explicit deferred M9 business capabilities; O006 registered automatic backup, O007 registered metrics flush, and O008 registered update checking.
 
-## M9 sequence and handoff state
+## M9 closure state
 
-M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and now owns the completed R008 update-checker callback. It composes closed M4-M8 services and does not own M10 broad qualification or M11 cutover.
+M9 is closed after accepted O010. O001-O010 are closed. The complete 63-path Rust CLI/operations surface and all six process task callbacks are implemented and qualified. M10 owns the broad target/live/dashboard/SBC/stability evidence that O010 intentionally excluded.
+
+## M10 sequence and handoff state
+
+M10 is evidence-focused and owns migration-wide deterministic qualification, DB rollback/backup compatibility, dashboard visual review, supported-target portability, disposable rootful Linux acceptance, bounded live-provider smoke, ARM64 SBC characterization, and sustained resource/failure stability. It does not own M11 public cutover.
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| O001 | [Operational CLI contract and deterministic oracle freeze](implementation/operations/001-operational-cli-contract-and-oracle-freeze.md) | **closed** |
-| O002 | [Local control, runtime paths, and process-state boundary](implementation/operations/002-local-control-runtime-paths-and-process-state.md) | **closed** |
-| O003 | [Process lifecycle control and watchdog commands](implementation/operations/003-process-lifecycle-control-and-watchdog-commands.md) | **closed** |
-| O004 | [Config, key, provider onboarding, and live-apply mutations](implementation/operations/004-config-key-provider-onboarding-and-live-apply.md) | **closed** |
-| O005 | [Agent integration and configsetup generation](implementation/operations/005-agent-integration-config-generation.md) | **closed** |
-| O006 | [Database, backup, recovery, and automatic backup](implementation/operations/006-database-backup-recovery-and-automatic-backup.md) | **closed; 6af52fb** |
-| O007 | [Operator inspection, maintenance, and metrics flush](implementation/operations/007-operator-inspection-maintenance-and-metrics-flush.md) | **closed** |
-| O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | **closed** |
-| O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | **closed; 27310ff** |
-| O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | **closed; f41489c** |
+| Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | **ready; sole dependency-ready M10 plan** |
+| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | queued behind Q001 |
+| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | queued behind Q002 |
+| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | queued behind Q003 |
+| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | queued behind Q004 |
+| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | queued behind Q005 |
+| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | queued behind Q006 |
+| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | queued behind Q007 |
+| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | queued behind Q008 |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | queued behind Q009 |
 
-### M9 boundary decisions
+### M10 boundary decisions
 
-- F003 remains the command/option shape authority; O001 refreshes current behavior/effects without rewriting F003 history.
-- Rust supported commands execute Rust behavior; no Python fallback.
-- O002 creates one bounded local Unix control listener for proven local-control needs; no public management port or general RPC framework.
-- O003 consumes M8 startup/reload/shutdown/drain APIs rather than creating a second process runtime.
-- O004/O005 keep config/provider/integration mutation/output narrow and secret-safe.
-- O006 reuses canonical migrations and makes `automatic_backup` a real M8 task.
-- O007 reuses domain repositories/services and makes `metrics_flush` a real M8 task.
-- O008 uses a Rust artifact/update backend with staged integrity-checked replacement and makes `update_checker` a real M8 task; M11 owns making public Rust assets canonical.
-- O009 ports local systemd/cron/logrotate/uninstall behavior but does not perform M11 public-install cutover; its implementation and closure are accepted in `27310ff` and `closure/operations/009-status.md`.
-- O010 alone may close M9; its accepted closure is recorded in `closure/operations/010-status.md`.
+- Python remains the oracle through M10; Q002 composes existing F002/M4-M9 differential evidence.
+- Normal CI stays small unless Q001/Q002 justify a narrow deterministic addition.
+- Rootful tests run only on disposable Linux systems.
+- Live-provider tests are explicit opt-in, low-cost, and secret-free; no automatic paid mirroring.
+- At least one real Linux aarch64 SBC is mandatory for Q008/Q010 closure.
+- Resource metrics are characterization unless they reveal correctness issues such as leaks, unbounded growth, crashes, deadlocks, replay, or clearly impractical SBC operation.
+- Dashboard qualification does not redesign the dashboard.
+- M10 may build candidate binaries but does not publish or make them canonical; M11 owns public release/install/update cutover.
 
 ## Future work and block state
 
-M10 is eligible after accepted O010 M9 closure, subject to its own
-planning/implementation review. M11-M12 remain sequenced by
-`002-long-term-roadmap.md`. No M10 plan is promoted automatically.
+M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 plan is promoted automatically by M10 planning.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and O001-O010 are closed as described above. M9 is closed after accepted O010 closure; M10 is eligible for its own planning/implementation review, and no later implementation plan is promoted automatically.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. M10 is active with Q001 ready. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.

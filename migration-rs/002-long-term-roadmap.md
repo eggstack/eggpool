@@ -164,9 +164,9 @@ Primary class: capability/invariant
 
 Subsystem roadmap: [Operational CLI, Lifecycle, Update, and Deployment](subsystems/operational-cli-lifecycle-roadmap.md).
 
-M9 converts the complete F003 Rust parser surface into real operational behavior and wires it to the closed M4-M8 services. It owns local control/runtime paths/process state, daemon lifecycle commands, live rehash/status/watchdogs, config/key/provider onboarding mutations, agent integration rendering, migrations/DB/backup/recover, operator inspection/model/stats maintenance, the three R008 deferred background callbacks, update/version behavior, local deployment artifacts, and uninstall.
+M9 converted the complete F003 Rust parser surface into real operational behavior and wired it to the closed M4-M8 services. It owns local control/runtime paths/process state, daemon lifecycle commands, live rehash/status/watchdogs, config/key/provider onboarding mutations, agent integration rendering, migrations/DB/backup/recover, operator inspection/model/stats maintenance, the three R008 deferred background callbacks, update/version behavior, local deployment artifacts, and uninstall.
 
-Initial planned sequence:
+Accepted sequence:
 
 ```text
 O001 operational CLI contract + deterministic oracle freeze
@@ -178,32 +178,53 @@ O001 operational CLI contract + deterministic oracle freeze
  -> O007 operator inspection/maintenance + metrics flush
  -> O008 update/version + update checker
  -> O009 deploy/install artifacts + uninstall
- -> O010 differential qualification + M9 closure (**closed**)
+ -> O010 differential qualification + M9 closure
 ```
 
-Only `registry.md` authorizes handoff. O010 is accepted and M9 is closed; M10 is eligible for its own planning/implementation review.
+O010 is accepted and M9 is closed with the complete 63-command surface, background callbacks, and operational fault matrices qualified. M9 still deliberately leaves broad platform/SBC/live/visual qualification and public Rust-default distribution to M10/M11.
 
-M9 preserves the command/option shape already frozen in F003 and avoids recreating Python's large `cli_full.py` structurally. CLI handlers are thin adapters over small Rust operation services. Supported Rust commands may not shell out to Python as a fallback.
-
-M9 uses one bounded local Unix control socket for the control behavior proven by the Python oracle, the one M8 process task supervisor, the existing Hyper/Rustls and SQLite stacks, and existing generation/reload/shutdown APIs. It does not add a public management port, second scheduler, second HTTP stack, workflow/daemon framework, ORM, or Rust-only schema.
-
-M9 prepares safe Rust-side update/deploy/install behavior but does not make Rust the canonical public install/release path; M11 owns that cutover. M10 still owns broad OS/architecture/SBC characterization, live-provider smoke, dashboard visual review, and complete cross-system qualification.
-
-Exit condition: every current documented/F003 command has real Rust behavior (or a frozen explicit unsupported-platform outcome), migration-stage `NotImplemented` is unreachable for supported commands, CLI/effect parity passes the O001 corpus, lifecycle/config/backup/update/deploy fault matrices converge safely, all three R008 deferred callbacks are real bounded singleton M8 tasks, and no unresolved high/medium M9 correctness/security/resource/data-loss/compatibility finding remains. Satisfied by accepted O010 closure.
+Exit condition satisfied after accepted O010 closure.
 
 ## M10 — Full differential qualification and SBC characterization
 
 Primary class: invariant/polish
 
-Run the complete contract matrix, targeted live-provider smoke tests, dashboard visual review, DB rollback/upgrade, failure/restart, and representative ARM64 SBC resource characterization. Do not invent unsupported performance gates.
+Subsystem roadmap: [Full Qualification, Portability, and SBC Characterization](subsystems/qualification-roadmap.md).
 
-Exit condition: mandatory compatibility gaps are closed or approved by ADR.
+M10 is the final evidence milestone before public Rust cutover planning. It does not create another major runtime subsystem. It verifies that the accumulated M4-M9 compatibility claims hold together across the migration-wide deterministic contract, DB rollback/backup/recovery, dashboard rendering, supported targets, real Linux deployment, bounded live-provider interoperability, representative ARM64 SBC operation, and sustained failure/resource stability.
+
+Planned sequence:
+
+```text
+Q001 qualification contract + target/evidence freeze
+ -> Q002 migration-wide deterministic differential runner
+ -> Q003 DB upgrade/rollback/backup/recovery compatibility
+ -> Q004 dashboard DOM/static/visual parity
+ -> Q005 supported-target build/non-root runtime portability
+ -> Q006 disposable rootful Linux operational acceptance
+ -> Q007 bounded live-provider interoperability smoke
+ -> Q008 ARM64 SBC functional/resource characterization
+ -> Q009 sustained failure/reload/stream/resource stability
+ -> Q010 aggregate M10 closure + M11 readiness
+```
+
+Only `registry.md` authorizes handoff. At initial M10 registration Q001 is the sole dependency-ready plan.
+
+M10 keeps normal CI intentionally lean. Expensive/rootful/live/physical qualification is explicit/manual evidence rather than an always-on OS × architecture × provider matrix. Live traffic is opt-in and low-cost; physical ARM64 evidence is mandatory because EggPool explicitly targets SBC deployment.
+
+M10 records performance/resource facts without inventing unsupported SLAs. Leaks, crashes, deadlocks, replay, data loss, unbounded state, or clearly impractical lightweight/SBC behavior are blockers; ordinary percentage differences are characterization unless an earlier requirement defines a threshold.
+
+M10 does not publish canonical Rust release assets, flip `scripts/install.sh`/README quick start, remove Python, or make the Rust updater public authority. Those remain M11/M12.
+
+Exit condition: every mandatory Q001 qualification cell is passed or explicitly authorized non-applicable; deterministic migration-wide parity is green; DB rollback/backup/recovery and dashboard visual/DOM/static review are accepted; supported-target and disposable rootful Linux evidence is accepted; required bounded live-provider cells pass; at least one real Linux ARM64 SBC has functional/resource evidence; sustained local failure/reload/resource qualification converges; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied only by accepted Q010 closure.
 
 ## M11 — Rust cutover
 
 Primary class: capability
 
 Make Rust the canonical install/release/runtime implementation while preserving filesystem/config/database locations and documented rollback to the final Python reference where schema compatibility permits.
+
+M11 is blocked on accepted Q010 M10 closure and its own separate planning review. No M11 implementation plan is promoted automatically by M10 planning.
 
 Exit condition: new installs/upgrades use Rust by default without Python runtime dependency.
 
