@@ -251,7 +251,7 @@ pub fn render_personal_systemd(spec: &PersonalSystemdSpec) -> String {
         .map(|path| format!("\nEnvironmentFile={}", systemd_quote(path)))
         .unwrap_or_default();
     format!(
-        "[Unit]\nDescription=EggPool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nExecStart={} --config {} serve\nWorkingDirectory={}\nEnvironment=EGGPOOL_CONFIG={}\n# Configuration changes require: systemctl restart eggpool\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nKillSignal=SIGTERM{}\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=EggPool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser={}\nGroup={}\nExecStart={} --config {} serve --verbose\nWorkingDirectory={}\nEnvironment=EGGPOOL_CONFIG={}\n# Configuration changes require: systemctl restart eggpool\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nKillSignal=SIGTERM{}\n\n[Install]\nWantedBy=multi-user.target\n",
         systemd_word(&spec.user),
         systemd_word(&spec.group),
         systemd_quote(&spec.binary),
@@ -264,7 +264,7 @@ pub fn render_personal_systemd(spec: &PersonalSystemdSpec) -> String {
 
 pub fn render_production_systemd(spec: &ProductionSystemdSpec) -> String {
     format!(
-        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve\nRestart=on-failure\nRestartSec=5\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve --verbose\nRestart=on-failure\nRestartSec=5\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
         systemd_quote(&spec.binary),
     )
 }
@@ -488,9 +488,11 @@ pub fn validate_config(path: &Path) -> Result<Config, DeployError> {
 pub struct UninstallTargets {
     pub binary: PathBuf,
     pub config: PathBuf,
+    pub config_dir: Option<PathBuf>,
     pub env: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub state_dir: PathBuf,
+    pub backup_dir: Option<PathBuf>,
     pub systemd_unit: PathBuf,
     pub logrotate: PathBuf,
     pub production_cron: PathBuf,
@@ -538,10 +540,16 @@ pub fn uninstall<R: CommandRunner>(
         if let Some(env_path) = &targets.env {
             remove_known_file(env_path)?;
         }
+        if let Some(config_dir) = &targets.config_dir {
+            remove_empty_directory(config_dir)?;
+        }
     }
     if !keep.data {
         remove_owned_tree(&targets.data_dir)?;
         remove_owned_tree(&targets.state_dir)?;
+        if let Some(backup_dir) = &targets.backup_dir {
+            remove_owned_tree(backup_dir)?;
+        }
     }
     if !keep.path {
         for path in &targets.shell_rc_files {
@@ -549,7 +557,7 @@ pub fn uninstall<R: CommandRunner>(
         }
     }
     remove_known_file(&targets.binary)?;
-    let leftovers = [
+    let mut leftovers = [
         &targets.binary,
         &targets.config,
         &targets.data_dir,
@@ -562,7 +570,17 @@ pub fn uninstall<R: CommandRunner>(
     .into_iter()
     .filter(|path| path.exists())
     .cloned()
-    .collect();
+    .collect::<Vec<_>>();
+    if let Some(config_dir) = &targets.config_dir {
+        if config_dir.exists() {
+            leftovers.push(config_dir.clone());
+        }
+    }
+    if let Some(backup_dir) = &targets.backup_dir {
+        if backup_dir.exists() {
+            leftovers.push(backup_dir.clone());
+        }
+    }
     Ok(leftovers)
 }
 
@@ -645,6 +663,21 @@ fn remove_known_file(path: &Path) -> Result<(), DeployError> {
             path.display()
         ))),
         Ok(_) => fs::remove_file(path).map_err(DeployError::Io),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DeployError::Io(error)),
+    }
+}
+
+fn remove_empty_directory(path: &Path) -> Result<(), DeployError> {
+    reject_symlink_ancestors(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(DeployError::UnsafePath(path.display().to_string()))
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            Err(DeployError::UnsafePath(path.display().to_string()))
+        }
+        Ok(_) => fs::remove_dir(path).map_err(DeployError::Io),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(DeployError::Io(error)),
     }

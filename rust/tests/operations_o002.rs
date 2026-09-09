@@ -72,6 +72,35 @@ fn path_resolution_is_precedence_ordered_and_read_only() {
     );
 }
 
+#[test]
+fn production_config_resolves_shared_service_paths() {
+    let environment = PathEnvironment {
+        home: Some("/root".into()),
+        eggpool_config: Some("/etc/eggpool/config.toml".into()),
+        uid: 0,
+        ..PathEnvironment::default()
+    };
+    let paths = RuntimePaths::resolve_with(&environment);
+    assert_eq!(paths.config_dir, std::path::PathBuf::from("/etc/eggpool"));
+    assert_eq!(paths.data_dir, std::path::PathBuf::from("/var/lib/eggpool"));
+    assert_eq!(
+        paths.state_dir,
+        std::path::PathBuf::from("/var/lib/eggpool/.local/state/eggpool")
+    );
+    assert_eq!(
+        paths.runtime_dir,
+        std::path::PathBuf::from("/var/lib/eggpool/runtime")
+    );
+    assert_eq!(
+        paths.pid_file,
+        std::path::PathBuf::from("/var/lib/eggpool/.local/state/eggpool/eggpool.pid")
+    );
+    assert_eq!(
+        paths.log_file,
+        std::path::PathBuf::from("/var/log/eggpool/eggpool.log")
+    );
+}
+
 #[tokio::test]
 async fn pid_helpers_are_atomic_and_conservative_about_identity() {
     let root = tempfile::tempdir().expect("temp root");

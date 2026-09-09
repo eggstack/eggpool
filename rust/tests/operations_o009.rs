@@ -33,7 +33,7 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
             group: "operator".into(),
         })
     );
-    assert!(personal.contains("ExecStart=\"/opt/Egg Pool/bin/eggpool\" --config \"/home/operator/My Config/config.toml\" serve"));
+    assert!(personal.contains("ExecStart=\"/opt/Egg Pool/bin/eggpool\" --config \"/home/operator/My Config/config.toml\" serve --verbose"));
     assert!(personal.contains("EnvironmentFile=\"/home/operator/Egg Pool/.env\""));
 
     let cron = render_watchdog_cron(
@@ -50,6 +50,7 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
     let production = render_production_systemd(&ProductionSystemdSpec { binary });
     assert!(production.contains("ProtectSystem=strict"));
     assert!(production.contains("User=eggpool"));
+    assert!(production.contains("ExecStart=") && production.contains("serve --verbose"));
     assert!(render_logrotate(PathBuf::from("/var/log/eggpool").as_path()).contains("rotate 14"));
 }
 
@@ -162,9 +163,11 @@ fn uninstall_removes_only_known_targets_and_honors_all_keep_flags() {
     let targets = UninstallTargets {
         binary,
         config,
+        config_dir: None,
         env: None,
         data_dir: data,
         state_dir: state,
+        backup_dir: None,
         systemd_unit: unit,
         logrotate,
         production_cron: cron,
@@ -191,9 +194,11 @@ fn uninstall_removes_only_known_targets_and_honors_all_keep_flags() {
     let targets = UninstallTargets {
         binary,
         config,
+        config_dir: None,
         env: None,
         data_dir: data,
         state_dir: state,
+        backup_dir: None,
         systemd_unit: root.path().join("service"),
         logrotate: root.path().join("rotate"),
         production_cron: root.path().join("cron"),

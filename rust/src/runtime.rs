@@ -446,13 +446,30 @@ async fn uninstall(path: &Path, args: crate::cli::UninstallArgs) -> Result<(), B
         ));
     }
     let config = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let production_config =
+        PathBuf::from(crate::operations::deploy::PRODUCTION_CONFIG_DIR).join("config.toml");
+    let production = config == production_config;
     let runtime_paths = RuntimePaths::resolve();
     let targets = deployment::UninstallTargets {
         binary,
         config: config.clone(),
-        env: crate::config::resolve_env_path(Some(&config)),
-        data_dir: runtime_paths.data_dir,
-        state_dir: runtime_paths.state_dir,
+        config_dir: production.then(|| PathBuf::from(deployment::PRODUCTION_CONFIG_DIR)),
+        env: if production {
+            Some(PathBuf::from(deployment::PRODUCTION_CONFIG_DIR).join("env"))
+        } else {
+            crate::config::resolve_env_path(Some(&config))
+        },
+        data_dir: if production {
+            PathBuf::from(deployment::PRODUCTION_DATA_DIR)
+        } else {
+            runtime_paths.data_dir
+        },
+        state_dir: if production {
+            PathBuf::from(deployment::PRODUCTION_LOG_DIR)
+        } else {
+            runtime_paths.state_dir
+        },
+        backup_dir: production.then(|| PathBuf::from(deployment::PRODUCTION_BACKUP_DIR)),
         systemd_unit: PathBuf::from(deployment::SYSTEMD_UNIT_PATH),
         logrotate: PathBuf::from(deployment::LOGROTATE_PATH),
         production_cron: PathBuf::from(deployment::PRODUCTION_CRON_PATH),

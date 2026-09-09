@@ -93,3 +93,25 @@ Known services are disabled/stopped before artifact removal. Atomic writes,
 argv-only external commands, explicit keep flags, symlink refusal, and
 leftover reporting make partial failures retryable. The command never scans a
 home directory or recursively removes an unresolved parent/XDG directory.
+
+## Disposable rootful Linux qualification
+
+Q006 exercises the deployment boundary on a disposable Linux host with
+systemd as PID 1. Build or copy the Rust candidate, then run the guarded
+qualification runner as root:
+
+```bash
+sudo -E uv run python scripts/qualification_rootful_linux.py \
+  --binary rust/target/release/eggpool \
+  --output migration-rs/closure/qualification/006-run.json \
+  --i-understand-disposable-host
+```
+
+The runner refuses non-Linux, non-root, non-systemd hosts and refuses known
+EggPool paths that already exist. It uses a loopback-only provider, creates a
+temporary non-root user, runs personal and production service flows, records
+bounded secret-free evidence, and cleans its managed paths in a `finally`
+path. If the host is interrupted after the ownership marker is written, run
+the same command with `--cleanup --i-understand-disposable-host`; cleanup
+refuses to proceed without that marker. Never run this procedure against a
+production host.

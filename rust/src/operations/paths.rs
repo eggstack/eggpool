@@ -18,6 +18,11 @@ const CONTROL_SOCKET_NAME: &str = "eggpool.sock";
 const PID_FILE_NAME: &str = "eggpool.pid";
 const LOG_FILE_NAME: &str = "eggpool.log";
 const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
+const PRODUCTION_CONFIG_PATH: &str = "/etc/eggpool/config.toml";
+const PRODUCTION_DATA_PATH: &str = "/var/lib/eggpool";
+const PRODUCTION_STATE_PATH: &str = "/var/lib/eggpool/.local/state/eggpool";
+const PRODUCTION_RUNTIME_PATH: &str = "/var/lib/eggpool/runtime";
+const PRODUCTION_LOG_PATH: &str = "/var/log/eggpool/eggpool.log";
 
 /// A snapshot of the environment values used by path resolution.
 ///
@@ -45,7 +50,7 @@ impl PathEnvironment {
         Self {
             home: env::var_os("HOME").map(PathBuf::from),
             cwd: env::current_dir().ok(),
-            eggpool_config: env::var("EGGPOOL_CONFIG").ok(),
+            eggpool_config: env::var("EGGPOOL_CONFIG").ok().or_else(command_line_config),
             eggpool_env: env::var("EGGPOOL_ENV").ok(),
             eggpool_runtime_dir: env::var_os("EGGPOOL_RUNTIME_DIR").map(PathBuf::from),
             eggpool_pid_file: env::var_os("EGGPOOL_PID_FILE").map(PathBuf::from),
@@ -115,6 +120,7 @@ impl RuntimePaths {
                 candidate.exists().then_some(absolute(candidate, &cwd))
             })
             .unwrap_or_else(|| absolute(cwd.join("config.toml"), &cwd));
+        let production = config_path == Path::new(PRODUCTION_CONFIG_PATH);
         let data_dir = environment
             .xdg_data_home
             .clone()
@@ -125,22 +131,39 @@ impl RuntimePaths {
             .clone()
             .unwrap_or_else(|| home.join(".local/state"))
             .join("eggpool");
+        let (config_dir, data_dir, state_dir) = if production {
+            (
+                PathBuf::from("/etc/eggpool"),
+                PathBuf::from(PRODUCTION_DATA_PATH),
+                PathBuf::from(PRODUCTION_STATE_PATH),
+            )
+        } else {
+            (config_dir, data_dir, state_dir)
+        };
         let runtime_dir = resolve_runtime_dir(environment, &state_dir, &home);
-        let pid_file = environment.eggpool_pid_file.clone().unwrap_or_else(|| {
-            environment
-                .xdg_runtime_dir
-                .clone()
-                .map(|path| path.join(PID_FILE_NAME))
-                .or_else(|| state_dir.exists().then(|| state_dir.join(PID_FILE_NAME)))
-                .unwrap_or_else(|| uid_tmp(environment.uid, "pid"))
-        });
-        let log_file = environment.eggpool_log_file.clone().unwrap_or_else(|| {
-            if state_dir.exists() {
-                state_dir.join(LOG_FILE_NAME)
-            } else {
-                uid_tmp(environment.uid, "log")
-            }
-        });
+        let pid_file = if production && environment.eggpool_pid_file.is_none() {
+            state_dir.join(PID_FILE_NAME)
+        } else {
+            environment.eggpool_pid_file.clone().unwrap_or_else(|| {
+                environment
+                    .xdg_runtime_dir
+                    .clone()
+                    .map(|path| path.join(PID_FILE_NAME))
+                    .or_else(|| state_dir.exists().then(|| state_dir.join(PID_FILE_NAME)))
+                    .unwrap_or_else(|| uid_tmp(environment.uid, "pid"))
+            })
+        };
+        let log_file = if production && environment.eggpool_log_file.is_none() {
+            PathBuf::from(PRODUCTION_LOG_PATH)
+        } else {
+            environment.eggpool_log_file.clone().unwrap_or_else(|| {
+                if state_dir.exists() {
+                    state_dir.join(LOG_FILE_NAME)
+                } else {
+                    uid_tmp(environment.uid, "log")
+                }
+            })
+        };
         let env_path = environment
             .eggpool_env
             .as_deref()
@@ -150,6 +173,11 @@ impl RuntimePaths {
                 let alongside = config_path.parent()?.join(".env");
                 alongside.exists().then_some(absolute(alongside, &cwd))
             });
+        let runtime_dir = if production && environment.eggpool_runtime_dir.is_none() {
+            PathBuf::from(PRODUCTION_RUNTIME_PATH)
+        } else {
+            runtime_dir
+        };
         let control_socket = runtime_dir.join(CONTROL_SOCKET_NAME);
         Self {
             config_path,
@@ -174,6 +202,18 @@ impl RuntimePaths {
     pub fn ensure_runtime_dir(&self) -> Result<(), PathError> {
         ensure_private_dir(&self.runtime_dir)
     }
+}
+
+fn command_line_config() -> Option<String> {
+    let mut arguments = env::args_os();
+    while let Some(argument) = arguments.next() {
+        if argument == "--config" {
+            return arguments
+                .next()
+                .map(|value| value.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 #[derive(Debug, thiserror::Error)]
