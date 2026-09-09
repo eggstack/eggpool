@@ -7,5 +7,6 @@
 
 pub mod config_mutation;
 pub mod control;
+pub mod integrations;
 pub mod paths;
 pub mod process;

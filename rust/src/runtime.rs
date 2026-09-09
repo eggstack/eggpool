@@ -74,6 +74,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             .await?
         }
         Some(Command::Onboard(args)) => onboard(&config_path, args).await?,
+        Some(Command::Configsetup(command)) => configsetup(&config_path, command).await?,
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());
@@ -84,6 +85,173 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
                 command: command.unavailable_name().to_string(),
             });
         }
+    }
+    Ok(())
+}
+
+async fn configsetup(
+    path: &Path,
+    command: crate::cli::ConfigsetupCommand,
+) -> Result<(), BootstrapError> {
+    use crate::operations::integrations::{self, SnippetOptions, Target};
+
+    let (target, args) = match command {
+        crate::cli::ConfigsetupCommand::Opencode => (Target::Opencode, None),
+        crate::cli::ConfigsetupCommand::ClaudeCode => (Target::ClaudeCode, None),
+        crate::cli::ConfigsetupCommand::Aider(args) => (Target::Aider, Some(args)),
+        crate::cli::ConfigsetupCommand::Codex(args) => (Target::Codex, Some(args)),
+        crate::cli::ConfigsetupCommand::QwenCode(args) => (Target::QwenCode, Some(args)),
+        crate::cli::ConfigsetupCommand::Kilo(args) => (Target::Kilo, Some(args)),
+        crate::cli::ConfigsetupCommand::Continue(args) => (Target::Continue, Some(args)),
+        crate::cli::ConfigsetupCommand::Cline(args) => (Target::Cline, Some(args)),
+        crate::cli::ConfigsetupCommand::RooCode(args) => (Target::RooCode, Some(args)),
+        crate::cli::ConfigsetupCommand::Goose(args) => (Target::Goose, Some(args)),
+        crate::cli::ConfigsetupCommand::Openhands(args) => (Target::Openhands, Some(args)),
+    };
+
+    let mut context = if target == Target::ClaudeCode {
+        integrations::build_endpoint_context(path)
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+    } else {
+        integrations::build_integration_context(path)
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+    };
+    if context.config_mutated {
+        eprintln!("Generated new server API key.");
+    }
+
+    if target == Target::Opencode {
+        let snippet = integrations::render_target(target, &context, None)
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let delivery = integrations::deliver(
+            &snippet,
+            target,
+            &SnippetOptions {
+                print_secret: true,
+                no_clipboard: false,
+                force: false,
+                output: None,
+                write: false,
+            },
+            None,
+            None,
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        if let Some(stdout) = delivery.stdout {
+            println!("{stdout}");
+        }
+        if !delivery
+            .messages
+            .iter()
+            .any(|message| message == "Copied config to clipboard.")
+        {
+            eprintln!("Could not copy to clipboard. Use the printed config above.");
+        }
+        for message in delivery.messages {
+            eprintln!("{message}");
+        }
+        if !context.models.is_empty() {
+            eprintln!("Generated config with {} models.", context.models.len());
+        } else {
+            eprintln!(
+                "Generated provider connection block (no model limits). Run 'eggpool models refresh' to populate model metadata."
+            );
+        }
+        if context.config_mutated || context.transcoder_mutated {
+            restart_after_integration_mutation(path).await?;
+        }
+        eprintln!("Paste into ~/.config/opencode/opencode.json.");
+        return Ok(());
+    }
+
+    if target == Target::ClaudeCode {
+        let snippet = integrations::render_target(target, &context, None)
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let delivery = integrations::deliver(
+            &snippet,
+            target,
+            &SnippetOptions {
+                print_secret: false,
+                no_clipboard: false,
+                force: false,
+                output: None,
+                write: false,
+            },
+            None,
+            Some("Paste into ~/.claude/settings.json or pass via --api-key and --base-url to the Claude Code CLI."),
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let copied = delivery
+            .messages
+            .iter()
+            .any(|message| message == "Copied config to clipboard.");
+        if !copied {
+            eprintln!(
+                "Could not copy to clipboard. Use `eggpool getkey` and pass --api-key to the Claude Code CLI."
+            );
+        }
+        for message in delivery.messages {
+            if !message.starts_with("Secret not printed") {
+                eprintln!("{message}");
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(args) = args {
+        context =
+            integrations::apply_overrides(context, args.host.as_deref(), args.base_url.as_deref())
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let model = integrations::resolve_model(
+            target,
+            args.model.as_deref(),
+            &context,
+            args.write || args.output.is_some(),
+        )
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let snippet = integrations::render_target(target, &context, model.as_deref())
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let delivery = integrations::deliver(
+            &snippet,
+            target,
+            &SnippetOptions {
+                print_secret: args.print_secret,
+                no_clipboard: args.no_clipboard,
+                force: args.force,
+                output: args.output,
+                write: args.write,
+            },
+            integrations::default_path(target).as_deref(),
+            integrations::paste_hint(target),
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        if let Some(stdout) = delivery.stdout {
+            println!("{stdout}");
+        }
+        for message in delivery.messages {
+            eprintln!("{message}");
+        }
+        if context.config_mutated || context.transcoder_mutated {
+            restart_after_integration_mutation(path).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn restart_after_integration_mutation(path: &Path) -> Result<(), BootstrapError> {
+    match config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
+        .await
+        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
+    {
+        ApplyOutcome::Restarted => eprintln!("Server restarted to apply generated config."),
+        ApplyOutcome::ServerNotRunning => {
+            eprintln!("Start or restart the server to apply generated config.")
+        }
+        outcome => render_apply(outcome),
     }
     Ok(())
 }

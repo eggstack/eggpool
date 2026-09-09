@@ -383,6 +383,68 @@ pub fn read_server_key(path: &Path) -> Result<Option<String>, MutationError> {
         .filter(|value| !value.trim().is_empty()))
 }
 
+/// Resolve the server key for an integration snippet.
+///
+/// This is deliberately kept beside the O004 key mutation service so an
+/// integration renderer cannot invent a second persistence or environment
+/// precedence rule.  An explicitly configured environment-owned key is
+/// never replaced with an inline generated value.
+pub fn resolve_server_key(path: &Path) -> Result<(String, bool), MutationError> {
+    let bytes = read_bounded(path)?;
+    let value: Value = std::str::from_utf8(&bytes)
+        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?
+        .parse()
+        .map_err(|_| MutationError::Invalid("configuration TOML is malformed".into()))?;
+    let server = value
+        .get("server")
+        .and_then(Value::as_table)
+        .ok_or_else(|| MutationError::Invalid("[server] section is missing".into()))?;
+
+    if let Some(key) = server.get("api_key").and_then(Value::as_str) {
+        if !key.is_empty() {
+            return Ok((key.to_owned(), false));
+        }
+    }
+    if let Some(env_name) = server.get("api_key_env").and_then(Value::as_str) {
+        if !env_name.trim().is_empty() {
+            let key = env::var(env_name).map_err(|_| {
+                MutationError::Invalid(
+                    "[server].api_key_env is configured, but the referenced environment variable is not available to this process".into(),
+                )
+            })?;
+            if key.trim().is_empty() {
+                return Err(MutationError::Invalid(
+                    "[server].api_key_env is configured, but the referenced environment variable is empty".into(),
+                ));
+            }
+            return Ok((key, false));
+        }
+    }
+
+    let key = generate_key()?;
+    if !write_server_key(path, &key)? {
+        return Err(MutationError::Invalid(
+            "cannot persist a generated server API key".into(),
+        ));
+    }
+    Ok((key, true))
+}
+
+/// Enable the compatibility transcoder when an enabled Anthropic-only
+/// provider is exposed to OpenAI-compatible integrations.
+pub fn set_transcoder_enabled(path: &Path, enabled: bool) -> Result<bool, MutationError> {
+    mutate_text(path, false, |text| {
+        replace_or_insert_section_value(
+            text,
+            "transcoder",
+            "enabled",
+            &enabled.to_string(),
+            true,
+            true,
+        )
+    })
+}
+
 pub fn redact_key(key: &str) -> String {
     let characters: Vec<char> = key.chars().collect();
     if characters.len() <= 8 {
