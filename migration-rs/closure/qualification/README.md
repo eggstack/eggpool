@@ -14,9 +14,10 @@ Expected records:
 - `008-status.md` — Q008 ARM64 SBC functional/resource characterization
 - `009-status.md` — Q009 sustained failure/reload/stream/resource qualification
 - `010-status.md` — Q010 aggregate M10 closure/M11 readiness report
+- `011-status.md` — Q007 corrective live-provider closure (created only after Q011 runs)
 
 Every record must identify the exact candidate commit and relevant environment class. Environment-specific records must include sanitized OS/architecture/hardware metadata and exact commands. Live-provider records must contain no credentials or raw sensitive response bodies.
 
 A later defect receives a new corrective Q011+ plan/closure record. Historical Q-records are never rewritten to hide a failed or superseded closure.
 
-Only accepted `010-status.md` may close M10 and make M11 eligible for its own planning review.
+Only accepted `010-status.md` may close M10 and make M11 eligible for its own planning review. Q010's blocked record does not promote Q011's implementation or any later plan.

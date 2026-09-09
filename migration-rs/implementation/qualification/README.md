@@ -1,6 +1,6 @@
 # M10 Qualification Implementation Plans
 
-Status: active; Q007 blocked; Q008 physical evidence complete but blocked pending Q007 acceptance
+Status: active; Q007/Q010 blocked; Q008 physical evidence complete but blocked pending Q007 acceptance
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -17,9 +17,15 @@ These plans implement M10 only. They qualify the closed Rust implementation from
 7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **blocked; see closure**.
 8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **physical evidence complete; blocked behind Q007**.
 9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — **implemented; blocked behind Q008 acceptance; see closure**.
-10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — queued behind Q009.
+10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — **blocked; closure attempted**; [closure](../../closure/qualification/010-status.md).
+11. [Q011 — Q007 live-provider corrective closure](011-q007-live-provider-corrective-closure.md) — **blocked pending maintainer-authorized live access**.
 
-Only `migration-rs/registry.md` authorizes implementation. Q007 remains the active plan but is blocked by missing live interoperability evidence; Q009's deterministic local implementation is complete but its closure remains blocked behind Q008 acceptance. Later plans are promoted only by accepted closure of their direct predecessor.
+Only `migration-rs/registry.md` authorizes implementation. Q007 remains the
+original blocked plan and Q011 is its corrective follow-up; both require real
+live-provider evidence before Q008 can unblock. Q009's deterministic local
+implementation and Q010's aggregate review are complete as blocked closure
+attempts. Later plans are promoted only by accepted closure in dependency
+order.
 
 ## Hard boundaries
 

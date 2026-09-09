@@ -1,5 +1,5 @@
 {
-  "candidate_sha": "73fad30f4eb79bcc75c38bd33a72c5b993f970cc",
+  "candidate_sha": "7a385824c5a79c3141f899b5f0b8c9ae21bd1711",
   "dom_comparisons": [
     {
       "active_nav": "/",
@@ -95,11 +95,11 @@
       "status": "pass"
     }
   ],
-  "duration_ms": 5840,
+  "duration_ms": 11003,
   "environment": {
     "browser": "manual-local",
-    "os": "darwin",
-    "python": "3.11.9"
+    "os": "linux",
+    "python": "3.12.3"
   },
   "fixture_matrix": [
     "empty first-run database",
@@ -127,7 +127,7 @@
   ],
   "plan": "Q004",
   "python_identity": "python:eggpool:local",
-  "rust_identity": "rust:/Users/davidbowman/projects/gorouter/rust/target/debug/eggpool",
+  "rust_identity": "rust:/home/sugarwookie/projects/eggpool/rust/target/debug/eggpool",
   "schema_version": "m10-q004.v1",
   "screenshots": {
     "entries": [

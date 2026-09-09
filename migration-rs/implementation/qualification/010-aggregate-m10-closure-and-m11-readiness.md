@@ -1,6 +1,6 @@
 # Q010 — Aggregate M10 Closure and M11 Readiness Report
 
-Status: queued behind Q009
+Status: blocked; closure attempted 2026-09-09 (see [closure](../../closure/qualification/010-status.md))
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

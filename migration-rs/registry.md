@@ -28,7 +28,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q007 blocked** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q007/Q010 blocked; Q011 corrective follow-up** |
 
 ## Dependency-ready implementation plans
 
@@ -39,8 +39,14 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | accepted Q004 | **accepted; see closure** |
 
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | invariant/polish | accepted Q006 | **blocked; see closure** |
+| Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | accepted Q006; blocked Q007 evidence | **blocked; maintainer live access required** |
 
-No M10 implementation plan is currently dependency-ready. Q007 remains active but blocked on live-provider evidence; Q008 has completed its physical run but remains blocked by Q007; Q009 has completed its deterministic local implementation but its closure is blocked behind Q008; Q010 remains queued behind Q009, and later plans are promoted only by accepted closure of their direct predecessor.
+No M10 implementation plan is currently dependency-ready. Q007 and its Q011
+corrective follow-up are blocked on real live-provider evidence; Q008 has
+completed its physical run but remains blocked by Q007; Q009 has completed its
+deterministic local implementation but its closure is blocked behind Q008; and
+Q010 has a blocked aggregate closure. Later plans are promoted only by
+accepted closure in direct dependency order.
 
 ## Completed implementation plans
 
@@ -97,7 +103,7 @@ No M10 implementation plan is currently dependency-ready. Q007 remains active bu
 | F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | `df902b5` | [closed](closure/foundation/006-status.md) |
 | T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | `50d7ff4` | [closed](closure/provider-transport/001-status.md) |
 | T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | `c9f448a` + `2696e52` | [closed](closure/provider-transport/002-status.md) |
-| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-egress-connector-and-proxy-parity.md) | infrastructure/capability | `5b34d8b` | [historical closure](closure/provider-transport/003-status.md) |
+| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | `5b34d8b` | [historical closure](closure/provider-transport/003-status.md) |
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | `71ef03d` | [closed](closure/provider-transport/004-status.md) |
 | T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | `c89e645` | [historical closure](closure/provider-transport/005-status.md) |
 | T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | `4b3a95a` | [closed](closure/provider-transport/006-status.md) |
@@ -160,7 +166,7 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **blocked; see closure** |
 | Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | physical evidence complete; blocked behind Q007 |
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | implemented; blocked behind Q008 |
-| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | queued behind Q009 |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | blocked; closure attempted; see [closure](closure/qualification/010-status.md) |
 
 ### M10 boundary decisions
 
@@ -175,8 +181,8 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 
 ## Future work and block state
 
-M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 plan is promoted automatically by M10 planning.
+M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 plan is promoted automatically by M10 planning. Q010's blocked closure promotes no future plan.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 are accepted within active M10; Q007 is blocked on live-provider evidence, Q008 has physical evidence but remains blocked behind Q007, Q009 has a passing deterministic implementation but a blocked closure behind Q008, and Q010 remains queued. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 are accepted within active M10; Q007 and Q011 are blocked on live-provider evidence, Q008 has physical evidence but remains blocked behind Q007, Q009 has a passing deterministic implementation but a blocked closure behind Q008, and Q010 has a blocked aggregate closure. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.

@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q007 blocked on live evidence; Q008 physical evidence complete but blocked behind Q007
+Status: active planning/implementation; Q007/Q010 blocked on live evidence; Q008 physical evidence complete but blocked behind Q007
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 
@@ -80,7 +80,11 @@ Q001 qualification contract, target matrix, and evidence schema freeze
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q007 remains the active blocked M10 plan after accepted Q006 closure; Q009's deterministic implementation is complete but its closure is blocked behind Q008 acceptance, so no later plan is dependency-ready.
+Only `../registry.md` authorizes implementation. Q007 remains blocked on live
+evidence; Q011 is the corrective follow-up created by the blocked Q010 review.
+Q008's physical run and Q009's deterministic implementation are complete but
+their closures remain blocked in dependency order. No later plan is
+dependency-ready.
 
 ## Qualification environment classes
 
@@ -194,6 +198,20 @@ Re-run the mandatory deterministic gates, aggregate Q001-Q009 evidence, resolve 
 Q010 does not itself flip installation/release authority. It answers whether the Rust candidate is qualified enough for M11 to plan public cutover.
 
 Exit: no unresolved high/medium migration correctness, security, data-loss, compatibility, lifecycle, resource, target-support, or dashboard finding remains; required live/Linux/SBC evidence exists; M11 is eligible for a separate cutover planning review.
+
+Q010's current-main closure attempt is recorded as blocked in
+[`../closure/qualification/010-status.md`](../closure/qualification/010-status.md).
+The deterministic and environment gates passed, but the mandatory Q007 live
+cell remains unresolved after an HTTP 403 provider-edge response.
+
+## Q011 — Q007 live-provider corrective closure
+
+Q011 is the narrow corrective follow-up for the unresolved Q007 live evidence.
+It reuses the existing bounded harness and owns no public cutover work. Q011
+requires maintainer-authorized live-provider access, a real success matrix or
+an explicitly reviewed provider-transport decision, and deterministic
+regressions for any discovered EggPool defect. It must be accepted before
+Q008 can promote Q009, Q009 can promote Q010, or M11 can become eligible.
 
 ## Evidence model
 
