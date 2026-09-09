@@ -13,6 +13,8 @@ Implementation surfaces:
 
 Machine-readable evidence: [`009-run.json`](009-run.json)
 
+Implementation commit: `0989d6e46aa184f0251eeb59be32f1a811b0f4cc`
+
 Evidence SHA-256: `557d8c1abfdc817704a1ead5731b9600f11ae012f4ab0a05c92c38e3a68cff35`
 
 Candidate SHA-256: `33dcbcb842b988bdd7a40dd7f17c56709b43ee5c3323c4f138db0bde1b5a31f5`
