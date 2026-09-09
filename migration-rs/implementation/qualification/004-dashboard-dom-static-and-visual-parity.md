@@ -1,6 +1,6 @@
 # Q004 — Dashboard SSR, DOM, Static Asset, and Visual Parity Review
 
-Status: ready for handoff (2026-09-09)
+Status: closed; accepted 2026-09-09; see [closure](../../closure/qualification/004-status.md)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

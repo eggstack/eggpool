@@ -1,6 +1,6 @@
 # Q005 — Supported-Target Build and Non-Root Runtime Portability
 
-Status: queued behind Q004
+Status: ready for handoff (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
