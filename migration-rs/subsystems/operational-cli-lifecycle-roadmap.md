@@ -1,6 +1,6 @@
 # M9 Operational CLI, Lifecycle, Update, and Deployment Roadmap
 
-Status: active implementation; O007 dependency-ready
+Status: active implementation; O008 dependency-ready
 
 Repository baseline: `e3edd5bc61b0718bc4559b85d30c27819e708350` (accepted R013 / M8 re-closure).
 
@@ -14,15 +14,15 @@ Python remains the behavioral oracle until M11 cutover. M9 preserves command nam
 
 ## Current baseline
 
-F003 represents the complete Python Click command tree in `rust/src/cli.rs`. O003 now gives the Rust dispatcher real foreground/daemon lifecycle, stop/restart, rehash, runtime-status, and watchdog behavior, O004 provides configuration/provider mutations, and O005 provides all agent integrations; the remaining inspection, data-safety, update, and deployment commands still return explicit migration-stage `NotImplemented` until their plans land.
+F003 represents the complete Python Click command tree in `rust/src/cli.rs`. O003 now gives the Rust dispatcher real foreground/daemon lifecycle, stop/restart, rehash, runtime-status, and watchdog behavior, O004 provides configuration/provider mutations, O005 provides all agent integrations, O006 provides database/backup operations, and O007 provides inspection, model-info, stats, and metrics-flush operations; update and deployment commands remain explicitly staged until their plans land.
 
-M8 exposes stable server-side authority for startup, reload, active-generation snapshots, task supervision, diagnostics, and shutdown. O003 now composes that authority into the Rust process lifecycle/control/watchdog commands. R008 intentionally left exactly three background capabilities unregistered for M9:
+M8 exposes stable server-side authority for startup, reload, active-generation snapshots, task supervision, diagnostics, and shutdown. O003 now composes that authority into the Rust process lifecycle/control/watchdog commands. R008 intentionally left exactly three background capabilities for M9:
 
 - `metrics_flush`;
 - `update_checker`;
 - `automatic_backup`.
 
-M9 owns those business capabilities and their task registration. O006 now owns the real automatic-backup callback; `metrics_flush` and `update_checker` remain the two deferred capabilities. M9 must reuse the single M8 task supervisor rather than creating another scheduler.
+M9 owns those business capabilities and their task registration. O006 owns the real automatic-backup callback, O007 owns the real metrics-flush callback, and `update_checker` remains deferred. M9 must reuse the single M8 task supervisor rather than creating another scheduler.
 
 ## M9 invariants
 
@@ -92,7 +92,7 @@ O001 operational contract + oracle freeze
 M10 eligibility
 ```
 
-Only `../registry.md` authorizes implementation. O007 is the current dependency-ready plan; O008-O010 remain queued behind their direct predecessors.
+Only `../registry.md` authorizes implementation. O008 is the current dependency-ready plan after O007 closure; O009-O010 remain queued behind their direct predecessors.
 
 ## Structural design
 

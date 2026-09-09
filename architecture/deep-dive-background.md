@@ -51,6 +51,25 @@ process has exited.
 
 Automatic backup task (zip archives).
 
+### Rust O007 operator services and metrics boundary
+
+The migration candidate keeps operator behavior in
+`rust/src/operations/operator.rs`: catalog refresh delegates to the catalog
+service, account explanation uses the read-only routing plan, model-info work
+uses the canonical tables, and cost/statistics operations use bounded SQL
+transactions. `rust/src/runtime.rs` is only the command adapter; it does not
+reimplement routing, catalog, pricing, or repair policy.
+
+`rust/src/operations/metrics.rs` owns the process-level
+`MetricsWriteCoalescer`. Request finalization contributes only bounded scalar
+usage facts. The coalescer aggregates by the canonical rollup key, enforces
+both a distinct-row cap and a pending-event cap, and writes additive
+`usage_rollups` upserts under one SQLite transaction. A failed write is
+re-buffered only within those same bounds and counted in diagnostics. The
+`metrics_flush` callback is registered with the existing M8 process task
+supervisor, honors immediate versus buffered mode, and the server performs one
+deadline-bounded final flush during shutdown.
+
 ## Task Classification
 
 ### Process-Owned Tasks

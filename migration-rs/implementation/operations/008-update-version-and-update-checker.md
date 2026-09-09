@@ -1,6 +1,6 @@
 # O008 — Update, Version Resolution, and Update-Checker Background Task
 
-Status: queued behind O007
+Status: dependency-ready; O007 closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

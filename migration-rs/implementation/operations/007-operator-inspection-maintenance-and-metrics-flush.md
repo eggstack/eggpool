@@ -1,6 +1,6 @@
 # O007 — Operator Inspection, Maintenance, and Metrics Flush
 
-Status: queued behind O006
+Status: closed; implementation and closure recorded in `migration-rs/closure/operations/007-status.md`
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

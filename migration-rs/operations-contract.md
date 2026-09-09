@@ -161,17 +161,17 @@ Inspection commands project facts from existing repositories/services. Timestamp
 terminal widths, and temporary root paths are normalized only as incidental
 presentation. JSON modes retain stable field names and types.
 
-The only R008 deferred capabilities at current main are exactly:
+The remaining R008 deferred capability at current main is:
 
 | Task | Enable predicate | Schedule/ownership | Failure/reload semantics |
 |---|---|---|---|
-| `metrics_flush` | `metrics.write_mode != immediate` | process-owned, configured flush interval, 5s initial delay | one supervisor callback; flush failure is isolated; schedule is reloadable |
 | `update_checker` | `update_checker.enabled` and process startup capability | process-owned, immediate first check then 86400s | lookup errors are recorded and swallowed; startup-only registration survives generation swaps |
-| `automatic_backup` | `backup.enabled` and `backup.interval_s > 0` | process-owned, configured interval and startup delay | tick errors are logged/isolated; schedule is reloadable; no parallel scheduler |
 
-All three use the one M8 supervisor and are shutdown-owned by it. No fourth
-deferred capability is present. `catalog_refresh`, retention, checkpoint, and
-other tasks are already registered M8/R008 capabilities, not M9 deferrals.
+`metrics_flush` and `automatic_backup` use the one M8 supervisor and are
+shutdown-owned by it; their callbacks are now registered by O007 and O006.
+No fourth deferred capability is present. `catalog_refresh`, retention,
+checkpoint, and other tasks are already registered M8/R008 capabilities, not
+M9 deferrals.
 
 ### Update
 

@@ -154,7 +154,7 @@ R001 runtime/reload oracle freeze
 
 R011/R012 remain append-only historical closure evidence. Accepted R013 fixed the remaining process wire-policy validation/acceptance/rollback and real-inference qualification defects and re-closed M8. R013 closure recorded no unresolved high/medium M8 finding.
 
-R008 left exactly three business capabilities intentionally deferred and unregistered for M9: `metrics_flush`, `update_checker`, and `automatic_backup`. M8 owns their scheduler/task-spec machinery; M9 owns the real callbacks.
+R008 left exactly three business capabilities intentionally deferred for M9: `metrics_flush`, `update_checker`, and `automatic_backup`. M8 owns their scheduler/task-spec machinery; M9 owns the real callbacks. O006 registered `automatic_backup` and O007 registered `metrics_flush`; `update_checker` remains the final deferred callback for O008.
 
 Exit condition satisfied after accepted R013 closure.
 

@@ -69,6 +69,14 @@ changes take effect without discarding compatible state, and one shared
 per-provider limit
 converges across existing in-flight negotiations.
 
+`ProcessRuntime.metrics_coalescer` is another process-owned bounded container.
+It aggregates terminal request usage into canonical `usage_rollups` rows with
+additive upserts, uses separate short state/flush locks, re-buffers failed
+writes only within the configured capacity, and is flushed once more under the
+server shutdown deadline. Its recurring callback is the M8 supervisor's
+singleton `metrics_flush` task, so reloads change task scheduling through the
+existing task-spec boundary rather than creating a second timer loop.
+
 Reload diagnostics are owned by the retained reload worker rather than the
 caller future. An operation token is the only authority allowed to clear
 `reload_in_progress`; a concurrent busy caller cannot overwrite the active
