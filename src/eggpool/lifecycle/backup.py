@@ -127,9 +127,9 @@ class BackupContents:
         """Map absolute source path to the archive member name."""
         out: dict[Path, str] = {}
         for p in self.member_paths():
-            if p.name == CONFIG_BASENAME:
+            if p == self.config_path:
                 out[p] = CONFIG_BASENAME
-            elif p.name == ENV_BASENAME:
+            elif p == self.env_path:
                 out[p] = ENV_BASENAME
             else:
                 out[p] = p.name

@@ -1,0 +1,41 @@
+{
+  "manifest_version": "m10-q003.v1",
+  "historical_fixture": {
+    "id": "python-v11",
+    "path": "tests/fixtures/schema/pre_phase17_v11.sql",
+    "sha256": "a65d21db88e0319a87ef91b9be59f7f135a13c06b9e9036bdd0d096b4a34447b",
+    "migration_checksum_manifest": "tests/fixtures/schema/checksums.json",
+    "migration_checksum_manifest_sha256": "bee248bba09edbb5e19268748c1cde56f4256517e3cf49a256b892103527c4dd"
+  },
+  "generated_fixtures": [
+    {
+      "id": "empty",
+      "source": "runtime-generated SQLite database with no user tables"
+    },
+    {
+      "id": "latest-python",
+      "source": "Python launcher startup plus finite/streaming local-provider requests"
+    },
+    {
+      "id": "latest-rust",
+      "source": "Rust launcher startup plus finite/streaming local-provider requests"
+    },
+    {
+      "id": "wal-active",
+      "source": "SQLite WAL connection with committed rows held open during Rust online backup"
+    },
+    {
+      "id": "python-runtime-backup",
+      "source": "Python sqlite3.Connection.backup runtime archive"
+    }
+  ],
+  "archive_contract": {
+    "supported_cross_implementation_shape": [
+      "META",
+      "config.toml",
+      ".env (optional)",
+      "usage.sqlite3"
+    ],
+    "unsupported_shape": "legacy Python raw-file archives containing usage.sqlite3-wal or usage.sqlite3-shm; Python runtime backups use an online snapshot and are the supported rollback boundary"
+  }
+}

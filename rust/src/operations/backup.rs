@@ -28,6 +28,7 @@ const MAX_ARCHIVE_MEMBERS: usize = 6;
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ENV_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DATABASE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = MAX_DATABASE_BYTES + MAX_CONFIG_BYTES + MAX_ENV_BYTES + 1_048_576;
 const BACKUP_TIMEOUT: Duration = Duration::from_secs(60);
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -350,6 +351,7 @@ fn write_archive(
 }
 
 fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> {
+    reject_duplicate_archive_members(archive_path)?;
     let file = File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file).map_err(BackupError::Archive)?;
     if archive.is_empty() || archive.len() > MAX_ARCHIVE_MEMBERS {
@@ -379,10 +381,14 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
                 "unexpected or duplicate member".to_owned(),
             ));
         }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 != 0o100000)
-        {
+        if entry.unix_mode().is_some_and(|mode| {
+            let file_type = mode & 0o170000;
+            // Python's stdlib zipfile leaves the Unix file-type bits unset
+            // for ordinary members.  Treat that as a regular file for the
+            // cross-implementation archive contract, while still rejecting
+            // an explicitly encoded directory/device/FIFO/socket type.
+            file_type != 0 && file_type != 0o100000
+        }) {
             return Err(BackupError::InvalidArchive(
                 "special-file member is not allowed".to_owned(),
             ));
@@ -470,6 +476,70 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
         database_bytes,
         env_bytes: env,
     })
+}
+
+/// Reject duplicate central-directory names before `zip` builds its
+/// name-indexed archive view.  `zip 2.4` intentionally deduplicates names in
+/// that view, which would otherwise make the application-level duplicate
+/// member contract unobservable.  Only the bounded central directory is
+/// scanned; payload validation remains owned by `ZipArchive` below.
+fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupError> {
+    let size = fs::metadata(archive_path)?.len();
+    if size > MAX_ARCHIVE_BYTES {
+        return Err(BackupError::InvalidArchive(
+            "archive exceeds the total size limit".to_owned(),
+        ));
+    }
+    let mut file = File::open(archive_path)?;
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.read_to_end(&mut bytes)?;
+    let Some(eocd) = bytes.windows(4).rposition(|window| window == b"PK\x05\x06") else {
+        return Ok(());
+    };
+    if eocd + 22 > bytes.len() {
+        return Ok(());
+    }
+    let central_size = u32::from_le_bytes(bytes[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
+    let central_offset =
+        u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+    if central_size == u32::MAX as usize || central_offset == u32::MAX as usize {
+        return Ok(());
+    }
+    let central_end = central_offset
+        .checked_add(central_size)
+        .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+    if central_offset > bytes.len() || central_end > bytes.len() || central_end > eocd {
+        return Ok(());
+    }
+    let mut names = BTreeSet::<Vec<u8>>::new();
+    let mut cursor = central_offset;
+    while cursor < central_end {
+        if cursor + 46 > central_end || &bytes[cursor..cursor + 4] != b"PK\x01\x02" {
+            return Ok(());
+        }
+        let name_len =
+            u16::from_le_bytes(bytes[cursor + 28..cursor + 30].try_into().unwrap()) as usize;
+        let extra_len =
+            u16::from_le_bytes(bytes[cursor + 30..cursor + 32].try_into().unwrap()) as usize;
+        let comment_len =
+            u16::from_le_bytes(bytes[cursor + 32..cursor + 34].try_into().unwrap()) as usize;
+        let name_start = cursor + 46;
+        let record_len = 46usize
+            .checked_add(name_len)
+            .and_then(|length| length.checked_add(extra_len))
+            .and_then(|length| length.checked_add(comment_len))
+            .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+        if cursor + record_len > central_end {
+            return Ok(());
+        }
+        if !names.insert(bytes[name_start..name_start + name_len].to_vec()) {
+            return Err(BackupError::InvalidArchive(
+                "unexpected or duplicate member".to_owned(),
+            ));
+        }
+        cursor += record_len;
+    }
+    Ok(())
 }
 
 fn validate_staged_config(bytes: &[u8], path: &Path) -> Result<(), BackupError> {
