@@ -1,6 +1,6 @@
 # M9 Operational CLI Handoff Sequence
 
-Status: active; O009 ready
+Status: active; O010 ready
 
 Execute and accept in this order:
 
@@ -12,8 +12,8 @@ Execute and accept in this order:
 6. O006 — implement migrate/vacuum/backup/recover and register the real automatic-backup M8 task (**closed; 6af52fb**).
 7. O007 — implement accounts/models/modelinfo/stats/dashboard operator commands and register the real metrics-flush M8 task (**closed**).
 8. O008 — implement latest/exact update resolution, staged verified replacement, version behavior, and update-checker M8 task (**closed; c9b63d5**).
-9. O009 — implement deploy systemd/cron/backup-cron/logrotate/all, reviewed Rust candidate install artifacts, and uninstall (**ready; O008 closure accepted**).
-10. O010 — run full M9 differential/fault/security/data-loss/deployment qualification and close M9 (**queued**).
+9. O009 — implement deploy systemd/cron/backup-cron/logrotate/all, reviewed Rust candidate install artifacts, and uninstall (**closed; 27310ff**).
+10. O010 — run full M9 differential/fault/security/data-loss/deployment qualification and close M9 (**ready; O009 closure accepted**).
 
 ## Rules for every handoff
 
@@ -31,4 +31,4 @@ Execute and accept in this order:
 - Secrets may be printed only on explicit existing surfaces whose contract requires it.
 - No M10 broad matrix, M11 default-cutover, or M12 retirement work is pulled forward.
 
-Only `migration-rs/registry.md` authorizes implementation. O009 is the sole ready plan.
+Only `migration-rs/registry.md` authorizes implementation. O010 is the sole ready plan.

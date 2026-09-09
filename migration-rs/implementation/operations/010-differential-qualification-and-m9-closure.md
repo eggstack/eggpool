@@ -1,6 +1,6 @@
 # O010 — Differential Qualification and M9 Closure
 
-Status: queued behind O009
+Status: dependency-ready; O009 closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

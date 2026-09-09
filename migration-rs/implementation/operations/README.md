@@ -1,6 +1,6 @@
 # M9 Operational CLI Implementation Plans
 
-Status: active; O009 dependency-ready
+Status: active; O010 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
@@ -16,10 +16,10 @@ These plans implement M9 only. They compose the closed M4-M8 Rust services into 
 6. [O006 — Migrations, DB maintenance, backup/recover, and automatic backup](006-database-backup-recovery-and-automatic-backup.md) — **closed; 6af52fb**.
 7. [O007 — Operator inspection, model/stats maintenance, and metrics flush](007-operator-inspection-maintenance-and-metrics-flush.md) — **closed**.
 8. [O008 — Update/version resolution and update-checker background task](008-update-version-and-update-checker.md) — **closed**.
-9. [O009 — Deployment artifacts, systemd/cron/logrotate, and uninstall](009-deployment-install-artifacts-and-uninstall.md) — **dependency-ready; O008 closure accepted**.
-10. [O010 — Differential qualification and M9 closure](010-differential-qualification-and-m9-closure.md) — queued behind O009.
+9. [O009 — Deployment artifacts, systemd/cron/logrotate, and uninstall](009-deployment-install-artifacts-and-uninstall.md) — **closed; 27310ff**.
+10. [O010 — Differential qualification and M9 closure](010-differential-qualification-and-m9-closure.md) — **dependency-ready; O009 closure accepted**.
 
-Only `migration-rs/registry.md` authorizes implementation. O009 is the current dependency-ready plan; O010 remains queued behind its direct predecessor.
+Only `migration-rs/registry.md` authorizes implementation. O010 is the current dependency-ready plan; M10 remains blocked until O010 is accepted.
 
 ## Hard boundaries
 

@@ -1,6 +1,10 @@
 # O009 — Deployment, Install Artifacts, and Uninstall
 
-Status: dependency-ready; O008 closure accepted
+Status: closed; implementation and closure recorded in `migration-rs/closure/operations/009-status.md`
+
+Implementation commit: `27310ffdd96e1d9aa94887edd312a932be0ad091a`
+
+Closure: [O009 status](../../closure/operations/009-status.md)
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
