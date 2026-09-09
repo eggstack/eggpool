@@ -1441,11 +1441,7 @@ async fn model_detail_page(
     Query(query): Query<PeriodQuery>,
 ) -> Response {
     let model_id = model_id.trim_start_matches('/');
-    let title = if model_id.is_empty() {
-        "Model detail"
-    } else {
-        "Model detail"
-    };
+    let title = "Model detail";
     let body = format!(
         "<h2>{title}</h2><section class=\"panel\"><div class=\"panel-header\"><h2>Model information</h2></div><p class=\"empty-state\">No model information available for <code>{}</code>.</p></section>",
         html_escape(model_id)
@@ -2139,7 +2135,7 @@ fn render_dashboard_layout(
         body,
         html_escape(period),
         refresh_interval_s,
-        format!("{}{}", chart_script, "")
+        chart_script
     )
 }
 
