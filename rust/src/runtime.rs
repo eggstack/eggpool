@@ -1859,7 +1859,7 @@ async fn stop(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError> {
     }
     println!("Stopping server (PID {pid})...");
     process::signal_term(pid, proof).map_err(process_error)?;
-    if !process::wait_for_exit(pid, timeout).await {
+    if !process::wait_for_exit_or_pid_clear(pid, &paths.pid_file, timeout).await {
         return Err(command_error(
             EXIT_VALIDATION,
             format!("server did not stop within {timeout_seconds}s"),
@@ -1924,7 +1924,7 @@ async fn restart_server_inner(
                 println!("Stopping server (PID {pid})...");
             }
             process::signal_term(pid, proof).map_err(process_error)?;
-            if !process::wait_for_exit(pid, timeout).await {
+            if !process::wait_for_exit_or_pid_clear(pid, &paths.pid_file, timeout).await {
                 return Err(command_error(
                     EXIT_VALIDATION,
                     format!(

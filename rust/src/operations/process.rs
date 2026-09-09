@@ -204,6 +204,25 @@ pub async fn wait_for_exit(pid: i32, timeout_duration: Duration) -> bool {
     !process_exists(pid)
 }
 
+/// Wait for a process to exit or for its owner to retire the matching PID
+/// file.  Some Unix hosts continue to report a just-reaped child as existing
+/// to unrelated observers, so the private PID file is also part of the
+/// lifecycle evidence.
+pub async fn wait_for_exit_or_pid_clear(
+    pid: i32,
+    pid_file: &Path,
+    timeout_duration: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout_duration;
+    while Instant::now() < deadline {
+        if read_pid(pid_file).ok().flatten() != Some(pid) || !process_exists(pid) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    read_pid(pid_file).ok().flatten() != Some(pid) || !process_exists(pid)
+}
+
 /// A create-new local guard for the watchdog start race.
 pub struct StartGuard {
     path: PathBuf,

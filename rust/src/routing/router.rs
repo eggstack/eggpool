@@ -229,6 +229,17 @@ impl RoutingRouter {
             .len()
     }
 
+    /// Return the bounded model-id projection used by the public models
+    /// endpoint. The snapshot is read-only and never performs provider or DB
+    /// work.
+    pub fn catalog_model_ids(&self) -> Vec<String> {
+        self.state
+            .catalog
+            .lock()
+            .expect("catalog lock")
+            .exposed_model_ids()
+    }
+
     /// Select, acquire any required half-open probe, and publish active plus
     /// pending quota ownership while holding one async mutex. There is no
     /// await after the mutex is acquired and no SQLite/network operation in

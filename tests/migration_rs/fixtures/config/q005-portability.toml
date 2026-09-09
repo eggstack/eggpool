@@ -1,0 +1,41 @@
+[server]
+host = "127.0.0.1"
+port = __Q005_PORT__
+api_key = "q005-server-key"
+max_request_body_bytes = 1048576
+
+[database]
+path = "__Q005_DATABASE__"
+
+[dashboard]
+enabled = false
+
+[models]
+startup_refresh = true
+
+[model_info]
+enabled = false
+startup_refresh = false
+
+[backup]
+directory = "__Q005_BACKUP_DIR__"
+include_env = false
+
+[providers.fixture]
+id = "fixture"
+base_url = "__Q005_UPSTREAM__"
+protocols = ["openai"]
+
+[providers.fixture.auth]
+mode = "bearer"
+
+[providers.fixture.models_endpoint]
+method = "GET"
+
+[[providers.fixture.static_models]]
+id = "q005-fixture-model"
+protocol = "openai"
+
+[[providers.fixture.accounts]]
+name = "q005-account"
+api_key = "q005-provider-key"

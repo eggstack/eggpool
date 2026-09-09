@@ -771,6 +771,13 @@ pub async fn run_with_digest(
             return Err(map_generation_error(error));
         }
     };
+    if config.models.startup_refresh
+        && let Some(generation) = prepared.generation()
+        && let Some(catalog) = generation.inference().catalog_service()
+        && let Err(error) = catalog.refresh().await
+    {
+        tracing::warn!(error = %error, "initial catalog refresh failed");
+    }
     let generation = match prepared.transfer() {
         Ok(generation) => generation,
         Err(error) => {
@@ -984,6 +991,7 @@ pub fn build_router(state: AppState) -> Router {
     let mut router = Router::new()
         .route("/v1/healthz", get(healthz))
         .route("/v1/readyz", get(readyz))
+        .route("/v1/models", get(models_api))
         .route("/api/stats/runtime", get(runtime_status))
         .route("/api/stats/update", get(update_status))
         .route("/v1/chat/completions", post(chat_completions))
@@ -1185,6 +1193,28 @@ fn is_loopback_host(host: &str) -> bool {
 
 async fn healthz() -> Response {
     json_response(StatusCode::OK, json!({"status": "ok"}))
+}
+
+async fn models_api(State(state): State<AppState>) -> Response {
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(_) => return degraded("runtime unavailable"),
+    };
+    let data = lease
+        .generation()
+        .inference()
+        .catalog_model_ids()
+        .into_iter()
+        .map(|model_id| {
+            json!({
+                "id": model_id,
+                "object": "model",
+                "owned_by": "eggpool",
+                "name": model_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    json_response(StatusCode::OK, json!({"object": "list", "data": data}))
 }
 
 async fn runtime_status(State(state): State<AppState>) -> Response {

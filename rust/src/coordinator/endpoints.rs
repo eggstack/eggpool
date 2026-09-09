@@ -313,6 +313,10 @@ impl InferenceState {
         self.router.clone()
     }
 
+    pub fn catalog_model_ids(&self) -> Vec<String> {
+        self.router.catalog_model_ids()
+    }
+
     pub fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
     }
