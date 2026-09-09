@@ -235,4 +235,4 @@ Accepted Q001 promotes only Q002.
 
 ## Implementation closure
 
-Q001 is closed by implementation candidate `d8885dc8fd5a319fe1152bb833f9723e5b35fbcf` and the accepted evidence record at `migration-rs/closure/qualification/001-status.md`. The frozen manifest and its six validation tests add no production capability, dependency, schema, CI job, or runtime behavior. Q002 is the only plan promoted by this closure.
+Q001 is closed by implementation candidate `4b5093a30a56f78c14aef3ffef8c47863fc74070` and the accepted evidence record at `migration-rs/closure/qualification/001-status.md`. The frozen manifest and its six validation tests add no production capability, dependency, schema, CI job, or runtime behavior. Q002 is the only plan promoted by this closure.

@@ -5,7 +5,7 @@ Status: closed
 Recommendation: accept Q001 closure; promote Q002 as the sole dependency-ready
 M10 implementation plan.
 
-Implementation candidate: `d8885dc8fd5a319fe1152bb833f9723e5b35fbcf`
+Implementation candidate: `4b5093a30a56f78c14aef3ffef8c47863fc74070`
 
 Plan: [Q001 — qualification contract, target matrix, and evidence schema freeze](../../implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md)
 
@@ -22,7 +22,7 @@ validate the contract itself.
 Manifest SHA-256:
 
 ```text
-b5b1c6202d8db9a43dad4ecaa0d17db5735baed0436295faa0b8c92fe85271b5
+a4b5d272c41b47bd30c39e5811ccc3a75545345148f6d78cea1c35bbf222bdb2
 ```
 
 ## Requirement-to-evidence matrix
@@ -173,7 +173,7 @@ was used. Those are intentionally owned by Q006-Q009.
 ## Registry transition and future-plan audit
 
 Q001 moves from the dependency-ready queue to the completed implementation
-plans with candidate `d8885dc8fd5a319fe1152bb833f9723e5b35fbcf`. Q002 is
+plans with candidate `4b5093a30a56f78c14aef3ffef8c47863fc74070`. Q002 is
 promoted as the sole dependency-ready M10 plan because its hard dependency is
 now accepted. Q003 remains queued behind Q002; Q004-Q010 remain queued behind
 their direct predecessors. M10 remains active, and M11 remains blocked on
