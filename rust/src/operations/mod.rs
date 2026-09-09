@@ -5,6 +5,7 @@
 //! `ReloadService`; `paths` and `process` provide reusable, secret-free
 //! lifecycle observations for later commands.
 
+pub mod backup;
 pub mod config_mutation;
 pub mod control;
 pub mod integrations;

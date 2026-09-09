@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     process::{Command as OsCommand, Stdio},
     time::Duration,
@@ -18,6 +18,7 @@ use crate::{
     cli::ServeArgs,
     config,
     operations::{
+        backup::{self, BackupService},
         config_mutation::{self, ApplyMode, ApplyOutcome},
         paths::RuntimePaths,
         process,
@@ -75,6 +76,10 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
         Some(Command::Onboard(args)) => onboard(&config_path, args).await?,
         Some(Command::Configsetup(command)) => configsetup(&config_path, command).await?,
+        Some(Command::Migrate) => migrate(&config_path).await?,
+        Some(Command::Db(crate::cli::DbCommand::Vacuum)) => vacuum(&config_path).await?,
+        Some(Command::Backup { output_dir }) => backup(&config_path, output_dir).await?,
+        Some(Command::Recover { source }) => recover(&config_path, source).await?,
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());
@@ -86,6 +91,187 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             });
         }
     }
+    Ok(())
+}
+
+async fn open_maintenance_database(
+    config: &config::Config,
+    require_existing: bool,
+) -> Result<crate::db::Database, BootstrapError> {
+    let path = config::Config::runtime_path(&config.database.path);
+    if require_existing && !path.is_file() {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            format!("database not found: {}", path.display()),
+        ));
+    }
+    let mut database_config = crate::db::DatabaseConfig::from(&config.database);
+    database_config.path = path.display().to_string();
+    crate::db::Database::open(database_config)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))
+}
+
+async fn migrate(path: &Path) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let database = open_maintenance_database(&config, false).await?;
+    let result = crate::db::MigrationRunner::new(&database).run().await;
+    let close = database.close().await;
+    match (result, close) {
+        (Ok(state), Ok(())) => {
+            println!(
+                "Migrations completed successfully\n  Applied migrations: {}\n  Current schema: {}",
+                state.applied_this_run.len(),
+                state.applied_versions.last().copied().unwrap_or_default()
+            );
+            Ok(())
+        }
+        (Err(error), _) | (Ok(_), Err(error)) => {
+            Err(command_error(EXIT_VALIDATION, error.to_string()))
+        }
+    }
+}
+
+async fn vacuum(path: &Path) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let database = open_maintenance_database(&config, true).await?;
+    let result = database.vacuum().await;
+    let close = database.close().await;
+    match (result, close) {
+        (Ok(()), Ok(())) => {
+            println!("Database vacuum completed successfully");
+            Ok(())
+        }
+        (Err(error), _) | (Ok(()), Err(error)) => {
+            Err(command_error(EXIT_VALIDATION, error.to_string()))
+        }
+    }
+}
+
+async fn backup(path: &Path, output_dir: Option<PathBuf>) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let mut service = BackupService::from_config(path, &config);
+    if let Some(output_dir) = output_dir {
+        service = service.with_output_dir(output_dir);
+    }
+    let database = open_maintenance_database(&config, true).await?;
+    let result = service.create(&database).await;
+    let close = database.close().await;
+    let result = match result {
+        Ok(result) => {
+            if let Err(error) = close {
+                return Err(command_error(EXIT_VALIDATION, error.to_string()));
+            }
+            result
+        }
+        Err(error) => return Err(command_error(EXIT_VALIDATION, error.to_string())),
+    };
+    println!("Wrote backup: {}", result.archive.display());
+    for member in result.members {
+        println!("  included: {member}");
+    }
+    Ok(())
+}
+
+async fn recover(path: &Path, source: Option<PathBuf>) -> Result<(), BootstrapError> {
+    let archive = match source {
+        Some(source) => {
+            let source =
+                if let Some(tail) = source.to_str().and_then(|value| value.strip_prefix("~/")) {
+                    std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_default()
+                        .join(tail)
+                } else {
+                    source
+                };
+            if source.is_absolute() {
+                source
+            } else {
+                backup::default_backup_dir().join(source)
+            }
+        }
+        None => {
+            let entries = backup::list_backups(&backup::default_backup_dir())
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            if entries.is_empty() {
+                println!("No backups found in the default backup directory.");
+                return Ok(());
+            }
+            println!("Available backups:");
+            for (index, entry) in entries.iter().enumerate() {
+                let size = fs::metadata(entry)
+                    .map(|meta| meta.len())
+                    .unwrap_or_default();
+                println!("  {}. {} ({} bytes)", index + 1, entry.display(), size);
+            }
+            print!("Select a backup (blank to cancel): ");
+            io::stdout()
+                .flush()
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let mut answer = String::new();
+            io::stdin()
+                .read_line(&mut answer)
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let Ok(index) = answer.trim().parse::<usize>() else {
+                println!("Aborted.");
+                return Ok(());
+            };
+            entries
+                .get(index.saturating_sub(1))
+                .cloned()
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "invalid backup selection"))?
+        }
+    };
+    if !archive.is_file() {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            format!("backup not found: {}", archive.display()),
+        ));
+    }
+    backup::BackupService::validate_archive(&archive)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    print!("Overwrite current configuration and database? [y/N] ");
+    io::stdout()
+        .flush()
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        println!("Aborted.");
+        return Ok(());
+    }
+    // Stop before replacement. The recovery service itself never touches a
+    // running database and does not restart the process after success.
+    let paths = RuntimePaths::resolve();
+    if paths.pid_file.is_file() {
+        stop(path, 10.0).await?;
+    }
+    let config = config::Config::from_toml(path).ok();
+    let service = config
+        .as_ref()
+        .map(|config| BackupService::from_config(path, config))
+        .unwrap_or_else(|| BackupService {
+            paths: backup::BackupPaths {
+                config: path.to_owned(),
+                database: PathBuf::new(),
+                env: None,
+                output_dir: backup::default_backup_dir(),
+            },
+            include_env: true,
+            install_method: "rust".to_owned(),
+        });
+    let restored = service
+        .recover(&archive)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    println!("Restore complete. Restart the server to load the new config.");
+    println!(
+        "  config: {}\n  db: {}",
+        restored.config.display(),
+        restored.database.display()
+    );
     Ok(())
 }
 

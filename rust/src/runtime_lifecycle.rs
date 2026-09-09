@@ -320,7 +320,11 @@ impl ProcessRuntime {
         config: &Config,
     ) -> Result<Self, GenerationBuildError> {
         let mut runtime = Self::new_with_config(database, config)?;
-        runtime.config_path = Some(config_path.into());
+        let config_path = config_path.into();
+        runtime.config_path = Some(config_path.clone());
+        runtime
+            .task_supervisor
+            .register_automatic_backup(runtime.database.clone(), config_path);
         Ok(runtime)
     }
 

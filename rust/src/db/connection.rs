@@ -420,6 +420,31 @@ impl Database {
         .await
     }
 
+    /// Rebuild the database through SQLite's dedicated maintenance command.
+    /// The serialized gate prevents this from racing another operation, while
+    /// SQLite's configured busy timeout keeps contention bounded.
+    pub async fn vacuum(&self) -> Result<(), DatabaseError> {
+        self.call(|connection| {
+            connection.execute_batch("VACUUM")?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Create a consistent online-backup snapshot without copying a live WAL
+    /// file.  The destination is opened only inside the SQLite worker thread,
+    /// so the source connection remains under the same serialized gate as all
+    /// other database operations.
+    pub async fn backup_to(&self, destination: std::path::PathBuf) -> Result<(), DatabaseError> {
+        self.call(move |source| {
+            let mut target = tokio_rusqlite::rusqlite::Connection::open(destination)?;
+            let backup = tokio_rusqlite::rusqlite::backup::Backup::new(source, &mut target)?;
+            backup.run_to_completion(32, std::time::Duration::from_millis(10), None)?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Delete only terminal/historical rows under a bounded maintenance
     /// budget. Pending requests and active reservations are never selected.
     pub async fn cleanup_retention(

@@ -25,12 +25,20 @@ def _launchers() -> tuple[PythonLauncher, RustLauncher]:
     return python, rust
 
 
-def test_version_and_deferred_command_are_explicit() -> None:
+def test_version_and_migrate_command_are_implemented(tmp_path: Path) -> None:
     python, rust = _launchers()
     with isolated_environment() as environment:
         python_version = python.run(["version"], environment=environment)
         rust_version = rust.run(["version"], environment=environment)
-        deferred = rust.run(["migrate"], environment=environment)
+        config_path = tmp_path / "config.toml"
+        database_path = tmp_path / "usage.sqlite3"
+        config_path.write_text(
+            f'[database]\npath = "{database_path}"\n',
+            encoding="utf-8",
+        )
+        migrated = rust.run(
+            ["--config", str(config_path), "migrate"], environment=environment
+        )
 
     assert (python_version.exit_code, python_version.stdout, python_version.stderr) == (
         0,
@@ -38,8 +46,8 @@ def test_version_and_deferred_command_are_explicit() -> None:
         rust_version.stderr,
     )
     assert rust_version.exit_code == 0
-    assert deferred.exit_code == 1
-    assert "not implemented in Rust candidate" in deferred.stderr
+    assert migrated.exit_code == 0
+    assert "Migrations completed successfully" in migrated.stdout
 
 
 def test_representative_config_is_accepted_and_invalid_config_is_rejected(

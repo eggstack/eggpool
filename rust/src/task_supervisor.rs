@@ -438,6 +438,41 @@ impl TaskCallbackRegistry {
         registry
     }
 
+    /// Add the process-owned O006 callback. The callback resolves the current
+    /// config on each tick so a successful reload changes backup directory,
+    /// env inclusion, and retention without capturing a retiring generation.
+    pub fn register_automatic_backup(
+        &mut self,
+        database: Database,
+        config_path: std::path::PathBuf,
+    ) {
+        self.register(
+            "automatic_backup",
+            task_callback(move |context| {
+                let database = database.clone();
+                let config_path = config_path.clone();
+                async move {
+                    if !matches!(context, TaskTickContext::Process) {
+                        return Err(TaskCallbackError::Failed);
+                    }
+                    let config = crate::Config::from_toml(&config_path)
+                        .map_err(|_| TaskCallbackError::Failed)?;
+                    let retain_count = config.backup.retain_count;
+                    let service = crate::operations::backup::BackupService::from_config(
+                        &config_path,
+                        &config,
+                    );
+                    service
+                        .create(&database)
+                        .await
+                        .map_err(|_| TaskCallbackError::Failed)?;
+                    let _ = service.prune(retain_count);
+                    Ok(())
+                }
+            }),
+        );
+    }
+
     pub fn available_kinds(&self) -> Vec<String> {
         self.callbacks.keys().cloned().collect()
     }
@@ -779,6 +814,16 @@ impl RuntimeTaskSupervisor {
             .lock()
             .expect("task callback registry lock")
             .register(callback_kind, callback);
+    }
+
+    /// Register the process-owned O006 callback in the supervisor's shared
+    /// callback registry before a task diff is committed.
+    pub fn register_automatic_backup(&self, database: Database, config_path: std::path::PathBuf) {
+        self.inner
+            .callbacks
+            .lock()
+            .expect("task callback registry lock")
+            .register_automatic_backup(database, config_path);
     }
 
     /// Return callback capabilities available to the current process. Reload
