@@ -40,7 +40,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -271,14 +271,15 @@ def _expected_path(surface: str) -> str:
 def _usage_summary(body: bytes) -> dict[str, int | bool]:
     """Extract scalar usage facts without retaining a response body."""
     try:
-        value = json.loads(body.decode("utf-8"))
+        value: Any = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {"reported": False}
     if not isinstance(value, dict):
         return {"reported": False}
-    usage = value.get("usage")
-    if not isinstance(usage, dict):
+    usage_value: Any = cast("Any", value).get("usage")
+    if not isinstance(usage_value, dict):
         return {"reported": False}
+    usage = cast("dict[str, Any]", usage_value)
     result: dict[str, int | bool] = {"reported": True}
     for key in (
         "prompt_tokens",
@@ -296,12 +297,15 @@ def _usage_summary(body: bytes) -> dict[str, int | bool]:
 def _error_summary(body: bytes) -> dict[str, str]:
     """Capture only an error type/message classification from a response."""
     try:
-        value = json.loads(body.decode("utf-8"))
+        value: Any = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {}
-    if not isinstance(value, dict) or not isinstance(value.get("error"), dict):
+    if not isinstance(value, dict):
         return {}
-    error = value["error"]
+    error_value: Any = cast("Any", value).get("error")
+    if not isinstance(error_value, dict):
+        return {}
+    error = cast("dict[str, Any]", error_value)
     result: dict[str, str] = {}
     for key in ("type", "code", "message"):
         if isinstance(error.get(key), str):
@@ -342,9 +346,9 @@ def _http(
     request = Request(url, data=body, headers=dict(headers or {}), method=method)
     try:
         with urlopen(request, timeout=timeout) as response:
-            return response.status, response.headers, response.read()
+            return response.status, dict(response.headers.items()), response.read()
     except HTTPError as error:
-        return error.code, error.headers, error.read(4096)
+        return error.code, dict(error.headers.items()), error.read(4096)
     except (OSError, URLError) as error:
         raise QualificationError(
             f"HTTP request failed: {type(error).__name__}"
@@ -424,7 +428,7 @@ def _durable_snapshot(database: Path) -> dict[str, Any]:
 class _FakeProviderHandler(http.server.BaseHTTPRequestHandler):
     provider: ClassVar[FakeProvider]
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *_args: object) -> None:  # noqa: A002
         return
 
     def do_GET(self) -> None:  # noqa: N802
@@ -440,11 +444,14 @@ class _FakeProviderHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         raw_body = self.rfile.read(length)
         try:
-            payload = json.loads(raw_body.decode("utf-8"))
+            payload_value = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+            payload_value = {}
+        payload: dict[str, Any] = (
+            cast("dict[str, Any]", payload_value)
+            if isinstance(payload_value, dict)
+            else {}
+        )
         path = self.path
         surface = (
             "openai_responses"
@@ -785,9 +792,11 @@ def run_qualification(
             )
             child_env = os.environ.copy()
             child_env.update(loaded_env)
-            child_env["Q007_PROVIDER_API_KEY"] = (
-                provider_key if live else FAKE_PROVIDER_KEY
-            )
+            if live:
+                assert provider_key is not None
+                child_env["Q007_PROVIDER_API_KEY"] = provider_key
+            else:
+                child_env["Q007_PROVIDER_API_KEY"] = FAKE_PROVIDER_KEY
             child_env["SERVER_API_KEY"] = SERVER_KEY
             child_env.setdefault("RUST_LOG", "debug")
             output_stream = stdout_path.open("wb")
@@ -815,11 +824,17 @@ def run_qualification(
             if status != 200:
                 raise QualificationError(f"model catalog returned HTTP {status}")
             try:
-                model_ids = {
-                    item["id"]
-                    for item in json.loads(models_body.decode("utf-8")).get("data", [])
-                    if isinstance(item, dict) and isinstance(item.get("id"), str)
-                }
+                models_value: Any = json.loads(models_body.decode("utf-8"))
+                model_ids: set[str] = set()
+                model_items_value: Any = models_value.get("data", [])
+                if isinstance(model_items_value, list):
+                    model_items = cast("list[Any]", model_items_value)
+                    for model_item in model_items:
+                        if not isinstance(model_item, dict):
+                            continue
+                        model_item = cast("dict[str, Any]", model_item)
+                        if isinstance(model_item.get("id"), str):
+                            model_ids.add(model_item["id"])
             except (UnicodeDecodeError, AttributeError, json.JSONDecodeError):
                 model_ids = set()
             expected_models = set(_FAKE_MODELS) if not live else set(_MODEL_SURFACES)
