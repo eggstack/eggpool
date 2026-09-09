@@ -1,6 +1,6 @@
 # Q007 — Bounded Live-Provider Interoperability Smoke
 
-Status: ready (2026-09-09)
+Status: blocked; closure attempted 2026-09-09 (see [closure](../../closure/qualification/007-status.md))
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

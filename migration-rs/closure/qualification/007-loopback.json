@@ -1,0 +1,548 @@
+{
+  "budget": {
+    "automatic_retry_policy": "EggPool ordinary bounded policy only",
+    "max_output_tokens": 16,
+    "maximum_requests": 8,
+    "planned_requests": 7
+  },
+  "candidate_stderr": "",
+  "candidate_stdout": "2026-09-09T15:32:19.422956Z INFO Rust development server listening address=\"127.0.0.1:60283\"",
+  "catalog": {
+    "expected_models": [
+      "mimo-v2.5",
+      "minimax-m3",
+      "muse-spark-1.2-contributor"
+    ],
+    "resolved_models": [
+      "mimo-v2.5",
+      "minimax-m3",
+      "muse-spark-1.2-contributor"
+    ],
+    "status": "pass"
+  },
+  "cells": [
+    {
+      "attempt_error_class": null,
+      "client_surface": "responses",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/responses",
+      "expected_upstream_surface": "openai_responses",
+      "http_status": 200,
+      "id": "responses-finite",
+      "input_tokens": 1,
+      "model_id": "muse-spark-1.2-contributor",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 244,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "reported": true,
+          "total_tokens": 2
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_observation": {
+        "auth_shape": "bearer",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "str",
+        "input_length": 21,
+        "max_output_tokens": 16,
+        "method": "POST",
+        "model": "muse-spark-1.2-contributor",
+        "path": "/responses",
+        "request_keys": [
+          "input",
+          "max_output_tokens",
+          "model",
+          "store",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": false,
+        "streaming": false,
+        "surface": "openai_responses"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "chat_completions",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "chat-finite",
+      "input_tokens": 1,
+      "model_id": "mimo-v2.5",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 212,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 1,
+          "reported": true,
+          "total_tokens": 2
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_observation": {
+        "auth_shape": "bearer",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "NoneType",
+        "input_length": null,
+        "max_output_tokens": null,
+        "method": "POST",
+        "model": "mimo-v2.5",
+        "path": "/chat/completions",
+        "request_keys": [
+          "max_tokens",
+          "messages",
+          "model",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": null,
+        "streaming": false,
+        "surface": "openai_chat_completions"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "messages",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/messages",
+      "expected_upstream_surface": "anthropic_messages",
+      "http_status": 200,
+      "id": "messages-finite",
+      "input_tokens": 1,
+      "model_id": "minimax-m3",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 173,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_observation": {
+        "auth_shape": "api_key",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-api-key",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "NoneType",
+        "input_length": null,
+        "max_output_tokens": null,
+        "method": "POST",
+        "model": "minimax-m3",
+        "path": "/messages",
+        "request_keys": [
+          "max_tokens",
+          "messages",
+          "model",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": null,
+        "streaming": false,
+        "surface": "anthropic_messages"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "messages",
+      "content_type": "application/json",
+      "cross_surface": true,
+      "durable_status": "completed",
+      "expected_upstream_path": "/responses",
+      "expected_upstream_surface": "openai_responses",
+      "http_status": 200,
+      "id": "messages-to-responses-finite",
+      "input_tokens": 1,
+      "model_id": "muse-spark-1.2-contributor",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 196,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_observation": {
+        "auth_shape": "bearer",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "list",
+        "input_length": null,
+        "max_output_tokens": 16,
+        "method": "POST",
+        "model": "muse-spark-1.2-contributor",
+        "path": "/responses",
+        "request_keys": [
+          "input",
+          "max_output_tokens",
+          "model",
+          "store",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": false,
+        "streaming": false,
+        "surface": "openai_responses"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "responses",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/responses",
+      "expected_upstream_surface": "openai_responses",
+      "http_status": 200,
+      "id": "responses-stream",
+      "input_tokens": 1,
+      "model_id": "muse-spark-1.2-contributor",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 210,
+        "incremental_events": 2,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_observation": {
+        "auth_shape": "bearer",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "str",
+        "input_length": 21,
+        "max_output_tokens": 16,
+        "method": "POST",
+        "model": "muse-spark-1.2-contributor",
+        "path": "/responses",
+        "request_keys": [
+          "input",
+          "max_output_tokens",
+          "model",
+          "store",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": false,
+        "streaming": true,
+        "surface": "openai_responses"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "chat_completions",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "chat-stream",
+      "input_tokens": 1,
+      "model_id": "mimo-v2.5",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 377,
+        "incremental_events": 3,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_observation": {
+        "auth_shape": "bearer",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "authorization",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "NoneType",
+        "input_length": null,
+        "max_output_tokens": null,
+        "method": "POST",
+        "model": "mimo-v2.5",
+        "path": "/chat/completions",
+        "request_keys": [
+          "max_tokens",
+          "messages",
+          "model",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": null,
+        "streaming": true,
+        "surface": "openai_chat_completions"
+      },
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "messages",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/messages",
+      "expected_upstream_surface": "anthropic_messages",
+      "http_status": 200,
+      "id": "messages-stream",
+      "input_tokens": 1,
+      "model_id": "minimax-m3",
+      "output_tokens": 1,
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 432,
+        "incremental_events": 5,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_observation": {
+        "auth_shape": "api_key",
+        "credential_valid": true,
+        "header_names": [
+          "accept",
+          "accept-encoding",
+          "content-length",
+          "content-type",
+          "host",
+          "user-agent",
+          "x-api-key",
+          "x-opencode-session",
+          "x-request-id"
+        ],
+        "input_kind": "NoneType",
+        "input_length": null,
+        "max_output_tokens": null,
+        "method": "POST",
+        "model": "minimax-m3",
+        "path": "/messages",
+        "request_keys": [
+          "max_tokens",
+          "messages",
+          "model",
+          "stream"
+        ],
+        "session_header_present": true,
+        "store": null,
+        "streaming": true,
+        "surface": "anthropic_messages"
+      },
+      "upstream_status": 200
+    }
+  ],
+  "credentials": {
+    "name": "EGGPOOL_E2E_OPENCODE_GO_API_KEY",
+    "source": "environment variable",
+    "values_written_to_evidence": false
+  },
+  "durable": {
+    "account_backoffs": 0,
+    "active_reservations": 0,
+    "attempts": 7,
+    "attempts_with_upstream_request_id": 7,
+    "completed_requests": 7,
+    "database_exists": true,
+    "input_tokens": 7,
+    "output_tokens": 7,
+    "pending_requests": 0,
+    "requests": 7
+  },
+  "duration_ms": 820,
+  "environment": {
+    "architecture": "x86_64",
+    "candidate_sha256": "14c0494c371ce0f245ba7fd83621751fafa1938736697171e81237527dd9baf0",
+    "os": "macOS-26.6.2-x86_64-i386-64bit",
+    "provider": "loopback fake provider",
+    "python": "3.11.9",
+    "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Homebrew)",
+    "system": "Darwin",
+    "transport": "direct"
+  },
+  "manifest": "m10-q001.v1",
+  "offline_fake": true,
+  "plan": "Q007",
+  "planned_matrix": [
+    {
+      "client_surface": "responses",
+      "cross_surface": false,
+      "id": "responses-finite",
+      "model_id": "muse-spark-1.2-contributor",
+      "streaming": false,
+      "upstream_surface": "openai_responses"
+    },
+    {
+      "client_surface": "chat_completions",
+      "cross_surface": false,
+      "id": "chat-finite",
+      "model_id": "mimo-v2.5",
+      "streaming": false,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "messages",
+      "cross_surface": false,
+      "id": "messages-finite",
+      "model_id": "minimax-m3",
+      "streaming": false,
+      "upstream_surface": "anthropic_messages"
+    },
+    {
+      "client_surface": "messages",
+      "cross_surface": true,
+      "id": "messages-to-responses-finite",
+      "model_id": "muse-spark-1.2-contributor",
+      "streaming": false,
+      "upstream_surface": "openai_responses"
+    },
+    {
+      "client_surface": "responses",
+      "cross_surface": false,
+      "id": "responses-stream",
+      "model_id": "muse-spark-1.2-contributor",
+      "streaming": true,
+      "upstream_surface": "openai_responses"
+    },
+    {
+      "client_surface": "chat_completions",
+      "cross_surface": false,
+      "id": "chat-stream",
+      "model_id": "mimo-v2.5",
+      "streaming": true,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "messages",
+      "cross_surface": false,
+      "id": "messages-stream",
+      "model_id": "minimax-m3",
+      "streaming": true,
+      "upstream_surface": "anthropic_messages"
+    }
+  ],
+  "proxy": {
+    "reason": "no Q001 live proxy cell",
+    "status": "not-applicable"
+  },
+  "redaction_review": {
+    "credentials_written_to_evidence": false,
+    "proxy_credentials_written_to_evidence": false,
+    "raw_response_bodies_persisted": false
+  },
+  "runtime_status_http": 200,
+  "schema": "m10-q007.v1",
+  "status": "pass"
+}
