@@ -40,7 +40,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | invariant/polish | accepted Q006 | **blocked; see closure** |
 
-No M10 implementation plan is currently dependency-ready. Q007 remains active but blocked on live-provider evidence; Q008 has completed its physical run but remains blocked by Q007; Q009-Q010 remain registered and queued serially, and later plans are promoted only by accepted closure of their direct predecessor.
+No M10 implementation plan is currently dependency-ready. Q007 remains active but blocked on live-provider evidence; Q008 has completed its physical run but remains blocked by Q007; Q009 has completed its deterministic local implementation but its closure is blocked behind Q008; Q010 remains queued behind Q009, and later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Completed implementation plans
 
@@ -159,7 +159,7 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | **accepted; see closure** |
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **blocked; see closure** |
 | Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | physical evidence complete; blocked behind Q007 |
-| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | queued behind Q008 |
+| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | implemented; blocked behind Q008 |
 | Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | queued behind Q009 |
 
 ### M10 boundary decisions
@@ -179,4 +179,4 @@ M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separat
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 are accepted within active M10; Q007 is blocked on live-provider evidence, Q008 has physical evidence but remains blocked behind Q007, and Q009-Q010 remain queued. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 are accepted within active M10; Q007 is blocked on live-provider evidence, Q008 has physical evidence but remains blocked behind Q007, Q009 has a passing deterministic implementation but a blocked closure behind Q008, and Q010 remains queued. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.

@@ -612,21 +612,38 @@ def _runtime_observations(value: Mapping[str, Any]) -> dict[str, Any]:
     active_map: dict[str, Any] = (
         cast("dict[str, Any]", active) if isinstance(active, dict) else {}
     )
-    tasks = value.get("background_tasks")
+    retiring = manager_map.get("retiring_generations")
+    retiring_list: list[Any] = (
+        cast("list[Any]", retiring) if isinstance(retiring, list) else []
+    )
+    tasks = manager_map.get("tasks") or value.get("background_tasks")
     task_list: list[Any] = cast("list[Any]", tasks) if isinstance(tasks, list) else []
     task_maps = [
         cast("dict[str, Any]", task) for task in task_list if isinstance(task, dict)
     ]
+
+    def retiring_sum(key: str) -> int:
+        total = 0
+        for raw_item in retiring_list:
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast("dict[str, Any]", raw_item)
+            number = item.get(key)
+            if isinstance(number, int):
+                total += number
+        return total
+
     return {
         "runtime_tasks": len(task_list),
         "running_tasks": sum(1 for task in task_maps if task.get("running")),
-        "generation_count": len(manager_map.get("slots", []))
-        if isinstance(manager_map.get("slots"), list)
-        else None,
-        "retiring_generations": len(manager_map.get("retiring", []))
-        if isinstance(manager_map.get("retiring"), list)
-        else None,
+        "generation_count": 1 + len(retiring_list) if active_map else None,
+        "active_generation_id": active_map.get("generation_id"),
+        "active_leases": active_map.get("active_leases"),
+        "retiring_generations": len(retiring_list) if active_map else None,
+        "retiring_leases": retiring_sum("active_leases"),
+        "terminal_references": retiring_sum("terminal_references"),
         "finalization_jobs": active_map.get("finalization_active_jobs"),
+        "finalization_capacity": active_map.get("finalization_capacity"),
         "wire_flights": manager_map.get("wire_flights"),
     }
 
@@ -638,6 +655,7 @@ def resource_sample(
     runtime_url: str,
     *,
     duration: float = SAMPLE_SECONDS,
+    server_api_key: str = "q008-server-key",
 ) -> dict[str, Any]:
     """Capture a bounded procfs/runtime/database snapshot."""
     pid = process.pid
@@ -649,9 +667,10 @@ def resource_sample(
     cpu_percent = None
     if first and second and first[1] == second[1]:
         cpu_percent = round(max(second[0] - first[0], 0) / first[1] / elapsed * 100, 2)
+    runtime_read_error = False
     try:
         _, body = _http(
-            runtime_url, headers={"Authorization": "Bearer q008-server-key"}
+            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
         )
         runtime_value = json.loads(body.decode("utf-8"))
         runtime = (
@@ -660,6 +679,7 @@ def resource_sample(
             else {}
         )
     except (OSError, ValueError):
+        runtime_read_error = True
         runtime = {}
     db = _db_counts(database)
     fd_count = None
@@ -677,6 +697,7 @@ def resource_sample(
         "wal_bytes": database.with_name(database.name + "-wal").stat().st_size
         if database.with_name(database.name + "-wal").exists()
         else 0,
+        "runtime_read_error": runtime_read_error,
         **_runtime_observations(runtime),
         **db,
     }

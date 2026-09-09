@@ -73,14 +73,14 @@ Q001 qualification contract, target matrix, and evidence schema freeze
  -> Q006 disposable rootful Linux operational acceptance (accepted; see closure)
  -> Q007 bounded live-provider interoperability smoke (blocked; see closure)
  -> Q008 ARM64 SBC functional/resource characterization
- -> Q009 sustained failure/reload/stream/resource-stability qualification
+ -> Q009 sustained failure/reload/stream/resource-stability qualification (implemented; blocked behind Q008 acceptance)
  -> Q010 aggregate M10 closure and M11 readiness report
   |
   v
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q007 remains the active blocked M10 plan after accepted Q006 closure; no later plan is dependency-ready.
+Only `../registry.md` authorizes implementation. Q007 remains the active blocked M10 plan after accepted Q006 closure; Q009's deterministic implementation is complete but its closure is blocked behind Q008 acceptance, so no later plan is dependency-ready.
 
 ## Qualification environment classes
 
@@ -179,7 +179,7 @@ Exit: no functional or resource-stability blocker exists on representative ARM64
 
 Primary class: invariant/polish
 
-Exercise the integrated process long enough to expose ownership/resource defects that short unit tests miss. Use deterministic local providers/proxies with bounded mixes of finite requests, streams, client cancellation, provider disconnects/timeouts/5xx/429 fixtures, account failover, repeated live reload, catalog/background ticks, backup/metrics activity, and graceful/restart cycles.
+Exercise the integrated process long enough to expose ownership/resource defects that short unit tests miss. Use deterministic local providers/proxies with bounded mixes of finite requests, streams, client cancellation, provider disconnects/timeouts/5xx/429 fixtures, account failover, repeated live reload, catalog/background ticks, backup/metrics activity, and graceful/restart cycles. The deterministic local implementation and blocked closure are recorded in `closure/qualification/009-status.md`.
 
 Record RSS, fd count, thread/task proxies where observable, DB/WAL growth, active claims/reservations/finalization jobs, generations, wire flights/gates, task counts, and error convergence. The goal is bounded stable ownership, not synthetic high-load benchmarking.
 

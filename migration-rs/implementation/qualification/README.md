@@ -16,10 +16,10 @@ These plans implement M10 only. They qualify the closed Rust implementation from
 6. [Q006 — Disposable rootful Linux operational acceptance](006-rootful-linux-operational-acceptance.md) — **accepted**; [closure](../../closure/qualification/006-status.md).
 7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **blocked; see closure**.
 8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **physical evidence complete; blocked behind Q007**.
-9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — queued behind Q008.
+9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — **implemented; blocked behind Q008 acceptance; see closure**.
 10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — queued behind Q009.
 
-Only `migration-rs/registry.md` authorizes implementation. Q007 remains the active plan but is blocked by missing live interoperability evidence; later plans are promoted only by accepted closure of their direct predecessor.
+Only `migration-rs/registry.md` authorizes implementation. Q007 remains the active plan but is blocked by missing live interoperability evidence; Q009's deterministic local implementation is complete but its closure remains blocked behind Q008 acceptance. Later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Hard boundaries
 
