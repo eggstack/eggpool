@@ -480,7 +480,12 @@ async fn task_inventory_is_real_or_explicitly_deferred_and_never_duplicates() {
             .filter(|capability| capability.registered)
             .map(|capability| capability.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["catalog_refresh", "retention_cleanup", "checkpoint"]
+        vec![
+            "catalog_refresh",
+            "retention_cleanup",
+            "checkpoint",
+            "update_checker",
+        ]
     );
     for capability in inventory.iter().filter(|capability| !capability.registered) {
         assert!(capability.future_owner.is_some());

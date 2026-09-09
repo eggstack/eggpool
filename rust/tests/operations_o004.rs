@@ -1,6 +1,6 @@
 //! O004 configuration/key/provider mutation contracts.
 
-use std::fs;
+use std::{fs, thread};
 
 use eggpool::operations::config_mutation::{self, ApplyMode, ApplyOutcome};
 use tempfile::tempdir;
@@ -66,6 +66,27 @@ fn key_rotation_is_random_and_env_owned_keys_are_not_replaced_inline() {
             .expect("config")
             .contains("api_key =")
     );
+}
+
+#[test]
+fn independent_config_mutations_do_not_share_a_process_wide_busy_gate() {
+    let directory = tempdir().expect("temporary directory");
+    let paths = (0..8)
+        .map(|index| {
+            let path = directory.path().join(format!("config-{index}.toml"));
+            fs::write(&path, base_config()).expect("config");
+            path
+        })
+        .collect::<Vec<_>>();
+    let workers = paths
+        .into_iter()
+        .map(|path| {
+            thread::spawn(move || config_mutation::set_server_value(&path, "host", "0.0.0.0"))
+        })
+        .collect::<Vec<_>>();
+    for worker in workers {
+        assert!(worker.join().expect("mutation thread").expect("mutation"));
+    }
 }
 
 #[test]

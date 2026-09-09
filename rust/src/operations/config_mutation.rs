@@ -6,11 +6,11 @@
 //! config parser remains the final validation authority.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fmt,
     fs::{self, File, OpenOptions},
     io::{self, IsTerminal, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::Duration,
 };
@@ -26,7 +26,20 @@ const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_CONFIG: &str = include_str!("../../../config.example.toml");
 const BUNDLED_PROVIDERS: &str = include_str!("../../../src/eggpool/providers/_templates.toml");
 
-static MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static MUTATION_PATHS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+
+struct MutationGuard {
+    path: PathBuf,
+}
+
+impl Drop for MutationGuard {
+    fn drop(&mut self) {
+        if let Some(paths) = MUTATION_PATHS.get() {
+            let mut paths = paths.lock().expect("mutation path lock");
+            paths.remove(&self.path);
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum MutationError {
@@ -101,11 +114,32 @@ impl fmt::Debug for AccountMatch {
     }
 }
 
-fn lock_mutation() -> Result<std::sync::MutexGuard<'static, ()>, MutationError> {
-    MUTATION_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .try_lock()
-        .map_err(|_| MutationError::Busy)
+fn mutation_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    fs::canonicalize(&absolute).unwrap_or_else(|_| {
+        let Some(parent) = absolute.parent() else {
+            return absolute;
+        };
+        fs::canonicalize(parent)
+            .map(|parent| parent.join(absolute.file_name().map(PathBuf::from).unwrap_or_default()))
+            .unwrap_or(absolute)
+    })
+}
+
+fn lock_mutation(path: &Path) -> Result<MutationGuard, MutationError> {
+    let path = mutation_path(path);
+    let paths = MUTATION_PATHS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    let mut active = paths.lock().expect("mutation path lock");
+    if !active.insert(path.clone()) {
+        return Err(MutationError::Busy);
+    }
+    Ok(MutationGuard { path })
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, MutationError> {
@@ -180,7 +214,7 @@ fn mutate_text<F>(path: &Path, create: bool, edit: F) -> Result<bool, MutationEr
 where
     F: FnOnce(&str) -> Result<(String, bool), MutationError>,
 {
-    let _guard = lock_mutation()?;
+    let _guard = lock_mutation(path)?;
     let original = if path.exists() {
         read_bounded(path)?
     } else if create {
@@ -349,13 +383,13 @@ pub fn read_dashboard_public(path: &Path) -> Result<bool, MutationError> {
 }
 
 pub fn init_config(path: &Path, force: bool) -> Result<bool, MutationError> {
+    let _guard = lock_mutation(path)?;
     if path.exists() && !force {
         return Err(MutationError::Invalid(format!(
             "{} already exists; use --force to overwrite",
             path.display()
         )));
     }
-    let _guard = lock_mutation()?;
     let bytes = DEFAULT_CONFIG.as_bytes();
     validate_bytes(path, bytes)?;
     atomic_replace(path, bytes, existing_mode(path)?)?;
@@ -815,7 +849,7 @@ pub fn connect(
         }
         Some(key)
     };
-    let guard = lock_mutation()?;
+    let guard = lock_mutation(path)?;
     let original = if path.exists() {
         read_bounded(path)?
     } else {
@@ -1017,7 +1051,7 @@ pub fn logout(path: &Path, target: Option<&str>) -> Result<Option<AccountMatch>,
         };
         account
     };
-    let guard = lock_mutation()?;
+    let guard = lock_mutation(path)?;
     let original = read_bounded(path)?;
     let text = String::from_utf8(original)
         .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
