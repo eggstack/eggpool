@@ -1,0 +1,15 @@
+{
+  "commands": [],
+  "environment": {
+    "architecture": "x86_64",
+    "system": "Darwin"
+  },
+  "findings": [],
+  "functional": [],
+  "manifest": "m10-q001.v1",
+  "plan": "Q008",
+  "reason": "Q008 requires Linux on a physical aarch64 SBC",
+  "resource_samples": [],
+  "schema_version": "m10-q008.v1",
+  "status": "blocked"
+}

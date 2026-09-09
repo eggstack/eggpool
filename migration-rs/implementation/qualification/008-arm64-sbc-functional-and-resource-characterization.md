@@ -1,6 +1,6 @@
 # Q008 — ARM64 SBC Functional and Resource Characterization
 
-Status: queued behind Q007
+Status: implemented; blocked pending physical SBC evidence
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -164,3 +164,10 @@ Write `migration-rs/closure/qualification/008-status.md` with:
 Q008 closes only when at least one representative Linux aarch64 SBC completes all mandatory functional cells, no correctness/resource-stability blocker remains, and enough resource characterization is recorded for M11 to make informed release/support decisions.
 
 Accepted Q008 promotes only Q009.
+
+Implementation note: `scripts/qualification_sbc.py` and the
+`q008-sbc.toml` loopback fixture implement the guarded bounded harness and
+machine-readable `m10-q008.v1` evidence schema. The harness refuses to claim
+physical SBC evidence unless Linux/aarch64 execution and a device-tree board
+model are present; closure remains blocked until Q007 is accepted and a real
+board run is recorded.

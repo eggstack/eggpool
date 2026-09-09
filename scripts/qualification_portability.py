@@ -133,6 +133,8 @@ def target_for_platform(system: str | None = None, machine: str | None = None) -
         return "linux-aarch64"
     if system_name == "darwin" and machine_name in {"arm64", "aarch64"}:
         return "macos-arm64"
+    if system is None and machine is None and _macos_arm64_hardware():
+        return "macos-arm64"
     return "other-unix"
 
 

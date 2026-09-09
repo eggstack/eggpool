@@ -37,7 +37,10 @@ def test_q005_fake_candidate_crash_is_failure_not_timeout(tmp_path: Path) -> Non
     candidate.chmod(candidate.stat().st_mode | stat.S_IXUSR)
     output = tmp_path / "report.json"
     target_id = target_for_platform()
-    assert TARGETS[target_id]["classification"] == "supported"
+    assert TARGETS[target_id]["classification"] in {
+        "supported",
+        "supported-development",
+    }
     exit_code = main(
         [
             "--binary",

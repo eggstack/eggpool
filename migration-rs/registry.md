@@ -158,7 +158,7 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | **accepted; see closure** |
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | **accepted; see closure** |
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **blocked; see closure** |
-| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | queued behind Q007 |
+| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | implemented; blocked behind Q007 and physical SBC evidence |
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | queued behind Q008 |
 | Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | queued behind Q009 |
 
@@ -168,7 +168,7 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 - Normal CI stays small unless Q001/Q002 justify a narrow deterministic addition.
 - Rootful tests run only on disposable Linux systems.
 - Live-provider tests are explicit opt-in, low-cost, and secret-free; no automatic paid mirroring.
-- At least one real Linux aarch64 SBC is mandatory for Q008/Q010 closure.
+- At least one real Linux aarch64 SBC is mandatory for Q008/Q010 closure; Q008's guarded harness is implemented but has no accepted physical run yet.
 - Resource metrics are characterization unless they reveal correctness issues such as leaks, unbounded growth, crashes, deadlocks, replay, or clearly impractical SBC operation.
 - Dashboard qualification does not redesign the dashboard.
 - M10 may build candidate binaries but does not publish or make them canonical; M11 owns public release/install/update cutover.
