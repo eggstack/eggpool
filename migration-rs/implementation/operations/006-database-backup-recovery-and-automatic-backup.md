@@ -1,6 +1,6 @@
 # O006 — Database, Backup, Recovery, and Automatic Backup
 
-Status: queued behind O005
+Status: dependency-ready; O005 closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
