@@ -52,6 +52,25 @@ deterministic Gemini codec and path tests do not require credentials.
 For release closure, record the exact live test outcomes. A clean skip caused
 by a missing credential is not live verification evidence.
 
+## Rust Q007 qualification
+
+The bounded M10 Q007 runner exercises the Rust candidate through its public
+HTTP server. It prints the frozen seven-request matrix before dispatch, uses
+an isolated database/configuration, records only semantic evidence, and never
+writes credentials or raw bodies:
+
+```bash
+uv run python scripts/qualification_live_provider.py \
+  --binary rust/target/release/eggpool \
+  --enable-live \
+  --provider-key-env EGGPOOL_E2E_OPENCODE_GO_API_KEY \
+  --output migration-rs/closure/qualification/007-run.json
+```
+
+Use `--env-file` only with a local, uncommitted dotenv file when the selected
+credential is not exported. The deterministic loopback rehearsal is
+`--offline-fake`; it must not be described as live-provider evidence.
+
 ## Deterministic migration acceptance
 
 The mandatory stale-profile check uses an in-process fake upstream:

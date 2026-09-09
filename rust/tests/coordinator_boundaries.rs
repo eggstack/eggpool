@@ -121,6 +121,31 @@ async fn resolver_learns_accepts_rejects_and_shares_a_leader() {
 }
 
 #[test]
+fn resolver_prefers_configured_model_wire_surface() {
+    let resolver = WireResolver::new(WireResolverConfig::default());
+    resolver.set_configured_preferences([(
+        "provider".into(),
+        "model".into(),
+        WireSurface::AnthropicMessages,
+        true,
+    )]);
+    let resolved = resolver.resolve(
+        "provider",
+        "model",
+        vec![
+            WireCandidate::new(profile(WireSurface::OpenaiResponses, 1), "responses"),
+            WireCandidate::new(profile(WireSurface::AnthropicMessages, 2), "messages"),
+        ],
+        Instant::now(),
+    );
+    assert_eq!(resolved.candidates.len(), 1);
+    assert_eq!(
+        resolved.candidates[0].surface(),
+        WireSurface::AnthropicMessages
+    );
+}
+
+#[test]
 fn wire_state_is_bounded_on_all_insertion_paths_and_rate_delay_is_reactive() {
     let resolver = WireResolver::new(WireResolverConfig {
         cache_capacity: 2,
@@ -246,6 +271,10 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
     assert_eq!(
         attempt.headers.get("authorization").unwrap(),
         "Bearer super-secret"
+    );
+    assert_eq!(
+        attempt.headers.get("user-agent").unwrap(),
+        concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(
         attempt.body,

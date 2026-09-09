@@ -1148,6 +1148,27 @@ impl RuntimeGenerationFactory {
         let provider_profiles = compile_provider_profiles(&config)
             .map_err(|detail| GenerationBuildError::Compilation { detail })?;
 
+        let configured_preferences = config.providers.iter().flat_map(|(provider_id, provider)| {
+            provider
+                .model_wire
+                .iter()
+                .filter_map(|(model_id, preference)| {
+                    crate::wire::WireSurface::try_from(preference.preferred_surface.as_str())
+                        .ok()
+                        .map(|surface| {
+                            (
+                                provider_id.clone(),
+                                model_id.clone(),
+                                surface,
+                                preference.fixed,
+                            )
+                        })
+                })
+        });
+        process
+            .wire_profile_resolver
+            .set_configured_preferences(configured_preferences);
+
         // The process-owned handles are cloned only after structural
         // compilation succeeds.  They remain untouched by candidate abort.
         let affinity = process.model_router_affinity();

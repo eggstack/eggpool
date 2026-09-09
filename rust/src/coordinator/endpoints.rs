@@ -423,7 +423,12 @@ fn static_routing_facts(
     StaticRoutingFacts {
         known_provider_ids: known_providers.clone(),
         requested_protocol: Some(surface.protocol().to_owned()),
-        transcode_protocols: Vec::new(),
+        // The canonical request can be adapted to any concrete protocol
+        // backed by the closed wire registry.  Provider/account eligibility
+        // still gates the choice to protocols that the selected provider
+        // declares, and the selected model wire preference freezes the
+        // actual target surface after routing.
+        transcode_protocols: vec!["openai".into(), "anthropic".into(), "gemini".into()],
         catalog_stale_after_s: None,
         capability_policy: BTreeMap::new(),
         now: 0,

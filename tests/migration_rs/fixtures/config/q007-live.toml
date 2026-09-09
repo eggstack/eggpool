@@ -1,0 +1,77 @@
+[server]
+host = "127.0.0.1"
+port = __Q007_PORT__
+api_key = "q007-server-key"
+max_request_body_bytes = 1048576
+
+[database]
+path = "__Q007_DATABASE__"
+
+[dashboard]
+enabled = false
+
+[models]
+startup_refresh = true
+refresh_interval_s = 60
+
+[model_info]
+enabled = false
+startup_refresh = false
+
+[providers.opencode-go]
+id = "opencode-go"
+base_url = "__Q007_UPSTREAM__"
+protocols = ["openai", "anthropic"]
+
+[providers.opencode-go.auth]
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.openai_chat_completions]
+path_template = "/chat/completions"
+priority = 100
+
+[providers.opencode-go.wire_surfaces.openai_chat_completions.auth]
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.openai_responses]
+path_template = "/responses"
+priority = 90
+
+[providers.opencode-go.wire_surfaces.openai_responses.auth]
+mode = "bearer"
+
+[providers.opencode-go.wire_surfaces.anthropic_messages]
+path_template = "/messages"
+priority = 100
+
+[providers.opencode-go.wire_surfaces.anthropic_messages.auth]
+mode = "api_key"
+header = "x-api-key"
+
+[providers.opencode-go.model_wire."muse-spark-1.2-contributor"]
+preferred_surface = "openai_responses"
+fixed = true
+
+[providers.opencode-go.model_wire."mimo-v2.5"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.opencode-go.model_wire."minimax-m3"]
+preferred_surface = "anthropic_messages"
+fixed = true
+
+[[providers.opencode-go.static_models]]
+id = "muse-spark-1.2-contributor"
+protocol = "openai"
+
+[[providers.opencode-go.static_models]]
+id = "mimo-v2.5"
+protocol = "openai"
+
+[[providers.opencode-go.static_models]]
+id = "minimax-m3"
+protocol = "anthropic"
+
+[[providers.opencode-go.accounts]]
+name = "q007-account"
+api_key_env = "Q007_PROVIDER_API_KEY"

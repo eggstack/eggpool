@@ -1325,7 +1325,7 @@ fn provider_error(
             Ok(None)
         };
     };
-    let Some(raw) = object.get("error") else {
+    let Some(raw) = object.get("error").filter(|value| !value.is_null()) else {
         return if status >= 400 {
             Err(error(
                 CodecReasonCode::MalformedProviderResponse,
@@ -1467,4 +1467,26 @@ fn truncate(message: &str) -> String {
         end -= 1;
     }
     message[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn responses_treats_null_error_as_no_error() {
+        let payload = serde_json::json!({
+            "id": "resp-q007",
+            "model": "muse-spark-1.2-contributor",
+            "status": "completed",
+            "error": null,
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "ok"}]
+            }],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+        });
+        let decoded = decode_responses_response(&payload, 200).expect("response decodes");
+        assert!(matches!(decoded.value, DecodedProviderPayload::Response(_)));
+    }
 }

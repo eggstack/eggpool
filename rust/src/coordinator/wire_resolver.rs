@@ -178,6 +178,7 @@ struct ResolverState {
     last_negotiation: BTreeMap<String, Instant>,
     negotiation_delay_until: BTreeMap<String, Instant>,
     operator_preferences: BTreeMap<(String, String), (WireSurface, bool)>,
+    configured_preferences: BTreeMap<(String, String), (WireSurface, bool)>,
     metadata_hints: BTreeMap<(String, String), WireSurface>,
     metrics: BTreeMap<String, u64>,
 }
@@ -387,7 +388,13 @@ impl WireResolver {
                 state
                     .operator_preferences
                     .get(&(provider_id.to_owned(), model_id.to_owned()))
-                    .copied(),
+                    .copied()
+                    .or_else(|| {
+                        state
+                            .configured_preferences
+                            .get(&(provider_id.to_owned(), model_id.to_owned()))
+                            .copied()
+                    }),
                 state
                     .metadata_hints
                     .get(&(provider_id.to_owned(), model_id.to_owned()))
@@ -619,6 +626,25 @@ impl WireResolver {
             (provider_id.to_owned(), model_id.to_owned()),
             (surface, fixed),
         );
+        trim_preference_state(&mut state, config.max_provider_state);
+    }
+
+    /// Replace the preferences declared by the active configuration.
+    ///
+    /// Operator preferences remain higher authority and are kept separate so
+    /// a safe config reload cannot erase an explicit operator decision.
+    pub fn set_configured_preferences(
+        &self,
+        preferences: impl IntoIterator<Item = (String, String, WireSurface, bool)>,
+    ) {
+        let config = self.config();
+        let mut state = self.state.lock().expect("wire resolver lock");
+        state.configured_preferences.clear();
+        for (provider_id, model_id, surface, fixed) in preferences {
+            state
+                .configured_preferences
+                .insert((provider_id, model_id), (surface, fixed));
+        }
         trim_preference_state(&mut state, config.max_provider_state);
     }
 

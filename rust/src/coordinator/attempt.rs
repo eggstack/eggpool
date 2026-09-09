@@ -181,6 +181,10 @@ impl AttemptBuilder {
             http::header::ACCEPT,
             HeaderValue::from_static("application/json"),
         );
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))),
+        );
         add_forwarded_headers(&mut headers, &input.incoming_headers)?;
         add_request_identity_headers(
             &mut headers,
@@ -427,7 +431,7 @@ fn add_auth_header(
     let key = key
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AttemptError::InvalidInput("provider credential is required".into()))?;
-    let value = if auth.scheme.is_empty() {
+    let value = if matches!(auth.mode.as_str(), "api_key" | "raw_authorization") {
         key.to_owned()
     } else {
         format!("{} {key}", auth.scheme)
@@ -459,7 +463,7 @@ fn add_auth_header_value(
     if mode.eq_ignore_ascii_case("none") {
         return Ok(());
     }
-    let value = if scheme.is_empty() {
+    let value = if matches!(mode, "api_key" | "raw_authorization") {
         key.to_owned()
     } else {
         format!("{} {key}", scheme)
