@@ -1,6 +1,6 @@
 # Q006 — Disposable Rootful Linux Operational Acceptance
 
-Status: ready for handoff (2026-09-09)
+Status: accepted; closed 2026-09-09
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -177,3 +177,5 @@ Write `migration-rs/closure/qualification/006-status.md` with:
 Q006 closes only when the required Linux deployment modes operate correctly on a disposable real system, repeated install/remove converges safely, no manual DB reset is required, no unsafe managed leftovers remain, and no unresolved high/medium operational/security finding remains.
 
 Accepted Q006 promotes only Q007.
+
+Closure: [Q006 closure record](../../closure/qualification/006-status.md)

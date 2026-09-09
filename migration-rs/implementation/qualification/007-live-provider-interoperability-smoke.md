@@ -1,6 +1,6 @@
 # Q007 — Bounded Live-Provider Interoperability Smoke
 
-Status: queued behind Q006
+Status: ready (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

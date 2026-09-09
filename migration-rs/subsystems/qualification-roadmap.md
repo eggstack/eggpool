@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q006 dependency-ready
+Status: active planning/implementation; Q007 dependency-ready
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 
@@ -70,8 +70,8 @@ Q001 qualification contract, target matrix, and evidence schema freeze
  -> Q003 database upgrade/rollback/backup/recovery compatibility
  -> Q004 dashboard SSR/DOM/static/visual parity review (accepted)
  -> Q005 supported-target build and non-root runtime portability (accepted; see closure)
- -> Q006 disposable rootful Linux operational acceptance (ready)
- -> Q007 bounded live-provider interoperability smoke
+ -> Q006 disposable rootful Linux operational acceptance (accepted; see closure)
+ -> Q007 bounded live-provider interoperability smoke (ready)
  -> Q008 ARM64 SBC functional/resource characterization
  -> Q009 sustained failure/reload/stream/resource-stability qualification
  -> Q010 aggregate M10 closure and M11 readiness report
@@ -80,7 +80,7 @@ Q001 qualification contract, target matrix, and evidence schema freeze
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q006 is the sole dependency-ready M10 plan after accepted Q005 closure.
+Only `../registry.md` authorizes implementation. Q007 is the sole dependency-ready M10 plan after accepted Q006 closure.
 
 ## Qualification environment classes
 

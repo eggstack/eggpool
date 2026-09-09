@@ -1,6 +1,6 @@
 # M10 Qualification Implementation Plans
 
-Status: active; Q006 dependency-ready
+Status: active; Q007 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -13,13 +13,13 @@ These plans implement M10 only. They qualify the closed Rust implementation from
 3. [Q003 — Database upgrade, rollback, backup, and recovery compatibility](003-database-upgrade-rollback-backup-recovery-compatibility.md) — **complete**; [closure](../../closure/qualification/003-status.md).
 4. [Q004 — Dashboard SSR, DOM, static asset, and visual parity review](004-dashboard-dom-static-and-visual-parity.md) — **accepted**; [closure](../../closure/qualification/004-status.md).
 5. [Q005 — Supported-target build and non-root runtime portability](005-supported-target-build-and-runtime-portability.md) — **accepted**; [closure](../../closure/qualification/005-status.md).
-6. [Q006 — Disposable rootful Linux operational acceptance](006-rootful-linux-operational-acceptance.md) — **ready**.
-7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — queued behind Q006.
+6. [Q006 — Disposable rootful Linux operational acceptance](006-rootful-linux-operational-acceptance.md) — **accepted**; [closure](../../closure/qualification/006-status.md).
+7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **ready**.
 8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — queued behind Q007.
 9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — queued behind Q008.
 10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — queued behind Q009.
 
-Only `migration-rs/registry.md` authorizes implementation. Q006 is now the sole dependency-ready plan after accepted Q005; later plans are promoted only by accepted closure of their direct predecessor.
+Only `migration-rs/registry.md` authorizes implementation. Q007 is now the sole dependency-ready plan after accepted Q006; later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Hard boundaries
 
