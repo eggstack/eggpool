@@ -1,6 +1,6 @@
 # O009 — Deployment, Install Artifacts, and Uninstall
 
-Status: queued behind O008
+Status: dependency-ready; O008 closure accepted
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 

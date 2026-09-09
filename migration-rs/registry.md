@@ -27,15 +27,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M6 canonical request/wire codecs | [canonical-wire-roadmap](subsystems/canonical-wire-roadmap.md) | closed after W012 corrective pass | W012 closed |
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
-| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | **active planning/implementation** | **O008 ready** |
+| M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | **active planning/implementation** | **O009 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | capability/invariant | accepted O007 | **dependency-ready** |
+| O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | capability/invariant | accepted O008 | **dependency-ready** |
 
-O008 is the sole dependency-ready implementation plan. O009-O010 remain queued serially; later plans are promoted only by accepted closure of their direct predecessor.
+O009 is the sole dependency-ready implementation plan. O010 remains queued behind O009; later plans are promoted only by accepted closure of their direct predecessor.
 
 ## Completed implementation plans
 
@@ -61,6 +61,7 @@ O008 is the sole dependency-ready implementation plan. O009-O010 remain queued s
 | O005 | [Agent integration and `configsetup` generation](implementation/operations/005-agent-integration-config-generation.md) | capability | `59591bca254fc5d71a55fbf750e9f0eb5189aba8` | [closed](closure/operations/005-status.md) |
 | O006 | [Database, backup, recovery, and automatic backup](implementation/operations/006-database-backup-recovery-and-automatic-backup.md) | capability/invariant | `6af52fb` | [closed](closure/operations/006-status.md) |
 | O007 | [Operator inspection, maintenance, and metrics flush](implementation/operations/007-operator-inspection-maintenance-and-metrics-flush.md) | capability/invariant | `94fddcc` | [closed](closure/operations/007-status.md) |
+| O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | capability/invariant | `c9b63d5` | [closed](closure/operations/008-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -125,11 +126,11 @@ M7 is closed after C011. C001-C002, C007-C011 and C012-C014 are closed; C003-C00
 
 M8 is closed after accepted R013. R001-R010 remain closed; R011/R012 remain historical closure evidence after post-close audits. R013 closed the final wire-policy acceptance/validation/rollback qualification boundary.
 
-M8 owns one process task supervisor. R008 intentionally left exactly `metrics_flush`, `update_checker`, and `automatic_backup` as explicit deferred M9 business capabilities; O006 registered automatic backup and O007 registered metrics flush.
+M8 owns one process task supervisor. R008 intentionally left exactly `metrics_flush`, `update_checker`, and `automatic_backup` as explicit deferred M9 business capabilities; O006 registered automatic backup, O007 registered metrics flush, and O008 registered update checking.
 
 ## M9 sequence and handoff state
 
-M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and the remaining deferred R008 update-checker callback. It composes closed M4-M8 services and does not own M10 broad qualification or M11 cutover.
+M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and now owns the completed R008 update-checker callback. It composes closed M4-M8 services and does not own M10 broad qualification or M11 cutover.
 
 | ID | Plan | Dependency state |
 |---|---|---|
@@ -140,8 +141,8 @@ M9 owns user-facing operational CLI/control/lifecycle/update/deploy behavior and
 | O005 | [Agent integration and configsetup generation](implementation/operations/005-agent-integration-config-generation.md) | **closed** |
 | O006 | [Database, backup, recovery, and automatic backup](implementation/operations/006-database-backup-recovery-and-automatic-backup.md) | **closed; 6af52fb** |
 | O007 | [Operator inspection, maintenance, and metrics flush](implementation/operations/007-operator-inspection-maintenance-and-metrics-flush.md) | **closed** |
-| O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | **dependency-ready; O007 closure accepted** |
-| O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | queued behind O008 |
+| O008 | [Update, version resolution, and update-checker task](implementation/operations/008-update-version-and-update-checker.md) | **closed** |
+| O009 | [Deployment, install artifacts, and uninstall](implementation/operations/009-deployment-install-artifacts-and-uninstall.md) | **dependency-ready; O008 closure accepted** |
 | O010 | [Differential qualification and M9 closure](implementation/operations/010-differential-qualification-and-m9-closure.md) | queued behind O009 |
 
 ### M9 boundary decisions
@@ -163,4 +164,4 @@ M10 remains blocked on accepted O010 M9 closure and its own planning/implementat
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and O001-O007 are closed as described above. M9 is active with O007 closed, O008 dependency-ready, and O009-O010 queued serially.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and O001-O008 are closed as described above. M9 is active with O008 closed, O009 dependency-ready, and O010 queued behind O009.

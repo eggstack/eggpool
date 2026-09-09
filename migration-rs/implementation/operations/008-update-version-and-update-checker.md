@@ -1,6 +1,10 @@
 # O008 — Update, Version Resolution, and Update-Checker Background Task
 
-Status: dependency-ready; O007 closure accepted
+Status: closed; closure accepted
+
+Implementation commit: `c9b63d5562cbfa515ae4dfb6cfa7ba688f82b14e`
+
+Closure: [O008 status](../../closure/operations/008-status.md)
 
 Source roadmap: `migration-rs/subsystems/operational-cli-lifecycle-roadmap.md`
 
