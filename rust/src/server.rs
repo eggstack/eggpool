@@ -9,7 +9,7 @@
 use axum::{
     Router,
     body::{Body, Bytes},
-    extract::{Extension, Query, State},
+    extract::{Extension, Path as AxumPath, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
@@ -998,6 +998,19 @@ pub fn build_router(state: AppState) -> Router {
     if dashboard {
         router = router
             .route("/", get(overview))
+            .route("/accounts", get(accounts_page))
+            .route("/models", get(models_page))
+            .route("/models/{*model_id}", get(model_detail_page))
+            .route("/latency", get(latency_page))
+            .route("/events", get(events_page))
+            .route("/timeseries", get(timeseries_page))
+            .route("/bandwidth", get(bandwidth_page))
+            .route("/pings", get(pings_page))
+            .route("/reliability", get(reliability_page))
+            .route("/routing", get(routing_page))
+            .route("/traces", get(traces_page))
+            .route("/runtime", get(runtime_page))
+            .route("/cache", get(cache_page))
             .route("/api/stats/summary", get(summary));
     }
 
@@ -1381,6 +1394,96 @@ async fn overview(State(state): State<AppState>, Query(query): Query<PeriodQuery
     html_response(html)
 }
 
+async fn accounts_page(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    dashboard_page(&state, "Accounts", "accounts", query.period, query.theme)
+}
+
+async fn models_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Models", "models", query.period, query.theme)
+}
+
+async fn model_detail_page(
+    State(state): State<AppState>,
+    AxumPath(model_id): AxumPath<String>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    let model_id = model_id.trim_start_matches('/');
+    let title = if model_id.is_empty() {
+        "Model detail"
+    } else {
+        "Model detail"
+    };
+    let body = format!(
+        "<h2>{title}</h2><section class=\"panel\"><div class=\"panel-header\"><h2>Model information</h2></div><p class=\"empty-state\">No model information available for <code>{}</code>.</p></section>",
+        html_escape(model_id)
+    );
+    dashboard_page_with_body(&state, title, "models", query.period, query.theme, body)
+}
+
+async fn latency_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Latency", "latency", query.period, query.theme)
+}
+
+async fn events_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Events", "events", query.period, query.theme)
+}
+
+async fn timeseries_page(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    dashboard_page(
+        &state,
+        "Timeseries",
+        "timeseries",
+        query.period,
+        query.theme,
+    )
+}
+
+async fn bandwidth_page(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    dashboard_page(&state, "Bandwidth", "bandwidth", query.period, query.theme)
+}
+
+async fn pings_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Provider Pings", "pings", query.period, query.theme)
+}
+
+async fn reliability_page(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    dashboard_page(
+        &state,
+        "Reliability",
+        "reliability",
+        query.period,
+        query.theme,
+    )
+}
+
+async fn routing_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Routing", "routing", query.period, query.theme)
+}
+
+async fn traces_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Traces", "traces", query.period, query.theme)
+}
+
+async fn runtime_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Runtime", "runtime", query.period, query.theme)
+}
+
+async fn cache_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
+    dashboard_page(&state, "Cache", "cache", query.period, query.theme)
+}
+
 async fn summary(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
     let period = match normalize_period(query.period.as_deref()) {
         Ok(period) => period,
@@ -1701,11 +1804,15 @@ async fn static_css() -> Response {
 }
 
 async fn static_js() -> Response {
-    static_response(DASHBOARD_JS, "text/javascript", "public, max-age=300")
+    static_response(
+        DASHBOARD_JS,
+        "application/javascript",
+        "public, max-age=86400",
+    )
 }
 
 async fn static_chart_js() -> Response {
-    static_response(CHART_JS, "text/javascript", "public, max-age=300")
+    static_response(CHART_JS, "application/javascript", "public, max-age=86400")
 }
 
 async fn static_favicon() -> Response {
@@ -1816,6 +1923,196 @@ fn selected_theme(configured: &str) -> &str {
     }
 }
 
+fn dashboard_page(
+    state: &AppState,
+    title: &str,
+    active_nav: &str,
+    period: Option<String>,
+    theme: Option<String>,
+) -> Response {
+    let period = period.as_deref().unwrap_or("24h");
+    let period = match normalize_period(Some(period)) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let theme = selected_theme(theme.as_deref().unwrap_or(&state.server.dashboard_theme));
+    let message = match active_nav {
+        "accounts" => "No accounts configured.",
+        "models" => "No models available.",
+        "latency" => "No latency data available.",
+        "events" => "No recent events.",
+        "timeseries" => "No time-series data available.",
+        "bandwidth" => "No bandwidth data available.",
+        "pings" => "No provider ping data available.",
+        "reliability" => "No reliability data available.",
+        "routing" => "No routing decisions available.",
+        "traces" => "No request traces available.",
+        "runtime" => "Runtime metrics are not available.",
+        "cache" => "No cache observations available.",
+        _ => "No data available.",
+    };
+    let body = format!(
+        "<h2>{}</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"panel\"><div class=\"panel-header\"><h2>{}</h2></div><p class=\"empty-state\">{}</p></section>",
+        html_escape(title),
+        period_options(period),
+        html_escape(theme),
+        html_escape(title),
+        html_escape(message),
+    );
+    dashboard_page_with_body(
+        state,
+        title,
+        active_nav,
+        Some(period.to_owned()),
+        Some(theme.to_owned()),
+        body,
+    )
+}
+
+fn dashboard_page_with_body(
+    state: &AppState,
+    title: &str,
+    active_nav: &str,
+    period: Option<String>,
+    theme: Option<String>,
+    body: String,
+) -> Response {
+    let period = period.as_deref().unwrap_or("24h");
+    let period = match normalize_period(Some(period)) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let theme = selected_theme(theme.as_deref().unwrap_or(&state.server.dashboard_theme));
+    html_response(render_dashboard_layout(
+        title,
+        active_nav,
+        period,
+        theme,
+        state.server.dashboard_refresh_interval_s,
+        body,
+        true,
+    ))
+}
+
+fn period_options(current: &str) -> String {
+    [
+        ("1h", "Last hour"),
+        ("24h", "Last 24 hours"),
+        ("7d", "Last 7 days"),
+        ("30d", "Last 30 days"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        let selected = if *value == current {
+            " selected=\"selected\""
+        } else {
+            ""
+        };
+        format!("<option value=\"{}\"{}>{}</option>", value, selected, label)
+    })
+    .collect()
+}
+
+fn query_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn render_dashboard_layout(
+    title: &str,
+    active_nav: &str,
+    period: &str,
+    theme: &str,
+    refresh_interval_s: u64,
+    body: String,
+    include_chart_js: bool,
+) -> String {
+    let query = format!(
+        "period={}&amp;theme={}",
+        query_component(period),
+        query_component(theme)
+    );
+    let navigation = [
+        ("overview", "/", "Overview"),
+        ("reliability", "/reliability", "Reliability"),
+        ("routing", "/routing", "Routing"),
+        ("cache", "/cache", "Cache"),
+        ("accounts", "/accounts", "Accounts"),
+        ("models", "/models", "Models"),
+        ("latency", "/latency", "Latency"),
+        ("pings", "/pings", "Pings"),
+        ("bandwidth", "/bandwidth", "Bandwidth"),
+        ("traces", "/traces", "Traces"),
+        ("events", "/events", "Events"),
+        ("timeseries", "/timeseries", "Timeseries"),
+        ("runtime", "/runtime", "Runtime"),
+    ]
+    .iter()
+    .map(|(key, href, label)| {
+        let class = if *key == active_nav {
+            " class=\"active\""
+        } else {
+            ""
+        };
+        format!(
+            "<a{} href=\"{}?{}\">{}</a>",
+            class,
+            href,
+            query,
+            html_escape(label)
+        )
+    })
+    .collect::<String>();
+    let theme_options = THEME_NAMES
+        .iter()
+        .map(|name| {
+            let selected = if *name == theme { " selected" } else { "" };
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                html_escape(name),
+                selected,
+                html_escape(name)
+            )
+        })
+        .collect::<String>();
+    let chart_preload = if include_chart_js {
+        "<link rel=\"preload\" href=\"/static/chart.js\" as=\"script\">"
+    } else {
+        ""
+    };
+    let chart_script = if include_chart_js {
+        "<script defer src=\"/static/chart.js\"></script>"
+    } else {
+        ""
+    };
+    let navigation_markup = format!(
+        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
+        navigation,
+        theme_options,
+        html_escape(period)
+    );
+    format!(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n<footer><small>Period: <span class=\"period-label\">{}</span> &middot; auto-refresh {}s &middot; <span id=\"dashboard-updated\">ready</span></small></footer>\n<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
+        html_escape(title),
+        query_component(theme),
+        chart_preload,
+        query,
+        navigation_markup,
+        body,
+        html_escape(period),
+        refresh_interval_s,
+        format!("{}{}", chart_script, "")
+    )
+}
+
 fn html_escape(value: impl std::fmt::Display) -> String {
     value
         .to_string()
@@ -1872,6 +2169,38 @@ fn render_overview(
         format!("<option value=\"{}\"{}>{}</option>", value, selected, label)
     })
     .collect::<String>();
+    let nav_links = [
+        ("/", "Overview"),
+        ("/reliability", "Reliability"),
+        ("/routing", "Routing"),
+        ("/cache", "Cache"),
+        ("/accounts", "Accounts"),
+        ("/models", "Models"),
+        ("/latency", "Latency"),
+        ("/pings", "Pings"),
+        ("/bandwidth", "Bandwidth"),
+        ("/traces", "Traces"),
+        ("/events", "Events"),
+        ("/timeseries", "Timeseries"),
+        ("/runtime", "Runtime"),
+    ]
+    .iter()
+    .map(|(href, label)| {
+        let class = if *href == "/" {
+            " class=\"active\""
+        } else {
+            ""
+        };
+        format!(
+            "<a{} href=\"{}?period={}&amp;theme={}\">{}</a>",
+            class,
+            href,
+            html_escape(period),
+            html_escape(theme),
+            html_escape(label)
+        )
+    })
+    .collect::<String>();
     let account_rows = if accounts.is_empty() {
         "<p class=\"empty-state\">No accounts configured.</p>".to_owned()
     } else {
@@ -1888,18 +2217,14 @@ fn render_overview(
             .collect::<String>()
     };
     let html = format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Overview</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\">☰</button><h1><a href=\"/?period={}&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\"><div class=\"topnav-menu\" id=\"topnav-menu\"><a class=\"active\" href=\"/?period={}&amp;theme={}\">Overview</a><a href=\"/accounts?period={}&amp;theme={}\">Accounts</a><a href=\"/models?period={}&amp;theme={}\">Models</a><form method=\"get\" class=\"theme-selector\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div><button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\"><h2>Overview</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select></label></form><section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{}</tbody></table></section></main><footer><small>Period: <span class=\"period-label\">{}</span> · auto-refresh {}s · <span id=\"dashboard-updated\">ready</span></small></footer><script defer src=\"/static/dashboard.js\"></script>\n</body>\n</html>",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Overview</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"preload\" href=\"/static/chart.js\" as=\"script\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\">☰</button><h1><a href=\"/?period={}&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\"><div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div><button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\"><h2>Overview</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{}</tbody></table></section><section class=\"panel\" id=\"timeseries-chart\"><h3>Timeseries</h3><script type=\"application/json\" id=\"timeseries-initial-data\">[]</script></section></main><footer><small>Period: <span class=\"period-label\">{}</span> · auto-refresh {}s · <span id=\"dashboard-updated\">ready</span></small></footer><script defer src=\"/static/dashboard.js\"></script><script defer src=\"/static/chart.js\"></script>\n</body>\n</html>",
         html_escape(theme),
         html_escape(period),
         html_escape(theme),
-        html_escape(period),
-        html_escape(theme),
-        html_escape(period),
-        html_escape(theme),
-        html_escape(period),
-        html_escape(theme),
+        nav_links,
         nav,
         html_escape(period),
+        html_escape(theme),
         total,
         success,
         errors,
