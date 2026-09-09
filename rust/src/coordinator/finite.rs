@@ -122,6 +122,44 @@ impl FiniteExecution {
         self.completion.handoff().started()
     }
 
+    /// Return the bounded scalar terminal usage event before ownership is
+    /// consumed by [`Self::complete`]. Bodies, headers, and credentials never
+    /// cross into the process metrics buffer.
+    pub fn usage_metric_event(&self) -> Option<crate::operations::metrics::UsageMetricEvent> {
+        let parts = self.completion.parts.as_ref()?;
+        let data = &parts.data;
+        let status = match data.outcome {
+            FinalizationOutcome::Completed => "success",
+            FinalizationOutcome::ClientError => "client_error",
+            FinalizationOutcome::ClientCancelled => "cancelled",
+            FinalizationOutcome::UpstreamError
+            | FinalizationOutcome::MidstreamError
+            | FinalizationOutcome::Timeout
+            | FinalizationOutcome::Interrupted => "error",
+        };
+        let mut event = crate::operations::metrics::UsageMetricEvent::now(
+            parts.identity.provider_id.clone(),
+            parts.identity.model_id.clone(),
+            parts.identity.account_id,
+            parts.identity.client_protocol.clone(),
+            status,
+        );
+        event.streamed = false;
+        event.input_tokens = data.input_tokens;
+        event.output_tokens = data.output_tokens;
+        event.cache_read_tokens = data.cache_read_tokens;
+        event.cache_write_tokens = data.cache_write_tokens;
+        event.reasoning_tokens = data.reasoning_tokens;
+        event.thinking_characters = data.thinking_characters;
+        event.cost_microdollars = data.cost_microdollars;
+        event.bytes_received = data.bytes_received;
+        event.bytes_emitted = data.bytes_emitted;
+        event.latency_ms = data.latency_ms;
+        event.first_byte_ms = data.first_byte_ms;
+        event.retry_count = i64::from(data.is_retry_outcome);
+        Some(event)
+    }
+
     /// Transfer terminal ownership to the retained C006 supervisor before the
     /// first cancellation-sensitive await.  A write failure after handoff is
     /// terminal and can never re-enter the upstream retry loop.

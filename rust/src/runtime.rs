@@ -80,6 +80,12 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Db(crate::cli::DbCommand::Vacuum)) => vacuum(&config_path).await?,
         Some(Command::Backup { output_dir }) => backup(&config_path, output_dir).await?,
         Some(Command::Recover { source }) => recover(&config_path, source).await?,
+        Some(Command::Accounts(command)) => accounts(&config_path, command).await?,
+        Some(Command::Models(crate::cli::ModelsCommand::Refresh)) => {
+            models_refresh(&config_path).await?
+        }
+        Some(Command::Modelinfo(command)) => modelinfo(&config_path, command).await?,
+        Some(Command::Stats(command)) => stats(&config_path, command).await?,
         None => {
             println!("{}", crate::cli::help_text());
             println!("\nConfig file: {}", config_path.display());
@@ -110,6 +116,492 @@ async fn open_maintenance_database(
     crate::db::Database::open(database_config)
         .await
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))
+}
+
+async fn open_operational_database(
+    config: &config::Config,
+    require_existing: bool,
+) -> Result<crate::db::Database, BootstrapError> {
+    let database = open_maintenance_database(config, require_existing).await?;
+    if let Err(error) = crate::db::MigrationRunner::new(&database).run().await {
+        let _ = database.close().await;
+        return Err(command_error(EXIT_VALIDATION, error.to_string()));
+    }
+    Ok(database)
+}
+
+async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    match command {
+        crate::cli::AccountsCommand::List => {
+            print_accounts_human(&crate::operations::operator::account_list(&config), false);
+        }
+        crate::cli::AccountsCommand::Status => {
+            print_accounts_human(&crate::operations::operator::account_status(&config), true);
+        }
+        crate::cli::AccountsCommand::Explain(args) => {
+            let model = args
+                .model
+                .as_deref()
+                .ok_or_else(|| command_error(EXIT_VALIDATION, "the --model option is required"))?;
+            let database = open_operational_database(&config, false).await?;
+            let result = crate::operations::operator::explain_accounts(
+                &config,
+                &database,
+                model,
+                args.provider.as_deref(),
+                args.protocol.as_deref(),
+                args.scores,
+                args.gates,
+            )
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error));
+            let close = database.close().await;
+            let value = result;
+            close.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let value = value?;
+            print_account_explain_human(&value);
+        }
+    }
+    Ok(())
+}
+
+fn print_accounts_human(rows: &[Value], status: bool) {
+    if rows.is_empty() {
+        println!(
+            "{}",
+            if status {
+                "No provider accounts configured."
+            } else {
+                "No configured accounts. Run `eggpool connect` to add one."
+            }
+        );
+        return;
+    }
+    if !status {
+        println!("Configured accounts:");
+        for row in rows {
+            println!(
+                "  {}/{}",
+                row["provider"].as_str().unwrap_or_default(),
+                row["name"].as_str().unwrap_or_default()
+            );
+        }
+        println!("\nTotal: {} accounts", rows.len());
+        return;
+    }
+    for row in rows {
+        println!(
+            "  {}: provider={}, priority={}, enabled={}, weight={}, api_key_env={} (set={})",
+            row["name"].as_str().unwrap_or_default(),
+            row["provider"].as_str().unwrap_or_default(),
+            row["routing_priority"].as_i64().unwrap_or_default(),
+            row["enabled"].as_bool().unwrap_or(false),
+            row["weight"].as_f64().unwrap_or_default(),
+            row["api_key_env"].as_str().unwrap_or_default(),
+            if row["credential_configured"].as_bool().unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            }
+        );
+    }
+    println!("\nTotal accounts: {}", rows.len());
+}
+
+fn print_account_explain_human(value: &Value) {
+    println!(
+        "Account eligibility for model {:?}:",
+        value["model_id"].as_str().unwrap_or_default()
+    );
+    let Some(accounts) = value["accounts"].as_array() else {
+        return;
+    };
+    println!("  Account                 Eligible  Reason");
+    println!("  ----------------------  --------  ------------------------------");
+    for account in accounts {
+        println!(
+            "  {:<22}  {:<8}  {}",
+            account["name"].as_str().unwrap_or_default(),
+            if account["eligible"].as_bool().unwrap_or(false) {
+                "yes"
+            } else {
+                "no"
+            },
+            account["reason_code"].as_str().unwrap_or_default()
+        );
+        if let Some(gates) = account["gates"].as_object() {
+            let rendered = gates
+                .iter()
+                .map(|(key, value)| format!("{key}={}", value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("    gates: {rendered}");
+        }
+    }
+    if let Some(candidates) = value["candidates"].as_array() {
+        for candidate in candidates {
+            if let Some(score) = candidate.get("score") {
+                println!(
+                    "    score {}: {}",
+                    candidate["account_name"].as_str().unwrap_or_default(),
+                    score
+                );
+            }
+        }
+    }
+}
+
+async fn models_refresh(path: &Path) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let database = open_operational_database(&config, false).await?;
+    let result = crate::operations::operator::refresh_catalog(&config, path, &database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error));
+    let close = database.close().await;
+    let summary = result;
+    close.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let summary = summary?;
+    println!(
+        "Refreshed catalog: {} models found ({} new, {} withdrawn; accounts: {} succeeded, {} failed, {} skipped)",
+        summary.model_count,
+        summary.new_model_count,
+        summary.withdrawn_model_count,
+        summary.successful_accounts,
+        summary.failed_accounts,
+        summary.skipped_accounts
+    );
+    Ok(())
+}
+
+async fn modelinfo(
+    path: &Path,
+    command: crate::cli::ModelInfoCommand,
+) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    if let crate::cli::ModelInfoCommand::List {
+        status: Some(status),
+    } = &command
+    {
+        crate::operations::operator::validate_model_info_status(status)
+            .map_err(|error| command_error(EXIT_VALIDATION, error))?;
+    }
+    let database = open_operational_database(&config, false).await?;
+    let result: Result<(&str, Value), String> = async {
+        match command {
+        crate::cli::ModelInfoCommand::Aliases { model_id, source } => {
+            crate::operations::operator::list_aliases(&database, &model_id, source.as_deref())
+                .await
+                .map(|rows| ("aliases", Value::Array(rows)))
+                .map_err(|error| error.to_string())
+        }
+        crate::cli::ModelInfoCommand::List { status } => {
+            crate::operations::operator::list_model_info(&database, status.as_deref())
+                .await
+                .map(|rows| ("model_info", Value::Array(rows)))
+                .map_err(|error| error.to_string())
+        }
+        crate::cli::ModelInfoCommand::Show { model_id } => {
+            crate::operations::operator::show_model_info(&database, &model_id)
+                .await
+                .map(|row| ("model_info", row.unwrap_or(Value::Null)))
+                .map_err(|error| error.to_string())
+        }
+        crate::cli::ModelInfoCommand::Refresh { .. } => {
+            let catalog = crate::operations::operator::refresh_catalog(&config, path, &database)
+                .await
+                ?;
+            let (created, updated) =
+                crate::operations::operator::refresh_model_info_from_catalog(&config, &database)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            let aliases = crate::operations::operator::seed_configured_aliases(&config, &database)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok((
+                "refresh",
+                json!({"catalog": catalog, "canonical_created": created, "canonical_updated": updated, "aliases": aliases}),
+            ))
+        }
+        crate::cli::ModelInfoCommand::Repair { limit } => {
+            let (scanned, upgraded, skipped, errors) =
+                crate::operations::operator::repair_model_info(&database, limit.unwrap_or(200))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            Ok((
+                "repair",
+                json!({"scanned": scanned, "upgraded": upgraded, "skipped": skipped, "errors": errors}),
+            ))
+        }
+        }
+    }
+    .await;
+    let close = database.close().await;
+    let result = result;
+    close.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let (kind, value) = result.map_err(|error| command_error(EXIT_VALIDATION, error))?;
+    if kind == "aliases" && value.as_array().is_some_and(Vec::is_empty) {
+        return Err(command_error(EXIT_VALIDATION, "no aliases found"));
+    }
+    if kind == "model_info" && value.as_array().is_some_and(Vec::is_empty) {
+        println!("No model-info rows found.");
+    } else if kind == "model_info" && value.is_null() {
+        return Err(command_error(EXIT_VALIDATION, "model-info row not found"));
+    } else {
+        print_modelinfo_human(kind, &value);
+    }
+    Ok(())
+}
+
+fn print_modelinfo_human(kind: &str, value: &Value) {
+    match kind {
+        "aliases" => {
+            println!("Aliases:");
+            if let Some(rows) = value.as_array() {
+                for row in rows {
+                    println!(
+                        "  {}  {}  provider={} active={} confidence={}",
+                        row["source"].as_str().unwrap_or_default(),
+                        row["alias"].as_str().unwrap_or_default(),
+                        row["provider_id"].as_str().unwrap_or("—"),
+                        row["active"].as_bool().unwrap_or(false),
+                        row["confidence"]
+                    );
+                }
+            }
+        }
+        "model_info" if value.is_array() => {
+            println!(
+                "Model ID                                             Status           Sparse  Summary"
+            );
+            println!("{}", "-".repeat(110));
+            if let Some(rows) = value.as_array() {
+                for row in rows {
+                    println!(
+                        "{:<50} {:<16} {:<7} {}",
+                        row["model_id"].as_str().unwrap_or_default(),
+                        row["status"].as_str().unwrap_or_default(),
+                        if row["sparse"].as_bool().unwrap_or(false) {
+                            "yes"
+                        } else {
+                            "no"
+                        },
+                        row["summary"].as_str().unwrap_or_default()
+                    );
+                }
+                println!("\nTotal: {}", rows.len());
+            }
+        }
+        "model_info" if value.is_object() => {
+            println!("Model: {}", value["model_id"].as_str().unwrap_or_default());
+            println!("Status: {}", value["status"].as_str().unwrap_or_default());
+            println!("Sparse: {}", value["sparse"].as_bool().unwrap_or(false));
+            if let Some(summary) = value["summary"].as_str() {
+                println!("Summary: {summary}");
+            }
+            println!("Detail: {}", value["detail"]);
+            println!("Provenance: {}", value["provenance"]);
+            if value["conflicts"]
+                .as_object()
+                .is_some_and(|object| !object.is_empty())
+            {
+                println!("Conflicts: {}", value["conflicts"]);
+            }
+            println!("First seen: {}", value["first_seen_at"]);
+            println!("Last seen: {}", value["last_seen_at"]);
+        }
+        "refresh" => {
+            println!("Refreshing provider catalog observations...");
+            println!("  Catalog: {}", value["catalog"]);
+            println!("  Canonical created: {}", value["canonical_created"]);
+            println!("  Canonical updated: {}", value["canonical_updated"]);
+            println!("  Aliases created: {}", value["aliases"]);
+            println!("Done.");
+        }
+        "repair" => {
+            println!("Running legacy detail backfill...");
+            println!("  Scanned: {}", value["scanned"]);
+            println!("  Upgraded: {}", value["upgraded"]);
+            println!("  Skipped: {}", value["skipped"]);
+            println!("  Errors: {}", value["errors"]);
+            println!("Done.");
+        }
+        _ => println!("{value}"),
+    }
+}
+
+async fn stats(path: &Path, command: crate::cli::StatsCommand) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let database = open_operational_database(&config, false).await?;
+    let json_output = match &command {
+        crate::cli::StatsCommand::Transcoding(args) => args.json,
+        crate::cli::StatsCommand::ExplainDashboard(args) => args.json,
+        crate::cli::StatsCommand::RecomputeCosts(_) | crate::cli::StatsCommand::RepairCosts(_) => {
+            false
+        }
+    };
+    let apply = match &command {
+        crate::cli::StatsCommand::RecomputeCosts(args) => args.apply,
+        crate::cli::StatsCommand::RepairCosts(args) => args.apply,
+        crate::cli::StatsCommand::Transcoding(_)
+        | crate::cli::StatsCommand::ExplainDashboard(_) => false,
+    };
+    let result: Result<(&str, Value), String> = match command {
+        crate::cli::StatsCommand::Transcoding(args) => {
+            let period = args.period.unwrap_or_else(|| "24h".into());
+            crate::operations::operator::transcoding_stats(
+                &database,
+                &period,
+            )
+            .await
+            .map(|value| {
+                let mut object = value.as_object().cloned().unwrap_or_default();
+                object.insert("period".into(), Value::String(period));
+                ("transcoding", Value::Object(object))
+            })
+            .map_err(|error| error.to_string())
+        }
+        crate::cli::StatsCommand::ExplainDashboard(args) => {
+            let period = args.period.as_deref().unwrap_or("24h").to_owned();
+            let bucket = args.bucket.as_deref().unwrap_or("hour").to_owned();
+            let group_by = args
+                .group_by
+                .as_deref()
+                .unwrap_or("provider_model")
+                .to_owned();
+            crate::operations::operator::explain_dashboard(
+                &database,
+                &period,
+                &bucket,
+                &group_by,
+            )
+            .await
+            .map(|rows| ("explain-dashboard", json!({"period": period, "bucket": bucket, "group_by": group_by, "queries": rows})))
+            .map_err(|error| error.to_string())
+        }
+        crate::cli::StatsCommand::RecomputeCosts(args) => crate::operations::operator::recompute_costs(
+            &database,
+            args.limit,
+            args.apply,
+        )
+        .await
+        .map(|summary| ("recompute-costs", json!({"scanned": summary.scanned, "updated": summary.updated, "skipped": summary.skipped, "skipped_no_snapshot": summary.skipped_no_snapshot, "skipped_missing_tokens": summary.skipped_missing_tokens, "old_total": summary.old_total, "new_total": summary.new_total, "changes": summary.changes})))
+        .map_err(|error| error.to_string()),
+        crate::cli::StatsCommand::RepairCosts(args) => crate::operations::operator::repair_costs(
+            &database,
+            args.provider.as_deref(),
+            args.since.as_deref(),
+            args.limit,
+            args.apply,
+        )
+        .await
+        .map(|summary| ("repair-costs", json!({"scanned": summary.scanned, "suspicious": summary.suspicious, "repaired": summary.repaired, "skipped_provider_reported": summary.skipped_provider_reported, "unchanged": summary.unchanged, "old_total": summary.old_total, "proposed_total": summary.proposed_total, "changes": summary.changes, "breakdown": summary.breakdown})))
+        .map_err(|error| error.to_string()),
+    };
+    let close = database.close().await;
+    let result = result;
+    close.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let (kind, value) = result.map_err(|error| command_error(EXIT_VALIDATION, error))?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value)
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+        );
+    } else {
+        print_stats_human(kind, &value, apply);
+    }
+    Ok(())
+}
+
+fn print_stats_human(kind: &str, value: &Value, apply: bool) {
+    match kind {
+        "transcoding" => {
+            println!("Period: {}", value["period"].as_str().unwrap_or("24h"));
+            println!("Total requests: {}", value["total"].as_i64().unwrap_or(0));
+            println!(
+                "Native (no transcoding): {}",
+                value["native_count"].as_i64().unwrap_or(0)
+            );
+            println!(
+                "Transcoded: {}",
+                value["transcoded_count"].as_i64().unwrap_or(0)
+            );
+            if let Some(directions) = value["per_direction"].as_object()
+                && !directions.is_empty()
+            {
+                println!("\nDirection                         Count");
+                println!("-------------------------------- ------");
+                for (direction, count) in directions {
+                    println!("{direction:<32} {:>6}", count.as_i64().unwrap_or_default());
+                }
+            }
+        }
+        "explain-dashboard" => {
+            println!(
+                "Period: {}  Bucket: {}  Group-by: {}",
+                value["period"].as_str().unwrap_or("24h"),
+                value["bucket"].as_str().unwrap_or("hour"),
+                value["group_by"].as_str().unwrap_or("provider_model")
+            );
+            println!("{}", "─".repeat(70));
+            if let Some(queries) = value["queries"].as_array() {
+                for query in queries {
+                    println!("{}:", query["name"].as_str().unwrap_or("query"));
+                    if let Some(plan) = query["plan"].as_array() {
+                        for line in plan.iter().filter_map(Value::as_str) {
+                            println!("  {line}");
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+        "recompute-costs" => {
+            println!(
+                "{}: scanned {} rows, updated {}, skipped {}",
+                if apply { "APPLY" } else { "DRY-RUN" },
+                value["scanned"].as_u64().unwrap_or_default(),
+                value["updated"].as_u64().unwrap_or_default(),
+                value["skipped"].as_u64().unwrap_or_default()
+            );
+            print_cost_changes(value);
+        }
+        "repair-costs" => {
+            println!(
+                "{}: scanned {} rows, flagged {} suspicious, repaired {}, skipped {} provider-reported, unchanged {}",
+                if apply { "APPLY" } else { "DRY-RUN" },
+                value["scanned"].as_u64().unwrap_or_default(),
+                value["suspicious"].as_u64().unwrap_or_default(),
+                value["repaired"].as_u64().unwrap_or_default(),
+                value["skipped_provider_reported"]
+                    .as_u64()
+                    .unwrap_or_default(),
+                value["unchanged"].as_u64().unwrap_or_default()
+            );
+            println!(
+                "old total {} μ$  proposed total {} μ$",
+                value["old_total"].as_i64().unwrap_or_default(),
+                value["proposed_total"].as_i64().unwrap_or_default()
+            );
+            print_cost_changes(value);
+        }
+        _ => println!("{}", value),
+    }
+}
+
+fn print_cost_changes(value: &Value) {
+    if let Some(changes) = value["changes"].as_array() {
+        for change in changes {
+            println!(
+                "  {} / {}: {} → {}",
+                change["model_id"].as_str().unwrap_or_default(),
+                change["provider_id"].as_str().unwrap_or_default(),
+                change["old_cost"].as_i64().unwrap_or_default(),
+                change["new_cost"].as_i64().unwrap_or_default()
+            );
+        }
+    }
 }
 
 async fn migrate(path: &Path) -> Result<(), BootstrapError> {

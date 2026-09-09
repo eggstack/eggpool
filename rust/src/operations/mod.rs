@@ -9,5 +9,7 @@ pub mod backup;
 pub mod config_mutation;
 pub mod control;
 pub mod integrations;
+pub mod metrics;
+pub mod operator;
 pub mod paths;
 pub mod process;

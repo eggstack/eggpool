@@ -74,6 +74,7 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub startup_recovery: Option<StartupRecoveryReport>,
     pub shutdown: ShutdownDiagnostics,
     pub counters: RuntimeDiagnosticCounters,
+    pub metrics: crate::operations::metrics::MetricsSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -232,6 +233,7 @@ pub struct ProcessRuntime {
     wire_profile_resolver: WireResolver,
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
+    metrics_coalescer: Arc<crate::operations::metrics::MetricsWriteCoalescer>,
     reload_lock: Arc<AsyncMutex<()>>,
     next_reload_owner: Arc<AtomicU64>,
     startup_recovery_report: Arc<Mutex<Option<StartupRecoveryReport>>>,
@@ -246,6 +248,7 @@ impl Clone for ProcessRuntime {
             wire_profile_resolver: self.wire_profile_resolver.clone(),
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
+            metrics_coalescer: Arc::clone(&self.metrics_coalescer),
             reload_lock: Arc::clone(&self.reload_lock),
             next_reload_owner: Arc::clone(&self.next_reload_owner),
             startup_recovery_report: Arc::clone(&self.startup_recovery_report),
@@ -278,6 +281,10 @@ impl std::fmt::Debug for ProcessRuntime {
 impl ProcessRuntime {
     pub fn new(database: Database) -> Self {
         let checkpoint_database = database.clone();
+        let metrics_coalescer = Arc::new(crate::operations::metrics::MetricsWriteCoalescer::new(
+            &crate::config::MetricsConfig::default(),
+            database.clone(),
+        ));
         Self {
             database,
             model_router_affinity: Arc::new(ModelRouterAffinity::new()),
@@ -288,6 +295,7 @@ impl ProcessRuntime {
                     checkpoint_database,
                 ),
             ),
+            metrics_coalescer,
             reload_lock: Arc::new(AsyncMutex::new(())),
             next_reload_owner: Arc::new(AtomicU64::new(1)),
             startup_recovery_report: Arc::new(Mutex::new(None)),
@@ -305,6 +313,14 @@ impl ProcessRuntime {
         let wire_policy = WireResolverConfig::from_config(&config.routing.wire_negotiation)?;
         let mut runtime = Self::new(database);
         runtime.wire_profile_resolver = WireResolver::new(wire_policy);
+        runtime.metrics_coalescer =
+            Arc::new(crate::operations::metrics::MetricsWriteCoalescer::new(
+                &config.metrics,
+                runtime.database.clone(),
+            ));
+        runtime
+            .task_supervisor
+            .register_metrics_flush(Arc::clone(&runtime.metrics_coalescer));
         Ok(runtime)
     }
 
@@ -357,6 +373,16 @@ impl ProcessRuntime {
 
     pub fn task_supervisor(&self) -> RuntimeTaskSupervisor {
         self.task_supervisor.clone()
+    }
+
+    pub fn metrics_coalescer(&self) -> Arc<crate::operations::metrics::MetricsWriteCoalescer> {
+        Arc::clone(&self.metrics_coalescer)
+    }
+
+    pub async fn flush_metrics(
+        &self,
+    ) -> Result<usize, crate::operations::metrics::MetricsFlushError> {
+        self.metrics_coalescer.flush().await
     }
 
     pub fn task_capability_inventory(&self) -> Vec<RuntimeTaskCapability> {
@@ -568,6 +594,7 @@ impl ProcessRuntime {
             startup_recovery: self.startup_recovery_report(),
             shutdown: diagnostics.shutdown,
             counters: diagnostics.counters,
+            metrics: self.metrics_coalescer.snapshot(),
         }
     }
 }
@@ -946,6 +973,14 @@ impl PreparedGeneration {
             .generation
             .as_ref()
             .map(|generation| generation.generation_id())
+    }
+
+    pub fn generation(&self) -> Option<Arc<RuntimeGeneration>> {
+        self.inner
+            .lock()
+            .expect("candidate ownership lock")
+            .generation
+            .clone()
     }
 
     /// Transfer cleanup ownership to the future manager exactly once.

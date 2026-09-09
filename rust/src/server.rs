@@ -495,6 +495,11 @@ async fn close_runtime_resources(
     let task_report = task_supervisor
         .shutdown_with_timeout(deadline.saturating_duration_since(tokio::time::Instant::now()))
         .await;
+    let _ = tokio::time::timeout(
+        deadline.saturating_duration_since(tokio::time::Instant::now()),
+        inner.process.flush_metrics(),
+    )
+    .await;
     let body_empty = if initially_forced {
         false
     } else {
@@ -1472,7 +1477,7 @@ async fn handle_inference(
 }
 
 async fn handle_finite_inference(
-    _state: AppState,
+    state: AppState,
     surface: ClientSurface,
     headers: HeaderMap,
     body: Bytes,
@@ -1504,6 +1509,14 @@ async fn handle_finite_inference(
                 outgoing.insert(name.clone(), value.clone());
             }
             let body = execution.response.body.clone();
+            if let Some(metrics) = state
+                .process
+                .as_ref()
+                .map(ProcessRuntime::metrics_coalescer)
+                && let Some(event) = execution.usage_metric_event()
+            {
+                let _ = metrics.record_usage_async(event).await;
+            }
             match execution
                 .complete(crate::coordinator::DownstreamResult::Delivered)
                 .await
@@ -1559,6 +1572,14 @@ async fn handle_stream_inference(
             outgoing.insert(name.clone(), value.clone());
         }
         execution.mark_started();
+        if let Some(metrics) = state
+            .process
+            .as_ref()
+            .map(ProcessRuntime::metrics_coalescer)
+            && let Some(event) = execution.usage_metric_event()
+        {
+            let _ = metrics.record_usage_async(event).await;
+        }
         let _ = execution
             .complete(crate::coordinator::DownstreamResult::Delivered)
             .await;
@@ -1573,6 +1594,10 @@ async fn handle_stream_inference(
     // each pulled chunk is forwarded as one Axum frame. Terminal ownership
     // is stored on clean or failed terminal; failures never retry.
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    let metrics = state
+        .process
+        .as_ref()
+        .map(ProcessRuntime::metrics_coalescer);
     state.body_tasks.spawn(async move {
         let _lease = lease;
         let mut execution = execution;
@@ -1588,6 +1613,11 @@ async fn handle_stream_inference(
                     }
                 }
                 None => {
+                    if let Some(metrics) = &metrics
+                        && let Some(event) = execution.usage_metric_event()
+                    {
+                        let _ = metrics.record_usage_async(event).await;
+                    }
                     let _ = execution
                         .complete(crate::coordinator::DownstreamResult::Delivered)
                         .await;
@@ -1596,6 +1626,11 @@ async fn handle_stream_inference(
                 Some(Err(_)) => {
                     // Failed terminal after handoff: end the stream without
                     // replay; durable status already converges as error.
+                    if let Some(metrics) = &metrics
+                        && let Some(event) = execution.usage_metric_event()
+                    {
+                        let _ = metrics.record_usage_async(event).await;
+                    }
                     let _ = execution
                         .complete(crate::coordinator::DownstreamResult::Delivered)
                         .await;

@@ -826,6 +826,32 @@ impl RuntimeTaskSupervisor {
             .register_automatic_backup(database, config_path);
     }
 
+    pub fn register_metrics_flush(
+        &self,
+        coalescer: std::sync::Arc<crate::operations::metrics::MetricsWriteCoalescer>,
+    ) {
+        self.inner
+            .callbacks
+            .lock()
+            .expect("task callback registry lock")
+            .register(
+                "metrics_flush",
+                task_callback(move |context| {
+                    let coalescer = std::sync::Arc::clone(&coalescer);
+                    async move {
+                        if !matches!(context, TaskTickContext::Process) {
+                            return Err(TaskCallbackError::Failed);
+                        }
+                        coalescer
+                            .flush()
+                            .await
+                            .map(|_| ())
+                            .map_err(|_| TaskCallbackError::Failed)
+                    }
+                }),
+            );
+    }
+
     /// Return callback capabilities available to the current process. Reload
     /// preflight uses this to keep deferred R008/M9 business callbacks
     /// explicit rather than silently installing no-op loops.
