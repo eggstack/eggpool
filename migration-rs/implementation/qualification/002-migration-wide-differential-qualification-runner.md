@@ -1,6 +1,6 @@
 # Q002 — Migration-Wide Deterministic Differential Qualification Runner
 
-Status: queued behind Q001
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 

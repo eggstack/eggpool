@@ -1,6 +1,6 @@
 # Q001 — Qualification Contract, Target Matrix, and Evidence Schema Freeze
 
-Status: ready for handoff
+Status: complete (2026-09-09)
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -232,3 +232,7 @@ Q001 closes only when:
 - no unresolved architecture/product contradiction prevents later qualification.
 
 Accepted Q001 promotes only Q002.
+
+## Implementation closure
+
+Q001 is closed by implementation candidate `d8885dc8fd5a319fe1152bb833f9723e5b35fbcf` and the accepted evidence record at `migration-rs/closure/qualification/001-status.md`. The frozen manifest and its six validation tests add no production capability, dependency, schema, CI job, or runtime behavior. Q002 is the only plan promoted by this closure.

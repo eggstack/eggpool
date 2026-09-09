@@ -1,11 +1,11 @@
 # M10 Qualification Handoff Sequence
 
-Status: active; Q001 ready
+Status: active; Q002 ready
 
 Execute and accept in this order:
 
-1. Q001 — freeze qualification cells, target support, exact/semantic normalization, environment classes, and evidence schema (**ready**).
-2. Q002 — build and run the migration-wide deterministic Python/Rust qualification runner.
+1. Q001 — freeze qualification cells, target support, exact/semantic normalization, environment classes, and evidence schema (**accepted**).
+2. Q002 — build and run the migration-wide deterministic Python/Rust qualification runner (**ready**).
 3. Q003 — qualify Python/Rust DB upgrade/rollback plus backup/recovery fault safety.
 4. Q004 — qualify dashboard DOM/static/escaping/navigation and representative visual parity.
 5. Q005 — qualify supported-target build and ordinary non-root runtime portability.
@@ -29,4 +29,4 @@ Execute and accept in this order:
 - No M11 release asset/public installer/default-update cutover is pulled forward.
 - No M12 Python retirement work is pulled forward.
 
-Only `migration-rs/registry.md` authorizes implementation. Q001 is the sole ready plan.
+Only `migration-rs/registry.md` authorizes implementation. Q002 is now the sole ready plan; Q003-Q010 remain queued behind their direct predecessors.
