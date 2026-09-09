@@ -234,6 +234,7 @@ pub struct ProcessRuntime {
     config_path: Option<PathBuf>,
     task_supervisor: RuntimeTaskSupervisor,
     metrics_coalescer: Arc<crate::operations::metrics::MetricsWriteCoalescer>,
+    update_checker: Arc<crate::operations::update::UpdateCheckerState>,
     reload_lock: Arc<AsyncMutex<()>>,
     next_reload_owner: Arc<AtomicU64>,
     startup_recovery_report: Arc<Mutex<Option<StartupRecoveryReport>>>,
@@ -249,6 +250,7 @@ impl Clone for ProcessRuntime {
             config_path: self.config_path.clone(),
             task_supervisor: self.task_supervisor.clone(),
             metrics_coalescer: Arc::clone(&self.metrics_coalescer),
+            update_checker: Arc::clone(&self.update_checker),
             reload_lock: Arc::clone(&self.reload_lock),
             next_reload_owner: Arc::clone(&self.next_reload_owner),
             startup_recovery_report: Arc::clone(&self.startup_recovery_report),
@@ -285,17 +287,23 @@ impl ProcessRuntime {
             &crate::config::MetricsConfig::default(),
             database.clone(),
         ));
+        let update_checker = Arc::new(crate::operations::update::UpdateCheckerState::new(
+            crate::operations::update::UpdateService::new()
+                .expect("default release authority URI is valid"),
+        ));
+        let mut callbacks =
+            crate::task_supervisor::TaskCallbackRegistry::with_generation_maintenance(
+                checkpoint_database,
+            );
+        callbacks.register_update_checker(Arc::clone(&update_checker));
         Self {
             database,
             model_router_affinity: Arc::new(ModelRouterAffinity::new()),
             wire_profile_resolver: WireResolver::new(WireResolverConfig::default()),
             config_path: None,
-            task_supervisor: RuntimeTaskSupervisor::with_callbacks(
-                crate::task_supervisor::TaskCallbackRegistry::with_generation_maintenance(
-                    checkpoint_database,
-                ),
-            ),
+            task_supervisor: RuntimeTaskSupervisor::with_callbacks(callbacks),
             metrics_coalescer,
+            update_checker,
             reload_lock: Arc::new(AsyncMutex::new(())),
             next_reload_owner: Arc::new(AtomicU64::new(1)),
             startup_recovery_report: Arc::new(Mutex::new(None)),
@@ -379,6 +387,10 @@ impl ProcessRuntime {
         Arc::clone(&self.metrics_coalescer)
     }
 
+    pub fn update_checker(&self) -> Arc<crate::operations::update::UpdateCheckerState> {
+        Arc::clone(&self.update_checker)
+    }
+
     pub async fn flush_metrics(
         &self,
     ) -> Result<usize, crate::operations::metrics::MetricsFlushError> {
@@ -446,7 +458,7 @@ impl ProcessRuntime {
         let current = self.task_supervisor.active_specs();
         let candidate = self
             .task_supervisor
-            .available_specs_for_config(config, false);
+            .available_specs_for_config(config, true);
         let mut diff = self.task_supervisor.prepare_diff(&current, &candidate)?;
         diff.commit().await
     }

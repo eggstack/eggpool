@@ -22,6 +22,7 @@ use crate::{
         config_mutation::{self, ApplyMode, ApplyOutcome},
         paths::RuntimePaths,
         process,
+        update::{ReleaseTarget, UpdateError, UpdateService},
     },
     version::PACKAGE_VERSION,
 };
@@ -58,6 +59,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::RuntimeStatus { json }) => runtime_status(&config_path, json).await?,
         Some(Command::Croncheck) => croncheck(),
         Some(Command::EnsureRunning) => ensure_running(&config_path).await?,
+        Some(Command::Update(args)) => update(&config_path, args).await?,
         Some(Command::Connect(args)) => connect(&config_path, args).await?,
         Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
         Some(Command::Edit) => edit(&config_path)?,
@@ -1709,6 +1711,114 @@ async fn ensure_running(path: &Path) -> Result<(), BootstrapError> {
         }
         sleep(Duration::from_millis(50)).await;
     }
+}
+
+async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), BootstrapError> {
+    if args.from_source {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "--from-source is not supported by the Rust updater; install a reviewed Rust release artifact",
+        ));
+    }
+    let target = ReleaseTarget::parse(args.requested_version.as_deref()).map_err(update_error)?;
+    let service = UpdateService::new().map_err(update_error)?;
+    let current = service.current_version().map_err(update_error)?;
+    let metadata = service.resolve(&target).await.map_err(update_error)?;
+
+    if matches!(target, ReleaseTarget::Exact(_)) {
+        println!("Current version: {}", current.as_str());
+        println!("Requested version: {}", metadata.version.as_str());
+    }
+    if metadata.version.equivalent(&current) {
+        if matches!(target, ReleaseTarget::Exact(_)) {
+            println!("Requested version is already installed.");
+        } else {
+            println!("Already up to date.");
+        }
+        return Ok(());
+    }
+    if args.check {
+        if matches!(target, ReleaseTarget::Exact(_)) {
+            println!("Exact version is available.");
+        } else if metadata.version.is_newer_than(&current) {
+            println!("Current version: {}", current.as_str());
+            println!("Latest version:  {}", metadata.version.as_str());
+            println!("An update is available.");
+        } else {
+            println!("Already up to date.");
+        }
+        return Ok(());
+    }
+
+    let executable = std::env::current_exe().map_err(|error| {
+        command_error(
+            EXIT_VALIDATION,
+            format!("cannot resolve eggpool executable: {error}"),
+        )
+    })?;
+    let executable = fs::canonicalize(executable).map_err(|_| {
+        command_error(
+            EXIT_VALIDATION,
+            "current executable path is unsupported or not writable",
+        )
+    })?;
+    if executable
+        .ancestors()
+        .any(|candidate| candidate.join(".git").exists())
+    {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "current executable is from a source checkout; install a managed Rust release before updating",
+        ));
+    }
+
+    let paths = RuntimePaths::resolve();
+    let was_running = server_is_running(path, &paths).await;
+    if was_running {
+        stop(path, 10.0).await?;
+    }
+    println!(
+        "Updating from {} to {}...",
+        current.as_str(),
+        metadata.version.as_str()
+    );
+    let restart = || async {
+        restart_server_inner(path, Duration::from_secs(10), false, true)
+            .await
+            .map(|_| ())
+            .map_err(|_| UpdateError::RestartFailed)
+    };
+    let result = service
+        .apply_current_executable(&target, &executable, was_running, Some(restart))
+        .await;
+    match result {
+        Ok(report) => {
+            println!("Installed version: {}", report.target_version);
+            if report.restarted {
+                println!("Server restarted.");
+            } else {
+                println!("Server is not running.");
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if was_running {
+                let _ = restart_server_inner(path, Duration::from_secs(10), false, true).await;
+            }
+            Err(update_error(error))
+        }
+    }
+}
+
+async fn server_is_running(path: &Path, paths: &RuntimePaths) -> bool {
+    let Some(pid) = process::read_pid(&paths.pid_file).ok().flatten() else {
+        return false;
+    };
+    process::process_exists(pid) && identity_proof(path, paths, pid).await.proves_eggpool()
+}
+
+fn update_error(error: UpdateError) -> BootstrapError {
+    command_error(EXIT_VALIDATION, format!("update failed: {error}"))
 }
 
 async fn runtime_status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {

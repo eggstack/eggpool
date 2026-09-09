@@ -185,6 +185,15 @@ artifact backend under M9; the user-visible guarantees are no unsafe partial
 replacement, no config/database overwrite, and restart only when a running
 server was present before an applied update.
 
+O008 freezes the Rust candidate's release authority as the public GitHub
+Releases API (`api.github.com/repos/eggstack/eggpool/releases`). This is a
+candidate-backend decision for the future M11 Rust distribution, not a rewrite
+of the Python/PyPI oracle. Rust update checks use direct Hyper/Rustls traffic,
+never provider/account proxies or credentials, and accept only the exact
+platform asset `eggpool-{version}-{os}-{arch}` with SHA-256 evidence in the
+release asset metadata. Missing or malformed integrity evidence is an apply
+failure; there is no package-manager fallback.
+
 ### Deployment and uninstall
 
 Snippet generation is deterministic for fixed inputs. Personal systemd units

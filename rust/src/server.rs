@@ -985,6 +985,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/healthz", get(healthz))
         .route("/v1/readyz", get(readyz))
         .route("/api/stats/runtime", get(runtime_status))
+        .route("/api/stats/update", get(update_status))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
@@ -1036,6 +1037,9 @@ fn requires_auth(path: &str, server: &ServerState) -> bool {
         return false;
     }
     if path == "/api/stats/runtime" {
+        return true;
+    }
+    if path == "/api/stats/update" {
         return true;
     }
     if path.starts_with("/v1/") {
@@ -1265,6 +1269,18 @@ async fn runtime_status(State(state): State<AppState>) -> Response {
             "runtime_manager": runtime_manager,
             "probe_errors": [],
         }),
+    )
+}
+
+async fn update_status(State(state): State<AppState>) -> Response {
+    let snapshot = state
+        .process
+        .as_ref()
+        .map(|process| process.update_checker().snapshot())
+        .unwrap_or_default();
+    json_response(
+        StatusCode::OK,
+        serde_json::to_value(snapshot).unwrap_or_else(|_| json!({})),
     )
 }
 

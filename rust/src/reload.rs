@@ -896,7 +896,7 @@ fn available_task_specs(
         .iter()
         .map(|spec| spec.name.as_str())
         .collect::<BTreeSet<_>>();
-    crate::task_supervisor::runtime_task_specs_for_config(config, false)
+    crate::task_supervisor::runtime_task_specs_for_config(config, true)
         .into_iter()
         .filter(|spec| {
             available.contains(&spec.callback_kind) || current_names.contains(spec.name.as_str())

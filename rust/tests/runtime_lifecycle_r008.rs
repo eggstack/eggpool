@@ -75,11 +75,13 @@ async fn maintenance_capabilities_are_registered_or_explicitly_deferred() {
     for name in ["catalog_refresh", "retention_cleanup", "checkpoint"] {
         assert!(by_name[name].registered, "{name} should be implemented");
     }
-    for name in ["metrics_flush", "update_checker", "automatic_backup"] {
+    for name in ["metrics_flush", "automatic_backup"] {
         assert!(!by_name[name].registered, "{name} must remain deferred");
         assert!(by_name[name].future_owner.is_some());
         assert!(by_name[name].reason.is_some());
     }
+    assert!(by_name["update_checker"].registered);
+    assert!(by_name["update_checker"].future_owner.is_none());
 
     let candidate = RuntimeGenerationFactory::prepare(
         &process,

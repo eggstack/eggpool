@@ -438,6 +438,28 @@ impl TaskCallbackRegistry {
         registry
     }
 
+    /// Register the process-owned, check-only release callback. The state is
+    /// process-owned so it survives generation swaps and remains the single
+    /// source for the dashboard update-status projection.
+    pub fn register_update_checker(
+        &mut self,
+        checker: std::sync::Arc<crate::operations::update::UpdateCheckerState>,
+    ) {
+        self.register(
+            "update_checker",
+            task_callback(move |context| {
+                let checker = std::sync::Arc::clone(&checker);
+                async move {
+                    if !matches!(context, TaskTickContext::Process) {
+                        return Err(TaskCallbackError::Failed);
+                    }
+                    checker.check_once().await;
+                    Ok(())
+                }
+            }),
+        );
+    }
+
     /// Add the process-owned O006 callback. The callback resolves the current
     /// config on each tick so a successful reload changes backup directory,
     /// env inclusion, and retention without capturing a retiring generation.

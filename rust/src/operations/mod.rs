@@ -13,3 +13,4 @@ pub mod metrics;
 pub mod operator;
 pub mod paths;
 pub mod process;
+pub mod update;
