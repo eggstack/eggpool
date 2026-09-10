@@ -132,14 +132,14 @@ async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
 async fn checker_is_check_only_bounded_and_retains_latest_on_failure() {
     let artifact = b"unused".to_vec();
     let metadata =
-        r#"{"tag_name":"v0.7.5","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
+        r#"{"tag_name":"v0.8.1","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
     let (api, stop) = fake_release_server(metadata, artifact).await;
     let service = UpdateService::with_release_api(&api).expect("service");
     let checker = UpdateCheckerState::new(service);
     let info = timeout(Duration::from_secs(2), checker.check_once())
         .await
         .expect("bounded check");
-    assert_eq!(info.latest_version, "0.7.5");
+    assert_eq!(info.latest_version, "0.8.1");
     assert!(info.update_available);
     assert!(info.last_check_error.is_empty());
     let _ = stop.send(());
@@ -148,7 +148,7 @@ async fn checker_is_check_only_bounded_and_retains_latest_on_failure() {
 #[tokio::test]
 async fn update_checker_runs_once_on_the_shared_supervisor_and_shuts_down_cleanly() {
     let metadata =
-        r#"{"tag_name":"v0.7.5","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
+        r#"{"tag_name":"v0.8.1","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
     let (api, stop) = fake_release_server(metadata, b"unused".to_vec()).await;
     let checker = Arc::new(UpdateCheckerState::new(
         UpdateService::with_release_api(&api).expect("service"),

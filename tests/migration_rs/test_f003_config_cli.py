@@ -40,10 +40,17 @@ def test_version_and_migrate_command_are_implemented(tmp_path: Path) -> None:
             ["--config", str(config_path), "migrate"], environment=environment
         )
 
+    # K002 establishes the intentional release boundary: the Python oracle
+    # remains at its historical version while Cargo owns the Rust candidate.
     assert (python_version.exit_code, python_version.stdout, python_version.stderr) == (
         0,
-        rust_version.stdout,
-        rust_version.stderr,
+        "0.7.4\n",
+        "",
+    )
+    assert (rust_version.exit_code, rust_version.stdout, rust_version.stderr) == (
+        0,
+        "0.8.0\n",
+        "",
     )
     assert rust_version.exit_code == 0
     assert migrated.exit_code == 0

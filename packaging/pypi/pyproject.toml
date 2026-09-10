@@ -1,0 +1,46 @@
+[project]
+name = "eggpool"
+dynamic = ["version"]
+description = "A lightweight proxy that aggregates multiple LLM provider accounts behind an OpenAI Chat Completions-compatible endpoint"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "David Bowman", email = "dbowman91@proton.me" }]
+keywords = [
+    "llm",
+    "proxy",
+    "openai",
+    "anthropic",
+    "aggregation",
+    "router",
+    "multi-account",
+    "opencode",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Homepage = "https://github.com/eggstack/eggpool"
+Repository = "https://github.com/eggstack/eggpool"
+Issues = "https://github.com/eggstack/eggpool/issues"
+Documentation = "https://github.com/eggstack/eggpool/tree/main/docs"
+Changelog = "https://github.com/eggstack/eggpool/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["maturin==1.14.1"]
+build-backend = "maturin"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "../../rust/Cargo.toml"
+locked = true
+compatibility = "pypi"
+strip = false

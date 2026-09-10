@@ -108,10 +108,11 @@ def test_rust_release_requires_wheels_after_artifact_stage_activation() -> None:
         validate_catalog(value)
 
 
-def test_reserved_cutover_has_no_source_or_public_artifact() -> None:
+def test_candidate_cutover_has_no_source_or_public_artifact() -> None:
     value = catalog()
     authority = value["version_authority"]
-    assert authority["phase"] == "reserved"
+    assert authority["phase"] == "candidate"
     assert authority["cutover_source_commit"] is None
+    assert authority["rust_cargo_version"] == authority["cutover_version"]
     versions = {release["version"] for release in releases(value)}
     assert authority["cutover_version"] not in versions

@@ -1,10 +1,10 @@
 [package]
 name = "eggpool"
-version = "0.7.4"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
-description = "Side-by-side Rust migration scaffold for EggPool"
+description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 
 [features]
 default = []

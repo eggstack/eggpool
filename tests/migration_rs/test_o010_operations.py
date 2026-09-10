@@ -51,8 +51,15 @@ def test_version_is_an_exact_two_sided_read_only_observation() -> None:
     with isolated_environment() as environment:
         python_result = python.run(["version"], environment=environment)
         rust_result = rust.run(["version"], environment=environment)
+    # K002 intentionally separates the Rust candidate version from the
+    # historical Python oracle version.
+    assert (python_result.exit_code, python_result.stdout, python_result.stderr) == (
+        0,
+        "0.7.4\n",
+        "",
+    )
     assert (rust_result.exit_code, rust_result.stdout, rust_result.stderr) == (
-        python_result.exit_code,
-        python_result.stdout,
-        python_result.stderr,
+        0,
+        "0.8.0\n",
+        "",
     )

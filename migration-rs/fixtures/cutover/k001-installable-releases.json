@@ -1,9 +1,9 @@
 {
   "catalog_version": "k001.v1",
-  "status": "frozen-reservation; no production publication",
+  "status": "candidate wheel substrate; no production publication",
   "captured_at_utc": "2026-09-10T00:00:00Z",
   "package_name": "eggpool",
-  "artifact_stage": "not-active",
+  "artifact_stage": "active",
   "sources": {
     "github_tags": "https://api.github.com/repos/eggstack/eggpool/tags?per_page=100",
     "github_releases": "https://api.github.com/repos/eggstack/eggpool/releases?per_page=100",
@@ -22,12 +22,12 @@
     ]
   },
   "version_authority": {
-    "phase": "reserved",
+    "phase": "candidate",
     "cutover_version": "0.8.0",
     "cutover_tag": "v0.8.0",
     "cutover_source_commit": null,
     "historical_python_project_version": "0.7.4",
-    "rust_cargo_version": "0.7.4",
+    "rust_cargo_version": "0.8.0",
     "source_of_truth": "Cargo.toml owns the Rust release version after K002; the root pyproject.toml remains the historical Python oracle through M11."
   },
   "release_entry_contract": {

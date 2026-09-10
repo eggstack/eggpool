@@ -164,22 +164,30 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
     cutover = normalize_version(
         _require_string(authority.get("cutover_version"), "cutover_version")
     )
-    if authority.get("phase") != "reserved":
-        raise CatalogError("K001 must freeze a reserved, not published, cutover")
+    phase = authority.get("phase")
+    if phase not in {"reserved", "candidate"}:
+        raise CatalogError("K001 catalog phase must be reserved or candidate")
     for field in ("historical_python_project_version", "rust_cargo_version"):
         normalize_version(
             _require_string(authority.get(field), f"version_authority.{field}")
         )
-    if (
+    if phase == "reserved" and (
         authority["historical_python_project_version"]
         != authority["rust_cargo_version"]
     ):
         raise CatalogError("historical Python and current Rust versions disagree")
+    if phase == "candidate" and authority["rust_cargo_version"] != cutover:
+        raise CatalogError("candidate Cargo version must equal the cutover version")
     if authority.get("cutover_tag") != f"v{cutover}":
         raise CatalogError(
             "cutover tag must be the normalized version with a leading v"
         )
-    if authority.get("cutover_source_commit") is not None:
+    source_commit = authority.get("cutover_source_commit")
+    if source_commit is not None and (
+        not isinstance(source_commit, str) or not _COMMIT_RE.fullmatch(source_commit)
+    ):
+        raise CatalogError("cutover source commit is not immutable")
+    if phase == "reserved" and source_commit is not None:
         raise CatalogError("reserved cutover cannot claim a source commit")
 
     releases_value = catalog.get("releases")
@@ -357,7 +365,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = validate_catalog(catalog)
     print(
         f"K001 catalog valid: {summary['release_count']} releases; "
-        f"cutover {summary['cutover_version']} reserved; "
+        f"cutover {summary['cutover_version']} "
+        f"{catalog['version_authority']['phase']}; "
         f"{summary['rollback_count']} rollback-compatible"
     )
     return 0
