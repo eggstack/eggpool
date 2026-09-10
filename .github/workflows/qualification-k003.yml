@@ -77,11 +77,17 @@ jobs:
           scripts/create_cutover_manifest.py
           --artifact-dir dist/k003
           --output migration-rs/closure/cutover/k003-release-manifest.json
+          --qualification-result pass
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/validate_cutover_artifacts.py
           migration-rs/closure/cutover/k003-release-manifest.json
           --artifact-dir dist/k003
+      - name: prove unsupported Windows resolution fails
+        run: >-
+          bash -c '! uv pip install --system --dry-run --no-index
+          --find-links dist/k003 --python-platform x86_64-pc-windows-msvc
+          eggpool==0.8.0'
       - uses: actions/upload-artifact@v4
         with:
           name: k003-release-manifest

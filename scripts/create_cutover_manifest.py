@@ -82,7 +82,10 @@ def _raw_path(artifact_dir: Path, version: str, target_class: str) -> Path:
 
 
 def _wheel_record(
-    artifact_dir: Path, version: str, target_class: str
+    artifact_dir: Path,
+    version: str,
+    target_class: str,
+    qualification_result: str,
 ) -> dict[str, Any]:
     wheels = [
         path
@@ -145,15 +148,20 @@ def _wheel_record(
             if target_class == "macos-arm64"
             else None,
         },
-        "qualification": {"result": "pending"},
+        "qualification": {"result": qualification_result},
     }
 
 
-def create_manifest(artifact_dir: Path, output: Path) -> dict[str, Any]:
+def create_manifest(
+    artifact_dir: Path, output: Path, *, qualification_result: str = "pending"
+) -> dict[str, Any]:
     """Create and write the bounded manifest for all three supported targets."""
     version = candidate_version()
+    if qualification_result not in {"pending", "pass"}:
+        raise ManifestError("qualification result must be pending or pass")
     records = [
-        _wheel_record(artifact_dir, version, target) for target in sorted(TARGETS)
+        _wheel_record(artifact_dir, version, target, qualification_result)
+        for target in sorted(TARGETS)
     ]
     manifest: dict[str, Any] = {
         "manifest_version": "m11-release-manifest.v1",
@@ -164,7 +172,7 @@ def create_manifest(artifact_dir: Path, output: Path) -> dict[str, Any]:
         "requires_python": ">=3.11",
         "artifacts": records,
         "historical_backfill_candidates": [],
-        "qualification_result": "pending",
+        "qualification_result": qualification_result,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -177,9 +185,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--qualification-result", choices=("pending", "pass"), default="pending"
+    )
     args = parser.parse_args(argv)
     try:
-        manifest = create_manifest(args.artifact_dir.resolve(), args.output.resolve())
+        manifest = create_manifest(
+            args.artifact_dir.resolve(),
+            args.output.resolve(),
+            qualification_result=args.qualification_result,
+        )
     except (ManifestError, OSError, json.JSONDecodeError) as error:
         print(f"K003 manifest creation failed: {error}", file=sys.stderr)
         return 1
