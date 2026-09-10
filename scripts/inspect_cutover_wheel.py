@@ -27,7 +27,7 @@ MAX_WHEEL_BYTES: Final = 100_000_000
 VERSION_RE: Final = re.compile(r"\d+\.\d+\.\d+(?:(?:a|b|rc|dev|post)\d*)?\Z")
 WHEEL_NAME_RE: Final = re.compile(
     r"^eggpool-(?P<version>[^-]+)-(?P<python>[^-]+)-"
-    r"(?P<abi>[^-]+)-(?P<platform>[^.]+)\.whl\Z"
+    r"(?P<abi>[^-]+)-(?P<platform>[^.]+(?:\.[^.]+)*)\.whl\Z"
 )
 TARGET_PLATFORMS: Final = {
     "linux-x86_64": frozenset({"manylinux2014_x86_64", "manylinux_2_17_x86_64"}),
@@ -132,10 +132,10 @@ def inspect_wheel(
         raise WheelInspectionError("wheel filename is not a normalized eggpool wheel")
     if match.group("version") != expected_version:
         raise WheelInspectionError("wheel filename version disagrees with candidate")
-    platform_tag = match.group("platform")
-    if platform_tag not in TARGET_PLATFORMS[target_class]:
+    platform_tags = tuple(match.group("platform").split("."))
+    if not set(platform_tags) <= TARGET_PLATFORMS[target_class]:
         raise WheelInspectionError("wheel platform tag disagrees with target class")
-    if platform_tag == "any":
+    if "any" in platform_tags:
         raise WheelInspectionError("Rust cutover wheel must not be universal")
 
     try:
@@ -202,7 +202,9 @@ def inspect_wheel(
             if _metadata_value(wheel_metadata, "Root-Is-Purelib").lower() != "false":
                 raise WheelInspectionError("wheel is marked as pure Python")
             tags = tuple(wheel_metadata.get_all("Tag", []))
-            if not tags or not any(platform_tag in tag for tag in tags):
+            if not tags or not set(platform_tags) <= {
+                tag.rsplit("-", 1)[-1] for tag in tags
+            }:
                 raise WheelInspectionError(
                     "WHEEL metadata has no matching platform tag"
                 )

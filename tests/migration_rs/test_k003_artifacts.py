@@ -36,7 +36,10 @@ def _native(machine: int, kind: str) -> bytes:
 def _make_wheel(directory: Path, target_class: str) -> Path:
     platform_tag, machine = TARGETS[target_class]
     kind = "macho" if target_class == "macos-arm64" else "elf"
-    wheel = directory / f"eggpool-{VERSION}-py3-none-{platform_tag}.whl"
+    platform_tags = [platform_tag]
+    if target_class.startswith("linux-"):
+        platform_tags.append(platform_tag.replace("manylinux_2_17", "manylinux2014"))
+    wheel = directory / (f"eggpool-{VERSION}-py3-none-{'.'.join(platform_tags)}.whl")
     dist_info = f"eggpool-{VERSION}.dist-info"
     executable = f"eggpool-{VERSION}.data/scripts/eggpool"
     members = {
@@ -47,7 +50,8 @@ def _make_wheel(directory: Path, target_class: str) -> Path:
         ),
         f"{dist_info}/WHEEL": (
             b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\n"
-            + f"Tag: py3-none-{platform_tag}\n\n".encode()
+            + "".join(f"Tag: py3-none-{tag}\n" for tag in platform_tags).encode()
+            + b"\n"
         ),
         f"{dist_info}/licenses/LICENSE": b"MIT License\n",
         executable: _native(machine, kind),
