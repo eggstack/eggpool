@@ -1,6 +1,6 @@
 # M11 Rust Cutover Implementation Plans
 
-Status: active; K001 closed; K002 dependency-ready
+Status: active; K001-K002 closed; K003 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -11,8 +11,8 @@ These plans make the qualified Rust implementation the canonical public runtime 
 ## Sequence
 
 1. [K001 — Cutover, package, and installable-version catalog contract freeze](001-cutover-package-and-version-catalog-contract-freeze.md) — **accepted/closed**.
-2. [K002 — Rust PyPI binary-wheel packaging substrate](002-rust-pypi-binary-wheel-packaging-substrate.md) — **ready for handoff**.
-3. [K003 — Supported wheel and raw release artifact matrix](003-supported-wheel-and-raw-artifact-matrix.md) — queued behind K002.
+2. [K002 — Rust PyPI binary-wheel packaging substrate](002-rust-pypi-binary-wheel-packaging-substrate.md) — **accepted/closed**.
+3. [K003 — Supported wheel and raw release artifact matrix](003-supported-wheel-and-raw-artifact-matrix.md) — **ready for handoff**.
 4. [K004 — Install provenance and package-manager transition engine](004-install-provenance-and-package-manager-transition-engine.md) — queued behind K003.
 5. [K005 — Cross-era exact version transitions and rollback](005-cross-era-exact-version-transitions-and-rollback.md) — queued behind K004.
 6. [K006 — Quick installer and existing-install adoption cutover](006-quick-installer-and-existing-install-adoption-cutover.md) — queued behind K005.
@@ -23,7 +23,7 @@ These plans make the qualified Rust implementation the canonical public runtime 
 11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — queued behind K010 and explicit production publish authority.
 12. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — queued behind K011.
 
-Only `migration-rs/registry.md` authorizes implementation. K002 is now the sole dependency-ready plan.
+Only `migration-rs/registry.md` authorizes implementation. K003 is now the sole dependency-ready plan.
 
 ## Hard boundaries
 

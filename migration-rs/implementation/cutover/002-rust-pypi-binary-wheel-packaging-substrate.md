@@ -1,6 +1,6 @@
 # K002 — Rust PyPI Binary-Wheel Packaging Substrate
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-10
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
