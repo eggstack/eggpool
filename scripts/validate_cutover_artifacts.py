@@ -52,7 +52,7 @@ def _artifact_path(artifact_dir: Path, filename: str) -> Path:
     return matches[0]
 
 
-def _linux_evidence(binary: Path) -> dict[str, Any]:
+def linux_portability_evidence(binary: Path) -> dict[str, Any]:
     readelf = subprocess.run(
         ["readelf", "-V", str(binary)], capture_output=True, text=True, check=False
     )
@@ -97,7 +97,7 @@ def _linux_evidence(binary: Path) -> dict[str, Any]:
     }
 
 
-def _macos_evidence(binary: Path) -> dict[str, Any]:
+def macos_portability_evidence(binary: Path) -> dict[str, Any]:
     result = subprocess.run(
         ["otool", "-l", str(binary)], capture_output=True, text=True, check=False
     )
@@ -192,9 +192,9 @@ def validate_manifest(
             )
         if portability:
             evidence = (
-                _linux_evidence(raw_path)
+                linux_portability_evidence(raw_path)
                 if target_class.startswith("linux-")
-                else _macos_evidence(raw_path)
+                else macos_portability_evidence(raw_path)
             )
             record["portability"] = evidence
     if seen != set(TARGETS):

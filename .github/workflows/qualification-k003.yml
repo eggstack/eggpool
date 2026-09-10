@@ -52,6 +52,12 @@ jobs:
           dist/k003/${{ matrix.target_class }}/eggpool-0.8.0-*.whl
           --target-class ${{ matrix.target_class }}
           --version 0.8.0
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/validate_cutover_portability.py
+          dist/k003/${{ matrix.target_class }}/eggpool-0.8.0-${{ startsWith(matrix.target_class, 'macos-') && 'macos-aarch64' || matrix.target_class }}
+          --target-class ${{ matrix.target_class }}
+          --version 0.8.0
       - uses: actions/upload-artifact@v4
         with:
           name: k003-${{ matrix.target_class }}
