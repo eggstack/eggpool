@@ -1,0 +1,88 @@
+name: K003 release artifact qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+
+jobs:
+  build-and-qualify:
+    name: ${{ matrix.target_class }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_class: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target_class: linux-aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target_class: macos-arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: mlugg/setup-zig@v1
+        if: startsWith(matrix.target_class, 'linux-')
+        with:
+          version: 0.13.0
+      - run: uv sync --frozen --extra ci
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/build_cutover_artifacts.py
+          --target-class ${{ matrix.target_class }}
+          --out dist/k003/${{ matrix.target_class }}
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/qualify_cutover_wheel.py
+          dist/k003/${{ matrix.target_class }}/eggpool-0.8.0-*.whl
+          --target-class ${{ matrix.target_class }}
+          --version 0.8.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k003-${{ matrix.target_class }}
+          path: dist/k003/${{ matrix.target_class }}
+
+  manifest:
+    name: assemble release manifest
+    needs: build-and-qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: k003-*
+          path: dist/k003
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/create_cutover_manifest.py
+          --artifact-dir dist/k003
+          --output migration-rs/closure/cutover/k003-release-manifest.json
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/validate_cutover_artifacts.py
+          migration-rs/closure/cutover/k003-release-manifest.json
+          --artifact-dir dist/k003
+      - uses: actions/upload-artifact@v4
+        with:
+          name: k003-release-manifest
+          path: migration-rs/closure/cutover/k003-release-manifest.json
