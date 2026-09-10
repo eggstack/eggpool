@@ -64,7 +64,9 @@ INSERT INTO reservations
   (id, request_id, account_id, model_id, reserved_microdollars, created_at,
    released_at, status, estimated_tokens, expires_at, release_reason)
 VALUES
-  (1, 4, 1, 'q012-chat-model', 400000, datetime('now', '-5 hours'), NULL, 'active', 6000, datetime('now', '+1 hour'), NULL);
+  (1, 4, 1, 'q012-chat-model', 400000, datetime('now', '-5 hours'),
+   datetime('now', '-4 hours', '-59 minutes'), 'released', 6000,
+   datetime('now', '-4 hours'), 'fixture_finalized');
 
 INSERT INTO request_attempts
   (id, request_id, attempt_number, account_id, started_at, completed_at,
