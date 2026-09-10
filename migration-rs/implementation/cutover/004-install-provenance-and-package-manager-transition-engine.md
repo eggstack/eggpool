@@ -1,6 +1,10 @@
 # K004 — Install Provenance and Package-Manager Transition Engine
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-10
+
+Implementation commit: `b33658be47d337c2c8a875b41d50ff436eb0f10b`
+
+Closure record: [accepted closure](../../closure/cutover/004-status.md)
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

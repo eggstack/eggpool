@@ -1,6 +1,6 @@
 # K005 — Cross-Era Exact Version Transitions and Rollback
 
-Status: queued; blocked on accepted K004
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
