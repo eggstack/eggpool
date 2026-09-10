@@ -28,22 +28,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **closed after Q011 corrective pass** | **Q010 accepted; M11 planning eligible** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **corrective pass active after post-Q011 dashboard audit** | **Q012 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | accepted Q001 | **complete; see closure** |
-| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | accepted Q002 | **complete; see closure** |
-| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | accepted Q004 | **accepted; see closure** |
+| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | invariant/corrective | accepted Q001-Q003/Q005-Q011 evidence; historical Q004/Q010 | **ready for handoff** |
 
-| — | — | — | — | **No M10 plan is currently dependency-ready; Q007-Q011 are closed/accepted below** |
-
-No M10 implementation plan is currently dependency-ready. Q007's original
-blocked attempt is retained as history, Q011 is accepted as its corrective
-closure, and Q008-Q010 were re-accepted in direct dependency order. M10 is
-closed; M11 is eligible only for its separate planning review.
+Q012 is the sole dependency-ready implementation plan. M11 is re-blocked until accepted Q012 closure re-closes M10. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -75,13 +68,13 @@ closed; M11 is eligible only for its separate planning review.
 | Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | invariant/infrastructure | `4b5093a30a56f78c14aef3ffef8c47863fc74070` | [closed](closure/qualification/001-status.md) |
 | Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | invariant/polish | `de50b7a27aa7829a41baa5c6a8ff5e08248dd401` | [accepted](closure/qualification/002-status.md) |
 | Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | `482856a898c40979c70106bd29958fcc454115ca` | [accepted](closure/qualification/003-status.md) |
-| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | invariant/polish | `73fad30f4eb79bcc75c38bd33a72c5b993f970cc` | [accepted](closure/qualification/004-status.md) |
+| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | invariant/polish | `73fad30f4eb79bcc75c38bd33a72c5b993f970cc` | [historical accepted closure; superseded by Q012 for dashboard-state/content findings](closure/qualification/004-status.md) |
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | `76d329f3` | [accepted](closure/qualification/005-status.md) |
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | invariant/capability | `c090ca0d` | [accepted](closure/qualification/006-status.md) |
 | Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | invariant/polish | `a0b2e75`, `c3e045c`, corrective `daae984` | [historical blocked + corrective accepted](closure/qualification/011-status.md) |
 | Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | invariant/polish | `ed82ed29`, `64ff9b4d` | [accepted by addendum](closure/qualification/008-status.md) |
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | invariant/polish | `0989d6e4`, corrective `daae984` | [accepted by addendum](closure/qualification/009-status.md) |
-| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | invariant/polish | `4d28e290`, corrective `daae984` | [accepted by addendum](closure/qualification/010-status.md) |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | invariant/polish | `4d28e290`, corrective `daae984` | [historical aggregate closure; superseded for current M10 closure authority by Q012](closure/qualification/010-status.md) |
 | Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | `daae984` | [accepted](closure/qualification/011-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
@@ -105,7 +98,7 @@ closed; M11 is eligible only for its separate planning review.
 | F006 | [Side-by-side safety and serve-contract closure](implementation/foundation/006-side-by-side-safety-and-serve-contract-closure.md) | invariant | `df902b5` | [closed](closure/foundation/006-status.md) |
 | T001 | [Provider transport contract and fixture freeze](implementation/provider-transport/001-contract-and-fixture-freeze.md) | invariant/infrastructure | `50d7ff4` | [closed](closure/provider-transport/001-status.md) |
 | T002 | [Direct Hyper/Rustls provider HTTP core](implementation/provider-transport/002-direct-hyper-rustls-core.md) | infrastructure | `c9f448a` + `2696e52` | [closed](closure/provider-transport/002-status.md) |
-| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-eggress-connector-and-proxy-parity.md) | infrastructure/capability | `5b34d8b` | [historical closure](closure/provider-transport/003-status.md) |
+| T003 | [Eggress connector and proxy parity](implementation/provider-transport/003-egress-connector-and-proxy-parity.md) | infrastructure/capability | `5b34d8b` | [historical closure](closure/provider-transport/003-status.md) |
 | T004 | [Provider/account client pool and lifecycle boundary](implementation/provider-transport/004-provider-account-client-pool.md) | capability/invariant | `71ef03d` | [closed](closure/provider-transport/004-status.md) |
 | T005 | [Differential qualification and initial M4 closure](implementation/provider-transport/005-differential-qualification-and-closure.md) | invariant | `c89e645` | [historical closure](closure/provider-transport/005-status.md) |
 | T006 | [Extended proxy runtime interoperability closure](implementation/provider-transport/006-extended-proxy-runtime-qualification.md) | invariant/corrective | `4b3a95a` | [closed](closure/provider-transport/006-status.md) |
@@ -147,46 +140,39 @@ M7 is closed after C011. C001-C002, C007-C011 and C012-C014 are closed; C003-C00
 
 M8 is closed after accepted R013. R001-R010 remain closed; R011/R012 remain historical closure evidence after post-close audits. R013 closed the final wire-policy acceptance/validation/rollback qualification boundary.
 
-M8 owns one process task supervisor. R008 intentionally left exactly `metrics_flush`, `update_checker`, and `automatic_backup` as explicit deferred M9 business capabilities; O006 registered automatic backup, O007 registered metrics flush, and O008 registered update checking.
-
 ## M9 closure state
 
-M9 is closed after accepted O010. O001-O010 are closed. The complete 63-path Rust CLI/operations surface and all six process task callbacks are implemented and qualified. M10 owns the broad target/live/dashboard/SBC/stability evidence that O010 intentionally excluded.
+M9 is closed after accepted O010. O001-O010 are closed. The complete Rust CLI/operations surface and all process task callbacks are implemented and qualified.
 
-## M10 sequence and handoff state
+## M10 sequence and corrective state
 
-M10 is evidence-focused and owns migration-wide deterministic qualification, DB rollback/backup compatibility, dashboard visual review, supported-target portability, disposable rootful Linux acceptance, bounded live-provider smoke, ARM64 SBC characterization, and sustained resource/failure stability. It does not own M11 public cutover.
+M10 owns migration-wide deterministic qualification, DB rollback/backup compatibility, dashboard visual/content review, supported-target portability, disposable rootful Linux acceptance, bounded live-provider smoke, ARM64 SBC characterization, and sustained resource/failure stability. It does not own M11 public cutover.
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | **accepted; see closure** |
-| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | **complete; see closure** |
-| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | **complete; see closure** |
-| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | **accepted; see closure** |
-| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | **accepted; see closure** |
-| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | **accepted; see closure** |
-| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **original attempt blocked; corrective closure accepted by Q011** |
-| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | **accepted by append-only re-acceptance** |
-| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | **accepted by append-only re-acceptance** |
-| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | **accepted by append-only re-acceptance; M10 closed** |
+| Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | accepted |
+| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | accepted |
+| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | accepted |
+| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | historical accepted closure; superseded for dashboard-state/content findings by Q012 |
+| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | accepted |
+| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | accepted |
+| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | historical blocked attempt; corrected by accepted Q011 |
+| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | accepted by append-only re-acceptance |
+| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | accepted by append-only re-acceptance |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | historical aggregate closure; current M10 closure superseded by Q012 audit |
+| Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | accepted |
+| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | **ready; sole dependency-ready M10 plan** |
 
-### M10 boundary decisions
+### Q012 audit findings
 
-- Python remains the oracle through M10; Q002 composes existing F002/M4-M9 differential evidence and the accepted Q001 manifest; Q003 adds the bidirectional database/backup boundary.
-- Normal CI stays small unless Q001/Q002 justify a narrow deterministic addition.
-- Rootful tests run only on disposable Linux systems.
-- Live-provider tests are explicit opt-in, low-cost, and secret-free; no automatic paid mirroring.
-- At least one real Linux aarch64 SBC is mandatory for Q008/Q010 closure; Q008 has a passing physical run, but cannot be accepted until its hard Q007 dependency is accepted.
-- Resource metrics are characterization unless they reveal correctness issues such as leaks, unbounded growth, crashes, deadlocks, replay, or clearly impractical SBC operation.
-- Dashboard qualification does not redesign the dashboard.
-- M10 may build candidate binaries but does not publish or make them canonical; M11 owns public release/install/update cutover.
+Post-Q011 review found that Q004's runner exercised fresh empty databases while mandatory populated/multi-provider states were only described as reserved fixture shapes; its DOM comparator did not compare meaningful page text/table rows/card values; and its 224 screenshot entries were metadata rather than actual captures, with only three manually reviewed PNGs recorded. Those gaps conflict with Q004 and the frozen Q001 `q001.dashboard.states` contract. The registry also retained completed Q002/Q003/Q005 rows in its dependency-ready table; this corrective planning pass removes that ambiguity.
+
+Q012 corrects and requalifies only this dashboard/evidence boundary, plus any narrow Rust dashboard parity defect the stronger corpus exposes. Accepted Q005-Q009/Q011 evidence remains valid subject to a source-freshness review after Q012 implementation.
 
 ## Future work and block state
 
-M11 Rust cutover is **not implemented** and requires its own separate planning
-review after accepted Q010. M12 remains sequenced behind M11. No M11/M12 plan
-is promoted automatically by M10 planning.
+M11 Rust cutover is **blocked** on accepted Q012 M10 re-closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 implementation plan is promoted automatically.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 and the Q007 corrective chain are accepted; Q007's original blocked attempt remains historical, Q008-Q010 were re-accepted in dependency order, and M10 is closed. M11 is eligible for a separate planning review only.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is corrective-active: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 are historical for the dashboard finding, and Q012 is ready. Only accepted Q012 closure may re-close M10 and restore M11 planning eligibility.

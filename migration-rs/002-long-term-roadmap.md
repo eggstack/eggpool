@@ -181,7 +181,7 @@ O001 operational CLI contract + deterministic oracle freeze
  -> O010 differential qualification + M9 closure
 ```
 
-O010 is accepted and M9 is closed with the complete 63-command surface, background callbacks, and operational fault matrices qualified. M9 still deliberately leaves broad platform/SBC/live/visual qualification and public Rust-default distribution to M10/M11.
+O010 is accepted and M9 is closed with the complete command surface, background callbacks, and operational fault matrices qualified. M9 still deliberately leaves broad platform/SBC/live/visual qualification and public Rust-default distribution to M10/M11.
 
 Exit condition satisfied after accepted O010 closure.
 
@@ -191,32 +191,36 @@ Primary class: invariant/polish
 
 Subsystem roadmap: [Full Qualification, Portability, and SBC Characterization](subsystems/qualification-roadmap.md).
 
-M10 is the final evidence milestone before public Rust cutover planning. It does not create another major runtime subsystem. It verifies that the accumulated M4-M9 compatibility claims hold together across the migration-wide deterministic contract, DB rollback/backup/recovery, dashboard rendering, supported targets, real Linux deployment, bounded live-provider interoperability, representative ARM64 SBC operation, and sustained failure/resource stability.
+M10 is the final evidence milestone before public Rust cutover planning. It verifies the accumulated M4-M9 compatibility claims across deterministic migration-wide behavior, DB rollback/backup/recovery, dashboard rendering, supported targets, real Linux deployment, bounded live-provider interoperability, representative ARM64 SBC operation, and sustained failure/resource stability.
 
-Planned sequence:
+Sequence and corrective history:
 
 ```text
 Q001 qualification contract + target/evidence freeze
  -> Q002 migration-wide deterministic differential runner
  -> Q003 DB upgrade/rollback/backup/recovery compatibility
- -> Q004 dashboard DOM/static/visual parity
+ -> Q004 dashboard DOM/static/visual parity (historical accepted closure)
  -> Q005 supported-target build/non-root runtime portability
  -> Q006 disposable rootful Linux operational acceptance
- -> Q007 bounded live-provider interoperability smoke
+ -> Q007 bounded live-provider attempt (historical blocked)
  -> Q008 ARM64 SBC functional/resource characterization
  -> Q009 sustained failure/reload/stream/resource stability
- -> Q010 aggregate M10 closure + M11 readiness
+ -> Q010 aggregate closure/re-acceptance (historical current closure before audit)
+ -> Q011 live-provider corrective closure and dependency-order re-acceptance
+ -> Q012 dashboard state/semantic content/actual visual requalification
 ```
 
-Only `registry.md` authorizes handoff. At initial M10 registration Q001 is the sole dependency-ready plan.
+Accepted Q011 successfully closed the live-provider blocker with a bounded real-provider matrix, and Q008-Q010 were re-accepted in dependency order. A later audit found that Q004 did not actually satisfy the frozen mandatory dashboard-state contract: populated/multi-provider states were only reserved in metadata, semantic data rows/card values were not compared, and the screenshot matrix primarily contained planned filenames rather than actual captures. Q010 inherited that gap.
 
-M10 keeps normal CI intentionally lean. Expensive/rootful/live/physical qualification is explicit/manual evidence rather than an always-on OS × architecture × provider matrix. Live traffic is opt-in and low-cost; physical ARM64 evidence is mandatory because EggPool explicitly targets SBC deployment.
+M10 is therefore **corrective-active**. Q004 and Q010 remain historical accepted closure evidence for what they actually proved; Q012 is the sole dependency-ready corrective plan and the current M10 closure authority.
 
-M10 records performance/resource facts without inventing unsupported SLAs. Leaks, crashes, deadlocks, replay, data loss, unbounded state, or clearly impractical lightweight/SBC behavior are blockers; ordinary percentage differences are characterization unless an earlier requirement defines a threshold.
+Q012 must execute representative empty, populated, unauthorized and error/missing dashboard states against Python and Rust; compare meaningful page text, metric/card values, table headers/ordered rows, controls, escaping and stable hooks; add deliberate data-content mismatch regressions; capture actual bounded Python/Rust screenshots covering every major page at least once across representative desktop/mobile/theme assignments; and rerun the aggregate Q001/Q002/Q010-equivalent gates. Accepted Q005-Q009/Q011 environment evidence must be rerun only when Q012 source changes invalidate freshness, with the decision recorded explicitly.
+
+M10 keeps normal CI intentionally lean. Expensive/rootful/live/physical/browser qualification remains explicit/manual evidence rather than an always-on matrix. Performance/resource facts remain characterization unless they expose correctness problems.
 
 M10 does not publish canonical Rust release assets, flip `scripts/install.sh`/README quick start, remove Python, or make the Rust updater public authority. Those remain M11/M12.
 
-Exit condition: every mandatory Q001 qualification cell is passed or explicitly authorized non-applicable; deterministic migration-wide parity is green; DB rollback/backup/recovery and dashboard visual/DOM/static review are accepted; supported-target and disposable rootful Linux evidence is accepted; required bounded live-provider cells pass; at least one real Linux ARM64 SBC has functional/resource evidence; sustained local failure/reload/resource qualification converges; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied only by accepted Q010 closure.
+Exit condition: every mandatory Q001 cell is actually proven, including real populated/error dashboard semantics and actual visual-review artifacts; deterministic migration-wide parity remains green; DB rollback/backup/recovery, supported targets, disposable rootful Linux, bounded live-provider, physical ARM64 SBC, and sustained resource/failure evidence remain accepted/fresh; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied only by accepted Q012 corrective closure.
 
 ## M11 — Rust cutover
 
@@ -224,7 +228,7 @@ Primary class: capability
 
 Make Rust the canonical install/release/runtime implementation while preserving filesystem/config/database locations and documented rollback to the final Python reference where schema compatibility permits.
 
-M11 is blocked on accepted Q010 M10 closure and its own separate planning review. No M11 implementation plan is promoted automatically by M10 planning.
+M11 is blocked on accepted Q012 M10 re-closure and its own separate planning review. No M11 implementation plan is promoted automatically by the Q012 planning pass.
 
 Exit condition: new installs/upgrades use Rust by default without Python runtime dependency.
 
