@@ -212,25 +212,46 @@ Q001 qualification contract + target/evidence freeze
 
 Accepted Q011 successfully closed the live-provider blocker with a bounded real-provider matrix, and Q008-Q010 were re-accepted in dependency order. A later audit found that Q004 did not actually satisfy the frozen mandatory dashboard-state contract: populated/multi-provider states were only reserved in metadata, semantic data rows/card values were not compared, and the screenshot matrix primarily contained planned filenames rather than actual captures. Q010 inherited that gap.
 
-M10 is therefore **closed after the accepted Q012 corrective pass**. Q004 and Q010 remain historical accepted closure evidence for what they actually proved; Q012 is the current M10 closure authority.
-
-Q012 must execute representative empty, populated, unauthorized and error/missing dashboard states against Python and Rust; compare meaningful page text, metric/card values, table headers/ordered rows, controls, escaping and stable hooks; add deliberate data-content mismatch regressions; capture actual bounded Python/Rust screenshots covering every major page at least once across representative desktop/mobile/theme assignments; and rerun the aggregate Q001/Q002/Q010-equivalent gates. Accepted Q005-Q009/Q011 environment evidence must be rerun only when Q012 source changes invalidate freshness, with the decision recorded explicitly.
+M10 is closed after the accepted Q012 corrective pass. Q004 and Q010 remain historical accepted closure evidence for what they actually proved; Q012 is the current M10 closure authority.
 
 M10 keeps normal CI intentionally lean. Expensive/rootful/live/physical/browser qualification remains explicit/manual evidence rather than an always-on matrix. Performance/resource facts remain characterization unless they expose correctness problems.
 
-M10 does not publish canonical Rust release assets, flip `scripts/install.sh`/README quick start, remove Python, or make the Rust updater public authority. Those remain M11/M12.
-
-Exit condition: every mandatory Q001 cell is actually proven, including real populated/error dashboard semantics and actual visual-review artifacts; deterministic migration-wide parity remains green; DB rollback/backup/recovery, supported targets, disposable rootful Linux, bounded live-provider, physical ARM64 SBC, and sustained resource/failure evidence remain accepted/fresh; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied by the accepted Q012 corrective closure recorded in `closure/qualification/012-status.md`.
+Exit condition satisfied by accepted Q012 closure.
 
 ## M11 — Rust cutover
 
-Primary class: capability
+Primary class: capability/invariant
 
-Make Rust the canonical install/release/runtime implementation while preserving filesystem/config/database locations and documented rollback to the final Python reference where schema compatibility permits.
+Subsystem roadmap: [Rust Cutover, Packaging, Release, and Cross-Era Versioning](subsystems/cutover-roadmap.md).
 
-M11 is eligible for its own separate planning review after accepted Q012 M10 re-closure. No M11 implementation plan is promoted automatically by the Q012 closure.
+M11 makes the qualified Rust implementation the canonical public EggPool runtime without abandoning the existing PyPI package identity or the Python-era rollback window. ADR-0004 freezes the packaging authority: `eggpool` remains the one PyPI project; Rust-backed releases are platform-specific Maturin `bin` wheels that install the native executable; package-manager-owned installs update/downgrade through uv/pipx/pip rather than direct binary overwrite; standalone Rust installs retain O008's verified GitHub raw updater; Python source/oracle remains until M12.
 
-Exit condition: new installs/upgrades use Rust by default without Python runtime dependency.
+Planned sequence:
+
+```text
+K001 cutover/package/version-catalog contract freeze
+ -> K002 Rust PyPI binary-wheel packaging substrate
+ -> K003 supported wheel + raw artifact matrix/release manifest
+ -> K004 install provenance + package-manager transition engine
+ -> K005 cross-era exact upgrade/downgrade + rollback
+ -> K006 quick installer + existing-install adoption cutover
+ -> K007 deployed-service cross-era transition/recovery
+ -> K008 Trusted Publishing/attestations/release supply chain
+ -> K009 local wheelhouse/TestPyPI staged release rehearsal
+ -> K010 public metadata/docs/release-candidate freeze
+ -> K011 first Rust-backed public release + immediate rollback drill
+ -> K012 aggregate M11 qualification/closure
+```
+
+Only `registry.md` authorizes handoff. K001 is the sole dependency-ready M11 plan.
+
+M11 preserves the PyPI user experience. Existing `pip install eggpool`, `pipx install eggpool`, and `uv tool install eggpool` workflows remain viable; the installed payload becomes the native Rust binary on qualified targets. The Rust wheel retains `Requires-Python >=3.11` during M11 as a package-manager rollback compatibility floor even though normal EggPool runtime does not invoke Python. M12 may reconsider that metadata after Python retirement.
+
+M11 must resolve the historical distribution gap explicitly: at planning time public PyPI ends at 0.5.6 while GitHub/repository versions reach 0.7.4. K001 freezes an installable-release catalog and decides which missing official Python versions can be reproducibly backfilled as immutable PyPI wheels, which need a pinned immutable fallback, and which cannot truthfully be advertised as exact switch targets. M11's guarantee is every version in that frozen installable catalog, not every tag irrespective of artifact availability.
+
+Release targets inherit M10: Linux x86_64, Linux aarch64, and macOS arm64 development/runtime. Rust-backed M11 PyPI releases are wheel-only; no Rust sdist, Windows wheel, or other-unqualified fallback is published. Release builds use pinned Maturin/tooling, exact Cargo lock state, explicit manylinux policy, one source revision, hashes/manifests, and PyPI Trusted Publishing/OIDC. Production publication occurs only in K011 after staged rehearsal.
+
+Exit condition: the first Rust-backed stable PyPI wheel set and matching GitHub raw assets are public on every required supported target; fresh package installs execute Rust; existing Python installs upgrade in place without config/DB relocation; exact package-managed Python -> Rust -> Python -> Rust transitions are demonstrated over the documented rollback window; deployed service state survives those transitions; unsupported targets fail cleanly with no source fallback; public installer/docs are Rust-default; release integrity/provenance is accepted; no unresolved high/medium cutover, package-ownership, update, rollback, security or data-loss finding remains. Satisfied only by accepted K012 closure.
 
 ## M12 — Python retirement
 
@@ -238,13 +259,15 @@ Primary class: polish/invariant
 
 After stabilization, remove Python production/runtime packaging and migration-only dual-run machinery while preserving reference history and useful differential fixtures.
 
+M12 is blocked on accepted K012 M11 closure and requires its own separate planning review. M11 does not auto-promote Python removal.
+
 Exit condition: production repository/release path is pure Rust with traceable parity evidence.
 
 ## Cross-cutting constraints
 
 At every milestone:
 
-- Python remains usable until cutover;
+- Python remains usable until cutover and remains as reference through M11;
 - no dashboard redesign is folded into migration work;
 - no database reset or Rust-only schema fork for convenience;
 - no broad CI matrix without demonstrated need;
