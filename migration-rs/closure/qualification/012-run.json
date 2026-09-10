@@ -1,0 +1,964 @@
+{
+  "candidate_sha": "b41a9ae07b086154a3efbcdeae663e991f022ce8",
+  "dom_comparisons": [
+    {
+      "active_nav": "/",
+      "cards": 4,
+      "route": "/",
+      "state": "empty",
+      "status": "pass",
+      "tables": 1,
+      "title": "Overview"
+    },
+    {
+      "active_nav": "/accounts",
+      "cards": 0,
+      "route": "/accounts",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Accounts"
+    },
+    {
+      "active_nav": "/models",
+      "cards": 0,
+      "route": "/models",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Models"
+    },
+    {
+      "active_nav": "/models",
+      "cards": 0,
+      "route": "/models/example-model",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Model: example-model"
+    },
+    {
+      "active_nav": "/latency",
+      "cards": 0,
+      "route": "/latency",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Latency"
+    },
+    {
+      "active_nav": "/events",
+      "cards": 0,
+      "route": "/events",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Events"
+    },
+    {
+      "active_nav": "/timeseries",
+      "cards": 0,
+      "route": "/timeseries",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Timeseries"
+    },
+    {
+      "active_nav": "/bandwidth",
+      "cards": 2,
+      "route": "/bandwidth",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Bandwidth"
+    },
+    {
+      "active_nav": "/pings",
+      "cards": 0,
+      "route": "/pings",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Provider Pings"
+    },
+    {
+      "active_nav": "/reliability",
+      "cards": 4,
+      "route": "/reliability",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Reliability"
+    },
+    {
+      "active_nav": "/routing",
+      "cards": 3,
+      "route": "/routing",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Routing"
+    },
+    {
+      "active_nav": "/traces",
+      "cards": 0,
+      "route": "/traces",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Traces"
+    },
+    {
+      "active_nav": "/runtime",
+      "cards": 3,
+      "route": "/runtime",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Runtime"
+    },
+    {
+      "active_nav": "/cache",
+      "cards": 21,
+      "route": "/cache",
+      "state": "empty",
+      "status": "pass",
+      "tables": 0,
+      "title": "Cache"
+    },
+    {
+      "active_nav": "/",
+      "cards": 4,
+      "route": "/",
+      "state": "populated",
+      "status": "pass",
+      "tables": 2,
+      "title": "Overview"
+    },
+    {
+      "active_nav": "/accounts",
+      "cards": 0,
+      "route": "/accounts",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Accounts"
+    },
+    {
+      "active_nav": "/models",
+      "cards": 0,
+      "route": "/models",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Models"
+    },
+    {
+      "active_nav": "/models",
+      "cards": 0,
+      "route": "/models/example-model",
+      "state": "populated",
+      "status": "pass",
+      "tables": 0,
+      "title": "Model: example-model"
+    },
+    {
+      "active_nav": "/latency",
+      "cards": 1,
+      "route": "/latency",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Latency"
+    },
+    {
+      "active_nav": "/events",
+      "cards": 0,
+      "route": "/events",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Events"
+    },
+    {
+      "active_nav": "/timeseries",
+      "cards": 0,
+      "route": "/timeseries",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Timeseries"
+    },
+    {
+      "active_nav": "/bandwidth",
+      "cards": 2,
+      "route": "/bandwidth",
+      "state": "populated",
+      "status": "pass",
+      "tables": 0,
+      "title": "Bandwidth"
+    },
+    {
+      "active_nav": "/pings",
+      "cards": 2,
+      "route": "/pings",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Provider Pings"
+    },
+    {
+      "active_nav": "/reliability",
+      "cards": 4,
+      "route": "/reliability",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Reliability"
+    },
+    {
+      "active_nav": "/routing",
+      "cards": 3,
+      "route": "/routing",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Routing"
+    },
+    {
+      "active_nav": "/traces",
+      "cards": 0,
+      "route": "/traces",
+      "state": "populated",
+      "status": "pass",
+      "tables": 1,
+      "title": "Traces"
+    },
+    {
+      "active_nav": "/runtime",
+      "cards": 3,
+      "route": "/runtime",
+      "state": "populated",
+      "status": "pass",
+      "tables": 0,
+      "title": "Runtime"
+    },
+    {
+      "active_nav": "/cache",
+      "cards": 21,
+      "route": "/cache",
+      "state": "populated",
+      "status": "pass",
+      "tables": 0,
+      "title": "Cache"
+    },
+    {
+      "inventory": 54,
+      "route": "static-assets",
+      "status": "pass"
+    }
+  ],
+  "duration_ms": 25623,
+  "environment": {
+    "browser": "isolated headless Chrome via Chrome DevTools Protocol",
+    "os": "darwin",
+    "python": "3.11.9"
+  },
+  "fixture": {
+    "accounts": 3,
+    "attempts": 6,
+    "events": 2,
+    "models": 3,
+    "path": "migration-rs/fixtures/dashboard/q012-populated.sql",
+    "pings": 3,
+    "providers": 2,
+    "requests": 5,
+    "routing_decisions": 5,
+    "secrets": "none",
+    "sha256": "3196d41b840d352de2c977647457808f5eda85a57cc5ec45f6b98d86c1854fce"
+  },
+  "fixture_matrix": [
+    {
+      "database": "fresh canonical schema",
+      "state": "empty"
+    },
+    {
+      "database": "one copied canonical SQLite fixture",
+      "state": "populated"
+    },
+    {
+      "classes": [
+        "multiple providers",
+        "multiple accounts",
+        "multiple models",
+        "long/unicode/HTML escaping",
+        "error and retry",
+        "missing model-info"
+      ],
+      "state": "populated"
+    },
+    {
+      "classes": [
+        "unauthorized",
+        "authorized",
+        "all dashboard routes"
+      ],
+      "state": "private"
+    }
+  ],
+  "page_routes": [
+    "/",
+    "/accounts",
+    "/models",
+    "/models/example-model",
+    "/latency",
+    "/events",
+    "/timeseries",
+    "/bandwidth",
+    "/pings",
+    "/reliability",
+    "/routing",
+    "/traces",
+    "/runtime",
+    "/cache"
+  ],
+  "plan": "Q012",
+  "python_identity": "python:eggpool:local",
+  "rust_identity": "rust:/Users/davidbowman/projects/gorouter/rust/target/debug/eggpool",
+  "schema_version": "m10-q012.v1",
+  "screenshots": {
+    "artifact_root": "/tmp/eggpool-q012-captures-final-b41a9ae",
+    "count": 28,
+    "entries": [
+      {
+        "artifact": "python/overview--desktop--default.png",
+        "bytes": 119450,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/",
+        "sha256": "f56e644243f9e21973ac478ea9cf4644fc5def6e41cdceeceb9283a4c66b0c34",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/accounts--desktop--default.png",
+        "bytes": 82367,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/accounts",
+        "sha256": "25c2c43be634c436f5f8a176d4fd224bffd7174f35ab52c745f7caf350505278",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/models--desktop--default.png",
+        "bytes": 88925,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/models",
+        "sha256": "2821962ae09a86c934f2ecc8a070158004a49e6e765ef8a5fb9be2d942e6ed3c",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/latency--desktop--default.png",
+        "bytes": 71167,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/latency",
+        "sha256": "b88af98573be5d17e443f10e827bdabc1c9e57d0f37fc5fc57e25269cd84d8f9",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/events--desktop--default.png",
+        "bytes": 64319,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/events",
+        "sha256": "c56386f9f41ac321d7906bc5ff65dd5d1c133ea7b1da7d2249a18142b8e1f098",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/timeseries--desktop--default.png",
+        "bytes": 101967,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/timeseries",
+        "sha256": "bcf837a51351d74cd550d92b222c8d0769f973b3967457e682632c2333c08701",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/bandwidth--desktop--default.png",
+        "bytes": 63081,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/bandwidth",
+        "sha256": "3965298a6624b62ff48406c6073b79da2875095180655fe543d0ebe0cb4e742a",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/pings--desktop--default.png",
+        "bytes": 83881,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/pings",
+        "sha256": "32fbf2019fdf751c115d0894fa3fbc7e7c5221f6ca3ef1c331f6c11308c1b175",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/reliability--desktop--default.png",
+        "bytes": 82687,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/reliability",
+        "sha256": "243a83db3ce16ba4a5d9a3d842642cef8783bdae198b7065defac71a52bdfd57",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/routing--desktop--default.png",
+        "bytes": 101071,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/routing",
+        "sha256": "b638523e387e0e82afc42590f3e59f6091f0fe09c518696371e91fd7df62101f",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/traces--desktop--default.png",
+        "bytes": 107646,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/traces",
+        "sha256": "f0e4160d788fbc27e29d083271b409fc063a6c0991d62b8593986ae2bf5ecba8",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/runtime--desktop--default.png",
+        "bytes": 119098,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/runtime",
+        "sha256": "f982c1037e37a0ca8fbffef9dd1b6a6b3a0fa86f7e18bff330b34f9e5a050cd0",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/cache--desktop--default.png",
+        "bytes": 139408,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/cache",
+        "sha256": "eac4a35b83c6e11196770280e171d089b33f38b25129a170d8089f6f39a06ff9",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "python/models-q012-escape-\u6a21\u578b<&\"--desktop--default.png",
+        "bytes": 45111,
+        "dimensions": {
+          "height": 900,
+          "width": 1440
+        },
+        "height": 900,
+        "implementation": "python",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/models/q012-escape-\u6a21\u578b<&\"",
+        "sha256": "ed49865a94c1ea48b88b02ec082ac9846808530a4655cf2b7c68fa5be28def27",
+        "state": "populated",
+        "theme": "default",
+        "viewport": "desktop",
+        "width": 1440
+      },
+      {
+        "artifact": "rust/overview--mobile--catppuccin-latte.png",
+        "bytes": 54898,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/",
+        "sha256": "33c981c2a5d9705819a4715ddcaae7a1616cd05eecbfe846b29474a29a515af4",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/accounts--mobile--catppuccin-latte.png",
+        "bytes": 45795,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/accounts",
+        "sha256": "52924f1fc7a18eef4bccc768f1617ce906b400b22bebd89dc5fd283eb6e0a8cb",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/models--mobile--catppuccin-latte.png",
+        "bytes": 48738,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/models",
+        "sha256": "acc6e3d8edf808d6dddeb9381e79b6d72980d6ab53c51c972d54fe608768eeed",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/latency--mobile--catppuccin-latte.png",
+        "bytes": 44233,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/latency",
+        "sha256": "b9280037583780067c10ac300132c60d4666e013ee634955aa6042743aea4b35",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/events--mobile--catppuccin-latte.png",
+        "bytes": 43423,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/events",
+        "sha256": "267280d7f961335acee6f9ee880ea9c98f2ab78942b9157425733e22f58ec4db",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/timeseries--mobile--catppuccin-latte.png",
+        "bytes": 52300,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/timeseries",
+        "sha256": "b56daf85613fc9be0efd0e043c0e36561175edfc916f3caa14d431bd2b29c095",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/bandwidth--mobile--catppuccin-latte.png",
+        "bytes": 41512,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/bandwidth",
+        "sha256": "0b1c4ed0bd61bc9bb0d386068bdfebb7a6ba43349b86fa80e969b30c75ca2b3a",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/pings--mobile--catppuccin-latte.png",
+        "bytes": 54490,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/pings",
+        "sha256": "327a8b0f14f7e5314a24db7f78512d276b9bda1b05e6fbed43e2ef8564b72f47",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/reliability--mobile--catppuccin-latte.png",
+        "bytes": 41684,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/reliability",
+        "sha256": "9e400a3f3f526d837ba1b43f16d5833c9b02eb6220e1e6118537b41d051fce50",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/routing--mobile--catppuccin-latte.png",
+        "bytes": 55829,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/routing",
+        "sha256": "923ca69421af7716f04aec2a57d40043873c21e54918e82b17436405c18fbeac",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/traces--mobile--catppuccin-latte.png",
+        "bytes": 51216,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/traces",
+        "sha256": "03962a78fe97a9f69fc5bf2c1a9bbb185331e0ad27c6397ae10076ad95c1c24b",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/runtime--mobile--catppuccin-latte.png",
+        "bytes": 51324,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/runtime",
+        "sha256": "5d4ce2d1f8df432564a59d55d86969c939c38925b5dfd84c80b9909f874e72a8",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/cache--mobile--catppuccin-latte.png",
+        "bytes": 50181,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/cache",
+        "sha256": "a402950972fbc32e93089888945eca38fa157751844e6f23baf7e51de9896192",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      },
+      {
+        "artifact": "rust/models-q012-escape-\u6a21\u578b<&\"--mobile--catppuccin-latte.png",
+        "bytes": 41347,
+        "dimensions": {
+          "height": 844,
+          "width": 390
+        },
+        "height": 844,
+        "implementation": "rust",
+        "manual_disposition": "pass: navigation, clipping, populated content, theme, and mobile layout reviewed",
+        "result": "captured",
+        "route": "/models/q012-escape-\u6a21\u578b<&\"",
+        "sha256": "75e309a6b8db9da8c3e6af4285e600e13ed69927d210500083002d830c11140e",
+        "state": "populated",
+        "theme": "Catppuccin Latte",
+        "viewport": "mobile",
+        "width": 390
+      }
+    ],
+    "manifest_sha256": "7eebaf858f9c5eca06313c35eabd60a2fec50b156409434ba5f50520e86edd08",
+    "procedure": "isolated headless Chrome via Chrome DevTools Protocol; browser is outside the Rust dependency graph"
+  },
+  "static_assets": {
+    "count": 54,
+    "paths": [
+      "static/chart.umd.min.js",
+      "static/dashboard.css",
+      "static/dashboard.js",
+      "static/favicon.svg",
+      "themes/Booberry.toml",
+      "themes/Catppuccin Latte.toml",
+      "themes/Catppuccin Macchiato.toml",
+      "themes/Catppuccin Mocha.toml",
+      "themes/Cyber Red.toml",
+      "themes/Cyberpunk.toml",
+      "themes/Dark Green.toml",
+      "themes/Discord (80_ Saturation).toml",
+      "themes/Discord.toml",
+      "themes/Dracula.toml",
+      "themes/Ferra Light.toml",
+      "themes/Flexor Dark.toml",
+      "themes/Gruvbox.toml",
+      "themes/Halcyon Dark.toml",
+      "themes/IntelliJ Light.toml",
+      "themes/Kanagawa.toml",
+      "themes/Macaw Dark.toml",
+      "themes/Macaw Light.toml",
+      "themes/Matrix.toml",
+      "themes/Noctis Lilac.toml",
+      "themes/Nord.toml",
+      "themes/Nostromo Terminal.toml",
+      "themes/One Dark.toml",
+      "themes/Oxocarbon.toml",
+      "themes/Rose Pine Dawn.toml",
+      "themes/Rose Pine Moon.toml",
+      "themes/Rose Pine.toml",
+      "themes/Solarized Dark.toml",
+      "themes/Sonokai.toml",
+      "themes/Tokyo Night Storm.toml",
+      "themes/VESPER.toml",
+      "themes/Zenburn.toml",
+      "themes/acton.toml",
+      "themes/bam.toml",
+      "themes/base16-atelier-forest-light.toml",
+      "themes/berlin.toml",
+      "themes/black but with important highlights.toml",
+      "themes/broc.toml",
+      "themes/cork.toml",
+      "themes/ferra.toml",
+      "themes/forest.toml",
+      "themes/lisbon.toml",
+      "themes/midnight.toml",
+      "themes/oslo.toml",
+      "themes/plum.toml",
+      "themes/portland.toml",
+      "themes/sunset.toml",
+      "themes/tofino.toml",
+      "themes/vanimo.toml",
+      "themes/vik.toml"
+    ],
+    "sha256": "e7d1e10c243dd699669b366fa9820d53a26a572308e26105b352861830d80904"
+  },
+  "themes": {
+    "count": 51,
+    "names": [
+      "default",
+      "Booberry",
+      "Catppuccin Latte",
+      "Catppuccin Macchiato",
+      "Catppuccin Mocha",
+      "Cyber Red",
+      "Cyberpunk",
+      "Dark Green",
+      "Discord",
+      "Discord (80_ Saturation)",
+      "Dracula",
+      "Ferra Light",
+      "Flexor Dark",
+      "Gruvbox",
+      "Halcyon Dark",
+      "IntelliJ Light",
+      "Kanagawa",
+      "Macaw Dark",
+      "Macaw Light",
+      "Matrix",
+      "Noctis Lilac",
+      "Nord",
+      "Nostromo Terminal",
+      "One Dark",
+      "Oxocarbon",
+      "Rose Pine",
+      "Rose Pine Dawn",
+      "Rose Pine Moon",
+      "Solarized Dark",
+      "Sonokai",
+      "Tokyo Night Storm",
+      "VESPER",
+      "Zenburn",
+      "acton",
+      "bam",
+      "base16-atelier-forest-light",
+      "berlin",
+      "black but with important highlights",
+      "broc",
+      "cork",
+      "ferra",
+      "forest",
+      "lisbon",
+      "midnight",
+      "oslo",
+      "plum",
+      "portland",
+      "sunset",
+      "tofino",
+      "vanimo",
+      "vik"
+    ],
+    "review_set": [
+      "default",
+      "Cyber Red",
+      "Catppuccin Latte",
+      "Cyberpunk"
+    ]
+  }
+}

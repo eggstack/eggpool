@@ -1,6 +1,6 @@
 # Q012 — Dashboard State, Semantic Content, and Visual Requalification
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-10
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -315,4 +315,4 @@ Only accepted Q012 closure may re-close M10 and restore M11 eligibility for a se
 
 ## Handoff
 
-Q012 is the sole dependency-ready M10 plan. M11 is blocked. Implement Q012, write append-only closure evidence, and re-close M10 only if every acceptance criterion above passes.
+Q012 is accepted and is the append-only closure authority for the dashboard findings. M10 is re-closed. The dependency-ready implementation-plan table is empty; M11 is eligible for its own separate planning review, but no M11 implementation plan is promoted by this closure.

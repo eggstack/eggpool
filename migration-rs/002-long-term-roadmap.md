@@ -212,7 +212,7 @@ Q001 qualification contract + target/evidence freeze
 
 Accepted Q011 successfully closed the live-provider blocker with a bounded real-provider matrix, and Q008-Q010 were re-accepted in dependency order. A later audit found that Q004 did not actually satisfy the frozen mandatory dashboard-state contract: populated/multi-provider states were only reserved in metadata, semantic data rows/card values were not compared, and the screenshot matrix primarily contained planned filenames rather than actual captures. Q010 inherited that gap.
 
-M10 is therefore **corrective-active**. Q004 and Q010 remain historical accepted closure evidence for what they actually proved; Q012 is the sole dependency-ready corrective plan and the current M10 closure authority.
+M10 is therefore **closed after the accepted Q012 corrective pass**. Q004 and Q010 remain historical accepted closure evidence for what they actually proved; Q012 is the current M10 closure authority.
 
 Q012 must execute representative empty, populated, unauthorized and error/missing dashboard states against Python and Rust; compare meaningful page text, metric/card values, table headers/ordered rows, controls, escaping and stable hooks; add deliberate data-content mismatch regressions; capture actual bounded Python/Rust screenshots covering every major page at least once across representative desktop/mobile/theme assignments; and rerun the aggregate Q001/Q002/Q010-equivalent gates. Accepted Q005-Q009/Q011 environment evidence must be rerun only when Q012 source changes invalidate freshness, with the decision recorded explicitly.
 
@@ -220,7 +220,7 @@ M10 keeps normal CI intentionally lean. Expensive/rootful/live/physical/browser 
 
 M10 does not publish canonical Rust release assets, flip `scripts/install.sh`/README quick start, remove Python, or make the Rust updater public authority. Those remain M11/M12.
 
-Exit condition: every mandatory Q001 cell is actually proven, including real populated/error dashboard semantics and actual visual-review artifacts; deterministic migration-wide parity remains green; DB rollback/backup/recovery, supported targets, disposable rootful Linux, bounded live-provider, physical ARM64 SBC, and sustained resource/failure evidence remain accepted/fresh; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied only by accepted Q012 corrective closure.
+Exit condition: every mandatory Q001 cell is actually proven, including real populated/error dashboard semantics and actual visual-review artifacts; deterministic migration-wide parity remains green; DB rollback/backup/recovery, supported targets, disposable rootful Linux, bounded live-provider, physical ARM64 SBC, and sustained resource/failure evidence remain accepted/fresh; no unresolved high/medium migration correctness/security/data-loss/compatibility/lifecycle/resource/target/dashboard/provider finding remains. Satisfied by the accepted Q012 corrective closure recorded in `closure/qualification/012-status.md`.
 
 ## M11 — Rust cutover
 
@@ -228,7 +228,7 @@ Primary class: capability
 
 Make Rust the canonical install/release/runtime implementation while preserving filesystem/config/database locations and documented rollback to the final Python reference where schema compatibility permits.
 
-M11 is blocked on accepted Q012 M10 re-closure and its own separate planning review. No M11 implementation plan is promoted automatically by the Q012 planning pass.
+M11 is eligible for its own separate planning review after accepted Q012 M10 re-closure. No M11 implementation plan is promoted automatically by the Q012 closure.
 
 Exit condition: new installs/upgrades use Rust by default without Python runtime dependency.
 

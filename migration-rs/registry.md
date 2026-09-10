@@ -28,15 +28,15 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **corrective pass active after post-Q011 dashboard audit** | **Q012 ready** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **closed after accepted Q012 corrective pass** | **Q012 closed** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | invariant/corrective | accepted Q001-Q003/Q005-Q011 evidence; historical Q004/Q010 | **ready for handoff** |
+| — | No implementation plan currently promoted | — | — | — |
 
-Q012 is the sole dependency-ready implementation plan. M11 is re-blocked until accepted Q012 closure re-closes M10. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 is accepted and re-closes M10. The dependency-ready table is intentionally empty. M11 is eligible for a separate planning review, but no M11 implementation plan is promoted automatically. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -76,6 +76,7 @@ Q012 is the sole dependency-ready implementation plan. M11 is re-blocked until a
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | invariant/polish | `0989d6e4`, corrective `daae984` | [accepted by addendum](closure/qualification/009-status.md) |
 | Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | invariant/polish | `4d28e290`, corrective `daae984` | [historical aggregate closure; superseded for current M10 closure authority by Q012](closure/qualification/010-status.md) |
 | Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | `daae984` | [accepted](closure/qualification/011-status.md) |
+| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | invariant/corrective | `bcc96c8`, `b41a9ae` | [accepted/closed](closure/qualification/012-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -161,7 +162,7 @@ M10 owns migration-wide deterministic qualification, DB rollback/backup compatib
 | Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | accepted by append-only re-acceptance |
 | Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | historical aggregate closure; current M10 closure superseded by Q012 audit |
 | Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | accepted |
-| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | **ready; sole dependency-ready M10 plan** |
+| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | **accepted corrective closure; M10 re-closed** |
 
 ### Q012 audit findings
 
@@ -171,8 +172,8 @@ Q012 corrects and requalifies only this dashboard/evidence boundary, plus any na
 
 ## Future work and block state
 
-M11 Rust cutover is **blocked** on accepted Q012 M10 re-closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 implementation plan is promoted automatically.
+M11 Rust cutover is **eligible for a separate planning review** now that Q012 has re-closed M10. No M11 implementation plan is promoted automatically. M12 remains sequenced behind M11.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is corrective-active: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 are historical for the dashboard finding, and Q012 is ready. Only accepted Q012 closure may re-close M10 and restore M11 planning eligibility.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. The dependency-ready table is empty; M11 is eligible only for a separate planning review.
