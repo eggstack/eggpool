@@ -6,6 +6,7 @@
 //! metadata and must never inherit an account's proxy or secret headers.
 
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     future::Future,
     io::{self, Write},
@@ -27,8 +28,16 @@ use hyper_util::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::{process::Command, time::timeout};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::Command,
+    time::timeout,
+};
 
+pub use super::catalog::{CatalogRelease, ReleaseCatalog, ReleaseEra};
+pub use super::provenance::{
+    DirectUrlMetadata, InstallProvenance, PackageMetadata, ProvenanceEnvironment,
+};
 use crate::version::PACKAGE_VERSION;
 
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/eggstack/eggpool/releases";
@@ -121,6 +130,10 @@ impl ReleaseVersion {
 
     fn cmp_key(&self) -> (&[u64], u8, u64) {
         (&self.release, self.rank, self.suffix)
+    }
+
+    pub(crate) fn ordering_key(&self) -> (Vec<u64>, u8, u64) {
+        (self.release.clone(), self.rank, self.suffix)
     }
 }
 
@@ -276,6 +289,40 @@ pub enum UpdateError {
     IntegrityMalformed,
     #[error("release artifact SHA-256 digest does not match")]
     IntegrityMismatch,
+    #[error("installable release catalog is malformed")]
+    CatalogMalformed,
+    #[error("requested release is not in the installable catalog")]
+    TargetNotCatalogued,
+    #[error("requested release is unavailable or yanked")]
+    TargetUnavailable,
+    #[error("requested release is unsupported on this platform")]
+    UnsupportedPlatform,
+    #[error("requested release is incompatible with the owning Python environment")]
+    IncompatiblePythonEnvironment,
+    #[error("the current install provenance is ambiguous")]
+    AmbiguousProvenance,
+    #[error("source checkouts must be transitioned by the developer workflow")]
+    SourceCheckout,
+    #[error("the current database/config state is incompatible with the target")]
+    IncompatibleDatabaseConfig,
+    #[error("package manager executable is unavailable")]
+    ManagerUnavailable,
+    #[error("package manager metadata is malformed")]
+    ManagerMetadataMalformed,
+    #[error("package manager transition timed out")]
+    ManagerTimeout,
+    #[error("package manager returned a non-zero exit status")]
+    ManagerFailed,
+    #[error("package manager output exceeded the retained limit")]
+    ManagerOutputTooLarge,
+    #[error("installed version does not match the requested release")]
+    WrongInstalledVersion,
+    #[error("installed executable ownership changed unexpectedly")]
+    OwnershipChanged,
+    #[error("target config validation failed")]
+    TargetConfigInvalid,
+    #[error("standalone binaries can transition only to Rust release assets")]
+    StandaloneTargetUnsupported,
     #[error("current executable path is unsupported or not writable")]
     UnsupportedInstallPath,
     #[error("current executable has unsafe links or ownership")]
@@ -311,6 +358,23 @@ impl UpdateError {
             Self::IntegrityMissing => "integrity_missing",
             Self::IntegrityMalformed => "integrity_malformed",
             Self::IntegrityMismatch => "integrity_mismatch",
+            Self::CatalogMalformed => "catalog_malformed",
+            Self::TargetNotCatalogued => "target_not_catalogued",
+            Self::TargetUnavailable => "target_unavailable",
+            Self::UnsupportedPlatform => "unsupported_platform",
+            Self::IncompatiblePythonEnvironment => "incompatible_python_environment",
+            Self::AmbiguousProvenance => "install_provenance_ambiguous",
+            Self::SourceCheckout => "source_checkout",
+            Self::IncompatibleDatabaseConfig => "db_config_rollback_incompatible",
+            Self::ManagerUnavailable => "package_manager_unavailable",
+            Self::ManagerMetadataMalformed => "package_manager_metadata_malformed",
+            Self::ManagerTimeout => "package_manager_timeout",
+            Self::ManagerFailed => "package_manager_failure",
+            Self::ManagerOutputTooLarge => "package_manager_output_too_large",
+            Self::WrongInstalledVersion => "post_install_wrong_version",
+            Self::OwnershipChanged => "ownership_changed_unexpectedly",
+            Self::TargetConfigInvalid => "target_config_invalid",
+            Self::StandaloneTargetUnsupported => "standalone_target_unsupported",
             Self::UnsupportedInstallPath => "unsupported_install_path",
             Self::UnsafeExecutable => "unsafe_executable",
             Self::UpdateInProgress => "update_in_progress",
@@ -634,6 +698,457 @@ pub struct UpdateService {
     client: ReleaseClient,
 }
 
+/// Bounded caller-owned facts needed before changing a package environment.
+#[derive(Debug, Clone, Default)]
+pub struct TransitionContext {
+    /// `None` means the owning environment did not expose a parseable
+    /// `pyvenv.cfg` version.  In that case a package transition is refused;
+    /// K005 may supply an explicitly observed interpreter version.
+    pub python_version: Option<(u8, u8)>,
+    /// The caller's DB/config compatibility precheck.  K004 does not open or
+    /// mutate the database and therefore requires this fact from its caller.
+    pub db_config_compatible: bool,
+    /// Optional config path used for the target's read-only `check-config`
+    /// probe after the package manager returns.
+    pub config_path: Option<PathBuf>,
+}
+
+impl TransitionContext {
+    pub const SAFE_DEFAULT: Self = Self {
+        python_version: Some((3, 11)),
+        db_config_compatible: true,
+        config_path: None,
+    };
+}
+
+/// An argv-only package-manager invocation.  The environment is intentionally
+/// private so it cannot accidentally be serialized or included in diagnostics.
+pub struct ManagerCommand {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    environment: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for ManagerCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ManagerCommand")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field(
+                "environment_keys",
+                &self
+                    .environment
+                    .iter()
+                    .map(|(key, _)| key)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransitionResult {
+    pub target_version: String,
+    pub manager: String,
+    pub restarted: bool,
+}
+
+pub struct TransitionRequest<'a> {
+    pub provenance: &'a InstallProvenance,
+    pub target: &'a ReleaseTarget,
+    pub current: &'a ReleaseVersion,
+    pub executable: &'a Path,
+    pub context: TransitionContext,
+    pub was_running: bool,
+}
+
+/// Package-manager transition authority.  It owns no package-manager state;
+/// every invocation is reconstructed from the current provenance snapshot.
+#[derive(Clone)]
+pub struct PackageTransitionService {
+    raw_updater: UpdateService,
+    catalog: ReleaseCatalog,
+    platform: Platform,
+}
+
+impl PackageTransitionService {
+    pub fn new(raw_updater: UpdateService) -> Result<Self, UpdateError> {
+        Ok(Self {
+            raw_updater,
+            catalog: ReleaseCatalog::embedded()?,
+            platform: Platform::current(),
+        })
+    }
+
+    pub fn with_catalog(
+        raw_updater: UpdateService,
+        catalog: ReleaseCatalog,
+        platform: Platform,
+    ) -> Self {
+        Self {
+            raw_updater,
+            catalog,
+            platform,
+        }
+    }
+
+    pub fn catalog(&self) -> &ReleaseCatalog {
+        &self.catalog
+    }
+
+    pub fn resolve_target(&self, target: &ReleaseTarget) -> Result<CatalogRelease, UpdateError> {
+        self.catalog.resolve(target, &self.platform)
+    }
+
+    pub fn command_for(
+        &self,
+        provenance: &InstallProvenance,
+        target: &CatalogRelease,
+    ) -> Result<ManagerCommand, UpdateError> {
+        build_manager_command(provenance, target)
+    }
+
+    pub async fn transition<F, Fut>(
+        &self,
+        request: TransitionRequest<'_>,
+        restart: Option<F>,
+    ) -> Result<TransitionResult, UpdateError>
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(), UpdateError>> + Send,
+    {
+        let TransitionRequest {
+            provenance,
+            target,
+            current,
+            executable,
+            context,
+            was_running,
+        } = request;
+        if let Some(metadata) = provenance.package_metadata() {
+            let observed = ReleaseVersion::parse(&metadata.version)
+                .map_err(|_| UpdateError::ManagerMetadataMalformed)?;
+            if !observed.equivalent(current) {
+                return Err(UpdateError::ManagerMetadataMalformed);
+            }
+        }
+        let selection = self.resolve_target(target)?;
+        if selection.version.equivalent(current)
+            || (matches!(target, ReleaseTarget::Latest)
+                && !selection.version.is_newer_than(current))
+        {
+            return Ok(TransitionResult {
+                target_version: current.as_str().to_owned(),
+                manager: provenance.manager_kind().unwrap_or("none").to_owned(),
+                restarted: false,
+            });
+        }
+        if !context.db_config_compatible {
+            return Err(UpdateError::IncompatibleDatabaseConfig);
+        }
+
+        match provenance {
+            InstallProvenance::SourceCheckout { .. } => Err(UpdateError::SourceCheckout),
+            InstallProvenance::Ambiguous { evidence } => {
+                if evidence
+                    .iter()
+                    .any(|item| item.contains("malformed") || item.contains("could not be read"))
+                {
+                    Err(UpdateError::ManagerMetadataMalformed)
+                } else {
+                    Err(UpdateError::AmbiguousProvenance)
+                }
+            }
+            InstallProvenance::StandaloneRust { .. } => {
+                if selection.era != ReleaseEra::Rust {
+                    return Err(UpdateError::StandaloneTargetUnsupported);
+                }
+                let report = self
+                    .raw_updater
+                    .apply_current_executable(target, executable, was_running, restart)
+                    .await?;
+                Ok(TransitionResult {
+                    target_version: report.target_version,
+                    manager: "standalone-rust".to_owned(),
+                    restarted: report.restarted,
+                })
+            }
+            InstallProvenance::UvTool { .. }
+            | InstallProvenance::Pipx { .. }
+            | InstallProvenance::PipEnvironment { .. } => {
+                if selection.era == ReleaseEra::Python
+                    && !context
+                        .python_version
+                        .is_some_and(|(major, minor)| (major, minor) >= (3, 11))
+                {
+                    return Err(UpdateError::IncompatiblePythonEnvironment);
+                }
+                let _lock = UpdateLock::acquire(executable)?;
+                let command = self.command_for(provenance, &selection)?;
+                run_manager(command).await?;
+                verify_package_install(
+                    provenance,
+                    &selection,
+                    executable,
+                    context.config_path.as_deref(),
+                )
+                .await?;
+                if was_running {
+                    let restart = restart.as_ref().ok_or(UpdateError::RestartFailed)?;
+                    restart().await?;
+                }
+                Ok(TransitionResult {
+                    target_version: selection.version.as_str().to_owned(),
+                    manager: provenance.manager_kind().unwrap_or("package").to_owned(),
+                    restarted: was_running,
+                })
+            }
+        }
+    }
+}
+
+fn build_manager_command(
+    provenance: &InstallProvenance,
+    target: &CatalogRelease,
+) -> Result<ManagerCommand, UpdateError> {
+    let requirement = exact_requirement(&target.version)?;
+    let (program, args, manager) = match provenance {
+        InstallProvenance::UvTool { manager, .. } => {
+            let program = manager.clone().ok_or(UpdateError::ManagerUnavailable)?;
+            (
+                program,
+                vec![
+                    "tool".to_owned(),
+                    "install".to_owned(),
+                    "--force".to_owned(),
+                    requirement,
+                ],
+                "uv",
+            )
+        }
+        InstallProvenance::Pipx { manager, .. } => {
+            let program = manager.clone().ok_or(UpdateError::ManagerUnavailable)?;
+            (
+                program,
+                vec!["install".to_owned(), "--force".to_owned(), requirement],
+                "pipx",
+            )
+        }
+        InstallProvenance::PipEnvironment { python, .. } => {
+            if !python.is_absolute() || !python.is_file() {
+                return Err(UpdateError::ManagerUnavailable);
+            }
+            (
+                python.clone(),
+                vec![
+                    "-m".to_owned(),
+                    "pip".to_owned(),
+                    "install".to_owned(),
+                    "--upgrade".to_owned(),
+                    "--force-reinstall".to_owned(),
+                    requirement,
+                ],
+                "pip",
+            )
+        }
+        _ => return Err(UpdateError::ManagerMetadataMalformed),
+    };
+    Ok(ManagerCommand {
+        program,
+        args,
+        environment: allowed_environment(manager),
+    })
+}
+
+fn exact_requirement(version: &ReleaseVersion) -> Result<String, UpdateError> {
+    let value = version.as_str();
+    if value.is_empty()
+        || value.len() > 32
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(UpdateError::InvalidVersion);
+    }
+    Ok(format!("eggpool=={value}"))
+}
+
+fn allowed_environment(manager: &str) -> Vec<(String, String)> {
+    const COMMON: &[&str] = &[
+        "HOME",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+    ];
+    let mut names = COMMON.to_vec();
+    match manager {
+        "uv" => names.extend([
+            "UV_TOOL_DIR",
+            "UV_CACHE_DIR",
+            "UV_INDEX_URL",
+            "UV_DEFAULT_INDEX",
+            "UV_EXTRA_INDEX_URL",
+        ]),
+        "pipx" => names.extend(["PIPX_HOME", "PIPX_BIN_DIR", "PIPX_MAN_DIR"]),
+        "pip" => names.extend(["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST"]),
+        _ => {}
+    }
+    env::vars_os()
+        .filter_map(|(key, value)| {
+            let key = key.into_string().ok()?;
+            if !names.contains(&key.as_str()) {
+                return None;
+            }
+            Some((key, value.into_string().ok()?))
+        })
+        .collect()
+}
+
+const MANAGER_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_MANAGER_OUTPUT: usize = 64 * 1024;
+
+async fn run_manager(command: ManagerCommand) -> Result<(), UpdateError> {
+    let mut child = Command::new(&command.program);
+    child
+        .args(&command.args)
+        .env_clear()
+        .envs(command.environment)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = child.spawn().map_err(|_| UpdateError::ManagerUnavailable)?;
+    let stdout = child.stdout.take().ok_or(UpdateError::ManagerFailed)?;
+    let stderr = child.stderr.take().ok_or(UpdateError::ManagerFailed)?;
+    let mut stdout_task = Box::pin(tokio::spawn(read_manager_output(stdout)));
+    let mut stderr_task = Box::pin(tokio::spawn(read_manager_output(stderr)));
+    let mut child_wait = Box::pin(child.wait());
+    let result = timeout(MANAGER_TIMEOUT, async {
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+        loop {
+            tokio::select! {
+                output = &mut stdout_task, if !stdout_done => {
+                    stdout_done = true;
+                    if matches!(output, Ok(Err(UpdateError::ManagerOutputTooLarge))) {
+                        return Err(UpdateError::ManagerOutputTooLarge);
+                    }
+                    if output.is_err() || output.as_ref().is_ok_and(|result| result.is_err()) {
+                        return Err(UpdateError::ManagerFailed);
+                    }
+                }
+                output = &mut stderr_task, if !stderr_done => {
+                    stderr_done = true;
+                    if matches!(output, Ok(Err(UpdateError::ManagerOutputTooLarge))) {
+                        return Err(UpdateError::ManagerOutputTooLarge);
+                    }
+                    if output.is_err() || output.as_ref().is_ok_and(|result| result.is_err()) {
+                        return Err(UpdateError::ManagerFailed);
+                    }
+                }
+                status = &mut child_wait => {
+                    let status = status.map_err(|_| UpdateError::ManagerFailed)?;
+                    if !stdout_done {
+                        let _ = (&mut stdout_task).await;
+                    }
+                    if !stderr_done {
+                        let _ = (&mut stderr_task).await;
+                    }
+                    return if status.success() {
+                        Ok(())
+                    } else {
+                        Err(UpdateError::ManagerFailed)
+                    };
+                }
+            }
+        }
+    })
+    .await;
+    drop(child_wait);
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(error)
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            Err(UpdateError::ManagerTimeout)
+        }
+    }
+}
+
+async fn read_manager_output<R: AsyncRead + Unpin>(reader: R) -> Result<Vec<u8>, UpdateError> {
+    let mut output = Vec::new();
+    reader
+        .take((MAX_MANAGER_OUTPUT + 1) as u64)
+        .read_to_end(&mut output)
+        .await
+        .map_err(|_| UpdateError::ManagerFailed)?;
+    if output.len() > MAX_MANAGER_OUTPUT {
+        return Err(UpdateError::ManagerOutputTooLarge);
+    }
+    Ok(output)
+}
+
+async fn verify_package_install(
+    previous: &InstallProvenance,
+    target: &CatalogRelease,
+    executable: &Path,
+    config_path: Option<&Path>,
+) -> Result<(), UpdateError> {
+    let environment = ProvenanceEnvironment::current();
+    let observed = InstallProvenance::detect_with(&environment, executable);
+    if observed.manager_kind() != previous.manager_kind()
+        || observed
+            .package_metadata()
+            .is_none_or(|metadata| metadata.version != target.version.as_str())
+    {
+        return Err(UpdateError::OwnershipChanged);
+    }
+    self_check(executable, &target.version)
+        .await
+        .map_err(|_| UpdateError::WrongInstalledVersion)?;
+    if let Some(config_path) = config_path {
+        config_self_check(executable, config_path)
+            .await
+            .map_err(|_| UpdateError::TargetConfigInvalid)?;
+    }
+    Ok(())
+}
+
+async fn config_self_check(executable: &Path, config_path: &Path) -> Result<(), UpdateError> {
+    let mut child = Command::new(executable);
+    child
+        .arg("--config")
+        .arg(config_path)
+        .arg("check-config")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let output = timeout(SELF_CHECK_TIMEOUT, child.output())
+        .await
+        .map_err(|_| UpdateError::TargetConfigInvalid)?
+        .map_err(|_| UpdateError::TargetConfigInvalid)?;
+    if output.status.success() && output.stdout.len() <= MAX_SELF_CHECK_OUTPUT {
+        Ok(())
+    } else {
+        Err(UpdateError::TargetConfigInvalid)
+    }
+}
+
 impl UpdateService {
     pub fn new() -> Result<Self, UpdateError> {
         Ok(Self {
@@ -937,6 +1452,8 @@ fn unix_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     #[test]
@@ -986,5 +1503,195 @@ mod tests {
         );
         assert!(parse_digest("sha1:0000000000000000000000000000000000000000").is_none());
         assert!(parse_digest("hostile").is_none());
+    }
+
+    fn catalog_target(version: &str) -> CatalogRelease {
+        let catalog = ReleaseCatalog::embedded().expect("catalog");
+        catalog
+            .resolve(
+                &ReleaseTarget::Exact(ReleaseVersion::parse(version).expect("version")),
+                &Platform {
+                    os: "linux".into(),
+                    architecture: "x86_64".into(),
+                },
+            )
+            .expect("catalog target")
+    }
+
+    fn package_metadata(root: &std::path::Path, version: &str) -> PackageMetadata {
+        PackageMetadata {
+            distribution: root.join("lib/python3.11/site-packages/eggpool.dist-info"),
+            version: version.to_owned(),
+            installer: Some("pip".to_owned()),
+            direct_url: None,
+        }
+    }
+
+    #[test]
+    fn catalog_rejects_unknown_and_preserves_exact_requirement() {
+        let catalog = ReleaseCatalog::embedded().expect("catalog");
+        let platform = Platform {
+            os: "linux".into(),
+            architecture: "x86_64".into(),
+        };
+        assert!(matches!(
+            catalog.resolve(
+                &ReleaseTarget::Exact(ReleaseVersion::parse("9.9.9").unwrap()),
+                &platform,
+            ),
+            Err(UpdateError::TargetNotCatalogued)
+        ));
+        assert_eq!(
+            catalog_target("0.7.4").package_requirement,
+            "eggpool==0.7.4"
+        );
+        assert!(matches!(
+            catalog.resolve(
+                &ReleaseTarget::Exact(ReleaseVersion::parse("0.8.0").unwrap()),
+                &Platform {
+                    os: "windows".into(),
+                    architecture: "x86_64".into(),
+                },
+            ),
+            Err(UpdateError::UnsupportedPlatform)
+        ));
+    }
+
+    #[test]
+    fn manager_commands_are_fixed_argv_and_never_shell_strings() {
+        let root = tempfile::tempdir().expect("root");
+        let python = root.path().join("bin/python");
+        std::fs::create_dir_all(python.parent().expect("bin")).expect("bin");
+        std::fs::write(&python, b"#!/bin/sh\n").expect("python");
+        let metadata = package_metadata(root.path(), "0.7.4");
+        let target = catalog_target("0.8.0");
+        let pip = InstallProvenance::PipEnvironment {
+            python,
+            environment: root.path().to_owned(),
+            exposed_executable: root.path().join("bin/eggpool"),
+            package_metadata: metadata,
+        };
+        let command = build_manager_command(&pip, &target).expect("command");
+        assert_eq!(
+            command.args,
+            [
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--force-reinstall",
+                "eggpool==0.8.0",
+            ]
+        );
+        assert!(
+            command
+                .args
+                .iter()
+                .all(|argument| !argument.contains("sh -c") && !argument.contains(';'))
+        );
+
+        let uv = InstallProvenance::UvTool {
+            manager: Some(root.path().join("uv")),
+            environment: root.path().to_owned(),
+            python: root.path().join("bin/python"),
+            exposed_executable: root.path().join("bin/eggpool"),
+            package_metadata: package_metadata(root.path(), "0.7.4"),
+        };
+        assert_eq!(
+            build_manager_command(&uv, &target)
+                .expect("uv command")
+                .args,
+            ["tool", "install", "--force", "eggpool==0.8.0"]
+        );
+        let pipx = InstallProvenance::Pipx {
+            manager: Some(root.path().join("pipx")),
+            environment: root.path().to_owned(),
+            python: root.path().join("bin/python"),
+            exposed_executable: root.path().join("bin/eggpool"),
+            package_metadata: package_metadata(root.path(), "0.7.4"),
+        };
+        assert_eq!(
+            build_manager_command(&pipx, &target)
+                .expect("pipx command")
+                .args,
+            ["install", "--force", "eggpool==0.8.0"]
+        );
+    }
+
+    #[tokio::test]
+    async fn pip_transition_updates_metadata_and_runs_target_without_raw_replacement() {
+        let root = tempfile::tempdir().expect("root");
+        let environment = root.path();
+        let site = environment.join("lib/python3.11/site-packages/eggpool-0.8.0.dist-info");
+        let bin = environment.join("bin");
+        std::fs::create_dir_all(&site).expect("site");
+        std::fs::write(site.join("METADATA"), "Name: eggpool\nVersion: 0.7.4\n").expect("metadata");
+        std::fs::write(site.join("INSTALLER"), "pip\n").expect("installer");
+        std::fs::write(environment.join("pyvenv.cfg"), "version = 3.11.0\n").expect("venv");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let executable = bin.join("eggpool");
+        std::fs::write(&executable, b"#!/bin/sh\nprintf '0.7.4\\n'\n").expect("eggpool");
+        let python = bin.join("python");
+        let manager = format!(
+            "#!/bin/sh\nprintf 'Name: eggpool\\nVersion: 0.8.0\\n' > '{}'\nprintf '#!/bin/sh\\nprintf %%s\\\\n 0.8.0\\n' > '{}'\nchmod 755 '{}'\n",
+            site.join("METADATA").display(),
+            executable.display(),
+            executable.display(),
+        );
+        std::fs::write(&python, manager).expect("manager");
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("manager mode");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("eggpool mode");
+        let provenance = InstallProvenance::PipEnvironment {
+            python: python.clone(),
+            environment: environment.to_owned(),
+            exposed_executable: executable.clone(),
+            package_metadata: package_metadata(environment, "0.7.4"),
+        };
+        let service = PackageTransitionService::with_catalog(
+            UpdateService::new().expect("raw service"),
+            ReleaseCatalog::embedded().expect("catalog"),
+            Platform {
+                os: "linux".into(),
+                architecture: "x86_64".into(),
+            },
+        );
+        let result = service
+            .transition(
+                TransitionRequest {
+                    provenance: &provenance,
+                    target: &ReleaseTarget::Exact(ReleaseVersion::parse("0.8.0").unwrap()),
+                    current: &ReleaseVersion::parse("0.7.4").unwrap(),
+                    executable: &executable,
+                    context: TransitionContext::SAFE_DEFAULT,
+                    was_running: false,
+                },
+                None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+            )
+            .await
+            .expect("package transition");
+        assert_eq!(result.manager, "pip");
+        assert_eq!(result.target_version, "0.8.0");
+        assert_eq!(
+            std::fs::read_to_string(site.join("METADATA")).expect("metadata"),
+            "Name: eggpool\nVersion: 0.8.0\n"
+        );
+        assert!(!environment.join(".eggpool-update.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn manager_output_is_bounded() {
+        let root = tempfile::tempdir().expect("root");
+        let manager = root.path().join("manager");
+        std::fs::write(&manager, "#!/bin/sh\nhead -c 70000 /dev/zero\n").expect("manager");
+        std::fs::set_permissions(&manager, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let result = run_manager(ManagerCommand {
+            program: manager,
+            args: Vec::new(),
+            environment: Vec::new(),
+        })
+        .await;
+        assert!(matches!(result, Err(UpdateError::ManagerOutputTooLarge)));
     }
 }

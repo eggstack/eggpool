@@ -1,4 +1,4 @@
-//! Small process-local services used by the M9 operational commands.
+//! Small process-local services used by operational commands.
 //!
 //! These modules deliberately contain no CLI presentation and no second
 //! runtime/reload authority.  `control` adapts local frames to M8's
@@ -6,6 +6,7 @@
 //! lifecycle observations for later commands.
 
 pub mod backup;
+pub mod catalog;
 pub mod config_mutation;
 pub mod control;
 pub mod deploy;
@@ -14,4 +15,5 @@ pub mod metrics;
 pub mod operator;
 pub mod paths;
 pub mod process;
+pub mod provenance;
 pub mod update;

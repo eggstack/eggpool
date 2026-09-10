@@ -23,7 +23,10 @@ use crate::{
         config_mutation::{self, ApplyMode, ApplyOutcome},
         paths::RuntimePaths,
         process,
-        update::{ReleaseTarget, UpdateError, UpdateService},
+        update::{
+            InstallProvenance, PackageTransitionService, ReleaseTarget, TransitionContext,
+            TransitionRequest, UpdateError, UpdateService,
+        },
     },
     version::PACKAGE_VERSION,
 };
@@ -2168,34 +2171,6 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
     }
     let target = ReleaseTarget::parse(args.requested_version.as_deref()).map_err(update_error)?;
     let service = UpdateService::new().map_err(update_error)?;
-    let current = service.current_version().map_err(update_error)?;
-    let metadata = service.resolve(&target).await.map_err(update_error)?;
-
-    if matches!(target, ReleaseTarget::Exact(_)) {
-        println!("Current version: {}", current.as_str());
-        println!("Requested version: {}", metadata.version.as_str());
-    }
-    if metadata.version.equivalent(&current) {
-        if matches!(target, ReleaseTarget::Exact(_)) {
-            println!("Requested version is already installed.");
-        } else {
-            println!("Already up to date.");
-        }
-        return Ok(());
-    }
-    if args.check {
-        if matches!(target, ReleaseTarget::Exact(_)) {
-            println!("Exact version is available.");
-        } else if metadata.version.is_newer_than(&current) {
-            println!("Current version: {}", current.as_str());
-            println!("Latest version:  {}", metadata.version.as_str());
-            println!("An update is available.");
-        } else {
-            println!("Already up to date.");
-        }
-        return Ok(());
-    }
-
     let executable = std::env::current_exe().map_err(|error| {
         command_error(
             EXIT_VALIDATION,
@@ -2208,52 +2183,113 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
             "current executable path is unsupported or not writable",
         )
     })?;
-    if executable
-        .ancestors()
-        .any(|candidate| candidate.join(".git").exists())
-    {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            "current executable is from a source checkout; install a managed Rust release before updating",
-        ));
-    }
+    let provenance = InstallProvenance::detect(&executable);
+    let current = provenance
+        .package_metadata()
+        .map(|metadata| ReleaseTarget::parse(Some(&metadata.version)))
+        .transpose()
+        .map_err(update_error)?
+        .and_then(|target| match target {
+            ReleaseTarget::Exact(version) => Some(version),
+            ReleaseTarget::Latest => None,
+        })
+        .unwrap_or(service.current_version().map_err(update_error)?);
+    let transition = PackageTransitionService::new(service.clone()).map_err(update_error)?;
 
-    let paths = RuntimePaths::resolve();
-    let was_running = server_is_running(path, &paths).await;
-    if was_running {
-        stop(path, 10.0).await?;
-    }
-    println!(
-        "Updating from {} to {}...",
-        current.as_str(),
-        metadata.version.as_str()
-    );
-    let restart = || async {
-        restart_server_inner(path, Duration::from_secs(10), false, true)
-            .await
-            .map(|_| ())
-            .map_err(|_| UpdateError::RestartFailed)
-    };
-    let result = service
-        .apply_current_executable(&target, &executable, was_running, Some(restart))
-        .await;
-    match result {
-        Ok(report) => {
-            println!("Installed version: {}", report.target_version);
-            if report.restarted {
-                println!("Server restarted.");
+    if provenance.manager_kind().is_some()
+        || matches!(
+            provenance,
+            InstallProvenance::Ambiguous { .. }
+                | InstallProvenance::SourceCheckout { .. }
+                | InstallProvenance::StandaloneRust { .. }
+        )
+    {
+        let selection = transition.resolve_target(&target).map_err(update_error)?;
+        println!("Current version: {}", current.as_str());
+        if matches!(target, ReleaseTarget::Exact(_)) {
+            println!("Requested version: {}", selection.version.as_str());
+        } else {
+            println!("Latest version:  {}", selection.version.as_str());
+        }
+        let no_change = selection.version.equivalent(&current)
+            || (matches!(target, ReleaseTarget::Latest)
+                && !selection.version.is_newer_than(&current));
+        if no_change {
+            if matches!(target, ReleaseTarget::Exact(_)) {
+                println!("Requested version is already installed.");
             } else {
-                println!("Server is not running.");
+                println!("Already up to date.");
             }
-            Ok(())
+            return Ok(());
         }
-        Err(error) => {
-            if was_running {
-                let _ = restart_server_inner(path, Duration::from_secs(10), false, true).await;
+        if args.check {
+            println!(
+                "{}",
+                if matches!(target, ReleaseTarget::Exact(_)) {
+                    "Exact version is available."
+                } else {
+                    "An update is available."
+                }
+            );
+            return Ok(());
+        }
+        if matches!(provenance, InstallProvenance::SourceCheckout { .. }) {
+            return Err(update_error(UpdateError::SourceCheckout));
+        }
+        config::Config::from_toml(path)?;
+        let paths = RuntimePaths::resolve();
+        let was_running = server_is_running(path, &paths).await;
+        if was_running {
+            stop(path, 10.0).await?;
+        }
+        println!(
+            "Updating from {} to {}...",
+            current.as_str(),
+            selection.version.as_str()
+        );
+        let restart = || async {
+            restart_server_inner(path, Duration::from_secs(10), false, true)
+                .await
+                .map(|_| ())
+                .map_err(|_| UpdateError::RestartFailed)
+        };
+        let context = TransitionContext {
+            python_version: Some((3, 11)),
+            db_config_compatible: selection.rollback_compatible,
+            config_path: Some(path.to_owned()),
+        };
+        let result = transition
+            .transition(
+                TransitionRequest {
+                    provenance: &provenance,
+                    target: &target,
+                    current: &current,
+                    executable: &executable,
+                    context,
+                    was_running,
+                },
+                Some(restart),
+            )
+            .await;
+        return match result {
+            Ok(report) => {
+                println!("Installed version: {}", report.target_version);
+                if report.restarted {
+                    println!("Server restarted.");
+                } else {
+                    println!("Server is not running.");
+                }
+                Ok(())
             }
-            Err(update_error(error))
-        }
+            Err(error) => {
+                if was_running {
+                    let _ = restart_server_inner(path, Duration::from_secs(10), false, true).await;
+                }
+                Err(update_error(error))
+            }
+        };
     }
+    Err(update_error(UpdateError::ManagerMetadataMalformed))
 }
 
 async fn server_is_running(path: &Path, paths: &RuntimePaths) -> bool {
