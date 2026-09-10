@@ -141,7 +141,7 @@ Q012 must:
 - audit freshness of Q005-Q009/Q011 evidence and rerun only affected environment qualification;
 - clean the registry dependency-ready table so Q012 is the only active handoff.
 
-Acceptance / closure addendum — 2026-09-10: Q012 is accepted. The versioned populated fixture, 14-route empty/populated/private matrix, semantic card/table/status/control comparison, negative data-content regressions, and 28 actual screenshot captures all passed. The Q001 manifest test, Q002 aggregate, Q003 database qualification, and Q010-equivalent final gates are green; accepted Q005-Q009/Q011 evidence remains fresh by the source-surface review recorded in [the Q012 closure](../closure/qualification/012-status.md). M10 is re-closed. The registry dependency-ready table is empty, and M11 is eligible only for a separate planning review; no M11 implementation plan is promoted automatically.
+Acceptance / closure addendum — 2026-09-10: Q012 is accepted. The versioned populated fixture, 14-route empty/populated/private matrix, semantic card/table/status/control comparison, negative data-content regressions, and 28 actual screenshot captures all passed. The Q001 manifest test, Q002 aggregate, Q003 database qualification, and Q010-equivalent final gates are green; accepted Q005-Q009/Q011 evidence remains fresh by the source-surface review recorded in [the Q012 closure](../closure/qualification/012-status.md). M10 is re-closed. The registry dependency-ready table now carries K002 as the sole ready M11 plan after accepted K001 closure; K003-K012 remain queued behind their direct predecessors.
 
 Exit: every mandatory Q001 dashboard cell is actually exercised; meaningful dashboard content differences fail qualification; actual visual review covers the declared page set; no high/medium M10 finding remains; aggregate final gates are green.
 
@@ -183,4 +183,4 @@ M10/Q012 does not:
 
 ## Closure posture
 
-Historical Q004/Q007/Q010/Q011 closure evidence remains append-only. Q012 is accepted and re-closes M10. The dependency-ready table is empty, and M11 is eligible only for a separate planning review; this closure does not authorize or auto-promote M11 implementation.
+Historical Q004/Q007/Q010/Q011 closure evidence remains append-only. Q012 is accepted and re-closes M10. K001 has since been accepted as the first M11 implementation plan, and K002 is now the sole dependency-ready plan; this closure does not authorize any later M11 promotion.

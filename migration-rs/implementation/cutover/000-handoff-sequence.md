@@ -1,11 +1,11 @@
 # M11 Rust Cutover Handoff Sequence
 
-Status: active; K001 ready
+Status: active; K002 ready
 
 Execute and accept in this order:
 
-1. K001 — freeze cutover version, public release inventory, installable-version catalog, target matrix, package-manager authority, and rollback window (**ready**).
-2. K002 — build the `eggpool` Rust binary as a Maturin `bin` PyPI wheel while preserving the root Python oracle package.
+1. K001 — freeze cutover version, public release inventory, installable-version catalog, target matrix, package-manager authority, and rollback window (**accepted/closed**).
+2. K002 — build the `eggpool` Rust binary as a Maturin `bin` PyPI wheel while preserving the root Python oracle package (**ready**).
 3. K003 — produce/qualify the Linux x86_64, Linux aarch64, and macOS arm64 wheel/raw artifact matrix and release manifest.
 4. K004 — implement trusted install-provenance detection and package-manager-aware exact transition authority.
 5. K005 — qualify Python -> Rust -> Python -> Rust exact transitions, failure rollback, concurrency, and data preservation.
@@ -35,4 +35,4 @@ Execute and accept in this order:
 - Production release is prohibited until K011.
 - Python deletion/packaging retirement is prohibited until M12.
 
-K001 is the sole dependency-ready handoff. K002-K012 are queued serially. K012 alone may close M11 and make M12 eligible for separate planning.
+K002 is the sole dependency-ready handoff. K003-K012 remain queued serially. K012 alone may close M11 and make M12 eligible for separate planning.

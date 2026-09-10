@@ -1,6 +1,6 @@
 # M11 Rust Cutover, Packaging, Release, and Cross-Era Versioning Roadmap
 
-Status: active planning; K001 dependency-ready
+Status: active implementation; K002 dependency-ready; K001 closed
 
 Repository baseline for planning: `aec794a060f6a9e71853a515fe50992446c41ebd` (accepted Q012 / M10 closure).
 
@@ -87,7 +87,7 @@ K001 cutover/package/version-catalog contract freeze
 M12 planning eligibility only after accepted K012 closure
 ```
 
-Only `../registry.md` authorizes implementation. K001 is the sole dependency-ready plan at registration.
+Only `../registry.md` authorizes implementation. K002 is the sole dependency-ready plan after K001 closure.
 
 ## K001 — Cutover/package/version-catalog contract freeze
 

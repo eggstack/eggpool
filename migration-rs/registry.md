@@ -16,6 +16,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 - [ADR-0001 — Side-by-side migration with Python as behavioral oracle](adrs/ADR-0001-side-by-side-python-oracle.md)
 - [ADR-0002 — Rust runtime, HTTP stack, SSR parity, and implementation location](adrs/ADR-0002-rust-runtime-http-ssr.md)
 - [ADR-0003 — Eggress in-process outbound connector replaces pproxy](adrs/ADR-0003-eggress-outbound-connector.md)
+- [ADR-0004 — PyPI remains the canonical package channel; Rust ships as binary wheels](adrs/ADR-0004-pypi-rust-wheel-and-install-authority.md)
 
 ## Subsystem roadmaps
 
@@ -34,9 +35,9 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| — | No implementation plan currently promoted | — | — | — |
+| K002 | [Rust PyPI binary-wheel packaging substrate](implementation/cutover/002-rust-pypi-binary-wheel-packaging-substrate.md) | infrastructure/capability | accepted K001 | **ready for handoff** |
 
-Q012 is accepted and re-closes M10. The dependency-ready table is intentionally empty. M11 is eligible for a separate planning review, but no M11 implementation plan is promoted automatically. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is the sole dependency-ready M11 plan. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -77,6 +78,7 @@ Q012 is accepted and re-closes M10. The dependency-ready table is intentionally 
 | Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | invariant/polish | `4d28e290`, corrective `daae984` | [historical aggregate closure; superseded for current M10 closure authority by Q012](closure/qualification/010-status.md) |
 | Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | `daae984` | [accepted](closure/qualification/011-status.md) |
 | Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | invariant/corrective | `bcc96c8`, `b41a9ae` | [accepted/closed](closure/qualification/012-status.md) |
+| K001 | [Cutover, package, and installable-version catalog contract freeze](implementation/cutover/001-cutover-package-and-version-catalog-contract-freeze.md) | invariant/infrastructure | `47905d54307afb6c73ccc7403a7dfa8702c36c22` | [closed](closure/cutover/001-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -172,8 +174,8 @@ Q012 corrects and requalifies only this dashboard/evidence boundary, plus any na
 
 ## Future work and block state
 
-M11 Rust cutover is **eligible for a separate planning review** now that Q012 has re-closed M10. No M11 implementation plan is promoted automatically. M12 remains sequenced behind M11.
+M11 Rust cutover is active. K001 is closed; K002 is promoted as the sole dependency-ready plan. K003-K012 remain queued behind their direct predecessors, and K012 alone may close M11. M12 remains sequenced behind M11.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. The dependency-ready table is empty; M11 is eligible only for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001 is closed with K002 ready; no later plan is unblocked until its direct predecessor closes.

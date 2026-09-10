@@ -1,6 +1,6 @@
 # K001 — Cutover, Package, and Installable-Version Catalog Contract Freeze
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-10
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -28,9 +28,18 @@ K001 converts the current implicit distribution state into a deterministic, mach
 
 No production release is published in K001.
 
+Implementation-time evidence superseded the planning-baseline assumption that
+PyPI stopped at 0.5.6: the live inventories now contain every stable release
+from 0.1.0 through 0.7.4. The frozen catalog records this observation rather
+than carrying forward the stale gap.
+
 ## Why this must precede packaging
 
-The repository says `0.7.4`, GitHub release history reaches `v0.7.4`, while the public PyPI project currently exposes releases only through `0.5.6`. Existing `eggpool update VERSION` semantics already accept exact targets, but no truthful cross-era guarantee exists until the install source for each target is known.
+At the planning baseline the repository said `0.7.4`, GitHub release history
+reached `v0.7.4`, and the public PyPI project appeared to stop at `0.5.6`.
+Implementation-time checks found PyPI releases through `0.7.4`, but the
+exact-switch contract still needed an immutable, checked-in authority for
+source identity, files, targets, manager ownership, and rollback safety.
 
 Publishing a Rust wheel first and deciding historical semantics later would create avoidable ambiguity around downgrades and could strand package-managed users.
 
