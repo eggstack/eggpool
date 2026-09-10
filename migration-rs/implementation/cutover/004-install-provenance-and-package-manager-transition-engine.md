@@ -1,6 +1,6 @@
 # K004 — Install Provenance and Package-Manager Transition Engine
 
-Status: queued; blocked on accepted K003
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

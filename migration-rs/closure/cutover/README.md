@@ -7,6 +7,7 @@ Expected records:
 - `001-status.md` — K001 cutover/package/version-catalog contract freeze
 - `002-status.md` — K002 Rust PyPI binary-wheel packaging substrate
 - `003-status.md` — K003 supported wheel/raw artifact matrix
+- `k003-release-manifest.json` — immutable staged candidate artifact manifest
 - `004-status.md` — K004 install provenance/package-manager transition engine
 - `005-status.md` — K005 cross-era exact transitions and rollback
 - `006-status.md` — K006 quick installer/existing-install adoption

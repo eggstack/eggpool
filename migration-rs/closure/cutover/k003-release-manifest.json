@@ -1,0 +1,110 @@
+{
+  "artifacts": [
+    {
+      "build": {
+        "linux_compatibility": "manylinux2014 / glibc 2.17 floor",
+        "macos_deployment_target": null,
+        "tool_versions": {
+          "maturin": "maturin 1.14.1",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)"
+        }
+      },
+      "product_target": "linux-aarch64",
+      "qualification": {
+        "result": "pass"
+      },
+      "raw": {
+        "filename": "eggpool-0.8.0-linux-aarch64",
+        "sha256": "5649db80ee42c4076d1311c575442c40952b9ce8efda80ee383fe2e961ade79a",
+        "size": 22694088
+      },
+      "rust_target": "aarch64-unknown-linux-gnu",
+      "wheel": {
+        "executable_member": "eggpool-0.8.0.data/scripts/eggpool",
+        "executable_sha256": "5649db80ee42c4076d1311c575442c40952b9ce8efda80ee383fe2e961ade79a",
+        "executable_size": 22694088,
+        "filename": "eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "platform_tags": [
+          "py3-none-manylinux_2_17_aarch64",
+          "py3-none-manylinux2014_aarch64"
+        ],
+        "requires_python": ">=3.11",
+        "sha256": "a351cfbcdb51556d4cd68d7e27f8504ee03043380b08aebe09caf5cd3842b653",
+        "size": 10243216
+      }
+    },
+    {
+      "build": {
+        "linux_compatibility": "manylinux2014 / glibc 2.17 floor",
+        "macos_deployment_target": null,
+        "tool_versions": {
+          "maturin": "maturin 1.14.1",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)"
+        }
+      },
+      "product_target": "linux-x86_64",
+      "qualification": {
+        "result": "pass"
+      },
+      "raw": {
+        "filename": "eggpool-0.8.0-linux-x86_64",
+        "sha256": "36797b324cda3142c6b888713d2a71606aaec7b5232698b65caf745edce44d43",
+        "size": 25943040
+      },
+      "rust_target": "x86_64-unknown-linux-gnu",
+      "wheel": {
+        "executable_member": "eggpool-0.8.0.data/scripts/eggpool",
+        "executable_sha256": "36797b324cda3142c6b888713d2a71606aaec7b5232698b65caf745edce44d43",
+        "executable_size": 25943040,
+        "filename": "eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "platform_tags": [
+          "py3-none-manylinux_2_17_x86_64",
+          "py3-none-manylinux2014_x86_64"
+        ],
+        "requires_python": ">=3.11",
+        "sha256": "3dc565d637c30f55391df445e541d6695745982f3a5932a91dbaa0f7f4bcc968",
+        "size": 10708133
+      }
+    },
+    {
+      "build": {
+        "linux_compatibility": null,
+        "macos_deployment_target": "11.0",
+        "tool_versions": {
+          "maturin": "maturin 1.14.1",
+          "rust": "rustc 1.98.1 (48a229cea 2026-09-01)"
+        }
+      },
+      "product_target": "macos-arm64",
+      "qualification": {
+        "result": "pass"
+      },
+      "raw": {
+        "filename": "eggpool-0.8.0-macos-aarch64",
+        "sha256": "28d1ef913b5c2aed0c3b74a5595620d8c36bd9d86dfa9063310f378b5df3d899",
+        "size": 28903400
+      },
+      "rust_target": "aarch64-apple-darwin",
+      "wheel": {
+        "executable_member": "eggpool-0.8.0.data/scripts/eggpool",
+        "executable_sha256": "28d1ef913b5c2aed0c3b74a5595620d8c36bd9d86dfa9063310f378b5df3d899",
+        "executable_size": 28903400,
+        "filename": "eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl",
+        "platform_tags": [
+          "py3-none-macosx_11_0_arm64"
+        ],
+        "requires_python": ">=3.11",
+        "sha256": "b8d8283ec968db2a280c5734cc92a0ba65ad00103a1c8ed97c331e7507fd55ac",
+        "size": 10819057
+      }
+    }
+  ],
+  "cargo_lock_sha256": "7876485f4a4aea44aa830175342b2a5721e47db036b2f1dcf65f21cef50e8a64",
+  "historical_backfill_candidates": [],
+  "manifest_version": "m11-release-manifest.v1",
+  "packaging_manifest_sha256": "c92725a4f970bd9bc808519f669501c83d24188c3d7c5b7e291edf248a308b48",
+  "qualification_result": "pass",
+  "release_version": "0.8.0",
+  "requires_python": ">=3.11",
+  "source_commit": "e1445e9560049171a24d7fa3e3aca2f252b6130c"
+}
