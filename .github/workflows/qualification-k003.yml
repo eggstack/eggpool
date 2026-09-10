@@ -89,7 +89,8 @@ jobs:
           --artifact-dir dist/k003
       - name: prove unsupported Windows resolution fails
         run: >-
-          bash -c '! uv pip install --system --dry-run --no-index
+          uv venv --quiet .k003-resolver && bash -c '! uv pip install
+          --python .k003-resolver/bin/python --dry-run --no-index
           --find-links dist/k003 --python-platform x86_64-pc-windows-msvc
           eggpool==0.8.0'
       - uses: actions/upload-artifact@v4
