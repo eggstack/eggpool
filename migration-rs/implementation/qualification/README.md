@@ -1,6 +1,6 @@
 # M10 Qualification Implementation Plans
 
-Status: active; Q007/Q010 blocked; Q008 physical evidence complete but blocked pending Q007 acceptance
+Status: closed after Q011 corrective pass; M11 planning eligible
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -14,18 +14,16 @@ These plans implement M10 only. They qualify the closed Rust implementation from
 4. [Q004 — Dashboard SSR, DOM, static asset, and visual parity review](004-dashboard-dom-static-and-visual-parity.md) — **accepted**; [closure](../../closure/qualification/004-status.md).
 5. [Q005 — Supported-target build and non-root runtime portability](005-supported-target-build-and-runtime-portability.md) — **accepted**; [closure](../../closure/qualification/005-status.md).
 6. [Q006 — Disposable rootful Linux operational acceptance](006-rootful-linux-operational-acceptance.md) — **accepted**; [closure](../../closure/qualification/006-status.md).
-7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **blocked; see closure**.
-8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **physical evidence complete; blocked behind Q007**.
-9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — **implemented; blocked behind Q008 acceptance; see closure**.
-10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — **blocked; closure attempted**; [closure](../../closure/qualification/010-status.md).
-11. [Q011 — Q007 live-provider corrective closure](011-q007-live-provider-corrective-closure.md) — **blocked pending maintainer-authorized live access**.
+7. [Q007 — Bounded live-provider interoperability smoke](007-live-provider-interoperability-smoke.md) — **original attempt blocked; corrective closure accepted by Q011**.
+8. [Q008 — ARM64 SBC functional and resource characterization](008-arm64-sbc-functional-and-resource-characterization.md) — **accepted by append-only re-acceptance**.
+9. [Q009 — Sustained failure, reload, streaming, and resource-stability qualification](009-sustained-failure-reload-stream-resource-stability.md) — **accepted by append-only re-acceptance**.
+10. [Q010 — Aggregate M10 closure and M11 readiness report](010-aggregate-m10-closure-and-m11-readiness.md) — **accepted by append-only re-acceptance**; [closure](../../closure/qualification/010-status.md).
+11. [Q011 — Q007 live-provider corrective closure](011-q007-live-provider-corrective-closure.md) — **accepted**; [closure](../../closure/qualification/011-status.md).
 
-Only `migration-rs/registry.md` authorizes implementation. Q007 remains the
-original blocked plan and Q011 is its corrective follow-up; both require real
-live-provider evidence before Q008 can unblock. Q009's deterministic local
-implementation and Q010's aggregate review are complete as blocked closure
-attempts. Later plans are promoted only by accepted closure in dependency
-order.
+Only `migration-rs/registry.md` authorizes implementation. Q007's original
+blocked record remains historical; Q011 accepted its corrective live evidence,
+and Q008-Q010 were re-accepted in dependency order. M10 is closed and M11 is
+eligible for a separate planning review, with no automatic M11 promotion.
 
 ## Hard boundaries
 

@@ -1,6 +1,6 @@
 # Q011 — Q007 Live-Provider Corrective Closure
 
-Status: blocked; queued behind maintainer-authorized live-provider access
+Status: accepted; closed 2026-09-10 (see [closure](../../closure/qualification/011-status.md))
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -15,6 +15,8 @@ Operational dependency: a maintainer-provided, test-only live-provider
 credential and a provider edge that permits the bounded Q001 request matrix.
 Credentials must remain outside the repository and all evidence must remain
 secret-free.
+
+Implementation commit: `daae984`
 
 ## Objective
 
@@ -47,6 +49,11 @@ reclassified as a successful provider interaction.
    turn the loopback run into a live pass.
 5. Add a deterministic regression for every EggPool defect discovered by a
    permitted live run, then rerun Q002 and the affected focused suites.
+
+Q011 used the permitted corrective fallback: GeneralCompute and MiniMax
+International as two structurally distinct authorized provider edges. The
+frozen seven-request budget was retained; the original OpenCode Go blocked
+attempt remains historical evidence.
 
 ## Non-goals
 

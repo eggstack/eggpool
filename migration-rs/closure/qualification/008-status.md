@@ -165,3 +165,13 @@ attempt. The physical run removes the operational SBC blocker, but a later
 Q007 acceptance is still required before Q008 can promote Q009. The new
 physical evidence is append-only; the original blocked artifact remains
 unchanged.
+
+## Append-only re-acceptance — 2026-09-10
+
+Q011 accepted the missing Q001 live-provider evidence using the bounded,
+secret-free GeneralCompute + MiniMax matrix. Q008's physical Raspberry Pi 5
+evidence remains valid: the corrective implementation changed only the
+qualification harness, fixtures, and deterministic regression tests, not the
+Rust runtime or deployment surfaces. Q008 is therefore re-accepted and
+promotes Q009. The original blocked disposition above is retained as
+historical evidence.

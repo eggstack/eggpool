@@ -139,3 +139,11 @@ promoted, Q010 remains queued behind Q009, and no future plan is unblocked. Q007
 remains the active blocked plan. A future Q007 acceptance must first promote
 Q008; only accepted Q008 can promote Q009, and only accepted Q009 can promote
 Q010. M11 remains blocked on accepted Q010 plus its separate planning review.
+
+## Append-only re-acceptance — 2026-09-10
+
+Q008 was re-accepted after Q011 closed the live-provider dependency. Q009's
+deterministic six-phase run, resource convergence, restart/reconciliation
+evidence, and focused regressions remain valid because Q011 changed no Rust
+runtime or stability surface. Q009 is therefore re-accepted and promotes
+Q010. The original blocked closure remains unchanged above.

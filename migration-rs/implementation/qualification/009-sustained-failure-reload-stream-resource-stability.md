@@ -1,6 +1,6 @@
 # Q009 — Sustained Failure, Reload, Streaming, and Resource-Stability Qualification
 
-Status: blocked; implementation and closure attempted 2026-09-09 (see [closure](../../closure/qualification/009-status.md))
+Status: accepted after Q008 re-acceptance; closed 2026-09-10 (see [closure](../../closure/qualification/009-status.md))
 
 Source roadmap: `migration-rs/subsystems/qualification-roadmap.md`
 
@@ -8,7 +8,7 @@ Repository baseline: planning baseline `00dd27fa103e3c663968ecd95d9289c60fca0601
 
 Primary class: invariant/polish
 
-Hard dependency: accepted Q008 (Q008 remains blocked pending Q007 acceptance).
+Hard dependency: accepted Q008 after Q011 corrective live-provider closure.
 
 ## Objective
 

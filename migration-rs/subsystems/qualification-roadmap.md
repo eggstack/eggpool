@@ -1,6 +1,6 @@
 # M10 Full Qualification, Portability, and SBC Characterization Roadmap
 
-Status: active planning/implementation; Q007/Q010 blocked on live evidence; Q008 physical evidence complete but blocked behind Q007
+Status: closed after Q011 corrective pass; M11 planning eligible
 
 Repository baseline: `00dd27fa103e3c663968ecd95d9289c60fca0601` (accepted O010 / M9 closure).
 
@@ -71,20 +71,19 @@ Q001 qualification contract, target matrix, and evidence schema freeze
  -> Q004 dashboard SSR/DOM/static/visual parity review (accepted)
  -> Q005 supported-target build and non-root runtime portability (accepted; see closure)
  -> Q006 disposable rootful Linux operational acceptance (accepted; see closure)
- -> Q007 bounded live-provider interoperability smoke (blocked; see closure)
- -> Q008 ARM64 SBC functional/resource characterization
- -> Q009 sustained failure/reload/stream/resource-stability qualification (implemented; blocked behind Q008 acceptance)
- -> Q010 aggregate M10 closure and M11 readiness report
+ -> Q007 bounded live-provider interoperability smoke (accepted via Q011 corrective closure)
+ -> Q008 ARM64 SBC functional/resource characterization (accepted)
+ -> Q009 sustained failure/reload/stream/resource-stability qualification (accepted)
+ -> Q010 aggregate M10 closure and M11 readiness report (accepted; M10 closed)
   |
   v
 M11 planning eligibility only after accepted Q010 closure
 ```
 
-Only `../registry.md` authorizes implementation. Q007 remains blocked on live
-evidence; Q011 is the corrective follow-up created by the blocked Q010 review.
-Q008's physical run and Q009's deterministic implementation are complete but
-their closures remain blocked in dependency order. No later plan is
-dependency-ready.
+Only `../registry.md` authorizes implementation. Q007's original blocked
+closure remains historical; Q011 accepted the corrective live evidence, and
+Q008-Q010 were re-accepted in dependency order. M10 is closed; M11 is eligible
+for a separate planning review, but no M11 implementation is auto-promoted.
 
 ## Qualification environment classes
 
@@ -199,19 +198,20 @@ Q010 does not itself flip installation/release authority. It answers whether the
 
 Exit: no unresolved high/medium migration correctness, security, data-loss, compatibility, lifecycle, resource, target-support, or dashboard finding remains; required live/Linux/SBC evidence exists; M11 is eligible for a separate cutover planning review.
 
-Q010's current-main closure attempt is recorded as blocked in
+Q010's original current-main closure attempt is recorded as blocked in
 [`../closure/qualification/010-status.md`](../closure/qualification/010-status.md).
 The deterministic and environment gates passed, but the mandatory Q007 live
-cell remains unresolved after an HTTP 403 provider-edge response.
+cell was subsequently closed by the accepted Q011 corrective record and the
+append-only Q010 re-acceptance addendum.
 
 ## Q011 — Q007 live-provider corrective closure
 
-Q011 is the narrow corrective follow-up for the unresolved Q007 live evidence.
-It reuses the existing bounded harness and owns no public cutover work. Q011
-requires maintainer-authorized live-provider access, a real success matrix or
-an explicitly reviewed provider-transport decision, and deterministic
-regressions for any discovered EggPool defect. It must be accepted before
-Q008 can promote Q009, Q009 can promote Q010, or M11 can become eligible.
+Q011 was the narrow corrective follow-up for the unresolved Q007 live
+evidence. Its accepted record uses the existing bounded harness with two
+authorized provider edges, retains the seven-request cap, and records
+deterministic regressions for the discovered provider/wire boundary. Q008,
+Q009, and Q010 were then re-accepted in dependency order; M11 is eligible for
+its separate planning review.
 
 ## Evidence model
 

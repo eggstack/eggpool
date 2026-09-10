@@ -28,7 +28,7 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **active planning/implementation** | **Q007/Q010 blocked; Q011 corrective follow-up** |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **closed after Q011 corrective pass** | **Q010 accepted; M11 planning eligible** |
 
 ## Dependency-ready implementation plans
 
@@ -38,15 +38,12 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 | Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | invariant | accepted Q002 | **complete; see closure** |
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | accepted Q004 | **accepted; see closure** |
 
-| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | invariant/polish | accepted Q006 | **blocked; see closure** |
-| Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | accepted Q006; blocked Q007 evidence | **blocked; maintainer live access required** |
+| — | — | — | — | **No M10 plan is currently dependency-ready; Q007-Q011 are closed/accepted below** |
 
-No M10 implementation plan is currently dependency-ready. Q007 and its Q011
-corrective follow-up are blocked on real live-provider evidence; Q008 has
-completed its physical run but remains blocked by Q007; Q009 has completed its
-deterministic local implementation but its closure is blocked behind Q008; and
-Q010 has a blocked aggregate closure. Later plans are promoted only by
-accepted closure in direct dependency order.
+No M10 implementation plan is currently dependency-ready. Q007's original
+blocked attempt is retained as history, Q011 is accepted as its corrective
+closure, and Q008-Q010 were re-accepted in direct dependency order. M10 is
+closed; M11 is eligible only for its separate planning review.
 
 ## Completed implementation plans
 
@@ -81,6 +78,11 @@ accepted closure in direct dependency order.
 | Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | invariant/polish | `73fad30f4eb79bcc75c38bd33a72c5b993f970cc` | [accepted](closure/qualification/004-status.md) |
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | invariant/polish | `76d329f3` | [accepted](closure/qualification/005-status.md) |
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | invariant/capability | `c090ca0d` | [accepted](closure/qualification/006-status.md) |
+| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | invariant/polish | `a0b2e75`, `c3e045c`, corrective `daae984` | [historical blocked + corrective accepted](closure/qualification/011-status.md) |
+| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | invariant/polish | `ed82ed29`, `64ff9b4d` | [accepted by addendum](closure/qualification/008-status.md) |
+| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | invariant/polish | `0989d6e4`, corrective `daae984` | [accepted by addendum](closure/qualification/009-status.md) |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | invariant/polish | `4d28e290`, corrective `daae984` | [accepted by addendum](closure/qualification/010-status.md) |
+| Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | invariant/polish | `daae984` | [accepted](closure/qualification/011-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -163,10 +165,10 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 | Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | **accepted; see closure** |
 | Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | **accepted; see closure** |
 | Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | **accepted; see closure** |
-| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **blocked; see closure** |
-| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | physical evidence complete; blocked behind Q007 |
-| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | implemented; blocked behind Q008 |
-| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | blocked; closure attempted; see [closure](closure/qualification/010-status.md) |
+| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | **original attempt blocked; corrective closure accepted by Q011** |
+| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | **accepted by append-only re-acceptance** |
+| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | **accepted by append-only re-acceptance** |
+| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | **accepted by append-only re-acceptance; M10 closed** |
 
 ### M10 boundary decisions
 
@@ -181,8 +183,10 @@ M10 is evidence-focused and owns migration-wide deterministic qualification, DB 
 
 ## Future work and block state
 
-M11 Rust cutover is **blocked** on accepted Q010 M10 closure and its own separate planning review. M12 remains sequenced behind M11. No M11/M12 plan is promoted automatically by M10 planning. Q010's blocked closure promotes no future plan.
+M11 Rust cutover is **not implemented** and requires its own separate planning
+review after accepted Q010. M12 remains sequenced behind M11. No M11/M12 plan
+is promoted automatically by M10 planning.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 are accepted within active M10; Q007 and Q011 are blocked on live-provider evidence, Q008 has physical evidence but remains blocked behind Q007, Q009 has a passing deterministic implementation but a blocked closure behind Q008, and Q010 has a blocked aggregate closure. Only accepted Q010 may close M10 and make M11 eligible for a separate planning review.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 are closed as described above. Q001-Q006 and the Q007 corrective chain are accepted; Q007's original blocked attempt remains historical, Q008-Q010 were re-accepted in dependency order, and M10 is closed. M11 is eligible for a separate planning review only.

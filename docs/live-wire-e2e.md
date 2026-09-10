@@ -71,6 +71,25 @@ Use `--env-file` only with a local, uncommitted dotenv file when the selected
 credential is not exported. The deterministic loopback rehearsal is
 `--offline-fake`; it must not be described as live-provider evidence.
 
+Q011's corrective profile is a separate, still opt-in seven-request matrix
+for two authorized provider edges. It uses GeneralCompute's OpenAI-compatible
+Chat surface and MiniMax International's Anthropic Messages surface, including
+Responses/Chat adaptation, streaming terminal evidence, and one Chat-to-Messages
+cell:
+
+```bash
+uv run python scripts/qualification_live_provider.py \
+  --binary rust/target/release/eggpool \
+  --enable-live --profile q011-multi \
+  --provider-key-env Q011_GENERALCOMPUTE_KEY \
+  --secondary-provider-key-env Q011_MINIMAX_KEY \
+  --output migration-rs/closure/qualification/011-run.json
+```
+
+Both credentials are supplied only through the invoking environment. The
+profile retains the Q007 maximum request budget and writes only bounded,
+secret-free evidence.
+
 ## Deterministic migration acceptance
 
 The mandatory stale-profile check uses an in-process fake upstream:

@@ -199,3 +199,21 @@ provider access. Q008, Q009, and M11 remain blocked; no future plan is
 dependency-ready. Once Q011 is accepted, the only valid promotion order is
 Q008, then Q009, then a new Q010 acceptance review; only that accepted Q010
 may make M11 eligible for its separate planning review.
+
+## Append-only re-acceptance — 2026-09-10
+
+Q011 accepted the mandatory live-provider cell through its alternate
+authorized two-provider matrix. Q008 and Q009 were then re-accepted in direct
+dependency order. Q002 remains green on current main (18 pass, 0 fail/block/
+skip); the serial Rust suite passed 445 tests across 52 suites; the migration
+suite passed 161 tests with 3 skips; and smoke passed 14 tests. The Q011
+artifact records 7/7 live cells, 7 completed requests, 0 pending requests,
+and 0 active reservations.
+
+No Q010 source/runtime contract changed after the previously accepted
+Q003-Q009 evidence; the Q011 changes are qualification-only and are covered
+by the current deterministic reruns. Q010 is re-accepted and M10 is closed.
+M11 is eligible for a separate planning review, but no M11 implementation,
+installer switch, release publication, or updater-authority change is
+promoted by this addendum. The blocked record above remains historical and
+append-only.
