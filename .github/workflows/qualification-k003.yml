@@ -72,6 +72,10 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.11"
+      - name: restore raw executable staging mode
+        run: >-
+          find dist/k003 -type f \( -name 'eggpool-0.8.0-linux-*' -o
+          -name 'eggpool-0.8.0-macos-*' \) -exec chmod 755 {} +
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/create_cutover_manifest.py
