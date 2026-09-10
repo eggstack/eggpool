@@ -35,7 +35,7 @@ def _require(value: object, label: str) -> str:
 
 
 def _check_no_unsupported_files(artifact_dir: Path, expected: set[str]) -> None:
-    actual = {path.name for path in artifact_dir.iterdir() if path.is_file()}
+    actual = {path.name for path in artifact_dir.rglob("*") if path.is_file()}
     unexpected = sorted(
         name
         for name in actual - expected
@@ -43,6 +43,13 @@ def _check_no_unsupported_files(artifact_dir: Path, expected: set[str]) -> None:
     )
     if unexpected:
         raise ValidationError(f"unsupported or unmanifested artifact: {unexpected[0]}")
+
+
+def _artifact_path(artifact_dir: Path, filename: str) -> Path:
+    matches = sorted(path for path in artifact_dir.rglob(filename) if path.is_file())
+    if len(matches) != 1:
+        raise ValidationError(f"artifact file is missing or duplicated: {filename}")
+    return matches[0]
 
 
 def _linux_evidence(binary: Path) -> dict[str, Any]:
@@ -145,8 +152,12 @@ def validate_manifest(
             raise ValidationError("Rust target disagrees with target matrix")
         wheel = cast("dict[str, Any]", record.get("wheel"))
         raw = cast("dict[str, Any]", record.get("raw"))
-        wheel_path = artifact_dir / _require(wheel.get("filename"), "wheel.filename")
-        raw_path = artifact_dir / _require(raw.get("filename"), "raw.filename")
+        wheel_path = _artifact_path(
+            artifact_dir, _require(wheel.get("filename"), "wheel.filename")
+        )
+        raw_path = _artifact_path(
+            artifact_dir, _require(raw.get("filename"), "raw.filename")
+        )
         expected_files.update({wheel_path.name, raw_path.name})
         try:
             inspection = inspect_wheel(

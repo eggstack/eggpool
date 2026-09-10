@@ -78,7 +78,11 @@ def _tool_versions() -> dict[str, str]:
 
 def _raw_path(artifact_dir: Path, version: str, target_class: str) -> Path:
     target = TARGETS[target_class]
-    return artifact_dir / f"eggpool-{version}-{target['os']}-{target['arch']}"
+    name = f"eggpool-{version}-{target['os']}-{target['arch']}"
+    matches = sorted(path for path in artifact_dir.rglob(name) if path.is_file())
+    if len(matches) != 1:
+        raise ManifestError(f"expected exactly one raw asset for {target_class}")
+    return matches[0]
 
 
 def _wheel_record(
@@ -89,7 +93,7 @@ def _wheel_record(
 ) -> dict[str, Any]:
     wheels = [
         path
-        for path in sorted(artifact_dir.glob(f"eggpool-{version}-*.whl"))
+        for path in sorted(artifact_dir.rglob(f"eggpool-{version}-*.whl"))
         if any(
             path.name.endswith(f"{platform_tag}.whl")
             for platform_tag in TARGET_PLATFORMS[target_class]
