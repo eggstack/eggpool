@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q007-live.toml"
+Q011_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q011-live.toml"
 DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/007-run.json"
 MANIFEST_VERSION = "m10-q001.v1"
 SCHEMA_VERSION = "m10-q007.v1"
@@ -90,6 +91,7 @@ class RequestCase:
     expected_surface: str
     streaming: bool
     cross_surface: bool = False
+    provider_id: str = "opencode-go"
 
 
 CASES: tuple[RequestCase, ...] = (
@@ -144,6 +146,81 @@ CASES: tuple[RequestCase, ...] = (
         True,
     ),
 )
+
+# Q011's corrective matrix keeps the frozen seven-request budget while using
+# two independently authorized provider edges.  GeneralCompute supplies the
+# OpenAI-compatible Chat surface (including Responses/Messages adaptation),
+# and MiniMax International supplies the Anthropic Messages surface.
+Q011_CASES: tuple[RequestCase, ...] = (
+    RequestCase(
+        "responses-finite",
+        "gpt-oss-120b",
+        "responses",
+        "openai_chat_completions",
+        False,
+        provider_id="generalcompute",
+    ),
+    RequestCase(
+        "chat-finite",
+        "gpt-oss-120b",
+        "chat_completions",
+        "openai_chat_completions",
+        False,
+        provider_id="generalcompute",
+    ),
+    RequestCase(
+        "messages-finite",
+        "MiniMax-M2.5",
+        "messages",
+        "anthropic_messages",
+        False,
+        provider_id="minimax",
+    ),
+    RequestCase(
+        "chat-to-messages-finite",
+        "MiniMax-M2.5",
+        "chat_completions",
+        "anthropic_messages",
+        False,
+        True,
+        "minimax",
+    ),
+    RequestCase(
+        "responses-stream",
+        "gpt-oss-120b",
+        "responses",
+        "openai_chat_completions",
+        True,
+        provider_id="generalcompute",
+    ),
+    RequestCase(
+        "chat-stream",
+        "gpt-oss-120b",
+        "chat_completions",
+        "openai_chat_completions",
+        True,
+        provider_id="generalcompute",
+    ),
+    RequestCase(
+        "messages-stream",
+        "MiniMax-M2.5",
+        "messages",
+        "anthropic_messages",
+        True,
+        provider_id="minimax",
+    ),
+)
+
+_PROFILE_CASES = {"opencode-go": CASES, "q011-multi": Q011_CASES}
+_PROFILE_FIXTURES = {"opencode-go": DEFAULT_FIXTURE, "q011-multi": Q011_FIXTURE}
+_PROFILE_MODELS = {
+    "opencode-go": set(_MODEL_SURFACES),
+    "q011-multi": {"gpt-oss-120b", "MiniMax-M2.5"},
+}
+_PROFILE_PROVIDER_LABELS = {
+    "opencode-go": "OpenCode Go",
+    "q011-multi": "GeneralCompute + MiniMax International",
+}
 
 
 def bounded(value: str, secrets: Sequence[str] = ()) -> str:
@@ -213,14 +290,16 @@ def _render_config(
     *,
     port: int,
     database: Path,
-    upstream: str,
+    upstream: str | None = None,
+    provider_upstreams: Mapping[str, str] | None = None,
 ) -> None:
     content = fixture.read_text(encoding="utf-8")
     replacements = {
         "__Q007_PORT__": str(port),
         "__Q007_DATABASE__": str(database),
-        "__Q007_UPSTREAM__": upstream,
+        "__Q007_UPSTREAM__": upstream or "",
     }
+    replacements.update(provider_upstreams or {})
     for marker, value in replacements.items():
         content = content.replace(marker, value)
     if "__Q007_" in content:
@@ -629,6 +708,7 @@ def _case_record(
 ) -> dict[str, Any]:
     record: dict[str, Any] = {
         "id": case.case_id,
+        "provider_id": case.provider_id,
         "model_id": case.model_id,
         "client_surface": case.client_surface,
         "expected_upstream_surface": case.expected_surface,
@@ -679,37 +759,66 @@ def _latest_request_snapshot(database: Path) -> tuple[bool | None, dict[str, Any
 def run_qualification(
     *,
     binary: Path,
-    config_fixture: Path = DEFAULT_FIXTURE,
+    config_fixture: Path | None = None,
     output: Path | None = None,
     live: bool = False,
     provider_key_env: str = "EGGPOOL_E2E_OPENCODE_GO_API_KEY",
+    secondary_provider_key_env: str | None = None,
+    profile: str = "opencode-go",
     env_file: Path | None = None,
     timeout: float = REQUEST_TIMEOUT,
 ) -> dict[str, Any]:
     """Run Q007 against a real provider or the deterministic fake provider."""
-    validate_request_plan()
+    if profile not in _PROFILE_CASES:
+        raise QualificationError(f"unknown Q007 provider profile: {profile}")
+    cases = _PROFILE_CASES[profile]
+    fixture = config_fixture or _PROFILE_FIXTURES[profile]
+    validate_request_plan(cases)
     if not live and provider_key_env == "":
         raise QualificationError("provider key environment name must not be empty")
+    if not live and profile != "opencode-go":
+        raise QualificationError("the corrective multi-provider profile is live-only")
 
     loaded_env: dict[str, str] = {}
     if env_file is not None:
         loaded_env = _parse_env_file(env_file)
     provider_key = os.environ.get(provider_key_env) or loaded_env.get(provider_key_env)
-    if live and not provider_key:
+    secondary_key = None
+    if secondary_provider_key_env:
+        secondary_key = os.environ.get(secondary_provider_key_env) or loaded_env.get(
+            secondary_provider_key_env
+        )
+    missing_keys = [
+        name
+        for name, value in (
+            (provider_key_env, provider_key),
+            (secondary_provider_key_env, secondary_key),
+        )
+        if name and not value
+    ]
+    if live and missing_keys:
         return {
             "schema": SCHEMA_VERSION,
             "manifest": MANIFEST_VERSION,
             "plan": "Q007",
             "status": "blocked",
             "reason": (
-                f"credential environment variable {provider_key_env!r} is unavailable"
+                "credential environment variable(s) unavailable: "
+                f"{', '.join(missing_keys)}"
             ),
             "budget": {
                 "maximum_requests": MAX_REQUESTS,
-                "planned_requests": len(CASES),
+                "planned_requests": len(cases),
             },
             "cells": [],
-            "credentials": {"source": "environment", "name": provider_key_env},
+            "credentials": {
+                "source": "environment",
+                "names": [
+                    name
+                    for name in (provider_key_env, secondary_provider_key_env)
+                    if name
+                ],
+            },
         }
     if not binary.is_file():
         raise QualificationError("candidate binary does not exist")
@@ -726,7 +835,9 @@ def run_qualification(
         ),
         "candidate_sha256": _sha256(binary),
         "transport": "direct",
-        "provider": "OpenCode Go" if live else "loopback fake provider",
+        "provider": _PROFILE_PROVIDER_LABELS[profile]
+        if live
+        else "loopback fake provider",
     }
     report: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
@@ -736,26 +847,29 @@ def run_qualification(
         "environment": environment,
         "budget": {
             "maximum_requests": MAX_REQUESTS,
-            "planned_requests": len(CASES),
+            "planned_requests": len(cases),
             "max_output_tokens": 16,
             "automatic_retry_policy": "EggPool ordinary bounded policy only",
         },
         "planned_matrix": [
             {
                 "id": case.case_id,
+                "provider_id": case.provider_id,
                 "model_id": case.model_id,
                 "client_surface": case.client_surface,
                 "upstream_surface": case.expected_surface,
                 "streaming": case.streaming,
                 "cross_surface": case.cross_surface,
             }
-            for case in CASES
+            for case in cases
         ],
         "cells": [],
         "proxy": {"status": "not-applicable", "reason": "no Q001 live proxy cell"},
         "credentials": {
             "source": "environment variable",
-            "name": provider_key_env,
+            "names": [
+                name for name in (provider_key_env, secondary_provider_key_env) if name
+            ],
             "values_written_to_evidence": False,
         },
         "redaction_review": {
@@ -777,24 +891,36 @@ def run_qualification(
         started = time.monotonic()
         try:
             upstream = ""
+            provider_upstreams: dict[str, str] = {}
             if live:
-                upstream = "https://opencode.ai/zen/go/v1"
+                provider_upstreams = {
+                    "__Q011_GENERALCOMPUTE_UPSTREAM__": "https://api.generalcompute.com/v1",
+                    "__Q011_MINIMAX_UPSTREAM__": "https://api.minimax.io/anthropic",
+                }
+                if profile == "opencode-go":
+                    upstream = "https://opencode.ai/zen/go/v1"
             else:
                 fake_provider = FakeProvider()
                 fake_provider.__enter__()
                 upstream = fake_provider.base_url
             _render_config(
-                config_fixture,
+                fixture,
                 config,
                 port=_port(),
                 database=database,
                 upstream=upstream,
+                provider_upstreams=provider_upstreams if live else None,
             )
             child_env = os.environ.copy()
             child_env.update(loaded_env)
             if live:
                 assert provider_key is not None
-                child_env["Q007_PROVIDER_API_KEY"] = provider_key
+                if profile == "opencode-go":
+                    child_env["Q007_PROVIDER_API_KEY"] = provider_key
+                else:
+                    assert secondary_key is not None
+                    child_env["Q011_GENERALCOMPUTE_API_KEY"] = provider_key
+                    child_env["Q011_MINIMAX_API_KEY"] = secondary_key
             else:
                 child_env["Q007_PROVIDER_API_KEY"] = FAKE_PROVIDER_KEY
             child_env["SERVER_API_KEY"] = SERVER_KEY
@@ -837,7 +963,9 @@ def run_qualification(
                             model_ids.add(model_item["id"])
             except (UnicodeDecodeError, AttributeError, json.JSONDecodeError):
                 model_ids = set()
-            expected_models = set(_FAKE_MODELS) if not live else set(_MODEL_SURFACES)
+            expected_models = (
+                set(_FAKE_MODELS) if not live else _PROFILE_MODELS[profile]
+            )
             if not expected_models <= model_ids:
                 raise QualificationError(
                     "model catalog omitted a planned Q007 model: "
@@ -848,7 +976,7 @@ def run_qualification(
                 "expected_models": sorted(expected_models),
                 "resolved_models": sorted(expected_models & model_ids),
             }
-            for case in CASES:
+            for case in cases:
                 request_body = json.dumps(_payload(case)).encode()
                 headers = {
                     "Authorization": f"Bearer {SERVER_KEY}",
@@ -897,12 +1025,12 @@ def run_qualification(
             if stdout_path.exists():
                 report["candidate_stdout"] = bounded(
                     stdout_path.read_text(encoding="utf-8", errors="replace"),
-                    (provider_key or "",),
+                    tuple(secret for secret in (provider_key, secondary_key) if secret),
                 )
             if stderr_path.exists():
                 report["candidate_stderr"] = bounded(
                     stderr_path.read_text(encoding="utf-8", errors="replace"),
-                    (provider_key or "",),
+                    tuple(secret for secret in (provider_key, secondary_key) if secret),
                 )
             if fake_provider is not None:
                 fake_provider.__exit__(None, None, None)
@@ -913,7 +1041,7 @@ def run_qualification(
                 report["reason"] = "durable pending requests remain after shutdown"
             if report["durable"].get("active_reservations") != 0:
                 report["reason"] = "active reservations remain after shutdown"
-        if "reason" not in report and len(report["cells"]) == len(CASES):
+        if "reason" not in report and len(report["cells"]) == len(cases):
             report["status"] = "pass"
         report["offline_fake"] = not live
     return report
@@ -922,8 +1050,15 @@ def run_qualification(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--config-fixture", type=Path, default=DEFAULT_FIXTURE)
+    parser.add_argument("--config-fixture", type=Path)
     parser.add_argument("--provider-key-env", default="EGGPOOL_E2E_OPENCODE_GO_API_KEY")
+    parser.add_argument("--secondary-provider-key-env")
+    parser.add_argument(
+        "--profile",
+        choices=tuple(_PROFILE_CASES),
+        default="opencode-go",
+        help="provider matrix profile (q011-multi is the corrective two-provider run)",
+    )
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--enable-live", action="store_true")
     parser.add_argument("--offline-fake", action="store_true")
@@ -936,15 +1071,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.enable_live == args.offline_fake:
         raise SystemExit("Q007 requires exactly one of --enable-live or --offline-fake")
+    cases = _PROFILE_CASES[args.profile]
     print(
         json.dumps(
             {
                 "plan": "Q007",
                 "status": "planned",
-                "requests": len(CASES),
-                "models": sorted({case.model_id for case in CASES}),
-                "surfaces": sorted({case.expected_surface for case in CASES}),
-                "streaming_requests": sum(case.streaming for case in CASES),
+                "profile": args.profile,
+                "requests": len(cases),
+                "models": sorted({case.model_id for case in cases}),
+                "surfaces": sorted({case.expected_surface for case in cases}),
+                "streaming_requests": sum(case.streaming for case in cases),
             }
         )
     )
@@ -955,6 +1092,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             output=args.output,
             live=args.enable_live,
             provider_key_env=args.provider_key_env,
+            secondary_provider_key_env=args.secondary_provider_key_env,
+            profile=args.profile,
             env_file=args.env_file,
             timeout=args.timeout,
         )

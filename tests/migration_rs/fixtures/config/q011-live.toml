@@ -1,0 +1,76 @@
+[server]
+host = "127.0.0.1"
+port = __Q007_PORT__
+api_key = "q007-server-key"
+max_request_body_bytes = 1048576
+
+[database]
+path = "__Q007_DATABASE__"
+
+[dashboard]
+enabled = false
+
+[models]
+startup_refresh = true
+refresh_interval_s = 60
+
+[model_info]
+enabled = false
+startup_refresh = false
+
+[providers.generalcompute]
+id = "generalcompute"
+base_url = "__Q011_GENERALCOMPUTE_UPSTREAM__"
+protocols = ["openai"]
+models_method = "GET"
+models_path = "/models"
+
+[providers.generalcompute.wire_surfaces.openai_chat_completions]
+path_template = "/chat/completions"
+priority = 100
+
+[providers.generalcompute.wire_surfaces.openai_chat_completions.auth]
+mode = "bearer"
+
+[providers.generalcompute.model_wire."gpt-oss-120b"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[[providers.generalcompute.static_models]]
+id = "gpt-oss-120b"
+protocol = "openai"
+
+[[providers.generalcompute.accounts]]
+name = "q011-generalcompute"
+api_key_env = "Q011_GENERALCOMPUTE_API_KEY"
+
+[providers.minimax]
+id = "minimax"
+base_url = "__Q011_MINIMAX_UPSTREAM__"
+protocols = ["anthropic"]
+models_method = "GET"
+models_path = "/v1/models"
+
+[providers.minimax.wire_surfaces.anthropic_messages]
+path_template = "/v1/messages"
+priority = 100
+
+[providers.minimax.wire_surfaces.anthropic_messages.auth]
+mode = "api_key"
+header = "x-api-key"
+
+[[providers.minimax.wire_surfaces.anthropic_messages.headers]]
+name = "anthropic-version"
+value = "2023-06-01"
+
+[providers.minimax.model_wire."MiniMax-M2.5"]
+preferred_surface = "anthropic_messages"
+fixed = true
+
+[[providers.minimax.static_models]]
+id = "MiniMax-M2.5"
+protocol = "anthropic"
+
+[[providers.minimax.accounts]]
+name = "q011-minimax"
+api_key_env = "Q011_MINIMAX_API_KEY"

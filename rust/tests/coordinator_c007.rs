@@ -991,6 +991,7 @@ async fn finite_forwards_filtered_headers_and_never_leaks_client_credentials() {
     let mut incoming = HeaderMap::new();
     incoming.insert("authorization", "Bearer client-secret".parse().unwrap());
     incoming.insert("x-custom-in", "forwarded".parse().unwrap());
+    incoming.insert("x-opencode-session", "q011-session".parse().unwrap());
     let request = FiniteRequest::new(
         "proxy-credential-hygiene",
         client_request_body(ClientSurface::ChatCompletions),
@@ -1023,6 +1024,10 @@ async fn finite_forwards_filtered_headers_and_never_leaks_client_credentials() {
     assert!(
         text.contains("x-custom-in: forwarded"),
         "allowed headers are forwarded: {text}"
+    );
+    assert!(
+        text.contains("x-opencode-session: q011-session"),
+        "provider-required session headers are forwarded: {text}"
     );
     assert!(
         !text.contains("client-secret"),

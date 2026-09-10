@@ -425,6 +425,33 @@ fn responses_codec_preserves_native_items_controls_and_usage() {
 }
 
 #[test]
+fn responses_codec_accepts_provider_incomplete_response_with_null_error() {
+    let codec = OpenAiResponsesCodec;
+    let decoded = codec
+        .decode_response(
+            &json!({
+                "id": "resp-live",
+                "object": "response",
+                "status": "incomplete",
+                "model": "muse-spark-1.2-contributor",
+                "error": null,
+                "output": [],
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "usage": {"input_tokens": 11, "output_tokens": 16, "total_tokens": 27}
+            }),
+            200,
+        )
+        .expect("a valid incomplete Responses result should decode")
+        .value;
+    let DecodedProviderPayload::Response(response) = decoded else {
+        panic!("expected a successful Responses result")
+    };
+    assert_eq!(response.finish_reason.as_deref(), Some("incomplete"));
+    assert!(response.output.is_empty());
+    assert_eq!(response.usage.as_ref().unwrap().total_tokens, Some(27));
+}
+
+#[test]
 fn generate_content_codec_maps_parts_tools_reasoning_and_schema() {
     let codec = GeminiGenerateContentCodec;
     let request = OpenAiChatCodec

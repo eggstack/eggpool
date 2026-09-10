@@ -1,0 +1,345 @@
+{
+  "budget": {
+    "automatic_retry_policy": "EggPool ordinary bounded policy only",
+    "max_output_tokens": 16,
+    "maximum_requests": 8,
+    "planned_requests": 7
+  },
+  "candidate_stderr": "",
+  "candidate_stdout": "2026-09-10T16:02:46.319072Z INFO Rust development server listening address=\"127.0.0.1:51518\"",
+  "catalog": {
+    "expected_models": [
+      "MiniMax-M2.5",
+      "gpt-oss-120b"
+    ],
+    "resolved_models": [
+      "MiniMax-M2.5",
+      "gpt-oss-120b"
+    ],
+    "status": "pass"
+  },
+  "cells": [
+    {
+      "attempt_error_class": null,
+      "client_surface": "responses",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "responses-finite",
+      "input_tokens": 71,
+      "model_id": "gpt-oss-120b",
+      "output_tokens": 16,
+      "provider_id": "generalcompute",
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 183,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "input_tokens": 71,
+          "output_tokens": 16,
+          "reported": true,
+          "total_tokens": 87
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "chat_completions",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "chat-finite",
+      "input_tokens": 71,
+      "model_id": "gpt-oss-120b",
+      "output_tokens": 52,
+      "provider_id": "generalcompute",
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 1127,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "completion_tokens": 52,
+          "prompt_tokens": 71,
+          "reported": true,
+          "total_tokens": 123
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "messages",
+      "content_type": "application/json",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/messages",
+      "expected_upstream_surface": "anthropic_messages",
+      "http_status": 200,
+      "id": "messages-finite",
+      "input_tokens": 45,
+      "model_id": "MiniMax-M2.5",
+      "output_tokens": 16,
+      "provider_id": "minimax",
+      "raw_response_body_retained": false,
+      "request_id_present": false,
+      "response": {
+        "body_bytes": 413,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "input_tokens": 45,
+          "output_tokens": 16,
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "chat_completions",
+      "content_type": "application/json",
+      "cross_surface": true,
+      "durable_status": "completed",
+      "expected_upstream_path": "/messages",
+      "expected_upstream_surface": "anthropic_messages",
+      "http_status": 200,
+      "id": "chat-to-messages-finite",
+      "input_tokens": 45,
+      "model_id": "MiniMax-M2.5",
+      "output_tokens": 16,
+      "provider_id": "minimax",
+      "raw_response_body_retained": false,
+      "request_id_present": false,
+      "response": {
+        "body_bytes": 343,
+        "normalized_response": true,
+        "raw_body_retained": false,
+        "usage": {
+          "completion_tokens": 16,
+          "prompt_tokens": 45,
+          "reported": true,
+          "total_tokens": 61
+        }
+      },
+      "status": "pass",
+      "streaming": false,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "responses",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "responses-stream",
+      "input_tokens": 71,
+      "model_id": "gpt-oss-120b",
+      "output_tokens": 16,
+      "provider_id": "generalcompute",
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 236,
+        "incremental_events": 2,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "chat_completions",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/chat/completions",
+      "expected_upstream_surface": "openai_chat_completions",
+      "http_status": 200,
+      "id": "chat-stream",
+      "input_tokens": 71,
+      "model_id": "gpt-oss-120b",
+      "output_tokens": 52,
+      "provider_id": "generalcompute",
+      "raw_response_body_retained": false,
+      "request_id_present": true,
+      "response": {
+        "body_bytes": 409,
+        "incremental_events": 4,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_status": 200
+    },
+    {
+      "attempt_error_class": null,
+      "client_surface": "messages",
+      "content_type": "text/event-stream",
+      "cross_surface": false,
+      "durable_status": "completed",
+      "expected_upstream_path": "/messages",
+      "expected_upstream_surface": "anthropic_messages",
+      "http_status": 200,
+      "id": "messages-stream",
+      "input_tokens": 45,
+      "model_id": "MiniMax-M2.5",
+      "output_tokens": 16,
+      "provider_id": "minimax",
+      "raw_response_body_retained": false,
+      "request_id_present": false,
+      "response": {
+        "body_bytes": 740,
+        "incremental_events": 8,
+        "raw_body_retained": false,
+        "terminal_evidence": true,
+        "usage": {
+          "reported": true
+        }
+      },
+      "status": "pass",
+      "streaming": true,
+      "upstream_status": 200
+    }
+  ],
+  "credentials": {
+    "names": [
+      "Q011_GENERALCOMPUTE_KEY",
+      "Q011_MINIMAX_KEY"
+    ],
+    "source": "environment variable",
+    "values_written_to_evidence": false
+  },
+  "durable": {
+    "account_backoffs": 0,
+    "active_reservations": 0,
+    "attempts": 7,
+    "attempts_with_upstream_request_id": 4,
+    "completed_requests": 7,
+    "database_exists": true,
+    "input_tokens": 419,
+    "output_tokens": 184,
+    "pending_requests": 0,
+    "requests": 7
+  },
+  "duration_ms": 5561,
+  "environment": {
+    "architecture": "x86_64",
+    "candidate_sha256": "d14da6d963efd9d8ddaa6bc3b58d158bd7503c4a52e5aa8293ffaace805eb2c2",
+    "os": "macOS-26.6.2-x86_64-i386-64bit",
+    "provider": "GeneralCompute + MiniMax International",
+    "python": "3.11.9",
+    "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Homebrew)",
+    "system": "Darwin",
+    "transport": "direct"
+  },
+  "manifest": "m10-q001.v1",
+  "offline_fake": false,
+  "plan": "Q007",
+  "planned_matrix": [
+    {
+      "client_surface": "responses",
+      "cross_surface": false,
+      "id": "responses-finite",
+      "model_id": "gpt-oss-120b",
+      "provider_id": "generalcompute",
+      "streaming": false,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "chat_completions",
+      "cross_surface": false,
+      "id": "chat-finite",
+      "model_id": "gpt-oss-120b",
+      "provider_id": "generalcompute",
+      "streaming": false,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "messages",
+      "cross_surface": false,
+      "id": "messages-finite",
+      "model_id": "MiniMax-M2.5",
+      "provider_id": "minimax",
+      "streaming": false,
+      "upstream_surface": "anthropic_messages"
+    },
+    {
+      "client_surface": "chat_completions",
+      "cross_surface": true,
+      "id": "chat-to-messages-finite",
+      "model_id": "MiniMax-M2.5",
+      "provider_id": "minimax",
+      "streaming": false,
+      "upstream_surface": "anthropic_messages"
+    },
+    {
+      "client_surface": "responses",
+      "cross_surface": false,
+      "id": "responses-stream",
+      "model_id": "gpt-oss-120b",
+      "provider_id": "generalcompute",
+      "streaming": true,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "chat_completions",
+      "cross_surface": false,
+      "id": "chat-stream",
+      "model_id": "gpt-oss-120b",
+      "provider_id": "generalcompute",
+      "streaming": true,
+      "upstream_surface": "openai_chat_completions"
+    },
+    {
+      "client_surface": "messages",
+      "cross_surface": false,
+      "id": "messages-stream",
+      "model_id": "MiniMax-M2.5",
+      "provider_id": "minimax",
+      "streaming": true,
+      "upstream_surface": "anthropic_messages"
+    }
+  ],
+  "proxy": {
+    "reason": "no Q001 live proxy cell",
+    "status": "not-applicable"
+  },
+  "redaction_review": {
+    "credentials_written_to_evidence": false,
+    "proxy_credentials_written_to_evidence": false,
+    "raw_response_bodies_persisted": false
+  },
+  "runtime_status_http": 200,
+  "schema": "m10-q007.v1",
+  "status": "pass"
+}
+
