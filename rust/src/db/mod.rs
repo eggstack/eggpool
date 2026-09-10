@@ -16,9 +16,12 @@ pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{
     Account, AccountConfig, AccountModelSupport, AccountRepository, CatalogModel,
     CatalogModelWrite, CatalogPersistenceBatch, CatalogPingWrite, CatalogRefreshState,
-    CatalogRefreshWrite, CatalogRepository, DashboardSummary, Model, ModelRepository, Ping,
-    PingRepository, ProviderModelMetadata, ProviderModelWrite, Request, RequestRepository,
-    UsageRollupRepository, UsageSummary, UsageWindowRepository, UsageWindowSnapshot,
+    CatalogRefreshWrite, CatalogRepository, DashboardAccountRow, DashboardCacheSummary,
+    DashboardData, DashboardEventRow, DashboardModelRow, DashboardRepository, DashboardRequestRow,
+    DashboardRetryRow, DashboardRoutingRow, DashboardSummary, DashboardTimeseriesRow, Model,
+    ModelRepository, Ping, PingRepository, ProviderModelMetadata, ProviderModelWrite, Request,
+    RequestRepository, UsageRollupRepository, UsageSummary, UsageWindowRepository,
+    UsageWindowSnapshot,
 };
 
 pub use crate::health::{

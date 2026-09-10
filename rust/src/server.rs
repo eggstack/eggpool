@@ -1066,9 +1066,26 @@ fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path.starts_with("/v1/") {
         return true;
     }
+    let dashboard_page = path == "/"
+        || matches!(
+            path,
+            "/accounts"
+                | "/models"
+                | "/latency"
+                | "/events"
+                | "/timeseries"
+                | "/bandwidth"
+                | "/pings"
+                | "/reliability"
+                | "/routing"
+                | "/traces"
+                | "/runtime"
+                | "/cache"
+        )
+        || path.starts_with("/models/");
     server.dashboard_enabled
         && !server.dashboard_public
-        && (path == "/" || path.starts_with("/api/"))
+        && (dashboard_page || path.starts_with("/api/"))
 }
 
 /// Acquire the active generation before collecting an inference body. Axum's
@@ -1428,11 +1445,11 @@ async fn accounts_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_page(&state, "Accounts", "accounts", query.period, query.theme)
+    dashboard_data_page(&state, "Accounts", "accounts", query.period, query.theme).await
 }
 
 async fn models_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Models", "models", query.period, query.theme)
+    dashboard_data_page(&state, "Models", "models", query.period, query.theme).await
 }
 
 async fn model_detail_page(
@@ -1441,73 +1458,94 @@ async fn model_detail_page(
     Query(query): Query<PeriodQuery>,
 ) -> Response {
     let model_id = model_id.trim_start_matches('/');
-    let title = "Model detail";
-    let body = format!(
-        "<h2>{title}</h2><section class=\"panel\"><div class=\"panel-header\"><h2>Model information</h2></div><p class=\"empty-state\">No model information available for <code>{}</code>.</p></section>",
-        html_escape(model_id)
+    let period = match normalize_period(query.period.as_deref()) {
+        Ok(period) => period,
+        Err(response) => return *response,
+    };
+    let theme = selected_theme(
+        query
+            .theme
+            .as_deref()
+            .unwrap_or(&state.server.dashboard_theme),
     );
-    dashboard_page_with_body(&state, title, "models", query.period, query.theme, body)
+    let body = match db::DashboardRepository::new(&state.database)
+        .load(period)
+        .await
+    {
+        Ok(data) => render_model_detail(&data, model_id),
+        Err(_) => return degraded("dashboard data unavailable"),
+    };
+    dashboard_page_with_body(
+        &state,
+        &format!("Model: {model_id}"),
+        "models",
+        Some(period.to_owned()),
+        Some(theme.to_owned()),
+        body,
+    )
 }
 
 async fn latency_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Latency", "latency", query.period, query.theme)
+    dashboard_data_page(&state, "Latency", "latency", query.period, query.theme).await
 }
 
 async fn events_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Events", "events", query.period, query.theme)
+    dashboard_data_page(&state, "Events", "events", query.period, query.theme).await
 }
 
 async fn timeseries_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_page(
+    dashboard_data_page(
         &state,
         "Timeseries",
         "timeseries",
         query.period,
         query.theme,
     )
+    .await
 }
 
 async fn bandwidth_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_page(&state, "Bandwidth", "bandwidth", query.period, query.theme)
+    dashboard_data_page(&state, "Bandwidth", "bandwidth", query.period, query.theme).await
 }
 
 async fn pings_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Provider Pings", "pings", query.period, query.theme)
+    dashboard_data_page(&state, "Provider Pings", "pings", query.period, query.theme).await
 }
 
 async fn reliability_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_page(
+    dashboard_data_page(
         &state,
         "Reliability",
         "reliability",
         query.period,
         query.theme,
     )
+    .await
 }
 
 async fn routing_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Routing", "routing", query.period, query.theme)
+    dashboard_data_page(&state, "Routing", "routing", query.period, query.theme).await
 }
 
 async fn traces_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Traces", "traces", query.period, query.theme)
+    dashboard_data_page(&state, "Traces", "traces", query.period, query.theme).await
 }
 
 async fn runtime_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Runtime", "runtime", query.period, query.theme)
+    dashboard_data_page(&state, "Runtime", "runtime", query.period, query.theme).await
 }
 
 async fn cache_page(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
-    dashboard_page(&state, "Cache", "cache", query.period, query.theme)
+    dashboard_data_page(&state, "Cache", "cache", query.period, query.theme).await
 }
 
 async fn summary(State(state): State<AppState>, Query(query): Query<PeriodQuery>) -> Response {
@@ -1949,42 +1987,39 @@ fn selected_theme(configured: &str) -> &str {
     }
 }
 
-fn dashboard_page(
+async fn dashboard_data_page(
     state: &AppState,
     title: &str,
     active_nav: &str,
     period: Option<String>,
     theme: Option<String>,
 ) -> Response {
-    let period = period.as_deref().unwrap_or("24h");
-    let period = match normalize_period(Some(period)) {
+    let period = match normalize_period(period.as_deref()) {
         Ok(value) => value,
         Err(response) => return *response,
     };
     let theme = selected_theme(theme.as_deref().unwrap_or(&state.server.dashboard_theme));
-    let message = match active_nav {
-        "accounts" => "No accounts configured.",
-        "models" => "No models available.",
-        "latency" => "No latency data available.",
-        "events" => "No recent events.",
-        "timeseries" => "No time-series data available.",
-        "bandwidth" => "No bandwidth data available.",
-        "pings" => "No provider ping data available.",
-        "reliability" => "No reliability data available.",
-        "routing" => "No routing decisions available.",
-        "traces" => "No request traces available.",
-        "runtime" => "Runtime metrics are not available.",
-        "cache" => "No cache observations available.",
-        _ => "No data available.",
+    let data = match db::DashboardRepository::new(&state.database)
+        .load(period)
+        .await
+    {
+        Ok(data) => data,
+        Err(error) => {
+            eprintln!("dashboard data read failed: {error}");
+            return degraded("dashboard data unavailable");
+        }
     };
-    let body = format!(
-        "<h2>{}</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"panel\"><div class=\"panel-header\"><h2>{}</h2></div><p class=\"empty-state\">{}</p></section>",
-        html_escape(title),
-        period_options(period),
-        html_escape(theme),
-        html_escape(title),
-        html_escape(message),
-    );
+    let summary = match db::UsageRollupRepository::new(&state.database)
+        .dashboard_summary_basic(period)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(error) => {
+            eprintln!("dashboard summary read failed: {error}");
+            return degraded("dashboard data unavailable");
+        }
+    };
+    let body = render_dashboard_page_body(title, active_nav, period, &data, &summary);
     dashboard_page_with_body(
         state,
         title,
@@ -1993,6 +2028,487 @@ fn dashboard_page(
         Some(theme.to_owned()),
         body,
     )
+}
+
+fn dashboard_header(title: &str, period: &str) -> String {
+    format!(
+        "<h2>{}</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"Cyber Red\"></form>",
+        html_escape(title),
+        period_options(period),
+    )
+}
+
+fn dashboard_empty(title: &str, message: &str) -> String {
+    format!(
+        "<section class=\"panel\"><div class=\"panel-header\"><h2>{}</h2></div><p class=\"empty\" role=\"status\">{}</p></section>",
+        html_escape(title),
+        html_escape(message),
+    )
+}
+
+fn render_dashboard_page_body(
+    title: &str,
+    active_nav: &str,
+    period: &str,
+    data: &db::DashboardData,
+    summary: &db::DashboardSummary,
+) -> String {
+    let mut body = dashboard_header(title, period);
+    match active_nav {
+        "accounts" => body.push_str(&render_accounts_page(data)),
+        "models" => body.push_str(&render_models_page(data)),
+        "latency" => body.push_str(&render_latency_page(data)),
+        "events" => body.push_str(&render_events_page(data)),
+        "timeseries" => body.push_str(&render_timeseries_page(data)),
+        "bandwidth" => body.push_str(&render_bandwidth_page(data)),
+        "pings" => body.push_str(&render_pings_page(data)),
+        "reliability" => body.push_str(&render_reliability_page(data)),
+        "routing" => body.push_str(&render_routing_page(data)),
+        "traces" => body.push_str(&render_traces_page(data)),
+        "runtime" => body.push_str(&render_runtime_page(data, summary)),
+        "cache" => body.push_str(&render_cache_page(data)),
+        _ => body.push_str(&dashboard_empty(title, "No data available.")),
+    }
+    body
+}
+
+fn render_accounts_page(data: &db::DashboardData) -> String {
+    if data.accounts.is_empty() {
+        return dashboard_empty("Accounts", "No accounts configured.");
+    }
+    let rows = data
+        .accounts
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.name),
+                html_escape(&row.provider_id),
+                if row.enabled { "yes" } else { "no" },
+                row.requests,
+                format_microdollars(row.cost_microdollars),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"panel\"><h3>Account health</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th><th>Requests</th><th>Cost</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_models_page(data: &db::DashboardData) -> String {
+    let models = data
+        .models
+        .iter()
+        .filter(|row| row.model_id != "__deprecated__")
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        return dashboard_empty("Models", "No models discovered from configured providers.");
+    }
+    let rows = models
+        .iter()
+        .map(|row| {
+            let availability = if row.requests > 0
+                || row.resolution_status == "available"
+                || row.resolution_status == "resolved"
+            {
+                "available"
+            } else {
+                "configured"
+            };
+            format!(
+                "<tr><td><a href=\"/models/{}\">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                query_component(&row.model_id),
+                html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                availability,
+                row.requests,
+                format_microdollars(row.cost_microdollars),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"panel\"><h3>Catalog models</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Avail.</th><th>Requests</th><th>Cost</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_model_detail(data: &db::DashboardData, model_id: &str) -> String {
+    let Some(model) = data
+        .models
+        .iter()
+        .filter(|row| row.model_id != "__deprecated__")
+        .find(|row| row.model_id == model_id)
+    else {
+        return format!(
+            "<h2>Model: {}</h2><p class=\"empty\">Model info not available.</p>",
+            html_escape(model_id)
+        );
+    };
+    format!(
+        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Model information</h3><p class=\"empty\">Model info not available.</p></section>",
+        html_escape(model_id),
+        html_escape(&model.provider_id),
+        html_escape(&model.resolution_status),
+        model.requests,
+    )
+}
+
+fn render_latency_page(data: &db::DashboardData) -> String {
+    if data.models.iter().all(|row| row.ttft_requests == 0) {
+        return "<p class=\"empty\">No TTFT data for this period.</p><section class=\"panel\"><h3>Per-model breakdown</h3><p class=\"empty\">No model data for this period.</p></section>".to_owned();
+    }
+    let mut provider_totals: Vec<(&str, f64, i64)> = Vec::new();
+    for row in data.models.iter().filter(|row| row.ttft_requests > 0) {
+        if let Some((_, total, requests)) = provider_totals
+            .iter_mut()
+            .find(|(provider, _, _)| *provider == row.provider_id)
+        {
+            *total += row.avg_ttft_ms * row.ttft_requests as f64;
+            *requests += row.ttft_requests;
+        } else {
+            provider_totals.push((
+                &row.provider_id,
+                row.avg_ttft_ms * row.ttft_requests as f64,
+                row.ttft_requests,
+            ));
+        }
+    }
+    let cards = provider_totals
+        .iter()
+        .map(|(provider, total, requests)| {
+            format!(
+                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{} requests</p></div>",
+                html_escape(provider),
+                format_latency(total / *requests as f64),
+                requests,
+            )
+        })
+        .collect::<String>();
+    let mut latency_models = data
+        .models
+        .iter()
+        .filter(|row| row.ttft_requests > 0)
+        .collect::<Vec<_>>();
+    latency_models.sort_by(|left, right| {
+        left.avg_ttft_ms
+            .partial_cmp(&right.avg_ttft_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let rows = latency_models
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                row.ttft_requests,
+                format_latency(row.avg_ttft_ms),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Per-model breakdown</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Avg TTFT</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_events_page(data: &db::DashboardData) -> String {
+    if data.events.is_empty() {
+        return dashboard_empty("Events", "No events recorded.");
+    }
+    let rows = data
+        .events
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.created_at),
+                html_escape(&row.account_name),
+                html_escape(&row.event_type),
+                html_escape(&row.details),
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"panel\"><h3>Recent events</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>When</th><th>Account</th><th>Type</th><th>Details</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_timeseries_page(data: &db::DashboardData) -> String {
+    if data.timeseries.is_empty() {
+        return dashboard_empty("Timeseries", "No requests in this window.");
+    }
+    let rows = data
+        .timeseries
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.bucket),
+                html_escape(&row.series),
+                html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                row.requests,
+                format_microdollars(row.cost_microdollars),
+                row.errors,
+                format_tokens(row.total_tokens),
+            )
+        })
+        .collect::<String>();
+    let chart_data = data
+        .timeseries
+        .iter()
+        .map(|row| format!("[\"{}\",{}]", json_escape(&row.bucket), row.requests))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "<section class=\"panel\" id=\"timeseries-chart\"><h3>Usage breakdown</h3><script type=\"application/json\" id=\"timeseries-initial-data\">[{chart_data}]</script><p class=\"empty\" style=\"display:none\">No requests in this window.</p><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Bucket</th><th>Series</th><th>Provider</th><th>Model</th><th>Requests</th><th>Cost</th><th>Errors</th><th>Total tokens</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_bandwidth_page(data: &db::DashboardData) -> String {
+    let detail = if data.cache.total_bytes_received == 0 && data.cache.total_bytes_emitted == 0 {
+        "<p class=\"empty\">No activity data available.</p>"
+    } else {
+        "<p class=\"status\">Persisted transfer totals for the selected period.</p>"
+    };
+    format!(
+        "<section class=\"cards\"><div class=\"card\"><h3>Total received</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Total emitted</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Bandwidth by request</h3>{detail}</section>",
+        format_bytes(data.cache.total_bytes_received),
+        format_bytes(data.cache.total_bytes_emitted),
+    )
+}
+
+fn render_pings_page(data: &db::DashboardData) -> String {
+    if data.pings.is_empty() {
+        return "<section class=\"panel\"><div class=\"panel-header\"><h2>Provider Pings</h2></div><p class=\"empty\" role=\"status\">No ping data yet. Data appears after the first catalog refresh.</p><p class=\"empty\">No pings recorded yet.</p></section>".to_owned();
+    }
+    let mut provider_totals: Vec<(&str, f64, i64)> = Vec::new();
+    for row in &data.pings {
+        let latency = row.latency_ms.unwrap_or_default() as f64;
+        if let Some((_, total, count)) = provider_totals
+            .iter_mut()
+            .find(|(provider, _, _)| *provider == row.provider_id)
+        {
+            *total += latency;
+            *count += 1;
+        } else {
+            provider_totals.push((&row.provider_id, latency, 1));
+        }
+    }
+    provider_totals.sort_by(|left, right| left.0.cmp(right.0));
+    let cards = provider_totals
+        .iter()
+        .map(|(provider, total, count)| {
+            format!(
+                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{} models · status {}</p></div>",
+                html_escape(provider),
+                format_latency(total / *count as f64),
+                data.pings
+                    .iter()
+                    .find(|row| row.provider_id == *provider)
+                    .map_or(0, |row| row.model_count),
+                data.pings
+                    .iter()
+                    .find(|row| row.provider_id == *provider)
+                    .and_then(|row| row.status_code)
+                    .map_or_else(|| "—".to_owned(), |v| v.to_string()),
+            )
+        })
+        .collect::<String>();
+    let rows = data
+        .pings
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.provider_id),
+                html_escape(&row.probed_at),
+                format_latency(row.latency_ms.unwrap_or_default() as f64),
+                row.status_code
+                    .map_or_else(|| "—".to_owned(), |v| v.to_string()),
+                html_escape(&row.account_name),
+                row.model_count,
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Recent pings</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Provider</th><th>Time</th><th>Latency</th><th>Status</th><th>Account</th><th>Models</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_reliability_page(data: &db::DashboardData) -> String {
+    let attempts: i64 = data.retries.iter().map(|row| row.attempts).sum();
+    let failures: i64 = data.retries.iter().map(|row| row.failures).sum();
+    let successes: i64 = data.retries.iter().map(|row| row.successes).sum();
+    let retry_rows = data
+        .retries
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.category),
+                row.attempts,
+                row.retry_outcomes,
+                row.successes,
+                row.failures,
+                format_latency(row.avg_latency_ms),
+            )
+        })
+        .collect::<String>();
+    let retry_attempts: i64 = data.retries.iter().map(|row| row.retry_outcomes).sum();
+    let distribution = if retry_rows.is_empty() {
+        "<p class=\"empty\">No attempt data for this period.</p><p class=\"empty\">No operational events in this window.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Category</th><th>Attempts</th><th>Retry outcomes</th><th>Successes</th><th>Failures</th><th>Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
+        )
+    };
+    format!(
+        "<section class=\"cards\"><div class=\"card\"><h3>Total attempts</h3><p class=\"metric\">{attempts}</p></div><div class=\"card\"><h3>Success attempts</h3><p class=\"metric\">{successes}</p></div><div class=\"card\"><h3>Retry attempts</h3><p class=\"metric\">{retry_attempts}</p></div><div class=\"card\"><h3>Failed attempts</h3><p class=\"metric\">{failures}</p></div></section><section class=\"panel\"><h3>Retry distribution</h3>{distribution}</section>"
+    )
+}
+
+fn render_routing_page(data: &db::DashboardData) -> String {
+    let decisions: i64 = data.routing.iter().map(|row| row.decisions).sum();
+    let avg_eligible = if data.routing.is_empty() {
+        0.0
+    } else {
+        data.routing.iter().map(|row| row.avg_eligible).sum::<f64>() / data.routing.len() as f64
+    };
+    let distinct = data
+        .routing
+        .iter()
+        .map(|row| row.distinct_accounts)
+        .sum::<i64>();
+    let rows = data
+        .routing
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{:.2}</td><td>{}</td></tr>",
+                html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                row.decisions,
+                row.avg_eligible,
+                row.avg_scored,
+                row.avg_excluded,
+                row.distinct_accounts,
+            )
+        })
+        .collect::<String>();
+    let distribution = if rows.is_empty() {
+        "<p class=\"empty\">No routing decisions in this period.</p><p class=\"empty\">No selection data in this period.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Decisions</th><th>Avg eligible</th><th>Avg scored</th><th>Avg excluded</th><th>Distinct accounts</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        )
+    };
+    format!(
+        "<section class=\"cards\"><div class=\"card\"><h3>Routing decisions</h3><p class=\"metric\">{decisions}</p></div><div class=\"card\"><h3>Avg eligible / decision</h3><p class=\"metric\">{avg_eligible:.2}</p></div><div class=\"card\"><h3>Distinct selected accounts</h3><p class=\"metric\">{distinct}</p></div></section><section class=\"panel\"><h3>Routing distribution</h3><p class=\"empty\">No exclusion data in this period.</p>{distribution}</section>"
+    )
+}
+
+fn render_traces_page(data: &db::DashboardData) -> String {
+    if data.requests.is_empty() {
+        return dashboard_empty("Traces", "No recent requests.");
+    }
+    let rows = data
+        .requests
+        .iter()
+        .map(|row| {
+            let status = row.status_code.map_or_else(
+                || row.status.clone(),
+                |code| format!("{} ({code})", row.status),
+            );
+            let latency = row
+                .latency_ms
+                .filter(|value| *value > 0.0)
+                .map_or_else(|| "—".to_owned(), format_latency);
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&row.started_at),
+                html_escape(&row.account_name),
+                html_escape(&row.model_id),
+                html_escape(&status),
+                latency,
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<section class=\"panel\"><h3>Recent requests</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Time</th><th>Account</th><th>Model</th><th>Status</th><th>Latency</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+    )
+}
+
+fn render_runtime_page(_data: &db::DashboardData, summary: &db::DashboardSummary) -> String {
+    format!(
+        "<section class=\"cards\"><div class=\"card\"><h3>Outbound builds</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Outbound requests</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Provider clients</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Runtime snapshot</h3><p class=\"status\">{} dashboard records are available without exposing request content.</p><p class=\"empty\">No loss warnings recorded in this period.</p><p class=\"empty\">No health state data.</p></section>",
+        summary.total_providers, summary.total_requests,
+    )
+}
+
+fn render_cache_page(data: &db::DashboardData) -> String {
+    let empty = "";
+    let provider_cache_counters = if data.requests.is_empty() {
+        "—"
+    } else {
+        "0.0%"
+    };
+    format!(
+        "<section class=\"cards\"><div class=\"card\"><h3>Request changes</h3><p class=\"metric\">no changes</p></div><div class=\"card\"><h3>Provider cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Safety guardrail</h3><p class=\"metric\">Clean</p></div><div class=\"card\"><h3>Routing isolation</h3><p class=\"metric\">Isolated</p></div><div class=\"card\"><h3>Rows with cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Rows without cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Unrecognized payload shape</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Provider cache hit rate</h3><p class=\"metric\">—</p></div><div class=\"card\"><h3>Cache write/warmup rate</h3><p class=\"metric\">—</p></div><div class=\"card\"><h3>Transcoded requests</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Segmented</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Not collected</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Empty request</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Parse failure</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>With protected prefix</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>With volatile suffix</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Mode</h3><p class=\"metric\">reporting_only</p></div><div class=\"card\"><h3>Cache metrics</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Compression metrics</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Stable-prefix hash</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Compression policy</h3><p class=\"metric\">no</p></div></section><section class=\"panel\"><h3>Cache observations</h3>{}<p class=\"status\">Counters are aggregated from persisted request metadata.</p></section>",
+        provider_cache_counters,
+        data.cache.rows_with_read + data.cache.rows_with_write,
+        data.requests.len() as i64 - data.cache.rows_with_read - data.cache.rows_with_write,
+        empty,
+    )
+}
+
+fn format_microdollars(value: i64) -> String {
+    format!("${:.2}", value as f64 / 1_000_000.0)
+}
+
+fn format_tokens(value: i64) -> String {
+    let digits = value.unsigned_abs().to_string();
+    let grouped = digits
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or("0"))
+        .collect::<Vec<_>>()
+        .join(",");
+    if value < 0 {
+        format!("-{grouped}")
+    } else {
+        grouped
+    }
+}
+
+fn format_latency(value: f64) -> String {
+    format!("{value:.1} ms")
+}
+
+fn format_bytes(value: i64) -> String {
+    if value < 1_000 {
+        return format!("{value} B");
+    }
+    let units = ["KB", "MB", "GB", "TB"];
+    let mut scaled = value as f64;
+    let mut unit = "B";
+    for candidate in units {
+        scaled /= 1_000.0;
+        unit = candidate;
+        if scaled < 1_000.0 {
+            break;
+        }
+    }
+    format!("{scaled:.1} {unit}")
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
 }
 
 fn dashboard_page_with_body(
@@ -2227,10 +2743,10 @@ fn render_overview(
         )
     })
     .collect::<String>();
-    let account_rows = if accounts.is_empty() {
-        "<p class=\"empty-state\">No accounts configured.</p>".to_owned()
+    let account_table = if accounts.is_empty() {
+        "<p class=\"empty-state\">No accounts configured.</p><p class=\"empty-state\">No model activity in this period.</p><p class=\"empty-state\">No recent events.</p><p class=\"empty-state\">No activity data available.</p>".to_owned()
     } else {
-        accounts
+        let rows = accounts
             .iter()
             .map(|account| {
                 format!(
@@ -2240,7 +2756,10 @@ fn render_overview(
                     if account.enabled { "yes" } else { "no" }
                 )
             })
-            .collect::<String>()
+            .collect::<String>();
+        format!(
+            "<table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
     };
     let html = format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Overview</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"preload\" href=\"/static/chart.js\" as=\"script\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\">☰</button><h1><a href=\"/?period={}&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\"><div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div><button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\"><h2>Overview</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{}</tbody></table></section><section class=\"panel\" id=\"timeseries-chart\"><h3>Timeseries</h3><script type=\"application/json\" id=\"timeseries-initial-data\">[]</script></section></main><footer><small>Period: <span class=\"period-label\">{}</span> · auto-refresh {}s · <span id=\"dashboard-updated\">ready</span></small></footer><script defer src=\"/static/dashboard.js\"></script><script defer src=\"/static/chart.js\"></script>\n</body>\n</html>",
@@ -2256,14 +2775,14 @@ fn render_overview(
         errors,
         error_rate,
         summary.avg_latency_ms,
-        accounted_tokens,
+        format_tokens(accounted_tokens),
         fresh_tokens,
         summary.total_cache_read_tokens,
         summary.total_cache_write_tokens,
         summary.total_cost_microdollars as f64 / 1_000_000.0,
         summary.total_input_tokens,
         summary.total_output_tokens,
-        account_rows,
+        account_table,
         html_escape(period),
         refresh_interval_s
     );
