@@ -22,3 +22,23 @@ K014 for exact Trusted Publisher configuration.
 
 K013 therefore remains incomplete for its public-publication acceptance
 criterion. K014 is the corrective follow-up; K011 remains unaccepted.
+
+## Acceptance addendum — 2026-09-11
+
+The historical publisher failure above is retained. After the PyPI Trusted
+Publisher was configured for `eggstack/eggpool`, environment `pypi`, and
+`.github/workflows/release.yml`, recovery run `34597248849` accepted the exact
+failed-run bundle from source run `34570717210` and published the three
+validated wheels through OIDC. No rebuild, token fallback, or mutable artifact
+replacement was used.
+
+The recovery path passed immutable tag/source checks, manifest and
+`SHA256SUMS` validation, exact three-wheel validation, and PyPA attestation
+generation. Public PyPI/GitHub verification passed against the frozen v0.8.0
+manifest. The public-index install and rollback qualification was completed by
+run `34598462704`; its Linux x86_64 uv/pipx/pip and Linux aarch64/macOS arm64
+uv results are recorded in the K011/K012 acceptance addenda.
+
+K013 is accepted and closed. Its corrected workflow remains the production
+recovery path, and no unresolved high/medium release or provenance finding
+remains.

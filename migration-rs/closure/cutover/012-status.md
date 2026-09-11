@@ -199,3 +199,84 @@ After K014 completes the external publisher exchange and K011 receives an
 accepted public-release/rollback closure, this K012 plan may be revisited with
 fresh public evidence. Only then may a new accepted K012 closure record close
 M11 and make M12 eligible for a separate planning review.
+
+## Acceptance addendum — 2026-09-11
+
+The blocked review above is retained as the first closure attempt. The
+external blocker has now cleared and the required public evidence is complete.
+
+### Release identity and public artifacts
+
+The accepted Rust release remains `0.8.0`, tag `v0.8.0`, source commit
+`431cad4f46a2d4bbcbc8839c18b71f392c0616ca`. Recovery run `34597248849`
+published the exact validated bundle from failed source run `34570717210`.
+The PyPI Trusted Publisher claims were configured for `eggstack/eggpool`,
+`.github/workflows/release.yml`, environment `pypi`, and ref `main`.
+
+Public PyPI has exactly three non-yanked wheels, all `Requires-Python >=3.11`:
+
+| Target | Size | SHA-256 |
+|---|---:|---|
+| Linux x86_64 | 11,213,582 | `cce9b86347664484078a858cd9676984a02bb86e9485fea5207e98b60a3d40df` |
+| Linux aarch64 | 10,624,177 | `534a7cd62a8dc7110ba5d64a0eb2a9c11f543d8d871e8a965200fbe4329f7df6` |
+| macOS arm64 | 11,554,892 | `375c4ccac9299536adc4e27a16578a649993597ba20d11c915bc0dd6c2de9835` |
+
+The public GitHub `v0.8.0` release still contains the three matching raw
+assets, `SHA256SUMS`, and the release manifest. The public manifest SHA-256 is
+`7b967a29f0416034fd5c0272c717d5607c124c8611a43be4567d0cc4986f99a7`. The
+PyPA publish log records successful OIDC upload and digital attestation
+generation. `verify_published_release.py` returned pass with
+`raw_assets=3`, `wheels=3`, and version `0.8.0`.
+
+### Public package and rollback qualification
+
+Hosted run `34598462704` passed public-index resolution and native runtime
+qualification on all required targets. Its manager matrix was:
+
+| Target | Public managers | Result |
+|---|---|---|
+| Linux x86_64 | uv tool, pipx, isolated pip | pass; all exact transition legs passed |
+| Linux aarch64 | uv tool | pass; exact transition legs passed |
+| macOS arm64 | uv tool | pass; exact transition legs passed |
+
+The cycle was public Python `0.7.4` -> Rust `0.8.0` -> Python `0.7.4` -> Rust
+`0.8.0`, with manager metadata and CLI versions aligned, config preserved,
+SQLite integrity `ok`, and migration maximum `54`. The same run passed native
+Rust wheel `version`, `help`, `check-config`, foreground health, and dashboard
+checks. Existing standalone raw-updater, unsupported-target, deployed-service,
+and Python-reference evidence remains source-fresh.
+
+### Freshness and finding disposition
+
+No Rust or Python runtime, database, provider, coordinator, or deployment code
+changed after the frozen release. The follow-up code only adds public-index
+qualification support and a manual qualification workflow. Fresh repository
+gates passed after those changes:
+
+```text
+uv run pytest tests/migration_rs -q --tb=short --maxfail=1  # 213 passed, 3 skipped
+uv run pytest tests/smoke/ -q --tb=short --maxfail=1       # 14 passed
+uv run pyright scripts/qualify_cutover_transitions.py      # 0 errors
+uv run ruff format --check scripts/qualify_cutover_transitions.py
+uv run ruff check scripts/qualify_cutover_transitions.py
+uv run python scripts/check_cutover_catalog.py
+uv run python scripts/validate_cutover_docs.py
+uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
+git diff --check
+```
+
+The previously recorded full Rust, Q002/Q003/Q012, portability, deployment,
+security, documentation, and footprint gates remain source-fresh. No
+high/medium cutover, security, package-ownership, rollback, compatibility, or
+data-loss finding remains open. Python source, fixtures, oracle tests, and the
+catalogued `0.7.4` rollback release remain intact.
+
+### Acceptance and dependency transition
+
+K012 is **accepted/closed** by this append-only addendum. M11 is closed with
+Rust as the canonical public runtime on the three qualified targets while
+Python remains the rollback/reference implementation. K011, K013, and K014
+have truthful accepted closure records/addenda. No future implementation plan
+is automatically unblocked: M12 is now eligible for a separate planning
+review, but remains unplanned and must not be treated as implementation
+authorized by this closure.

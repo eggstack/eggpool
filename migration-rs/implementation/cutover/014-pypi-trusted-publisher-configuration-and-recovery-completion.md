@@ -1,6 +1,6 @@
 # K014 — PyPI Trusted Publisher Configuration and Recovery Completion
 
-Status: blocked pending maintainer PyPI account access
+Status: accepted/closed 2026-09-11; closure recorded in closure/cutover/014-status.md
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -62,7 +62,7 @@ PyPI credential.
 
 ## Closure evidence
 
-Record the PyPI publisher configuration result, recovery run, public metadata,
-hash verification, install/rollback evidence, and registry transition in
-`migration-rs/closure/cutover/014-status.md`. Until that evidence exists, K011,
-K013, and K014 remain incomplete/blocked.
+The PyPI publisher configuration result, recovery run, public metadata, hash
+verification, install/rollback evidence, and registry transition are recorded
+in `migration-rs/closure/cutover/014-status.md`; K011, K013, and K014 are
+accepted/closed by their append-only closure addenda.

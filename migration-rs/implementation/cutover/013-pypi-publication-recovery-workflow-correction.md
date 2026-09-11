@@ -1,7 +1,6 @@
 # K013 — PyPI Publication Recovery Workflow Correction
 
-Status: implementation complete; acceptance blocked pending production PyPI
-Trusted Publisher configuration
+Status: accepted/closed 2026-09-11; acceptance addendum recorded in closure/cutover/013-status.md
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

@@ -243,7 +243,9 @@ K001 cutover/package/version-catalog contract freeze
  -> K012 aggregate M11 qualification/closure
 ```
 
-Only `registry.md` authorizes handoff. K001-K010 are closed and K011 is the sole dependency-ready M11 plan.
+Only `registry.md` authorizes handoff. K001-K014 are accepted/closed, and no
+future M11 implementation plan is dependency-ready. M12 is eligible for a
+separate planning review but is not authorized by this closure.
 
 M11 preserves the PyPI user experience. Existing `pip install eggpool`, `pipx install eggpool`, and `uv tool install eggpool` workflows remain viable; the installed payload becomes the native Rust binary on qualified targets. The Rust wheel retains `Requires-Python >=3.11` during M11 as a package-manager rollback compatibility floor even though normal EggPool runtime does not invoke Python. M12 may reconsider that metadata after Python retirement.
 
@@ -259,7 +261,9 @@ Primary class: polish/invariant
 
 After stabilization, remove Python production/runtime packaging and migration-only dual-run machinery while preserving reference history and useful differential fixtures.
 
-M12 is blocked on accepted K012 M11 closure and requires its own separate planning review. M11 does not auto-promote Python removal.
+M12 is eligible for a separate planning review after accepted K012 M11
+closure. M11 does not auto-promote Python removal, and no M12 implementation
+is authorized by this closure.
 
 Exit condition: production repository/release path is pure Rust with traceable parity evidence.
 

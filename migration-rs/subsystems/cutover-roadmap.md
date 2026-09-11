@@ -1,6 +1,6 @@
 # M11 Rust Cutover, Packaging, Release, and Cross-Era Versioning Roadmap
 
-Status: active implementation; K011 blocked on production PyPI Trusted Publisher configuration; K001-K010 closed
+Status: M11 closed 2026-09-11; K001-K014 accepted/closed; M12 eligible for separate planning review
 
 Repository baseline for planning: `aec794a060f6a9e71853a515fe50992446c41ebd` (accepted Q012 / M10 closure).
 
@@ -18,11 +18,12 @@ M11 does **not** remove Python source or the final Python oracle. That remains M
 
 ## Current cutover block
 
-The first `v0.8.0` GitHub release is public, but PyPI publication did not
-complete. K013 corrected the workflow and proved exact-bundle recovery through
-artifact validation; PyPI then rejected the OIDC exchange because the
-`eggstack/eggpool` Trusted Publisher is not configured. K014 owns that external
-configuration and recovery. K012 remains blocked until K011 is accepted.
+The first `v0.8.0` GitHub release and the exact three-wheel PyPI release are
+public. K013 corrected the recovery workflow, K014 completed the
+`eggstack/eggpool` Trusted Publisher configuration, and K011/K012 recorded
+accepted public release, install, rollback, and aggregate closure evidence.
+M11 is closed; M12 is eligible for separate planning review and remains
+explicitly out of scope for this roadmap closure.
 
 ## Packaging decision
 
@@ -95,7 +96,9 @@ K001 cutover/package/version-catalog contract freeze
 M12 planning eligibility only after accepted K012 closure
 ```
 
-Only `../registry.md` authorizes implementation. K011 is the sole dependency-ready plan after accepted K010 closure.
+Only `../registry.md` authorizes implementation. K011-K014 are closed, and
+M12 is eligible for a separate planning review after accepted K012; no M12
+implementation is authorized by this closure.
 
 ## K001 — Cutover/package/version-catalog contract freeze
 

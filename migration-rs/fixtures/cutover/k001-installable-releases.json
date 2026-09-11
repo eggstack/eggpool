@@ -1,7 +1,7 @@
 {
   "catalog_version": "k001.v1",
-  "status": "candidate wheel substrate; no production publication",
-  "captured_at_utc": "2026-09-10T00:00:00Z",
+  "status": "published Rust cutover; public PyPI and GitHub release verified",
+  "captured_at_utc": "2026-09-11T12:15:00Z",
   "package_name": "eggpool",
   "artifact_stage": "active",
   "sources": {
@@ -22,10 +22,10 @@
     ]
   },
   "version_authority": {
-    "phase": "candidate",
+    "phase": "published",
     "cutover_version": "0.8.0",
     "cutover_tag": "v0.8.0",
-    "cutover_source_commit": null,
+    "cutover_source_commit": "431cad4f46a2d4bbcbc8839c18b71f392c0616ca",
     "historical_python_project_version": "0.7.4",
     "rust_cargo_version": "0.8.0",
     "source_of_truth": "Cargo.toml owns the Rust release version after K002; the root pyproject.toml remains the historical Python oracle through M11."
@@ -180,17 +180,17 @@
     ]
   },
   "historical_gap_policy": {
-    "newest_pypi_version_at_capture": "0.7.4",
+    "newest_pypi_version_at_capture": "0.8.0",
     "official_stable_github_versions_newer_than_newest_pypi": [],
-    "disposition": "No PyPI backfill or immutable fallback is required at this capture. Every official stable GitHub release is already present on PyPI.",
+    "disposition": "The Rust cutover release is now public on PyPI with the exact supported wheel set; no PyPI backfill or immutable fallback is required.",
     "future_backfill_publication": "Not scheduled; any later gap requires a reviewed K001 corrective catalog update before exact-switch claims."
   },
   "official_inventory": {
-    "github_stable_release_count": 56,
-    "pypi_stable_release_count": 56,
-    "latest_stable_version": "0.7.4",
+    "github_stable_release_count": 57,
+    "pypi_stable_release_count": 57,
+    "latest_stable_version": "0.8.0",
     "missing_pypi_versions": [],
-    "github_releases_have_no_rust_cutover_assets": true
+    "github_releases_have_no_rust_cutover_assets": false
   },
   "releases": [
     {"version":"0.1.0","source_tag":"v0.1.0","source_commit":"0bce8df7d78ce5ebe273618c5a2ff8240a7a61fb","pypi_files":[{"filename":"eggpool-0.1.0-py3-none-any.whl","sha256":"0d2ae0c77a697324c4f2358778960950843ba02190fce72a96a17d26cca58694"},{"filename":"eggpool-0.1.0.tar.gz","sha256":"540afc6b6c3743e3b9f069dac642a0fbf2a031d0ab4d334838fa6c8a21bc3818"}],"rollback_suitability":"not-compatible-with-schema54","db_config_compatibility":"schema22; cannot reopen schema54 state"},
@@ -248,6 +248,7 @@
     {"version":"0.7.1","source_tag":"v0.7.1","source_commit":"bd1772ff38a2ad4afb601f73150969e90b7d8fd8","pypi_files":[{"filename":"eggpool-0.7.1-py3-none-any.whl","sha256":"55e67bb7acb84bb5091a9c4b588d0d1470b3629d95b26dc0f3d606ec5df8bab6"},{"filename":"eggpool-0.7.1.tar.gz","sha256":"df9c0609a5dcf5d9889e5fd7102b2b6132c9f18ffdd151c3c0fe5b92cf35fc24"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
     {"version":"0.7.2","source_tag":"v0.7.2","source_commit":"98ee1176f3bbdcde8f97e21aea4255bd1d7a2ee8","pypi_files":[{"filename":"eggpool-0.7.2-py3-none-any.whl","sha256":"e99dfd5a17b38bd179d80b55554523fd25129c1f9e90ddc0ec1b76a48edecea8"},{"filename":"eggpool-0.7.2.tar.gz","sha256":"82376aa056c640f2b26644d275d3c49d601761a9aef26fb27830b952946821d6"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
     {"version":"0.7.3","source_tag":"v0.7.3","source_commit":"0bc0e02bbea5eebae70b247542d084e6fa6b122f","pypi_files":[{"filename":"eggpool-0.7.3-py3-none-any.whl","sha256":"244fde4a0338ed115760d1d34cb90cf85febfe4a0863dd70aeca75bba46e2c27"},{"filename":"eggpool-0.7.3.tar.gz","sha256":"8fd6e5807071a96c4fa741b47f7727dedededb5e5109d4c7df71524b33cc9741"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
-    {"version":"0.7.4","source_tag":"v0.7.4","source_commit":"b7ab884347180afea6d935653119277eddbaab02","pypi_files":[{"filename":"eggpool-0.7.4-py3-none-any.whl","sha256":"47b61c1c9db3ee9fa8945bebed89c7294cb867240b2204b1bfc39e443d1a9581"},{"filename":"eggpool-0.7.4.tar.gz","sha256":"85a0a719cf966077d43d71564fa7371ec4570fc4a5f2adbee349c5918e9b7cf3"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"}
+    {"version":"0.7.4","source_tag":"v0.7.4","source_commit":"b7ab884347180afea6d935653119277eddbaab02","pypi_files":[{"filename":"eggpool-0.7.4-py3-none-any.whl","sha256":"47b61c1c9db3ee9fa8945bebed89c7294cb867240b2204b1bfc39e443d1a9581"},{"filename":"eggpool-0.7.4.tar.gz","sha256":"85a0a719cf966077d43d71564fa7371ec4570fc4a5f2adbee349c5918e9b7cf3"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
+    {"version":"0.8.0","source_tag":"v0.8.0","source_commit":"431cad4f46a2d4bbcbc8839c18b71f392c0616ca","implementation_era":"rust","pypi_files":[{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","sha256":"cce9b86347664484078a858cd9676984a02bb86e9485fea5207e98b60a3d40df"},{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","sha256":"534a7cd62a8dc7110ba5d64a0eb2a9c11f543d8d871e8a965200fbe4329f7df6"},{"filename":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl","sha256":"375c4ccac9299536adc4e27a16578a649993597ba20d11c915bc0dd6c2de9835"}],"supported_target_classes":["linux-x86_64","linux-aarch64","macos-arm64"],"supported_wheels":{"linux-x86_64":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","linux-aarch64":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","macos-arm64":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl"},"rollback_suitability":"current-cutover-release","db_config_compatibility":"schema54"}
   ]
 }
