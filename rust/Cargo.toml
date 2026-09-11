@@ -2,7 +2,7 @@
 name = "eggpool"
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 
