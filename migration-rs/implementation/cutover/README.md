@@ -1,6 +1,6 @@
 # M11 Rust Cutover Implementation Plans
 
-Status: active; K001-K009 closed; K010 dependency-ready
+Status: active; K001-K010 closed; K011 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -19,11 +19,11 @@ These plans make the qualified Rust implementation the canonical public runtime 
 7. [K007 — Deployed-service cross-era transition and recovery](007-deployed-service-cross-era-transition-and-recovery.md) — **accepted/closed**.
 8. [K008 — Trusted publishing, attestations, and release supply chain](008-trusted-publishing-attestations-and-release-supply-chain.md) — **accepted/closed**.
 9. [K009 — Local wheelhouse and TestPyPI staged release rehearsal](009-wheelhouse-testpypi-staged-release-rehearsal.md) — **accepted/closed**.
-10. [K010 — Public metadata, documentation, and release-candidate freeze](010-public-metadata-docs-and-release-candidate-freeze.md) — **dependency-ready after accepted K009**.
-11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — queued behind K010 and explicit production publish authority.
+10. [K010 — Public metadata, documentation, and release-candidate freeze](010-public-metadata-docs-and-release-candidate-freeze.md) — **accepted/closed**.
+11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — **dependency-ready after accepted K010** and explicit production publish authority.
 12. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — queued behind K011.
 
-Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008 and K009 are accepted/closed, and K010 is now dependency-ready. K011-K012 remain queued behind their direct predecessors.
+Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008-K010 are accepted/closed, and K011 is now dependency-ready. K012 remains queued behind K011.
 
 ## Hard boundaries
 

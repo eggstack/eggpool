@@ -1,6 +1,6 @@
 # K011 — First Rust-Backed Public Release and Immediate Rollback Drill
 
-Status: queued; blocked on accepted K010
+Status: dependency-ready after accepted K010
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

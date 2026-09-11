@@ -1,6 +1,6 @@
 # M11 Rust Cutover Handoff Sequence
 
-Status: active; K009 ready
+Status: active; K011 ready
 
 Execute and accept in this order:
 
@@ -35,4 +35,4 @@ Execute and accept in this order:
 - Production release is prohibited until K011.
 - Python deletion/packaging retirement is prohibited until M12.
 
-K009 is the sole dependency-ready handoff. K010-K012 remain queued serially. K012 alone may close M11 and make M12 eligible for separate planning.
+K011 is the sole dependency-ready handoff. K010 is accepted/closed; K012 remains queued behind K011. K012 alone may close M11 and make M12 eligible for separate planning.
