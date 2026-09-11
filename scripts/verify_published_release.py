@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify public PyPI/GitHub metadata against a K003 release manifest."""
+"""Verify public PyPI/GitHub metadata against a release artifacts release manifest."""
 
 from __future__ import annotations
 
@@ -185,7 +185,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(verify_publication(manifest, pypi, github), sort_keys=True))
     except (OSError, PublicationVerificationError) as error:
-        print(f"K008 publication verification failed: {error}", file=sys.stderr)
+        print(
+            f"release workflow publication verification failed: {error}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

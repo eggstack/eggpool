@@ -1,4 +1,4 @@
-"""Run the bounded deterministic M10 Q009 stability qualification.
+"""Run bounded deterministic runtime stability qualification.
 
 The workload is intentionally finite.  It exercises ordinary requests,
 provider/client faults, reloads, background ticks, restart reconciliation, and
@@ -10,7 +10,7 @@ Usage::
 
     uv run python scripts/qualification_stability.py \
         --binary rust/target/debug/eggpool \
-        --output migration-rs/closure/qualification/009-run.json
+        --output artifacts/qualification/009-run.json
 """
 
 from __future__ import annotations
@@ -58,12 +58,10 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = (
-    ROOT / "migration-rs/fixtures/qualification/config/q009-stability.toml"
-)
-DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/009-run.json"
-SCHEMA_VERSION = "m10-q009.v1"
-MANIFEST_VERSION = "m10-q001.v1"
+DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/stability.toml"
+DEFAULT_OUTPUT = ROOT / "artifacts/qualification/009-run.json"
+SCHEMA_VERSION = "runtime-q009.v1"
+MANIFEST_VERSION = "runtime-q001.v1"
 MAX_BODY_BYTES = 128 * 1024
 MAX_SAMPLES = 96
 DEFAULT_TIMEOUT = 20.0
@@ -71,7 +69,7 @@ MAX_CYCLES = 16
 
 
 class QualificationError(RuntimeError):
-    """A mandatory Q009 observation failed."""
+    """A mandatory stability qualification observation failed."""
 
 
 class _FaultProviderHandler(BaseHTTPRequestHandler):
@@ -311,14 +309,16 @@ def _render_fixture(
 ) -> str:
     content = fixture.read_text(encoding="utf-8")
     for marker, replacement in {
-        "__Q009_PORT__": str(port),
-        "__Q009_UPSTREAM__": upstream,
-        "__Q009_DATABASE__": str(database),
-        "__Q009_BACKUP_DIR__": str(backup_dir),
+        "__STABILITY_PORT__": str(port),
+        "__STABILITY_UPSTREAM__": upstream,
+        "__STABILITY_DATABASE__": str(database),
+        "__STABILITY_BACKUP_DIR__": str(backup_dir),
     }.items():
         content = content.replace(marker, replacement)
-    if "__Q009_" in content:
-        raise QualificationError("Q009 config fixture has unresolved placeholders")
+    if "__STABILITY_" in content:
+        raise QualificationError(
+            "stability qualification config fixture has unresolved placeholders"
+        )
     destination.write_text(content, encoding="utf-8")
     return content
 
@@ -461,7 +461,9 @@ def _resource_sample(
     samples: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if len(samples) >= MAX_SAMPLES:
-        raise QualificationError("Q009 resource sample bound exceeded")
+        raise QualificationError(
+            "stability qualification resource sample bound exceeded"
+        )
     sample = resource_sample(
         label,
         process,
@@ -542,7 +544,7 @@ def run_qualification(
     timeout: float = DEFAULT_TIMEOUT,
     phases: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Execute Q009 and return a bounded report."""
+    """Execute stability qualification and return a bounded report."""
     _validate_cycles(
         {
             "warmup_cycles": warmup_cycles,
@@ -556,7 +558,7 @@ def run_qualification(
     if not binary.is_file():
         return {
             "schema_version": SCHEMA_VERSION,
-            "plan": "Q009",
+            "plan": "stability qualification",
             "manifest": MANIFEST_VERSION,
             "status": "fail",
             "reason": "candidate binary does not exist",
@@ -564,7 +566,7 @@ def run_qualification(
     selected = phases or frozenset({"all"})
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "plan": "Q009",
+        "plan": "stability qualification",
         "manifest": MANIFEST_VERSION,
         "status": "fail",
         "seed": seed,
@@ -1014,7 +1016,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ) as error:
         report = {
             "schema_version": SCHEMA_VERSION,
-            "plan": "Q009",
+            "plan": "stability qualification",
             "manifest": MANIFEST_VERSION,
             "status": "fail",
             "reason": bounded(str(error)),

@@ -1,48 +1,46 @@
 {
-  "manifest_version": "m12.runtime-assets.v1",
-  "source_reference_commit": "c6b5d2c25038a8ac155c71f68fd50afea03fa459",
-  "source_reference_tree": "2887b6b6a3be38ad8b386781cda76f888d5ac0dc",
+  "manifest_version": "runtime-assets.v1",
   "assets": [
     {
       "path": "db/migrations/checksums.json",
       "category": "sqlite-migrations",
-      "source": "src/eggpool/db/schema/checksums.json",
+      "source": "rust/assets/db/migrations/checksums.json",
       "sha256": "0b0ea98e626a51a561c3e2e2cbff09f8a5c7d05a2ef2e61ba7589347c929bc95",
       "identity": "exact"
     },
     {
       "path": "providers/_templates.toml",
       "category": "provider-templates",
-      "source": "src/eggpool/providers/_templates.toml",
+      "source": "rust/assets/providers/_templates.toml",
       "sha256": "05f5f5c37640450a83da7027e81ad8ad39cbc12231932d6e47634ef9f5c6eeb6",
       "identity": "exact"
     },
     {
       "path": "providers/_wire_profiles.toml",
       "category": "wire-profiles",
-      "source": "src/eggpool/providers/_wire_profiles.toml",
+      "source": "rust/assets/providers/_wire_profiles.toml",
       "sha256": "c733956c712420a0a73ff183eade852ed432afa292a8a35ea126b1ef26725b6d",
       "identity": "exact"
     },
     {
       "path": "config/config.example.toml",
       "category": "configuration-template",
-      "source": "config.example.toml",
+      "source": "rust/assets/config/config.example.toml",
       "sha256": "f7b2b82aeba817b1d79eea158532c42969fa4d63611908fbc27c50839aba16b4",
       "identity": "exact"
     },
     {
       "path": "config/config.sbc.example.toml",
       "category": "configuration-template",
-      "source": "config.sbc.example.toml",
+      "source": "rust/assets/config/config.sbc.example.toml",
       "sha256": "d7cce7ae31e7dcdd3146840017cbc080e1fe1fbaeafb4407117952fc68325931",
       "identity": "exact"
     },
     {
-      "path": "catalog/k001-installable-releases.json",
+      "path": "catalog/installable-releases.json",
       "category": "release-catalog",
-      "source": "migration-rs/fixtures/cutover/k001-installable-releases.json",
-      "sha256": "1addf6d13cd42d78f78e67646bf3211719c0b3140e39701484ee49c219fe1c6f",
+      "source": "rust/assets/catalog/installable-releases.json",
+      "sha256": "3b37b08bb5b5e4c5e9d4a2401cd2940cf7c3c29bf902e8258acc119e68b74db2",
       "identity": "exact"
     },
     {
@@ -53,8 +51,8 @@
       "identity": "exact"
     }
   ],
-  "migration_count": 54,
+  "schema_migration_count": 54,
   "schema_change": false,
   "ownership": "Rust build/runtime owns these copies; the source and catalog paths are provenance only",
-  "rollback": "restore the source tree from source_reference_commit through Git history"
+  "rollback": "restore the source tree from Git history"
 }

@@ -10,8 +10,7 @@ use clap::{Command, CommandFactory, Parser};
 use eggpool::{Cli, Command as EggpoolCommand};
 use serde_json::Value;
 
-const MATRIX: &str =
-    include_str!("../../migration-rs/fixtures/operations/o001-fixture-matrix.json");
+const MATRIX: &str = include_str!("../../tests/fixtures/cli/contract-matrix.json");
 
 fn fixture_commands() -> BTreeMap<String, Vec<String>> {
     let value: Value = serde_json::from_str(MATRIX).expect("valid O001 matrix");

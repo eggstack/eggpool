@@ -10,19 +10,19 @@ UPGRADE_ONLY=0
 ADOPT_STANDALONE=0
 TARGET_VERSION=""
 VERSION_REQUESTED=0
-RUST_CUTOVER_VERSION="0.8.0"
+NATIVE_RELEASE_VERSION="0.8.0"
 INSTALL_INDEX_URL="${EGGPOOL_INSTALL_INDEX_URL:-}"
 INSTALL_FIND_LINKS="${EGGPOOL_INSTALL_FIND_LINKS:-}"
 
-version_at_or_after_cutover() {
+version_at_or_after_native_release() {
     local version="$1"
     local major minor patch
-    local cutover_major cutover_minor cutover_patch
+    local native_release_major native_release_minor native_release_patch
     IFS=. read -r major minor patch <<< "$version"
-    IFS=. read -r cutover_major cutover_minor cutover_patch <<< "$RUST_CUTOVER_VERSION"
-    ((10#$major > 10#$cutover_major)) ||
-        { ((10#$major == 10#$cutover_major && 10#$minor > 10#$cutover_minor)) ||
-            { ((10#$major == 10#$cutover_major && 10#$minor == 10#$cutover_minor && 10#$patch >= 10#$cutover_patch)); }; }
+    IFS=. read -r native_release_major native_release_minor native_release_patch <<< "$NATIVE_RELEASE_VERSION"
+    ((10#$major > 10#$native_release_major)) ||
+        { ((10#$major == 10#$native_release_major && 10#$minor > 10#$native_release_minor)) ||
+            { ((10#$major == 10#$native_release_major && 10#$minor == 10#$native_release_minor && 10#$patch >= 10#$native_release_patch)); }; }
 }
 
 catalogued_historical_version() {
@@ -53,7 +53,7 @@ Options:
 
 Without --version, --upgrade selects the latest stable package-channel
 release. --upgrade may be combined with --version; the exact version wins.
-Source-checkout invocation installs the local checkout candidate and never
+Source-checkout invocation installs the local checkout build and never
 resolves the public package by accident.
 EOF
 }
@@ -147,7 +147,7 @@ while (($#)); do
     esac
 done
 
-if ((VERSION_REQUESTED)) && ! version_at_or_after_cutover "$TARGET_VERSION"; then
+if ((VERSION_REQUESTED)) && ! version_at_or_after_native_release "$TARGET_VERSION"; then
     catalogued_historical_version "$TARGET_VERSION" ||
         fail "requested historical version $TARGET_VERSION is not in the schema-compatible catalog"
 fi
@@ -529,7 +529,7 @@ fi
 
 REPORT=""
 NATIVE_REQUIRED=1
-if ((VERSION_REQUESTED)) && ! version_at_or_after_cutover "$TARGET_VERSION"; then
+if ((VERSION_REQUESTED)) && ! version_at_or_after_native_release "$TARGET_VERSION"; then
     NATIVE_REQUIRED=0
 fi
 if REPORT="$("$ACTIVE_BIN" install-provenance --shell 2>/dev/null)" && parse_provenance_report "$REPORT"; then
@@ -544,7 +544,7 @@ fi
 }
 if ((NATIVE_REQUIRED)) && [[ "$PROVENANCE_NATIVE" != true ]]; then
     restore_standalone
-    fail "installed command is not the native Rust cutover wheel owned by $MANAGER_KIND"
+    fail "installed command is not the native Rust release wheel owned by $MANAGER_KIND"
 fi
 if ((VERSION_REQUESTED)) && [[ "$PROVENANCE_VERSION" != "$TARGET_VERSION" ]]; then
     restore_standalone

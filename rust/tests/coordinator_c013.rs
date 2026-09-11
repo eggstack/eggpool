@@ -26,7 +26,7 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const C001_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/coordinator/c001-python-observations.json");
+    include_str!("../../tests/fixtures/coordinator/compatibility-observations.json");
 
 fn profile(surface: WireSurface, priority: u32) -> ConfiguredWireProfile {
     let (request_codec, response_codec, stream_codec) = match surface {

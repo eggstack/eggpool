@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Rust is the intended canonical runtime for supported M11 installations;
+- Rust is the canonical runtime for supported releases;
   config paths, database state, API URLs, CLI names, and dashboard behavior
   remain compatible.
 - The PyPI channel publishes native platform wheels for Linux x86_64, Linux
@@ -21,9 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The native runtime has a lower process/runtime dependency footprint than the
   Python reference characterization; this is descriptive, not a benchmark
   claim.
-- Python source and the root reference package remain in the repository for
-  differential and rollback tests through M11. Python retirement is deferred
-  to M12.
+- Historical Python packages remain immutable external artifacts. Migration
+  history and exact-version rollback policy are documented in `docs/`.
 
 ## [Unreleased]
 

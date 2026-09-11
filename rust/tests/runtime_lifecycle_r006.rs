@@ -21,8 +21,7 @@ use tokio::{
     time::{Duration, sleep, timeout},
 };
 
-const ORACLE: &str =
-    include_str!("../../migration-rs/fixtures/runtime-lifecycle/r001-python-observations.json");
+const ORACLE: &str = include_str!("../../tests/fixtures/runtime/compatibility-observations.json");
 
 fn callback_registry(
     kind: &str,

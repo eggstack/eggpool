@@ -17,13 +17,13 @@ metadata/assets only.
 | Database and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime generations and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/server.rs` |
 | Dashboard, operations, update | `rust/src/server.rs`, `rust/src/operations/` |
-| Historical evidence | `migration-rs/fixtures/`, `migration-rs/closure/` |
+| Compatibility fixtures and qualification output | `tests/fixtures/`, `artifacts/qualification/` |
 
 The repository-root `pyproject.toml` is tooling-only. Python utilities under
 `scripts/` validate release/catalog/package contracts and qualification
 artifacts; they are not imported by or required to start EggPool. Historical
 Python source is recoverable from the immutable reference commit recorded in
-`migration-rs/fixtures/retirement/m12-reference-manifest.json`.
+`docs/migration-history.md`.
 
 ## Request lifecycle
 
@@ -59,5 +59,5 @@ publication or runtime entry point.
 
 The subsystem references in [README.md](README.md) describe the current
 runtime and point to the detailed design documents. Those documents use Rust
-source paths and retained neutral fixtures; migration plans and closure
-records remain historical provenance.
+source paths and retained neutral fixtures. Migration history is recoverable
+from Git; see [migration-history.md](../docs/migration-history.md).

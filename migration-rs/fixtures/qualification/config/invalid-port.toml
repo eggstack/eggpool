@@ -1,3 +1,0 @@
-# Schema failure fixture: the Python config contract rejects this port.
-[server]
-port = 70000

@@ -15,7 +15,7 @@ contract.
 
 Repositories are the only persistence boundary for runtime modules. They do
 not open independent writer pools or accept raw unbounded diagnostic content.
-Historical compatibility fixtures under `migration-rs/fixtures/` are evidence
-only and are never loaded by the production executable.
+Compatibility fixtures under `tests/fixtures/` are test-only and are never
+loaded by the production executable.
 
 See `rust/src/db/connection.rs`, `migrations.rs`, and `repositories.rs`.

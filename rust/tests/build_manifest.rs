@@ -9,10 +9,8 @@ mod build_support;
 #[derive(Debug, Deserialize)]
 struct RuntimeManifest {
     manifest_version: String,
-    source_reference_commit: String,
-    source_reference_tree: String,
     assets: Vec<RuntimeAsset>,
-    migration_count: usize,
+    schema_migration_count: usize,
     schema_change: bool,
 }
 
@@ -56,10 +54,8 @@ fn rust_owned_runtime_assets_are_complete_and_hash_locked() {
     let manifest: RuntimeManifest =
         serde_json::from_str(include_str!("../assets/runtime-manifest.json"))
             .expect("runtime asset manifest is valid JSON");
-    assert_eq!(manifest.manifest_version, "m12.runtime-assets.v1");
-    assert_eq!(manifest.source_reference_commit.len(), 40);
-    assert_eq!(manifest.source_reference_tree.len(), 40);
-    assert_eq!(manifest.migration_count, 54);
+    assert_eq!(manifest.manifest_version, "runtime-assets.v1");
+    assert_eq!(manifest.schema_migration_count, 54);
     assert!(!manifest.schema_change);
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

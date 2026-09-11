@@ -99,13 +99,15 @@ Markers registered in `pyproject.toml`: `unit`, `integration`, `network`, `live`
 
 ## Testing
 
-- Python tests cover migration/release tooling under `tests/tooling/`; the native runtime is covered by Cargo targets in `rust/tests/`.
+- Python tests cover release/validation tooling under `tests/tooling/`; the native runtime is covered by Cargo targets in `rust/tests/`.
 - No real provider network is used by the tooling suite.
 - Rust integration/operation tests are the runtime contract; manual live-provider checks remain opt-in.
 
 ## Release
 
-Manual release procedure — no automated release workflow. See `docs/releasing.md`.
+The pinned `.github/workflows/release.yml` is the production release
+authority. See `docs/releasing.md` for manual checks, staged rehearsal,
+rollback, and publication verification.
 
 ## File Organization
 
@@ -187,7 +189,7 @@ Non-obvious wiring:
 - **Canonical wire intent is source-owned**: `rust/src/wire/ir.rs` captures the original request, reasoning intent, normalized usage, response blocks, and bounded streaming events before provider adaptation. Alternate targets must encode from that canonical source; never chain a previously translated provider payload. `ReasoningIntent` keeps effort labels separate from numeric budgets and explicit disable. See `architecture/deep-dive-transcoder.md`
 - **Default wire codecs are concrete and terminal-aware**: the closed registry owns executable codecs for `openai_chat_completions`, `openai_responses`, `anthropic_messages`, `gemini_interactions`, and `gemini_generate_content`. Streaming adapters forward native grammar and require native terminal evidence; transport EOF never synthesizes a client terminal event. See `architecture/deep-dive-transcoder.md` and `architecture/deep-dive-providers.md`
 - **Negotiation-safe failure effects**: a bare/unknown 401 never disables credentials, advances health, or cascades; only explicit invalid/expired/revoked credential evidence disables the selected account. Typed wire auth/surface/schema/model-on-surface signals take precedence over generic `Unsupported*` error classes, but negotiation still requires a declared alternate and pre-handoff response-status evidence. Weak model/endpoint availability wording is wire-local only when the selected provider-scoped catalog knows the model; strong `model not found`/authoritative absence remains model quarantine/withdrawal and does not enumerate surfaces. Deterministic wire rejection may enter one provider/model single-flight before downstream handoff. Leaders alone submit discovery candidates under the provider-wide abnormal-dispatch gate; followers share only the wire decision. 429/rate pressure ends discovery without candidate suppression, and cancellation cannot release unowned capacity. All account and wire retries consume one shared `1 + max_retries_before_stream` upstream-submission budget. See `architecture/deep-dive-retry.md` and `architecture/deep-dive-request-lifecycle.md`
-- **Live wire verification is opt-in**: `tests/live/test_opencode_go_wire_live.py` uses `EGGPOOL_E2E_OPENCODE_GO_API_KEY`, temporary state, bounded prompts, and sanitized outbound observations, including Muse Spark 1.2/1.3 Responses requests, MiniMax-M3 binary-toggle Chat-to-Messages adaptation, and local rejection of an invalid MiniMax effort. It is excluded from default pytest, smoke, and CI; deterministic migration and failure-isolation coverage is mandatory locally.
+- **Live wire verification is opt-in**: `tests/live/test_opencode_go_wire_live.py` uses `EGGPOOL_E2E_OPENCODE_GO_API_KEY`, temporary state, bounded prompts, and sanitized outbound observations, including Muse Spark 1.2/1.3 Responses requests, MiniMax-M3 binary-toggle Chat-to-Messages adaptation, and local rejection of an invalid MiniMax effort. It is excluded from default pytest, smoke, and CI; deterministic wire-negotiation and failure-isolation coverage is mandatory locally.
 
 ## Error Handling
 

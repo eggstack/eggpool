@@ -6,7 +6,7 @@ use eggpool::wire::{
 use serde_json::{Value, json};
 
 const W011_SSE_UTF8_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/canonical-wire/w011-sse-utf8-observations.json");
+    include_str!("../../tests/fixtures/wire/stream-utf8-observations.json");
 
 fn fixture(profile: StreamAdapterKind) -> Vec<u8> {
     let mut bytes = Vec::new();

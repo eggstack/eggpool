@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""Validate the installable release catalog and version authorities.
+
+This is a contract checker, not an updater. Cargo is the current authority;
+the root project records only the immutable historical Python version.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import tomllib
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any, cast
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CATALOG = ROOT / "rust/assets/catalog/installable-releases.json"
+_VERSION_RE = re.compile(
+    r"(?P<release>\d+(?:\.\d+){2})(?P<suffix>(?:a|b|rc|dev|post)\d*)?\Z"
+)
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+
+
+class CatalogError(ValueError):
+    """A stable, secret-free catalog validation error."""
+
+
+def normalize_version(raw: str) -> str:
+    """Normalize one accepted EggPool release spelling."""
+
+    value = raw.strip()
+    if value[:1].lower() == "v":
+        value = value[1:]
+    if not _VERSION_RE.fullmatch(value):
+        raise CatalogError("invalid EggPool release version")
+    return value
+
+
+def _version_key(raw: str) -> tuple[int, int, int, int, int]:
+    value = normalize_version(raw)
+    match = _VERSION_RE.fullmatch(value)
+    if match is None:  # pragma: no cover - guarded by normalize_version
+        raise CatalogError("invalid EggPool release version")
+    release_parts = tuple(int(part) for part in match.group("release").split("."))
+    suffix = match.group("suffix") or ""
+    kind = re.match(r"[a-z]+", suffix)
+    rank = {"dev": 0, "a": 1, "b": 2, "rc": 3, "": 4, "post": 5}.get(
+        kind.group(0) if kind else "", -1
+    )
+    number = (
+        int(suffix[len(kind.group(0)) :])
+        if kind and suffix[len(kind.group(0)) :]
+        else 0
+    )
+    return (release_parts[0], release_parts[1], release_parts[2], rank, number)
+
+
+def _as_mapping(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CatalogError(f"{label} must be an object")
+    return cast("dict[str, Any]", value)
+
+
+def _require_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise CatalogError(f"{label} must be a non-empty string")
+    return value
+
+
+def _walk_for_secrets(value: object, path: str = "catalog") -> None:
+    forbidden_keys = (
+        "api_key",
+        "authorization",
+        "credential",
+        "password",
+        "secret",
+        "token",
+    )
+    forbidden_values = ("-----begin ", "sk-", "bearer ")
+    if isinstance(value, Mapping):
+        mapping = cast("Mapping[object, object]", value)
+        for key, nested in mapping.items():
+            key_text = str(key).lower()
+            if any(fragment in key_text for fragment in forbidden_keys):
+                raise CatalogError(f"secret-bearing field is forbidden: {path}.{key}")
+            _walk_for_secrets(nested, f"{path}.{key}")
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        sequence = cast("Sequence[object]", value)
+        for index, nested in enumerate(sequence):
+            _walk_for_secrets(nested, f"{path}[{index}]")
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if any(fragment in lowered for fragment in forbidden_values):
+            raise CatalogError(f"secret-bearing value is forbidden: {path}")
+
+
+def expanded_release(
+    catalog: Mapping[str, Any], release: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Resolve the catalog's documented shared release defaults."""
+
+    defaults = _as_mapping(catalog.get("release_defaults"), "release_defaults")
+    result = dict(defaults)
+    result.update(release)
+    version = _require_string(result.get("version"), "release.version")
+    result["version"] = normalize_version(version)
+    expected_version = _require_string(
+        result.get("expected_version", version), "release.expected_version"
+    ).replace("{version}", result["version"])
+    result["expected_version"] = normalize_version(expected_version)
+    requirement = _require_string(
+        result.get("package_manager_requirement", ""),
+        "release.package_manager_requirement",
+    )
+    result["package_manager_requirement"] = requirement.replace(
+        "{version}", result["version"]
+    )
+    return result
+
+
+def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
+    """Validate the machine-readable release catalog and return stable counts."""
+
+    _walk_for_secrets(catalog)
+    if catalog.get("catalog_version") != "release-catalog.v1":
+        raise CatalogError("unsupported release catalog version")
+    if catalog.get("package_name") != "eggpool":
+        raise CatalogError("catalog package name must be eggpool")
+    if catalog.get("artifact_stage") not in {"not-active", "active"}:
+        raise CatalogError("artifact stage must be explicit")
+
+    targets = _as_mapping(catalog.get("target_matrix"), "target_matrix")
+    qualified_targets = {
+        name
+        for name, value in targets.items()
+        if _as_mapping(value, f"target_matrix.{name}").get("classification")
+        in {"supported", "supported-development"}
+    }
+    if qualified_targets != {"linux-x86_64", "linux-aarch64", "macos-arm64"}:
+        raise CatalogError("release catalog target matrix does not match runtime")
+    for name, value in targets.items():
+        target = _as_mapping(value, f"target_matrix.{name}")
+        _require_string(target.get("rust_target"), f"target_matrix.{name}.rust_target")
+        tags = target.get("wheel_platform_tags")
+        if not isinstance(tags, list) or (
+            not tags
+            and target.get("classification") in {"supported", "supported-development"}
+        ):
+            raise CatalogError(
+                f"target_matrix.{name}.wheel_platform_tags must be non-empty"
+            )
+        if (
+            target.get("classification") not in {"supported", "supported-development"}
+            and tags != []
+        ):
+            raise CatalogError(f"unsupported target {name} cannot have wheel tags")
+
+    authority = _as_mapping(catalog.get("version_authority"), "version_authority")
+    if (
+        authority.get("current_release_era") != "rust"
+        or authority.get("historical_release_era") != "python"
+    ):
+        raise CatalogError(
+            "catalog must distinguish current Rust and historical Python eras"
+        )
+    if authority.get("latest_resolution") != "rust-only":
+        raise CatalogError("latest resolution must be Rust-only")
+    if authority.get("historical_exact_resolution") != "explicit-package-manager-only":
+        raise CatalogError("historical exact resolution must be package-manager-owned")
+    if authority.get("pypi_artifacts") != "immutable-external-history":
+        raise CatalogError(
+            "historical PyPI artifacts must be immutable external history"
+        )
+    if (
+        authority.get("requires_python_semantics")
+        != "package-manager-compatibility-only"
+    ):
+        raise CatalogError("Requires-Python semantics must be explicit")
+    native_release = normalize_version(
+        _require_string(
+            authority.get("native_release_version"), "native_release_version"
+        )
+    )
+    phase = authority.get("publication_status")
+    if phase not in {"reserved", "candidate", "published"}:
+        raise CatalogError(
+            "release catalog status must be reserved, candidate, or published"
+        )
+    for field in ("historical_python_project_version", "rust_cargo_version"):
+        normalize_version(
+            _require_string(authority.get(field), f"version_authority.{field}")
+        )
+    if phase == "reserved" and (
+        authority["historical_python_project_version"]
+        != authority["rust_cargo_version"]
+    ):
+        raise CatalogError("historical Python and current Rust versions disagree")
+    if phase == "candidate" and authority["rust_cargo_version"] != native_release:
+        raise CatalogError(
+            "candidate Cargo version must equal the native release version"
+        )
+    if phase == "published" and authority["rust_cargo_version"] != native_release:
+        raise CatalogError(
+            "published Cargo version must equal the native release version"
+        )
+    if authority.get("native_release_tag") != f"v{native_release}":
+        raise CatalogError(
+            "native release tag must be the normalized version with a leading v"
+        )
+    source_commit = authority.get("native_release_source_commit")
+    if source_commit is not None and (
+        not isinstance(source_commit, str) or not _COMMIT_RE.fullmatch(source_commit)
+    ):
+        raise CatalogError("native release source commit is not immutable")
+    if phase == "reserved" and source_commit is not None:
+        raise CatalogError("reserved native release cannot claim a source commit")
+    if phase == "candidate" and source_commit is not None:
+        raise CatalogError("candidate native release cannot claim a source commit")
+    if phase == "published" and source_commit is None:
+        raise CatalogError("published native release must claim a source commit")
+
+    releases_value = catalog.get("releases")
+    if not isinstance(releases_value, list) or not releases_value:
+        raise CatalogError("catalog releases must be a non-empty array")
+    raw_releases = cast("list[object]", releases_value)
+    releases = [_as_mapping(item, "release entry") for item in raw_releases]
+    seen: set[str] = set()
+    for raw_release in releases:
+        release = expanded_release(catalog, raw_release)
+        version = release["version"]
+        if version in seen:
+            raise CatalogError(f"duplicate release version: {version}")
+        seen.add(version)
+        if _version_key(version) > _version_key(native_release) or (
+            _version_key(version) == _version_key(native_release)
+            and phase != "published"
+        ):
+            raise CatalogError(f"native release is not newer than release {version}")
+        if release.get("implementation_era") not in {"python", "rust"}:
+            raise CatalogError(f"invalid implementation era for {version}")
+        expected_era = "rust" if version == native_release else "python"
+        if release["implementation_era"] != expected_era:
+            raise CatalogError(
+                f"release {version} has era {release['implementation_era']!r}; "
+                f"expected {expected_era!r}"
+            )
+        if release.get("source_tag") != f"v{version}":
+            raise CatalogError(f"source tag does not match {version}")
+        commit = _require_string(
+            release.get("source_commit"), f"source commit for {version}"
+        )
+        if not _COMMIT_RE.fullmatch(commit):
+            raise CatalogError(f"source commit is not immutable for {version}")
+        if release.get("public_release_status") not in {
+            "published",
+            "yanked",
+            "unavailable",
+        }:
+            raise CatalogError(f"invalid public status for {version}")
+        if not isinstance(release.get("pypi_presence"), bool):
+            raise CatalogError(f"PyPI presence must be explicit for {version}")
+        files = release.get("pypi_files")
+        if release["pypi_presence"] and (not isinstance(files, list) or not files):
+            raise CatalogError(f"published PyPI release has no files: {version}")
+        if files is not None:
+            if not isinstance(files, list):
+                raise CatalogError(f"PyPI files must be an array for {version}")
+            filenames: set[str] = set()
+            raw_files = cast("list[object]", files)
+            for raw_file in raw_files:
+                file_info = _as_mapping(raw_file, f"PyPI file for {version}")
+                filename = _require_string(file_info.get("filename"), "PyPI filename")
+                if filename in filenames or not filename.startswith(
+                    f"eggpool-{version}"
+                ):
+                    raise CatalogError(
+                        f"invalid or duplicate PyPI filename for {version}"
+                    )
+                filenames.add(filename)
+                digest = _require_string(
+                    file_info.get("sha256"), f"PyPI hash for {filename}"
+                )
+                if not _SHA256_RE.fullmatch(digest):
+                    raise CatalogError(f"invalid PyPI SHA-256 for {filename}")
+        supported = release.get("supported_target_classes")
+        if (
+            not isinstance(supported, list)
+            or not set(cast("list[str]", supported)) <= qualified_targets
+        ):
+            raise CatalogError(f"unsupported target appears in release {version}")
+        if release.get("expected_version") != version:
+            raise CatalogError(f"expected runtime version does not match {version}")
+        if not isinstance(release.get("yanked"), bool) or not isinstance(
+            release.get("unavailable"), bool
+        ):
+            raise CatalogError(
+                f"yanked/unavailable state must be explicit for {version}"
+            )
+        if release.get("public_release_status") == "published" and (
+            release["yanked"] or release["unavailable"]
+        ):
+            raise CatalogError(
+                f"published release has invalid unavailable state: {version}"
+            )
+        if (
+            catalog["artifact_stage"] == "active"
+            and release["implementation_era"] == "rust"
+        ):
+            wheels = release.get("supported_wheels")
+            if (
+                not isinstance(wheels, Mapping)
+                or set(cast("Mapping[str, object]", wheels)) != qualified_targets
+            ):
+                raise CatalogError(
+                    f"Rust release has incomplete supported wheels: {version}"
+                )
+        if phase == "published" and version == native_release:
+            if release["implementation_era"] != "rust":
+                raise CatalogError("published native release must be a Rust release")
+            if release.get("source_commit") != source_commit:
+                raise CatalogError("published native release source commit disagrees")
+        _require_string(
+            release.get("db_config_compatibility"), f"compatibility for {version}"
+        )
+        _require_string(
+            release.get("rollback_suitability"), f"rollback status for {version}"
+        )
+
+    inventory = _as_mapping(catalog.get("official_inventory"), "official_inventory")
+    if inventory.get("github_stable_release_count") != len(releases):
+        raise CatalogError("GitHub stable release count does not match catalog")
+    if inventory.get("pypi_stable_release_count") != len(releases):
+        raise CatalogError("PyPI stable release count does not match catalog")
+    if inventory.get("missing_pypi_versions") != []:
+        raise CatalogError(
+            "current catalog must record that no PyPI versions are missing"
+        )
+    latest = _version_key(
+        _require_string(inventory.get("latest_stable_version"), "latest version")
+    )
+    if phase == "published":
+        if latest != _version_key(native_release):
+            raise CatalogError(
+                "published native release must be the latest stable release"
+            )
+    elif _version_key(native_release) <= latest:
+        raise CatalogError("native release must be newer than latest stable release")
+
+    rollback = _as_mapping(catalog.get("rollback_window"), "rollback_window")
+    compatible_versions = rollback.get("compatible_versions")
+    if not isinstance(compatible_versions, list) or not compatible_versions:
+        raise CatalogError("rollback window must enumerate compatible versions")
+    compatible_version_values = cast("list[object]", compatible_versions)
+    for version in compatible_version_values:
+        normalized = normalize_version(_require_string(version, "rollback version"))
+        if normalized not in seen:
+            raise CatalogError(f"rollback version is absent from catalog: {normalized}")
+    gap_policy = _as_mapping(
+        catalog.get("historical_gap_policy"), "historical_gap_policy"
+    )
+    if gap_policy.get("historical_files_are_immutable") is not True:
+        raise CatalogError("historical PyPI immutability must be explicit")
+    _require_string(
+        gap_policy.get("historical_file_mutation_policy"),
+        "historical_file_mutation_policy",
+    )
+    return {
+        "catalog_version": "release-catalog.v1",
+        "native_release_version": native_release,
+        "release_count": len(releases),
+        "rollback_count": len(compatible_version_values),
+    }
+
+
+def check_version_authorities(repo_root: Path, catalog: Mapping[str, Any]) -> None:
+    """Check Rust version authority and the tooling-only historical marker."""
+
+    authority = _as_mapping(catalog["version_authority"], "version_authority")
+    try:
+        with (repo_root / "rust/Cargo.toml").open("rb") as handle:
+            rust_project = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise CatalogError("version authority source could not be read") from exc
+    try:
+        with (repo_root / "pyproject.toml").open("rb") as handle:
+            tooling_project = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise CatalogError("tooling project could not be read") from exc
+    root_tools = _as_mapping(tooling_project.get("tool", {}), "tool")
+    root_eggpool = _as_mapping(root_tools.get("eggpool", {}), "tool.eggpool")
+    if root_eggpool.get("project_role") != "repository-tooling-only":
+        raise CatalogError("root project is not marked repository tooling-only")
+    python_version = root_eggpool.get("historical_python_version")
+    rust_version = rust_project.get("package", {}).get("version")
+    if python_version != authority["historical_python_project_version"]:
+        raise CatalogError("tooling historical version disagrees with release catalog")
+    if rust_version != authority["rust_cargo_version"]:
+        raise CatalogError("Rust Cargo version disagrees with release catalog")
+    if (
+        authority["publication_status"] == "reserved"
+        and python_version == authority["native_release_version"]
+    ):
+        raise CatalogError(
+            "reserved native release has already replaced the Python oracle"
+        )
+
+
+def load_and_validate(path: Path = DEFAULT_CATALOG) -> dict[str, Any]:
+    """Load and validate a catalog JSON document."""
+
+    try:
+        with path.open(encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CatalogError("catalog JSON could not be read") from exc
+    catalog = _as_mapping(value, "catalog")
+    validate_catalog(catalog)
+    return catalog
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
+    parser.add_argument("--repo-root", type=Path, default=ROOT)
+    args = parser.parse_args(argv)
+    try:
+        catalog = load_and_validate(args.catalog)
+        check_version_authorities(args.repo_root, catalog)
+    except CatalogError as exc:
+        print(f"release catalog invalid: {exc}", file=sys.stderr)
+        return 1
+    summary = validate_catalog(catalog)
+    print(
+        f"release catalog valid: {summary['release_count']} releases; "
+        f"native release {summary['native_release_version']} "
+        f"{catalog['version_authority']['publication_status']}; "
+        f"{summary['rollback_count']} rollback-compatible"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

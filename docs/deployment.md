@@ -36,7 +36,7 @@ connections, configuration validation, and an optional server start.
 
 ```bash
 eggpool update          # install the newest published release when newer
-eggpool update 0.8.0    # exact Rust candidate/release
+eggpool update 0.8.0    # exact current Rust release
 eggpool update 0.7.4    # exact supported Python-era rollback
 eggpool update v0.7.4   # equivalent spelling
 eggpool update 0.8.0 --check

@@ -74,8 +74,8 @@ example:
 eggpool update 0.8.0
 ```
 
-After a successful rollback, return to Rust with either the latest compatible
-release or an exact cutover request:
+After a successful rollback, return to the current Rust release with either
+the latest compatible release or an exact version:
 
 ```bash
 eggpool update
@@ -128,8 +128,8 @@ Use the checkout's `packaging/pypi/pyproject.toml` only when building a local
 Rust wheel for qualification. The repository root `pyproject.toml` contains
 tooling configuration only; it is not an EggPool package and is never a
 runtime fallback. Historical Python source is recoverable from the immutable
-reference commit recorded in `migration-rs/fixtures/retirement/`, not from a
-current source package.
+reference commit recorded in [migration history](migration-history.md), not
+from a current source package.
 
 The Rust wheel's `Requires-Python >=3.11` is a package-manager compatibility
 floor for explicit historical transitions, not a runtime interpreter

@@ -13,11 +13,11 @@ use eggpool::wire::{
 use serde_json::{Value, json};
 
 const W001_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/canonical-wire/w001-python-observations.json");
+    include_str!("../../tests/fixtures/wire/compatibility-observations.json");
 const W012_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/canonical-wire/w012-cross-surface-observations.json");
+    include_str!("../../tests/fixtures/wire/cross-surface-observations.json");
 const W011_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/canonical-wire/w011-sse-utf8-observations.json");
+    include_str!("../../tests/fixtures/wire/stream-utf8-observations.json");
 
 fn oracle() -> Value {
     serde_json::from_str(W001_OBSERVATIONS).expect("committed W001 fixture is valid JSON")

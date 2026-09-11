@@ -12,7 +12,7 @@ dev = [
 ]
 
 [tool.eggpool]
-project_role = "migration-tooling-only"
+project_role = "repository-tooling-only"
 current_runtime = "rust"
 publication_manifest = "packaging/pypi/pyproject.toml"
 historical_python_version = "0.7.4"

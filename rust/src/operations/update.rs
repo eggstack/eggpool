@@ -42,7 +42,7 @@ use crate::version::PACKAGE_VERSION;
 
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/eggstack/eggpool/releases";
 const DEFAULT_USER_AGENT: &str = "eggpool-rust-update";
-const RUST_CUTOVER_VERSION: &str = "0.8.0";
+const NATIVE_RELEASE_VERSION: &str = "0.8.0";
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;
@@ -215,7 +215,7 @@ impl Platform {
     }
 }
 
-/// The minimum M11-compatible raw executable asset contract.
+/// The minimum release-compatible raw executable asset contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactDescriptor {
     pub name: String,
@@ -470,8 +470,8 @@ impl ReleaseClient {
         }
         let version = ReleaseVersion::parse(&response.tag_name)?;
         if matches!(target, ReleaseTarget::Latest)
-            && !version.is_newer_than(&ReleaseVersion::parse(RUST_CUTOVER_VERSION)?)
-            && version.as_str() != RUST_CUTOVER_VERSION
+            && !version.is_newer_than(&ReleaseVersion::parse(NATIVE_RELEASE_VERSION)?)
+            && version.as_str() != NATIVE_RELEASE_VERSION
         {
             return Err(UpdateError::UnsupportedRelease);
         }
@@ -720,9 +720,9 @@ pub struct UpdateService {
 pub struct TransitionContext {
     /// `None` means the owning environment did not expose a parseable
     /// `pyvenv.cfg` version.  In that case a package transition is refused;
-    /// K005 may supply an explicitly observed interpreter version.
+    /// release compatibility may supply an explicitly observed interpreter version.
     pub python_version: Option<(u8, u8)>,
-    /// The caller's DB/config compatibility precheck.  K004 does not open or
+    /// The caller's DB/config compatibility precheck.  The compatibility logic does not open or
     /// mutate the database and therefore requires this fact from its caller.
     pub db_config_compatible: bool,
     /// Optional config path used for the target's read-only `check-config`

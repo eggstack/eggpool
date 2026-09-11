@@ -5,20 +5,20 @@ Current EggPool releases are built and published by the pinned
 authority; it consumes `packaging/pypi/pyproject.toml` and packages only the
 Rust executable plus distribution metadata/assets.
 
-## Candidate checks
+## Release checks
 
 Before creating a release tag:
 
 ~~~bash
-uv run python scripts/check_cutover_catalog.py
-uv run python scripts/validate_cutover_release.py
+uv run python scripts/check_release_catalog.py
+uv run python scripts/validate_release_identity.py
 uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
-uv run python scripts/validate_cutover_docs.py
-uv run python scripts/validate_m12_package_boundary.py
+uv run python scripts/validate_release_docs.py
+uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ~~~
 
-The checks must agree on the K001 candidate (0.8.0 for the current public
+The checks must agree on the release catalog's native version (0.8.0 for the current public
 release), Cargo version, package metadata, supported targets, changelog
 heading, and source commit. The root `pyproject.toml` is tooling-only and
 cannot be built or uploaded as an EggPool release. `Requires-Python >=3.11` on
@@ -26,7 +26,7 @@ the Rust wheel exists for package-manager compatibility when an operator
 explicitly selects a historical Python target, not because the Rust process
 imports or spawns Python.
 
-The candidate release set is exactly:
+The release set is exactly:
 
 - Linux x86_64 wheel/raw executable;
 - Linux aarch64 wheel/raw executable;
@@ -37,15 +37,15 @@ fallback.
 
 ## Staged rehearsal
 
-Use K009's local wheelhouse/staged-index workflow before any public upload.
+Use release rehearsal's local wheelhouse/staged-index workflow before any public upload.
 Staged commands must use explicit EGGPOOL_INSTALL_FIND_LINKS or
 EGGPOOL_INSTALL_INDEX_URL together with
 EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_INDEX=1. Do not persist those variables
 in operator configuration.
 
 ~~~bash
-uv run python scripts/qualification_cutover_rehearsal.py \
-  --manifest migration-rs/closure/cutover/009-run.json
+uv run python scripts/qualification_release_rehearsal.py \
+  --manifest packaging/release/upgrade-rehearsal.json
 ~~~
 
 The rehearsal is not a production publication and cannot make a missing
@@ -63,10 +63,10 @@ After publication, verify the public metadata and release asset digests:
 
 ~~~bash
 uv run python scripts/verify_published_release.py \
-  migration-rs/closure/cutover/k003-release-manifest.json
+  packaging/release/release-manifest.json
 ~~~
 
-Do not call a candidate released until all required targets are public and
+Do not call a release complete until all required targets are public and
 the post-publication verifier passes. A partial immutable upload is stopped,
 recorded, and recovered by a new reviewed release; filenames are never reused.
 
@@ -81,7 +81,7 @@ a normal release trigger or a substitute for the post-publication verifier.
 ## Historical exact-version compatibility
 
 Historical Python releases remain immutable external PyPI artifacts. They may
-be selected only by an explicit exact version when the K001 catalog, Python
+be selected only by an explicit exact version when the release catalog, Python
 environment, and database/config compatibility checks allow it. They are not
 rebuilt, uploaded, or used as a current source package. The root
 `pyproject.toml` is tooling-only and contains no EggPool application package;
@@ -90,8 +90,8 @@ the current publication authority is `packaging/pypi/pyproject.toml`.
 Use a non-publishing rehearsal before any upload:
 
 ```bash
-uv run python scripts/qualification_cutover_rehearsal.py \
-  --manifest migration-rs/closure/cutover/009-run.json
+uv run python scripts/qualification_release_rehearsal.py \
+  --manifest packaging/release/upgrade-rehearsal.json
 ```
 
 Manual `workflow_dispatch` with `destination: validate` builds and validates

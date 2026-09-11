@@ -169,7 +169,7 @@ async fn routing_domain_schema54_seed_opens_and_preserves_owned_state() {
     database
         .call(|connection| {
             connection.execute_batch(include_str!(
-                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+                "../../tests/fixtures/database/schema54-routing-domain-seed.sql"
             ))
         })
         .await

@@ -52,9 +52,9 @@ deterministic Gemini codec and path tests do not require credentials.
 For release closure, record the exact live test outcomes. A clean skip caused
 by a missing credential is not live verification evidence.
 
-## Rust Q007 qualification
+## Rust live-provider qualification
 
-The bounded M10 Q007 runner exercises the Rust candidate through its public
+The bounded runtime live-provider qualification runner exercises the Rust binary through its public
 HTTP server. It prints the frozen seven-request matrix before dispatch, uses
 an isolated database/configuration, records only semantic evidence, and never
 writes credentials or raw bodies:
@@ -64,14 +64,15 @@ uv run python scripts/qualification_live_provider.py \
   --binary rust/target/release/eggpool \
   --enable-live \
   --provider-key-env EGGPOOL_E2E_OPENCODE_GO_API_KEY \
-  --output migration-rs/closure/qualification/007-run.json
+  --output artifacts/qualification/007-run.json
 ```
 
 Use `--env-file` only with a local, uncommitted dotenv file when the selected
 credential is not exported. The deterministic loopback rehearsal is
 `--offline-fake`; it must not be described as live-provider evidence.
 
-Q011's corrective profile is a separate, still opt-in seven-request matrix
+The extended live-provider qualification corrective profile is a separate,
+still opt-in seven-request matrix
 for two authorized provider edges. It uses GeneralCompute's OpenAI-compatible
 Chat surface and MiniMax International's Anthropic Messages surface, including
 Responses/Chat adaptation, streaming terminal evidence, and one Chat-to-Messages
@@ -83,14 +84,15 @@ uv run python scripts/qualification_live_provider.py \
   --enable-live --profile q011-multi \
   --provider-key-env Q011_GENERALCOMPUTE_KEY \
   --secondary-provider-key-env Q011_MINIMAX_KEY \
-  --output migration-rs/closure/qualification/011-run.json
+  --output artifacts/qualification/011-run.json
 ```
 
 Both credentials are supplied only through the invoking environment. The
-profile retains the Q007 maximum request budget and writes only bounded,
+profile retains the live-provider qualification maximum request budget and
+writes only bounded,
 secret-free evidence.
 
-## Deterministic migration acceptance
+## Deterministic wire compatibility acceptance
 
 The mandatory stale-profile check uses an in-process fake upstream:
 
@@ -103,5 +105,5 @@ Chat acceptance. The same account succeeds after an in-process alternate-wire
 retry, the Chat preference is learned, and the next request uses Chat without
 a restart or database reset. The test also verifies that the outbound hook
 sees the actual paths and attempt ordinals without exposing credentials.
-The same integration module covers an unhinted known-model migration, strong
+The same integration module covers unhinted known-model negotiation, strong
 model-absence control, and Messages↔Responses/Chat cross-surface adaptation.

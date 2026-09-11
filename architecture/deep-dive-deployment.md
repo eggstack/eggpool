@@ -33,9 +33,9 @@ supported OS/architecture before mutation, and preserves configuration.
 
 The `scripts/` directory contains release, package-boundary, installer,
 portability, and qualification tooling. The most relevant commands are
-`qualify_quick_installer.py`, `validate_m12_retirement.py`,
-`validate_m12_package_boundary.py`, `validate_release_workflow.py`,
-`build_cutover_artifacts.py`, and `verify_published_release.py`.
+`qualify_quick_installer.py`, `validate_runtime_package_boundary.py`,
+`validate_release_workflow.py`, `build_release_artifacts.py`,
+`validate_release_artifacts.py`, and `verify_published_release.py`.
 
 ## Systemd Integration
 

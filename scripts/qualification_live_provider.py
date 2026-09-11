@@ -1,4 +1,4 @@
-"""Run the bounded M10 Q007 live-provider interoperability qualification.
+"""Run bounded live-provider interoperability qualification.
 
 The runner is opt-in and qualification-only.  It starts the supplied Rust
 candidate with an isolated configuration and database, sends a fixed seven
@@ -13,7 +13,7 @@ Usage::
         --enable-live \
         --provider-key-env OPENCODE_GO_KEY_1 \
         --env-file .env \
-        --output migration-rs/closure/qualification/007-run.json
+        --output artifacts/qualification/007-run.json
 
 The offline loopback mode is intended for deterministic regression tests and
 never claims live-provider qualification::
@@ -48,11 +48,13 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q007-live.toml"
-Q011_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q011-live.toml"
-DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/007-run.json"
-MANIFEST_VERSION = "m10-q001.v1"
-SCHEMA_VERSION = "m10-q007.v1"
+DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/live-provider.toml"
+Q011_FIXTURE = (
+    ROOT / "tests/tooling/fixtures/qualification/live-provider-multimodel.toml"
+)
+DEFAULT_OUTPUT = ROOT / "artifacts/qualification/007-run.json"
+MANIFEST_VERSION = "runtime-q001.v1"
+SCHEMA_VERSION = "runtime-q007.v1"
 SERVER_KEY = "q007-server-key"
 FAKE_PROVIDER_KEY = "q007-provider-key"
 OPENCODE_SESSION_HEADER = "x-opencode-session"
@@ -78,12 +80,12 @@ _FAKE_MODELS = {
 
 
 class QualificationError(RuntimeError):
-    """A mandatory Q007 observation failed."""
+    """A mandatory live-provider qualification observation failed."""
 
 
 @dataclass(frozen=True)
 class RequestCase:
-    """One bounded request in the frozen Q007 matrix."""
+    """One bounded request in the frozen live-provider qualification matrix."""
 
     case_id: str
     model_id: str
@@ -147,7 +149,8 @@ CASES: tuple[RequestCase, ...] = (
     ),
 )
 
-# Q011's corrective matrix keeps the frozen seven-request budget while using
+# The extended live-provider corrective matrix keeps the frozen seven-request
+# budget while using
 # two independently authorized provider edges.  GeneralCompute supplies the
 # OpenAI-compatible Chat surface (including Responses/Messages adaptation),
 # and MiniMax International supplies the Anthropic Messages surface.
@@ -239,10 +242,11 @@ def bounded(value: str, secrets: Sequence[str] = ()) -> str:
 def validate_request_plan(cases: Sequence[RequestCase] = CASES) -> None:
     """Fail closed when the fixed request budget would be exceeded."""
     if not cases:
-        raise QualificationError("Q007 request plan is empty")
+        raise QualificationError("live-provider qualification request plan is empty")
     if len(cases) > MAX_REQUESTS:
         raise QualificationError(
-            f"Q007 request plan has {len(cases)} requests; maximum is {MAX_REQUESTS}"
+            f"live-provider qualification request plan has {len(cases)} requests; "
+            f"maximum is {MAX_REQUESTS}"
         )
 
 
@@ -303,7 +307,9 @@ def _render_config(
     for marker, value in replacements.items():
         content = content.replace(marker, value)
     if "__Q007_" in content:
-        raise QualificationError("Q007 config fixture has unresolved placeholders")
+        raise QualificationError(
+            "live-provider qualification config fixture has unresolved placeholders"
+        )
     destination.write_text(content, encoding="utf-8")
 
 
@@ -599,7 +605,7 @@ class _FakeProviderHandler(http.server.BaseHTTPRequestHandler):
 
 
 class FakeProvider:
-    """Loopback provider with all Q007 wire families and no raw-body retention."""
+    """Loopback provider with all wire families and no raw-body retention."""
 
     def __init__(self) -> None:
         self.observations: list[dict[str, Any]] = []
@@ -768,9 +774,11 @@ def run_qualification(
     env_file: Path | None = None,
     timeout: float = REQUEST_TIMEOUT,
 ) -> dict[str, Any]:
-    """Run Q007 against a real provider or the deterministic fake provider."""
+    """Run live-provider qualification against a real or deterministic provider."""
     if profile not in _PROFILE_CASES:
-        raise QualificationError(f"unknown Q007 provider profile: {profile}")
+        raise QualificationError(
+            f"unknown live-provider qualification provider profile: {profile}"
+        )
     cases = _PROFILE_CASES[profile]
     fixture = config_fixture or _PROFILE_FIXTURES[profile]
     validate_request_plan(cases)
@@ -800,7 +808,7 @@ def run_qualification(
         return {
             "schema": SCHEMA_VERSION,
             "manifest": MANIFEST_VERSION,
-            "plan": "Q007",
+            "plan": "live-provider qualification",
             "status": "blocked",
             "reason": (
                 "credential environment variable(s) unavailable: "
@@ -842,7 +850,7 @@ def run_qualification(
     report: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "manifest": MANIFEST_VERSION,
-        "plan": "Q007",
+        "plan": "live-provider qualification",
         "status": "fail",
         "environment": environment,
         "budget": {
@@ -939,7 +947,9 @@ def run_qualification(
             port_text = config.read_text(encoding="utf-8")
             port_match = re.search(r"^port = (\d+)$", port_text, re.MULTILINE)
             if port_match is None:
-                raise QualificationError("Q007 config did not contain a server port")
+                raise QualificationError(
+                    "live-provider qualification config did not contain a server port"
+                )
             port = int(port_match.group(1))
             base_url = f"http://127.0.0.1:{port}"
             _wait_ready(process, f"{base_url}/v1/healthz", timeout)
@@ -968,7 +978,7 @@ def run_qualification(
             )
             if not expected_models <= model_ids:
                 raise QualificationError(
-                    "model catalog omitted a planned Q007 model: "
+                    "model catalog omitted a planned live-provider model: "
                     f"resolved={sorted(model_ids)}"
                 )
             report["catalog"] = {
@@ -1070,12 +1080,15 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.enable_live == args.offline_fake:
-        raise SystemExit("Q007 requires exactly one of --enable-live or --offline-fake")
+        raise SystemExit(
+            "live-provider qualification requires exactly one of "
+            "--enable-live or --offline-fake"
+        )
     cases = _PROFILE_CASES[args.profile]
     print(
         json.dumps(
             {
-                "plan": "Q007",
+                "plan": "live-provider qualification",
                 "status": "planned",
                 "profile": args.profile,
                 "requests": len(cases),
@@ -1101,7 +1114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = {
             "schema": SCHEMA_VERSION,
             "manifest": MANIFEST_VERSION,
-            "plan": "Q007",
+            "plan": "live-provider qualification",
             "status": "fail",
             "reason": bounded(str(error)),
         }

@@ -12,7 +12,7 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
 | `README.md` | New users | Current install, CLI, and development flow |
 | `docs/` | Operators | Deployment, providers, API, runbooks, release/rollback |
 | `architecture/` | Contributors | Current Rust design and ownership |
-| `migration-rs/` | Maintainers | Append-only plans, evidence, and closure records |
+| `plans/` | Maintainers | Historical plans and current maintenance records |
 | `AGENTS.md`, `.opencode/skills/` | Agents | Repository workflow and task guidance |
 
 ## Rules
@@ -28,13 +28,13 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
 - Treat `rust/Cargo.toml` as the authority for native dependency and feature
   claims. Do not document proxy, TLS, SQLite, or archive capabilities that are
   not present in the resolved Cargo feature graph.
-- Keep migration plans and closure records append-only. Only the registry
-  authorizes implementation, and only accepted P006 closes M12.
+- Keep historical plans append-only. Git history is the archive for retired
+  migration scaffolding; current docs must describe the shipped Rust runtime.
 
 ## Checks
 
 ```bash
-uv run python scripts/validate_cutover_docs.py
-uv run python scripts/validate_m12_retirement.py
+uv run python scripts/validate_release_docs.py
+uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ```

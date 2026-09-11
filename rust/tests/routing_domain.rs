@@ -326,7 +326,7 @@ async fn schema54_seed_hydrates_catalog_and_durable_freshness() {
     database
         .call(|connection| {
             connection.execute_batch(include_str!(
-                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+                "../../tests/fixtures/database/schema54-routing-domain-seed.sql"
             ))
         })
         .await
@@ -374,7 +374,7 @@ async fn missing_durable_refresh_rows_use_legacy_model_timestamp_fallback() {
     database
         .call(|connection| {
             connection.execute_batch(include_str!(
-                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+                "../../tests/fixtures/database/schema54-routing-domain-seed.sql"
             ))?;
             connection.execute("DELETE FROM catalog_refresh_state", [])
         })
@@ -402,7 +402,7 @@ async fn advisory_json_isolated_but_invalid_protocol_fails_closed() {
     database
         .call(|connection| {
             connection.execute_batch(include_str!(
-                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+                "../../tests/fixtures/database/schema54-routing-domain-seed.sql"
             ))
         })
         .await

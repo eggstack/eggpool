@@ -232,7 +232,7 @@ def _log(root: Path) -> list[str]:
 
 
 def _case_fresh(kind: str) -> dict[str, str]:
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         manager = None if kind == "pip" else ("uv" if kind == "uv-tool" else "pipx")
         _run(root, manager=manager, manager_kind=kind)
@@ -248,7 +248,7 @@ def _case_fresh(kind: str) -> dict[str, str]:
 
 
 def _case_existing(kind: str) -> dict[str, str]:
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         config = root / "config-home/eggpool/config.toml"
         config.parent.mkdir(parents=True)
@@ -279,7 +279,7 @@ def _case_existing(kind: str) -> dict[str, str]:
 
 
 def _case_standalone(failure: bool) -> dict[str, str]:
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         old = root / "existing-bin/eggpool"
         old.parent.mkdir(parents=True)
@@ -302,7 +302,7 @@ def _case_standalone(failure: bool) -> dict[str, str]:
 
 def _negative_cases() -> list[dict[str, str]]:
     cases: list[dict[str, str]] = []
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         result = _run(
             Path(value),
             manager="uv",
@@ -311,7 +311,7 @@ def _negative_cases() -> list[dict[str, str]]:
         )
         assert "ambiguous" in result.stderr
         cases.append({"case": "ambiguous-refusal", "status": "pass"})
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         manager_bin = root / "manager-bin"
         manager_bin.mkdir(parents=True)
@@ -319,7 +319,7 @@ def _negative_cases() -> list[dict[str, str]]:
         result = _run(root, manager="uv", expected=1)
         assert "collision" in result.stderr
         cases.append({"case": "manager-path-collision", "status": "pass"})
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         fake_bin = root / "fake-bin"
         fake_bin.mkdir()
@@ -327,7 +327,7 @@ def _negative_cases() -> list[dict[str, str]]:
         result = _run(root, manager="uv", expected=1)
         assert "refuses root" in result.stderr
         cases.append({"case": "root-refusal", "status": "pass"})
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         result = _run(Path(value), manager="uv", args=["--unknown"], expected=2)
         assert "Unknown argument" in result.stderr
         cases.append({"case": "unknown-argument-exit-2", "status": "pass"})
@@ -352,7 +352,7 @@ def _negative_cases() -> list[dict[str, str]]:
 
 
 def _source_case() -> dict[str, str]:
-    with tempfile.TemporaryDirectory(prefix="eggpool-k006-") as value:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         result = _run(root, manager="uv", source=True)
         log = _log(root)

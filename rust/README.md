@@ -43,7 +43,7 @@ development. Use the built binary directly, or build a local wheel through
 
 ## T002 direct provider transport
 
-`eggpool::providers::ProviderHttpClient` is the migration transport boundary
+`eggpool::providers::ProviderHttpClient` is the provider transport boundary
 for direct provider HTTP/HTTPS. It uses one cheap-to-clone Hyper HTTP/1.1
 client per future provider scope, Rustls with explicit Mozilla webpki roots,
 and a connection-lifetime semaphore that bounds physical connections while
@@ -70,7 +70,7 @@ The feature-enabled command runs deterministic local Shadowsocks, SSR, Trojan,
 and OpenSSH peers. The Trojan CA override is test-only; SSH uses the same
 production `ProviderHttpClient::new_with_proxy` path as configured accounts.
 This is transport-only evidence; it does not claim provider inference
-dispatch, routing, codecs, or production Rust cutover.
+dispatch, routing, codecs, or production Rust release.
 
 ## T004 provider/account client pool
 
@@ -118,12 +118,13 @@ typed, usable failure just as in the Python oracle.
 
 The Rust repositories and runtime own account, model, request, provider-ping,
 usage, finalization, quota, catalog, backup, and recovery behavior. Historical
-compatibility fixtures live under `migration-rs/fixtures/` and are not read by
+compatibility fixtures live under `tests/fixtures/` and are not read by
 the production runtime.
 
 ## F003 config and CLI compatibility
 
-The migration candidate resolves configuration in the same order as Python:
+The native runtime resolves configuration in the same order as the historical
+package:
 an explicit `--config` path, `$EGGPOOL_CONFIG`, the XDG user config path when
 it exists, and finally `./config.toml`. It validates the supported TOML shape,
 defaults, legacy flat accounts, provider/auth/proxy forms, wire surfaces,

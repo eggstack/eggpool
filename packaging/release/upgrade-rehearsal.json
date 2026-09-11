@@ -1,0 +1,20 @@
+{
+  "artifacts": [
+    {"target": "linux-aarch64", "wheel": {"filename": "eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", "manifest_sha256": "b9b1827f442f1abf3c84116aa1a955770755ee5a4ac324ab11c5dee7065c260e", "sha256": "b9b1827f442f1abf3c84116aa1a955770755ee5a4ac324ab11c5dee7065c260e", "size": 10623987}, "raw": {"filename": "eggpool-0.8.0-linux-aarch64", "manifest_sha256": "91eec9ab29556a30971ad94da7b42049c6c9f4b5fa1b041d1628527ec22dd9c8", "sha256": "91eec9ab29556a30971ad94da7b42049c6c9f4b5fa1b041d1628527ec22dd9c8", "size": 23514160}},
+    {"target": "linux-x86_64", "wheel": {"filename": "eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "manifest_sha256": "aed054784a1619987457f332d18b354ab4c693f45a0b6dd6b70ad9d4edabd2d6", "sha256": "aed054784a1619987457f332d18b354ab4c693f45a0b6dd6b70ad9d4edabd2d6", "size": 11206432}, "raw": {"filename": "eggpool-0.8.0-linux-x86_64", "manifest_sha256": "8664513c1634824d089a9b852f9e24792ae7743536a4b03f0aeec684fe5c3487", "sha256": "8664513c1634824d089a9b852f9e24792ae7743536a4b03f0aeec684fe5c3487", "size": 27493776}},
+    {"target": "macos-arm64", "wheel": {"filename": "eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl", "manifest_sha256": "ca51e31dcd56096e6cb08eca869c69c3bf3053f0f9ae38dfe17e3bc16151dd28", "sha256": "ca51e31dcd56096e6cb08eca869c69c3bf3053f0f9ae38dfe17e3bc16151dd28", "size": 11544770}, "raw": {"filename": "eggpool-0.8.0-macos-aarch64", "manifest_sha256": "65deceda482f4dd9d8dc7e53fdab9846d0afe366a6966c6d6c2ff3d03df858db", "sha256": "65deceda482f4dd9d8dc7e53fdab9846d0afe366a6966c6d6c2ff3d03df858db", "size": 27594944}}
+  ],
+  "release": {"manifest_schema": "release-manifest.v1", "manifest_sha256": "3dcd16bc11674872a57cc42af04123684a4cd9602f0a40abac5cc9fd63c3cc4c", "source_commit": "e5fb9a52b8dcce1e02eddf406e7b0d29779738bf", "version": "0.8.0"},
+  "environment": {"architecture": "x86_64", "managers": {"pipx": "1.17.2", "python": "3.11.9", "uv": "uv 0.11.16 (135a36367 2026-05-21 x86_64-apple-darwin)"}, "os": "Darwin", "target": "macos-arm64"},
+  "failure_injection": {"cases": {"corrupted_wheel_before_publish": "pass", "download_timeout": "bounded category available", "index_hash_or_missing_file": "pass", "missing_artifact_aggregation": "pass", "partial_manager_install": "installer harness", "production_publish_from_rehearsal": "workflow gate", "service_restart_failure": "service transition recovery harness", "staged_target_self_check": "release artifacts wheel smoke", "unsupported_extra_artifact": "pass"}, "status": "pass"},
+  "installer": {"reason": "target does not match this host", "status": "skipped"},
+  "local_index": {"filename": "eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl", "sha256": "ca51e31dcd56096e6cb08eca869c69c3bf3053f0f9ae38dfe17e3bc16151dd28", "status": "pass", "url_scope": "loopback only"},
+  "qualification_freshness": {"basis": "release rehearsal changes release/install orchestration only; runtime-visible runtime surfaces are unchanged", "status": "pass"},
+  "package_managers": {"reason": "target does not match this host", "status": "skipped"},
+  "schema_version": "release-rehearsal.v1",
+  "status": "pass",
+  "target": {"raw": {"filename": "eggpool-0.8.0-macos-aarch64", "sha256": "65deceda482f4dd9d8dc7e53fdab9846d0afe366a6966c6d6c2ff3d03df858db"}, "raw_standalone_smoke": {"reason": "target smoke disabled", "status": "skipped"}, "status": "pass", "target": "macos-arm64", "wheel": {"filename": "eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl", "sha256": "ca51e31dcd56096e6cb08eca869c69c3bf3053f0f9ae38dfe17e3bc16151dd28", "tags": ["py3-none-macosx_11_0_arm64"]}, "wheel_smoke": {"reason": "target smoke disabled", "status": "skipped"}},
+  "testpypi": {"disposition": "no TestPyPI environment is configured; production is untouched", "next_owner": "release owner", "status": "not_run"},
+  "unsupported_target": {"category": "unsupported_platform", "status": "pass"},
+  "workflow": {"jobs": 9, "production_publish": "tag push plus repository and environment gates", "rehearsal_publish": "manual testpypi input only", "status": "pass", "targets": ["linux-x86_64", "linux-aarch64", "macos-arm64"]}
+}

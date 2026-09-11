@@ -1,4 +1,4 @@
-"""Run the bounded Q006 acceptance on a disposable rootful Linux host.
+"""Run the bounded rootful qualification acceptance on a disposable rootful Linux host.
 
 This is deliberately a host runner, not a container test.  It requires Linux
 with systemd as PID 1 and effective root, refuses known EggPool paths before
@@ -8,7 +8,7 @@ Usage::
 
     sudo -E uv run python scripts/qualification_rootful_linux.py \
         --binary rust/target/release/eggpool \
-        --output migration-rs/closure/qualification/006-run.json \
+        --output artifacts/qualification/006-run.json \
         --i-understand-disposable-host
 
 The host must be disposable.  ``--cleanup`` is a recovery mode for a runner
@@ -39,8 +39,8 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/006-run.json"
-MANIFEST_VERSION = "m10-q006.v1"
+DEFAULT_OUTPUT = ROOT / "artifacts/qualification/006-run.json"
+MANIFEST_VERSION = "runtime-q006.v1"
 SERVICE_NAME = "eggpool"
 MARKER = Path("/var/tmp/eggpool-q006-owned")
 CANDIDATE_ROOT = Path("/usr/local/lib/eggpool-q006")
@@ -65,7 +65,7 @@ COMMAND_TIMEOUT = 45.0
 
 
 class QualificationError(RuntimeError):
-    """A mandatory Q006 observation failed."""
+    """A mandatory rootful qualification observation failed."""
 
 
 def bounded(value: str) -> str:
@@ -344,13 +344,15 @@ def command_version(program: str, arg: str) -> str:
 
 def assert_preflight() -> None:
     if platform.system() != "Linux":
-        raise QualificationError("Q006 requires Linux; no host mutation was attempted")
+        raise QualificationError(
+            "rootful qualification requires Linux; no host mutation was attempted"
+        )
     if os.geteuid() != 0:
         raise QualificationError(
-            "Q006 requires effective root for production acceptance"
+            "rootful qualification requires effective root for production acceptance"
         )
     if Path("/proc/1/comm").read_text(encoding="utf-8").strip() != "systemd":
-        raise QualificationError("Q006 requires systemd as PID 1")
+        raise QualificationError("rootful qualification requires systemd as PID 1")
     required = ("systemctl", "useradd", "userdel", "runuser")
     missing = [name for name in required if not available(name)]
     if missing:
@@ -732,7 +734,8 @@ def run_qualification(binary: Path, output: Path) -> dict[str, Any]:
             ):
                 production_cli_env.pop(key, None)
             MARKER.write_text(
-                "Q006 disposable acceptance ownership marker\n", encoding="utf-8"
+                "rootful qualification disposable acceptance ownership marker\n",
+                encoding="utf-8",
             )
             production_user_created = True
             runner.require(

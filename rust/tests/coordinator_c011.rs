@@ -67,7 +67,7 @@ use tokio::{
 const MODEL: &str = "fixture-model";
 const VIRTUAL: &str = "virtual-route";
 const C001_OBSERVATIONS: &str =
-    include_str!("../../migration-rs/fixtures/coordinator/c001-python-observations.json");
+    include_str!("../../tests/fixtures/coordinator/compatibility-observations.json");
 
 // ---------------------------------------------------------------------------
 // Wire profiles and payloads

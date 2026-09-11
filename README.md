@@ -48,7 +48,7 @@ arm64. Windows and other unqualified targets are unsupported. See
 [Upgrade and rollback](docs/upgrading.md) for exact-version switching and
 [Deployment](docs/deployment.md) for systemd, cron, and production setup.
 
-To update the owning installation or make an exact cross-era switch:
+To update the owning installation or make an exact historical-version switch:
 
 ~~~bash
 eggpool update
@@ -225,7 +225,7 @@ known by the selected provider, may authorize an alternate-surface attempt on
 the same account. Strong model absence remains model-scoped failure behavior.
 Bounded endpoint-qualified `model ... is not available` wording is treated as
 weak only with the same known-model context. Generic `Unsupported*` error
-classes alone never authorize wire migration.
+classes alone never authorize wire fallback.
 Concurrent requests share one provider/model discovery flight;
 the provider-wide negotiation gate bounds only those abnormal alternate-surface
 submissions, not ordinary known-good inference. Rate pressure ends discovery

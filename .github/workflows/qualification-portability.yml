@@ -1,0 +1,53 @@
+name: Q005 portability qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+
+jobs:
+  target:
+    name: ${{ matrix.target_id }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_id: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target_id: linux-aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target_id: macos-arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - run: uv sync --frozen
+      - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --target ${{ matrix.rust_target }} -- -D warnings
+      - run: cargo build --manifest-path rust/Cargo.toml --release --target ${{ matrix.rust_target }}
+      - run: cargo test --manifest-path rust/Cargo.toml --all-targets --no-run --target ${{ matrix.rust_target }}
+      - run: >-
+          uv run python scripts/qualification_portability.py
+          --binary rust/target/${{ matrix.rust_target }}/release/eggpool
+          --config-fixture tests/tooling/fixtures/qualification/portability.toml
+          --target-id ${{ matrix.target_id }}
+          --output artifacts/qualification/005-run-${{ matrix.target_id }}.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: q005-${{ matrix.target_id }}
+          path: artifacts/qualification/005-run-${{ matrix.target_id }}.json

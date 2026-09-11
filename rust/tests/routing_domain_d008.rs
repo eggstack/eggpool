@@ -136,7 +136,7 @@ async fn generation() -> Generation {
     database
         .call(|connection| {
             connection.execute_batch(include_str!(
-                "../../migration-rs/fixtures/routing-domain/schema54-routing-domain-seed.sql"
+                "../../tests/fixtures/database/schema54-routing-domain-seed.sql"
             ))
         })
         .await

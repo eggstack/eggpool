@@ -1,0 +1,105 @@
+name: release artifact qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+
+jobs:
+  build-and-qualify:
+    name: ${{ matrix.target_class }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_class: linux-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target_class: linux-aarch64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target_class: macos-arm64
+            rust_target: aarch64-apple-darwin
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: mlugg/setup-zig@v1
+        if: startsWith(matrix.target_class, 'linux-')
+        with:
+          version: 0.13.0
+      - run: uv sync --frozen
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/build_release_artifacts.py
+          --target-class ${{ matrix.target_class }}
+          --out dist/release-artifacts/${{ matrix.target_class }}
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/qualify_release_wheel.py
+          dist/release-artifacts/${{ matrix.target_class }}/eggpool-0.8.0-*.whl
+          --target-class ${{ matrix.target_class }}
+          --version 0.8.0
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/validate_release_portability.py
+          dist/release-artifacts/${{ matrix.target_class }}/eggpool-0.8.0-${{ startsWith(matrix.target_class, 'macos-') && 'macos-aarch64' || matrix.target_class }}
+          --target-class ${{ matrix.target_class }}
+          --version 0.8.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.target_class }}
+          path: dist/release-artifacts/${{ matrix.target_class }}
+
+  manifest:
+    name: assemble release manifest
+    needs: build-and-qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-artifacts-*
+          path: dist/release-artifacts
+          merge-multiple: true
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - name: restore raw executable staging mode
+        run: >-
+          find dist/release-artifacts -type f \( -name 'eggpool-0.8.0-linux-*' -o
+          -name 'eggpool-0.8.0-macos-*' \) -exec chmod 755 {} +
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/create_release_manifest.py
+          --artifact-dir dist/release-artifacts
+          --output dist/release-manifest.json
+          --qualification-result pass
+      - run: >-
+          uv run --no-project --with maturin==1.14.1 python
+          scripts/validate_release_artifacts.py
+          dist/release-manifest.json
+          --artifact-dir dist/release-artifacts
+      - name: prove unsupported Windows resolution fails
+        run: >-
+          uv venv --quiet .release-artifacts-resolver && bash -c '! uv pip install
+          --python .release-artifacts-resolver/bin/python --dry-run --no-index
+          --find-links dist/release-artifacts --python-platform x86_64-pc-windows-msvc
+          eggpool==0.8.0'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-release-manifest
+          path: dist/release-manifest.json

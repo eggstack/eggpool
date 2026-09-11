@@ -1,7 +1,7 @@
 # Plan 171 — Migration Scaffold Retirement and Durable Release/Compatibility Consolidation
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: completed
 Parent roadmap: `plans/168-rust-production-cleanup-roadmap.md`
 Priority: P1 repository maintenance / ownership cleanup
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model

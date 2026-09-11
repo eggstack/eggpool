@@ -14,8 +14,7 @@ use eggpool::{
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-const ORACLE: &str =
-    include_str!("../../migration-rs/fixtures/runtime-lifecycle/r001-python-observations.json");
+const ORACLE: &str = include_str!("../../tests/fixtures/runtime/compatibility-observations.json");
 const SERVER_SECRET: &str = "ep-r005-server-secret-sentinel";
 const ACCOUNT_SECRET: &str = "sk-r005-account-secret-sentinel";
 const PROXY_SECRET: &str = "proxy-r005-secret-sentinel";

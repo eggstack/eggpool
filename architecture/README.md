@@ -1,8 +1,9 @@
 # Architecture
 
 This directory is the current design index. It describes the native Rust
-runtime shipped by EggPool; migration plans and historical evidence remain
-under `migration-rs/`.
+runtime shipped by EggPool. Historical migration context is limited to the
+concise [migration history](../docs/migration-history.md) pointer; Git history
+is the archival authority.
 
 ## Runtime shape
 

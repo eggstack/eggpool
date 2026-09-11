@@ -26,7 +26,7 @@ use tokio::time::{sleep, timeout};
 use tower::ServiceExt;
 
 const R001_ORACLE: &str =
-    include_str!("../../migration-rs/fixtures/runtime-lifecycle/r001-python-observations.json");
+    include_str!("../../tests/fixtures/runtime/compatibility-observations.json");
 
 struct Fixture {
     _directory: TempDir,

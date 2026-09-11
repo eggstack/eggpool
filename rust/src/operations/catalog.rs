@@ -1,4 +1,4 @@
-//! Embedded K001 installable-release catalog used before update mutation.
+//! Embedded release catalog installable-release catalog used before update mutation.
 
 use std::collections::BTreeMap;
 
@@ -6,7 +6,8 @@ use serde::Deserialize;
 
 use super::update::{Platform, ReleaseTarget, ReleaseVersion, UpdateError};
 
-const K001_CATALOG: &str = include_str!("../../assets/catalog/k001-installable-releases.json");
+const INSTALLABLE_RELEASES_CATALOG: &str =
+    include_str!("../../assets/catalog/installable-releases.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseEra {
@@ -30,13 +31,13 @@ pub struct CatalogRelease {
 pub struct ReleaseCatalog {
     releases: BTreeMap<String, CatalogRelease>,
     latest_stable: Option<String>,
-    cutover_version: String,
+    native_release_version: String,
 }
 
 impl ReleaseCatalog {
     pub fn embedded() -> Result<Self, UpdateError> {
-        let document: CatalogDocument =
-            serde_json::from_str(K001_CATALOG).map_err(|_| UpdateError::CatalogMalformed)?;
+        let document: CatalogDocument = serde_json::from_str(INSTALLABLE_RELEASES_CATALOG)
+            .map_err(|_| UpdateError::CatalogMalformed)?;
         Self::from_document(document)
     }
 
@@ -75,7 +76,7 @@ impl ReleaseCatalog {
     }
 
     fn from_document(document: CatalogDocument) -> Result<Self, UpdateError> {
-        if document.catalog_version != "k001.v2" {
+        if document.catalog_version != "release-catalog.v1" {
             return Err(UpdateError::CatalogMalformed);
         }
         let authority = document.version_authority;
@@ -88,7 +89,7 @@ impl ReleaseCatalog {
         {
             return Err(UpdateError::CatalogMalformed);
         }
-        let cutover = ReleaseVersion::parse(&authority.cutover_version)
+        let native_release = ReleaseVersion::parse(&authority.native_release_version)
             .map_err(|_| UpdateError::CatalogMalformed)?;
         let defaults = document.release_defaults;
         if defaults.implementation_era != "python" {
@@ -129,15 +130,15 @@ impl ReleaseCatalog {
                 return Err(UpdateError::CatalogMalformed);
             }
         }
-        let cutover_key = cutover.as_str().to_owned();
-        let cutover_release = releases
-            .get_mut(&cutover_key)
+        let native_release_key = native_release.as_str().to_owned();
+        let native_release_entry = releases
+            .get_mut(&native_release_key)
             .ok_or(UpdateError::CatalogMalformed)?;
-        if cutover_release.era != ReleaseEra::Rust {
+        if native_release_entry.era != ReleaseEra::Rust {
             return Err(UpdateError::CatalogMalformed);
         }
-        cutover_release.supported_target_classes = defaults.supported_target_classes;
-        cutover_release.rollback_compatible = true;
+        native_release_entry.supported_target_classes = defaults.supported_target_classes;
+        native_release_entry.rollback_compatible = true;
         let latest_stable = releases
             .values()
             .filter(|release| {
@@ -149,18 +150,18 @@ impl ReleaseCatalog {
                     .cmp(&right.version.ordering_key())
             })
             .map(|release| release.version.as_str().to_owned());
-        if latest_stable.as_deref() != Some(cutover_key.as_str()) {
+        if latest_stable.as_deref() != Some(native_release_key.as_str()) {
             return Err(UpdateError::CatalogMalformed);
         }
         Ok(Self {
             releases,
             latest_stable,
-            cutover_version: cutover_key,
+            native_release_version: native_release_key,
         })
     }
 
-    pub fn cutover_version(&self) -> &str {
-        &self.cutover_version
+    pub fn native_release_version(&self) -> &str {
+        &self.native_release_version
     }
 }
 
@@ -185,7 +186,7 @@ struct CatalogDocument {
 
 #[derive(Debug, Deserialize)]
 struct VersionAuthority {
-    cutover_version: String,
+    native_release_version: String,
     current_release_era: String,
     historical_release_era: String,
     latest_resolution: String,
@@ -217,7 +218,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn latest_package_target_is_the_rust_cutover_candidate() {
+    fn latest_package_target_is_the_current_rust_release() {
         let catalog = ReleaseCatalog::embedded().expect("embedded catalog");
         let release = catalog
             .resolve(

@@ -1,4 +1,4 @@
-"""Run the bounded M10 Q008 qualification on a physical Linux aarch64 SBC.
+"""Run bounded SBC qualification on a physical Linux aarch64 SBC.
 
 The runner uses a private temporary root and a loopback-only provider. It
 records only bounded, scalar evidence; process output, request bodies,
@@ -8,7 +8,7 @@ Usage::
 
     uv run python scripts/qualification_sbc.py \
         --binary rust/target/release/eggpool \
-        --output migration-rs/closure/qualification/008-run.json
+        --output artifacts/qualification/008-run.json
 
 The command is intentionally refused unless Linux/aarch64 and a device-tree
 board model are visible. This prevents a hosted ARM VM from being reported as
@@ -43,10 +43,10 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q008-sbc.toml"
-DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/008-run.json"
-SCHEMA_VERSION = "m10-q008.v1"
-MANIFEST_VERSION = "m10-q001.v1"
+DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/sbc.toml"
+DEFAULT_OUTPUT = ROOT / "artifacts/qualification/008-run.json"
+SCHEMA_VERSION = "runtime-q008.v1"
+MANIFEST_VERSION = "runtime-q001.v1"
 MAX_REASON_BYTES = 768
 MAX_HTTP_BODY_BYTES = 128 * 1024
 COMMAND_TIMEOUT = 45.0
@@ -59,7 +59,7 @@ MODELS = {
 
 
 class QualificationError(RuntimeError):
-    """A mandatory Q008 observation failed."""
+    """A mandatory SBC qualification observation failed."""
 
 
 @dataclass(frozen=True)
@@ -180,12 +180,13 @@ def _storage_device_class(device: str | None) -> str | None:
 def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
     """Return board facts, or why physical SBC evidence is unavailable."""
     if platform.system().lower() != "linux":
-        return None, "Q008 requires Linux on a physical aarch64 SBC"
+        return None, "SBC qualification requires Linux on a physical aarch64 SBC"
     architecture = platform.machine().lower()
     if architecture not in {"aarch64", "arm64"}:
         return (
             None,
-            "Q008 requires aarch64; hosted or translated execution is refused",
+            "SBC qualification requires aarch64; hosted or translated execution "
+            "is refused",
         )
     model = next(
         (
@@ -715,15 +716,17 @@ def _render_fixture(
 ) -> str:
     content = fixture.read_text(encoding="utf-8")
     replacements = {
-        "__Q008_PORT__": str(port),
-        "__Q008_UPSTREAM__": upstream,
-        "__Q008_DATABASE__": str(database),
-        "__Q008_BACKUP_DIR__": str(backup_dir),
+        "__SBC_PORT__": str(port),
+        "__SBC_UPSTREAM__": upstream,
+        "__SBC_DATABASE__": str(database),
+        "__SBC_BACKUP_DIR__": str(backup_dir),
     }
     for marker, replacement in replacements.items():
         content = content.replace(marker, replacement)
-    if "__Q008_" in content:
-        raise QualificationError("Q008 config fixture has unresolved placeholders")
+    if "__SBC_" in content:
+        raise QualificationError(
+            "SBC qualification config fixture has unresolved placeholders"
+        )
     destination.write_text(content, encoding="utf-8")
     return content
 
@@ -826,10 +829,10 @@ def run_qualification(
     candidate_origin: str = "supplied-candidate",
     build_elapsed_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Run Q008 and return a bounded machine-readable report."""
+    """Run SBC qualification and return a bounded machine-readable report."""
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "plan": "Q008",
+        "plan": "SBC qualification",
         "manifest": MANIFEST_VERSION,
         "status": "blocked",
         "functional": [],
@@ -944,7 +947,7 @@ def run_qualification(
                     (time.monotonic() - started) * 1000
                 )
                 for step_id, path in (
-                    ("migration-startup", "/v1/readyz"),
+                    ("startup-readyz", "/v1/readyz"),
                     ("model-listing", "/v1/models"),
                 ):
                     status, body = _http(
@@ -1242,7 +1245,7 @@ def run_qualification(
                     "fd_counts": [sample["open_fd_count"] for sample in samples],
                     "thread_counts": [sample["thread_count"] for sample in samples],
                     "interpretation": (
-                        "bounded samples for M11 characterization; no fixed "
+                        "bounded samples for release characterization; no fixed "
                         "performance threshold applied"
                     ),
                 }
@@ -1302,7 +1305,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         report = {
             "schema_version": SCHEMA_VERSION,
-            "plan": "Q008",
+            "plan": "SBC qualification",
             "manifest": MANIFEST_VERSION,
             "status": "fail",
             "reason": bounded(str(error)),

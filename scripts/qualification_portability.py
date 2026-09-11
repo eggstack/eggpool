@@ -1,4 +1,4 @@
-"""Run the bounded M10 Q005 target-build and non-root portability check.
+"""Run the bounded runtime portability target-build and non-root portability check.
 
 The runner is intentionally qualification-only.  It starts the supplied Rust
 candidate against a private loopback provider, exercises the ordinary local
@@ -10,7 +10,7 @@ Usage::
     uv run python scripts/qualification_portability.py \
         --binary rust/target/release/eggpool \
         --config-fixture \
-        migration-rs/fixtures/qualification/config/q005-portability.toml \
+        tests/tooling/fixtures/qualification/portability.toml \
         --target-id macos-arm64 \
         --output /tmp/q005.json
 """
@@ -41,13 +41,11 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = (
-    ROOT / "migration-rs/fixtures/qualification/config/q005-portability.toml"
-)
-DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/005-run.json"
+DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/portability.toml"
+DEFAULT_OUTPUT = ROOT / "artifacts/qualification/005-run.json"
 MAX_DIAGNOSTIC_BYTES = 768
 MAX_METADATA_BYTES = 4096
-Q005_MANIFEST_VERSION = "m10-q001.v1"
+PORTABILITY_MANIFEST_VERSION = "runtime-q001.v1"
 
 TARGETS: dict[str, dict[str, str]] = {
     "linux-x86_64": {
@@ -74,7 +72,7 @@ TARGETS: dict[str, dict[str, str]] = {
 
 
 class QualificationError(RuntimeError):
-    """A mandatory Q005 observation failed."""
+    """A mandatory portability observation failed."""
 
 
 @dataclass(frozen=True)
@@ -457,15 +455,17 @@ def _render_fixture(
 ) -> str:
     content = fixture.read_text(encoding="utf-8")
     replacements = {
-        "__Q005_PORT__": str(port),
-        "__Q005_UPSTREAM__": upstream,
-        "__Q005_DATABASE__": str(database),
-        "__Q005_BACKUP_DIR__": str(backup_dir),
+        "__PORTABILITY_PORT__": str(port),
+        "__PORTABILITY_UPSTREAM__": upstream,
+        "__PORTABILITY_DATABASE__": str(database),
+        "__PORTABILITY_BACKUP_DIR__": str(backup_dir),
     }
     for marker, value in replacements.items():
         content = content.replace(marker, value)
-    if "__Q005_" in content:
-        raise QualificationError("Q005 config fixture has unresolved placeholders")
+    if "__PORTABILITY_" in content:
+        raise QualificationError(
+            "portability config fixture has unresolved placeholders"
+        )
     destination.write_text(content, encoding="utf-8")
     return content
 
@@ -564,7 +564,7 @@ def run_qualification(
     target_id: str | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """Run Q005 and return bounded machine-readable evidence."""
+    """Run portability and return bounded machine-readable evidence."""
     resolved_target = target_id or target_for_platform()
     if resolved_target not in TARGETS:
         raise QualificationError(f"unknown Q001 target: {resolved_target}")
@@ -585,11 +585,11 @@ def run_qualification(
             ).stdout
         ),
         "candidate_sha256": _sha256(binary) if binary.is_file() else None,
-        "qualification_manifest": Q005_MANIFEST_VERSION,
+        "qualification_manifest": PORTABILITY_MANIFEST_VERSION,
     }
     report: dict[str, Any] = {
-        "schema_version": "m10-q005.v1",
-        "plan": "Q005",
+        "schema_version": "runtime-q005.v1",
+        "plan": "portability",
         "status": "not-applicable",
         "target": environment,
         "commands": [],
@@ -958,8 +958,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except (OSError, QualificationError) as error:
         report = {
-            "schema_version": "m10-q005.v1",
-            "plan": "Q005",
+            "schema_version": "runtime-q005.v1",
+            "plan": "portability",
             "status": "fail",
             "reason": _bounded_text(str(error)),
         }

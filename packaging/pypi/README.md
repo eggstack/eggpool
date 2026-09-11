@@ -6,7 +6,8 @@ behind an OpenAI Chat Completions-compatible endpoint.
 This publication manifest builds the Rust `eggpool` executable as a
 platform-specific Maturin binary wheel. The installed command is native code;
 the package's Python requirement exists for package-manager compatibility
-during the M12 historical-transition window and is not a runtime interpreter dependency.
+during the package-manager compatibility window and is not a runtime
+interpreter dependency.
 
 Rust-backed current wheels are published only for the qualified Linux x86_64,
 Linux aarch64, and macOS arm64 targets. The historical Python package remains

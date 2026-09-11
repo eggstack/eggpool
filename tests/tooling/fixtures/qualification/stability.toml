@@ -1,0 +1,227 @@
+[server]
+host = "127.0.0.1"
+port = __STABILITY_PORT__
+api_key = "q009-server-key"
+max_request_body_bytes = 1048576
+
+[upstream]
+connect_timeout_s = 0.25
+read_timeout_s = 0.35
+write_timeout_s = 0.35
+
+[database]
+path = "__STABILITY_DATABASE__"
+busy_timeout_ms = 10000
+wal = true
+journal_size_limit = 67108864
+
+[dashboard]
+enabled = true
+public = false
+
+[models]
+startup_refresh = true
+refresh_interval_s = 1
+
+[model_info]
+enabled = false
+startup_refresh = false
+
+[metrics]
+write_mode = "low_wear"
+flush_interval_s = 2
+
+[backup]
+enabled = true
+interval_s = 1
+startup_delay_s = 1
+retain_count = 2
+directory = "__STABILITY_BACKUP_DIR__"
+include_env = false
+
+[providers.fixture]
+id = "fixture"
+base_url = "__STABILITY_UPSTREAM__"
+protocols = ["openai", "anthropic"]
+
+[providers.fixture.wire_surfaces.openai_chat_completions]
+path_template = "/chat/completions"
+priority = 100
+
+[providers.fixture.wire_surfaces.openai_chat_completions.auth]
+mode = "bearer"
+
+[providers.fixture.wire_surfaces.openai_responses]
+path_template = "/responses"
+priority = 100
+
+[providers.fixture.wire_surfaces.openai_responses.auth]
+mode = "bearer"
+
+[providers.fixture.wire_surfaces.anthropic_messages]
+path_template = "/messages"
+priority = 100
+
+[providers.fixture.wire_surfaces.anthropic_messages.auth]
+mode = "bearer"
+
+[providers.fixture.model_wire."q009-chat"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-responses"]
+preferred_surface = "openai_responses"
+fixed = true
+
+[providers.fixture.model_wire."q009-messages"]
+preferred_surface = "anthropic_messages"
+fixed = true
+
+[providers.fixture.model_wire."q009-selector"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-fault-408"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-fault-429"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-fault-5xx"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-timeout"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-partial"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-disconnect"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-cancel"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-abrupt"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-wire"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.fixture.model_wire."q009-malformed"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[providers.fixture.model_wire."q009-absent"]
+preferred_surface = "openai_chat_completions"
+fixed = true
+
+[[providers.fixture.static_models]]
+id = "q009-chat"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-responses"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-messages"
+protocol = "anthropic"
+
+[[providers.fixture.static_models]]
+id = "q009-selector"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-fault-408"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-fault-429"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-fault-5xx"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-timeout"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-partial"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-disconnect"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-cancel"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-abrupt"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-wire"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-malformed"
+protocol = "openai"
+
+[[providers.fixture.static_models]]
+id = "q009-absent"
+protocol = "openai"
+
+[[providers.fixture.accounts]]
+name = "q009-account-a"
+api_key = "q009-provider-key-a"
+
+[[providers.fixture.accounts]]
+name = "q009-account-b"
+api_key = "q009-provider-key-b"
+
+[providers.unreachable]
+id = "unreachable"
+base_url = "http://127.0.0.1:1"
+protocols = ["openai"]
+
+[providers.unreachable.wire_surfaces.openai_chat_completions]
+path_template = "/chat/completions"
+priority = 100
+
+[providers.unreachable.wire_surfaces.openai_chat_completions.auth]
+mode = "bearer"
+
+[[providers.unreachable.static_models]]
+id = "q009-connect"
+protocol = "openai"
+
+[[providers.unreachable.accounts]]
+name = "q009-connect-account"
+api_key = "q009-connect-key"
+
+[model_routers.stability]
+selector_model = "q009-selector"
+default_model = "q009-chat"
+sticky = true
+affinity_ttl_s = 60
+selector_timeout_s = 1.0
+max_input_bytes = 512
+repair_attempts = 1
+
+[model_routers.stability.routes.default]
+model = "q009-chat"
+description = "Deterministic local stability route"

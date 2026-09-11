@@ -23,8 +23,8 @@ catalogued compatible exact version.
 ## Safe checks
 
 ```bash
-uv run python scripts/check_cutover_catalog.py
-uv run python scripts/validate_m12_package_boundary.py
+uv run python scripts/check_release_catalog.py
+uv run python scripts/validate_runtime_package_boundary.py
 uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
 uv run python scripts/qualify_quick_installer.py
 ```

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the K008 release workflow without a YAML runtime dependency."""
+"""Validate the release workflow without a YAML runtime dependency."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ FORBIDDEN_SECRET_MARKERS = (
 
 
 class WorkflowValidationError(ValueError):
-    """A release workflow violates the K008 supply-chain contract."""
+    """A release workflow violates the release workflow supply-chain contract."""
 
 
 def _job_blocks(text: str) -> dict[str, str]:
@@ -78,7 +78,7 @@ def _validate_action_pins(text: str) -> None:
 
 
 def validate_workflow_text(text: str) -> dict[str, object]:
-    """Return a bounded summary when the workflow satisfies K008."""
+    """Return a bounded summary when the workflow satisfies release workflow."""
     if "\t" in text:
         raise WorkflowValidationError("workflow must not use tab indentation")
     _require(text, r"^on:\s*$", "workflow trigger mapping is missing")
@@ -164,20 +164,20 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     _require_in_block(
         blocks,
         "validate-release",
-        r"validate_cutover_release\.py",
-        "candidate/version validator is missing",
+        r"validate_release_identity\.py",
+        "release identity validator is missing",
     )
     _require_in_block(
         blocks,
         "validate-release",
-        r"validate_cutover_docs\.py",
+        r"validate_release_docs\.py",
         "public metadata/docs guard is missing",
     )
     _require_in_block(
         blocks,
         "validate-release",
-        r"validate_m12_package_boundary\.py",
-        "M12 current-package boundary guard is missing",
+        r"validate_runtime_package_boundary\.py",
+        "runtime current-package boundary guard is missing",
     )
     for job, target in zip(
         (
@@ -206,13 +206,13 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         _require_in_block(
             blocks,
             job,
-            r"build_cutover_artifacts\.py",
-            f"K003 builder is missing: {target}",
+            r"build_release_artifacts\.py",
+            f"release artifacts builder is missing: {target}",
         )
         _require_in_block(
             blocks,
             job,
-            r"qualify_cutover_wheel\.py",
+            r"qualify_release_wheel\.py",
             f"wheel smoke is missing: {target}",
         )
         _require_in_block(
@@ -237,12 +237,12 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     )
     _require(
         aggregate,
-        r"validate_cutover_artifacts\.py",
+        r"validate_release_artifacts\.py",
         "manifest hash validation is missing",
     )
     _require(
         aggregate,
-        r"create_cutover_manifest\.py",
+        r"create_release_manifest\.py",
         "release manifest creation is missing",
     )
     _require(aggregate, r"SHA256SUMS", "raw/wheel checksum sidecar is missing")
@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(validate_workflow(args.workflow.resolve()))
     except (OSError, WorkflowValidationError) as error:
-        print(f"K008 workflow validation failed: {error}", file=sys.stderr)
+        print(f"release workflow workflow validation failed: {error}", file=sys.stderr)
         return 1
     return 0
 
