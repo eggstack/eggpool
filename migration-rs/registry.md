@@ -58,7 +58,7 @@ P005-P006 remain registered but serially blocked by their direct predecessors. P
 | K014 | [PyPI Trusted Publisher configuration and recovery completion](implementation/cutover/014-pypi-trusted-publisher-configuration-and-recovery-completion.md) | accepted/closed; [closure](closure/cutover/014-status.md) |
 | K012 | [Aggregate M11 cutover qualification and closure](implementation/cutover/012-aggregate-m11-cutover-qualification-and-closure.md) | accepted/closed; [closure](closure/cutover/012-status.md) |
 
-Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 planning is complete under accepted ADR-0005: P001/P002 are accepted/closed, P003 is the sole dependency-ready plan, and P004-P006 remain queued. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions are preserved by M12 rather than removed.
+Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 planning is complete under accepted ADR-0005: P001-P003 are accepted/closed, P004 is the sole dependency-ready plan, and P005-P006 remain queued. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions are preserved by M12 rather than removed.
 
 ## Completed implementation plans
 
@@ -197,12 +197,12 @@ M12 removes the historical Python application from the current production/runtim
 |---|---|---|
 | P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | **accepted/closed** |
 | P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | **accepted/closed** |
-| P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | **dependency-ready** |
-| P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | queued behind P003 |
+| P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | **accepted/closed** |
+| P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | **dependency-ready** |
 | P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | queued behind P004 |
 | P006 | [Rust-only qualification and M12 closure](implementation/retirement/006-rust-only-qualification-and-m12-closure.md) | queued behind P005 |
 
-ADR-0005 is accepted. P001 and P002 are accepted/closed; P003 is the authorized first Python application-source deletion; P004 retires live-oracle machinery; P005 consolidates repository/release/docs; P006 is the sole M12 closure authority.
+ADR-0005 is accepted. P001-P003 are accepted/closed; P004 is the authorized live-oracle machinery retirement; P005 consolidates repository/release/docs; P006 is the sole M12 closure authority.
 
 Historical public Python releases are immutable external artifacts. Compatible explicit package-managed historical targets remain supported, while latest/default resolution and all current/future publication remain Rust-only.
 
@@ -212,4 +212,4 @@ No post-M12 migration milestone is planned. After accepted P006 closure, migrati
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 implementation planning is complete; P001/P002 are accepted/closed, P003 is dependency-ready, and P004-P006 remain gated by direct predecessors. M12 itself remains open until accepted P006 closure.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 implementation planning is complete; P001-P003 are accepted/closed, P004 is dependency-ready, and P005-P006 remain gated by direct predecessors. M12 itself remains open until accepted P006 closure.

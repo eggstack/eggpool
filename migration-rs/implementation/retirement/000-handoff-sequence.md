@@ -1,6 +1,6 @@
 # M12 Python Retirement Handoff Sequence
 
-Status: implementation planning complete; P001/P002 accepted/closed; P003 dependency-ready; P004-P006 blocked by direct predecessors
+Status: implementation planning complete; P001-P003 accepted/closed; P004 dependency-ready; P005-P006 blocked by direct predecessors
 
 Execute and accept in this order:
 
@@ -23,4 +23,4 @@ Execute and accept in this order:
 - Retained Python tooling cannot be required by the installed Rust service.
 - A failed destructive or closure gate gets a new corrective P-plan; do not rewrite an earlier closure.
 
-P001 is the sole dependency-ready handoff at registration time. P006 is the only plan that may close M12.
+P004 is the sole dependency-ready handoff after P003 closure. P006 is the only plan that may close M12.
