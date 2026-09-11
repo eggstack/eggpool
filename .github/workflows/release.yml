@@ -54,6 +54,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
           python scripts/validate_release_workflow.py .github/workflows/release.yml
+          python scripts/validate_cutover_docs.py
           if [ -n "$RELEASE_TAG" ]; then
             result="$(python scripts/validate_cutover_release.py --tag "$RELEASE_TAG" --source-commit "$GITHUB_SHA")"
           else

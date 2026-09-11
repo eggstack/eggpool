@@ -1,9 +1,10 @@
 # Rust candidate deployment
 
-This is the side-by-side installation path for the Rust migration candidate.
-It is intended for local Linux/Unix qualification during M9/M10. The public
-`scripts/install.sh`, Python package, PyPI update path, and README quick-start
-remain canonical until M11.
+This document covers standalone Rust binaries and disposable qualification
+hosts. Normal users should install the native Rust wheel from PyPI using
+`scripts/install.sh`, uv, or pipx; see [Upgrade and rollback](upgrading.md).
+Standalone binaries use the verified GitHub raw-asset authority and are
+distinct from package-managed installations.
 
 ## Build and run
 
@@ -128,8 +129,8 @@ the same command with `--cleanup --i-understand-disposable-host`; cleanup
 refuses to proceed without that marker. Never run this procedure against a
 production host.
 
-K007's deployed-service cycle uses the same guard and stable path with one
-stateful package environment. Supply the immutable Python and Rust wheels to
+K007's historical deployed-service cycle uses the same guard and stable path
+with one stateful package environment. Supply the immutable Python and Rust wheels to
 the dedicated runner:
 
 ```bash

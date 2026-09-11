@@ -132,9 +132,7 @@ impl ReleaseCatalog {
         );
         let latest_stable = releases
             .values()
-            .filter(|release| {
-                release.era == ReleaseEra::Python && !release.yanked && !release.unavailable
-            })
+            .filter(|release| !release.yanked && !release.unavailable)
             .max_by(|left, right| {
                 left.version
                     .ordering_key()
@@ -191,4 +189,26 @@ struct ReleaseDefaults {
 struct CatalogEntry {
     version: String,
     rollback_suitability: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_package_target_is_the_rust_cutover_candidate() {
+        let catalog = ReleaseCatalog::embedded().expect("embedded catalog");
+        let release = catalog
+            .resolve(
+                &ReleaseTarget::Latest,
+                &Platform {
+                    os: "linux".to_owned(),
+                    architecture: "x86_64".to_owned(),
+                },
+            )
+            .expect("latest release");
+
+        assert_eq!(release.version.as_str(), "0.8.0");
+        assert_eq!(release.era, ReleaseEra::Rust);
+    }
 }

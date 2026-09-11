@@ -26,7 +26,8 @@ use crate::{
         process,
         update::{
             InstallProvenance, PackageTransitionService, ProvenanceEnvironment, ReleaseTarget,
-            TransitionContext, TransitionGuard, TransitionRequest, UpdateError, UpdateService,
+            ReleaseVersion, TransitionContext, TransitionGuard, TransitionRequest, UpdateError,
+            UpdateService,
         },
     },
     version::PACKAGE_VERSION,
@@ -2282,16 +2283,32 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
                 | InstallProvenance::StandaloneRust { .. }
         )
     {
-        let selection = transition.resolve_target(&target).map_err(update_error)?;
+        let standalone = matches!(provenance, InstallProvenance::StandaloneRust { .. });
+        let selection = if standalone && matches!(target, ReleaseTarget::Latest) {
+            None
+        } else {
+            Some(transition.resolve_target(&target).map_err(update_error)?)
+        };
+        let target_version = match selection.as_ref() {
+            Some(selection) => selection.version.as_str().to_owned(),
+            None => service
+                .resolve(&target)
+                .await
+                .map_err(update_error)?
+                .version
+                .as_str()
+                .to_owned(),
+        };
         println!("Current version: {}", current.as_str());
         if matches!(target, ReleaseTarget::Exact(_)) {
-            println!("Requested version: {}", selection.version.as_str());
+            println!("Requested version: {target_version}");
         } else {
-            println!("Latest version:  {}", selection.version.as_str());
+            println!("Latest version:  {target_version}");
         }
-        let no_change = selection.version.equivalent(&current)
+        let target_version_parsed = ReleaseVersion::parse(&target_version).map_err(update_error)?;
+        let no_change = target_version_parsed.equivalent(&current)
             || (matches!(target, ReleaseTarget::Latest)
-                && !selection.version.is_newer_than(&current));
+                && !target_version_parsed.is_newer_than(&current));
         if no_change {
             if matches!(target, ReleaseTarget::Exact(_)) {
                 println!("Requested version is already installed.");
@@ -2331,7 +2348,7 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
         println!(
             "Updating from {} to {}...",
             current.as_str(),
-            selection.version.as_str()
+            target_version
         );
         let restart_systemd = systemd.as_ref().copied().filter(|state| state.active);
         let restart = || async {
@@ -2346,7 +2363,9 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
         };
         let context = TransitionContext {
             python_version: Some((3, 11)),
-            db_config_compatible: selection.rollback_compatible,
+            db_config_compatible: selection
+                .as_ref()
+                .is_none_or(|selection| selection.rollback_compatible),
             config_path: Some(path.to_owned()),
             manager_environment: (path == production_config).then(|| {
                 vec![

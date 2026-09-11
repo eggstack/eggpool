@@ -47,6 +47,7 @@ Closure evidence / archive
 - `closure/` — requirement-to-evidence records for completed milestones.
 - `archive/` — superseded or completed interim planning retained for traceability.
 - `registry.md` — compact active-work control surface.
+- `python-reference.md` — M11 labeling and packaging boundary for the Python oracle.
 
 ## Core migration rule
 

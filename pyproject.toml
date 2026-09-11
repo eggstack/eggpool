@@ -1,3 +1,6 @@
+# Historical Python/oracle packaging definition through M11. Rust-era
+# production publication uses packaging/pypi/pyproject.toml; this project must
+# not be published under the cutover version.
 [project]
 name = "eggpool"
 version = "0.7.4"

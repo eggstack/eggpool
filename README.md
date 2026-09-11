@@ -1,5 +1,5 @@
 [![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Rust runtime](https://img.shields.io/badge/runtime-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/eggpool?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/eggpool)
@@ -33,6 +33,10 @@ For full details on features, architecture, and design decisions, see [architect
 # Install (one-shot)
 curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
 
+# Or install the native wheel directly
+uv tool install eggpool
+# or: pipx install eggpool
+
 # Interactive onboarding — connect providers, validate, start
 eggpool onboard
 
@@ -40,7 +44,18 @@ eggpool onboard
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-See [Deployment](docs/deployment.md) for alternative install methods (pipx, manual, production) and the full deployment guide.
+The Rust wheel currently supports Linux x86_64, Linux aarch64, and macOS
+arm64. Windows and other unqualified targets are unsupported. See
+[Upgrade and rollback](docs/upgrading.md) for exact-version switching and
+[Deployment](docs/deployment.md) for systemd, cron, and production setup.
+
+To update the owning installation or make an exact cross-era switch:
+
+~~~bash
+eggpool update
+eggpool update 0.8.0
+eggpool update 0.7.4
+~~~
 
 ## First-Time Setup
 
@@ -143,12 +158,16 @@ See [Firewall](docs/firewall.md) for restricting access to your LAN.
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
 | `eggpool configsetup` | Generate config snippets for coding agents (see [Agent Configuration](docs/agent-configuration.md)) |
-| `eggpool update [VERSION]` | Check for latest, or install an exact PyPI release (`v` prefix accepted) |
+| `eggpool update [VERSION]` | Install the latest or one exact catalogued release (`v` prefix accepted) |
+| `eggpool install-provenance` | Show the package manager or standalone update authority |
 | `eggpool uninstall` | Uninstall EggPool from this machine |
 
 All commands accept `--config /path/to/config.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.
 
 Full deploy commands reference: [docs/deployment.md](docs/deployment.md#deploy-commands-reference)
+
+For exact upgrades, supported rollback targets, standalone binaries, and
+ownership failures, see [docs/upgrading.md](docs/upgrading.md).
 
 ## Configuration
 

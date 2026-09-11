@@ -1,94 +1,76 @@
-# Manual Release Procedure
+# Rust release procedure
 
-EggPool uses manual release publication. There is no automated release workflow.
+M11 Rust releases are built and published by the pinned
+.github/workflows/release.yml workflow. The workflow is the production
+authority; it consumes the Maturin binary-wheel manifest and never selects the
+root Hatchling project.
 
-## Preconditions
+## Candidate checks
 
-- Clean working tree on `main`
-- Current `main` fetched from remote
-- Version set in `pyproject.toml` is greater than the latest published version
-- Changelog or release notes prepared if applicable
-- Before-push check passes (see below)
+Before creating a release tag:
 
-## Before-Push Check
+~~~bash
+uv run python scripts/check_cutover_catalog.py
+uv run python scripts/validate_cutover_release.py
+uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
+uv run python scripts/validate_cutover_docs.py
+git diff --check
+~~~
 
-```bash
-uv lock --check
-uv sync --frozen --extra ci
-uv run ruff format --check src/ tests/ scripts/
-uv run ruff check src/ tests/ scripts/
-uv run pyright src/ scripts/
-uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+The checks must agree on the K001 candidate (0.8.0 for this cutover), Cargo
+version, package metadata, supported targets, changelog heading, and source
+commit. The root pyproject.toml is deliberately the historical Python
+reference at 0.7.4; it must not be built or uploaded for the Rust candidate.
 
-# Keep the richer local developer environment healthy too.
-uv sync --frozen --extra dev
-uv build
-```
+The candidate release set is exactly:
 
-## Build
+- Linux x86_64 wheel/raw executable;
+- Linux aarch64 wheel/raw executable;
+- macOS arm64 wheel/raw executable.
 
-```bash
-rm -rf dist/
-uv build
-```
+There is no Rust sdist, universal wheel, Windows asset, or source-build
+fallback.
 
-Verify wheel and source distribution exist in `dist/`.
+## Staged rehearsal
 
-## Clean-Artifact Smoke
+Use K009's local wheelhouse/staged-index workflow before any public upload.
+Staged commands must use explicit EGGPOOL_INSTALL_FIND_LINKS or
+EGGPOOL_INSTALL_INDEX_URL together with
+EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_INDEX=1. Do not persist those variables
+in operator configuration.
 
-Test the built wheel in an isolated environment:
+~~~bash
+uv run python scripts/qualification_cutover_rehearsal.py \
+  --manifest migration-rs/closure/cutover/009-run.json
+~~~
 
-```bash
-TMP_VENV="$(mktemp -d)/venv"
-uv venv "$TMP_VENV"
-uv pip install --python "$TMP_VENV/bin/python" dist/*.whl
-cd "$(mktemp -d)"
-"$TMP_VENV/bin/python" -c "import eggpool"
-"$TMP_VENV/bin/eggpool" --help
-```
+The rehearsal is not a production publication and cannot make a missing
+target artifact acceptable.
 
-Create a minimal valid config file and run:
+## Production workflow
 
-```bash
-"$TMP_VENV/bin/eggpool" check-config --config /path/to/minimal-config.toml
-```
+K011 is the first operation authorized to publish. It must use a clean,
+immutable vX.Y.Z tag, maintainer approval, the protected PyPI Trusted
+Publisher environment, and the exact downloaded artifact bundle. The
+production jobs build and qualify each target, aggregate the hashes, then
+publish PyPI wheels and matching GitHub raw assets. They do not rebuild in a
+publish job and do not consume a long-lived PyPI token.
 
-The smoke must prove import and CLI execution from the built wheel outside the repository directory.
+After publication, verify the public metadata and release asset digests:
 
-## Publish
+~~~bash
+uv run python scripts/verify_published_release.py \
+  migration-rs/closure/cutover/k003-release-manifest.json
+~~~
 
-```bash
-uv publish
-```
+Do not call a candidate released until all required targets are public and
+the post-publication verifier passes. A partial immutable upload is stopped,
+recorded, and recovered by a new reviewed release; filenames are never reused.
 
-Use token or keyring configuration. Publishing must be an explicit operator action.
+## Python reference packaging
 
-## Tag and GitHub Release
-
-```bash
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-Then create a GitHub release from the tag.
-
-**Important:**
-- Package index releases are immutable
-- A failed or incomplete release requires a new version bump
-- Never force-reuse an already published version
-- Command failures must stop the process — do not mask with `|| true`
-
-## Optional target-device validation
-
-For request-path, streaming, database, reload, concurrency, or dependency
-changes, a short run on representative SBC hardware is useful when available.
-Exercise one ordinary request, one canonical stream, one premature-EOF stream,
-and confirm that active reservations return to zero after the run. Use the
-focused smoke suite first; do not treat a fixed-duration soak, timing
-percentage, JSON evidence file, or unavailable metric as a release gate.
-
-For a stream-specific reproducer, use:
-
-```bash
-uv run python scripts/repro_high_concurrency_streams.py --help
-```
+The root Hatchling project and src/eggpool remain available through M11 for
+differential tests and exact rollback targets. The canonical production build
+is packaging/pypi/pyproject.toml, whose Maturin bin backend packages the Rust
+executable with no Python application dependencies. Python source and
+packaging retirement belong to M12.

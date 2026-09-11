@@ -88,7 +88,6 @@ def test_publication_manifest_is_a_pinned_binary_wheel_definition() -> None:
             "Operating System :: MacOS",
             "Operating System :: POSIX :: Linux",
             "Programming Language :: Rust",
-            "Programming Language :: Python :: 3 :: Only",
             "Topic :: System :: Monitoring",
         ],
         "urls": {

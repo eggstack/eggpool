@@ -3,11 +3,11 @@
 Two deployment modes: **personal use** (quick, current user) and
 **production** (separate user, hardened). Pick the one that fits.
 
-> Migration note: the commands below are the public Python installation and
-> release path until M11. The Rust candidate has a separate side-by-side
-> deployment path for M9/M10 qualification; see
-> [Rust candidate deployment](rust-candidate-deployment.md). Do not replace
-> `scripts/install.sh` or the quick-start commands with the Rust binary yet.
+EggPool's canonical public runtime is the native Rust executable delivered
+through the PyPI wheel. Qualified targets are Linux x86_64, Linux aarch64, and
+macOS arm64; Windows and other unqualified targets are unsupported. See
+[Upgrade and rollback](upgrading.md) for exact cross-era transitions and the
+standalone raw-binary authority.
 
 ## Personal Use (Recommended for LAN/Raspberry Pi)
 
@@ -22,11 +22,10 @@ eggpool onboard
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-The installer script clones the repo (or uses an existing clone) to
-`~/eggpool`, installs `uv` if missing, finds a Python 3.11+ interpreter,
-and installs `eggpool` as a global command. It detects an existing
-`eggpool` on PATH and refuses to silently reinstall — pass `--force`
-or `--upgrade` for intentional updates. It seeds
+The installer selects uv, pipx, or the existing owning pip environment and
+installs the native Rust wheel from PyPI. It detects an existing `eggpool`
+on PATH and refuses to silently replace an ambiguous owner — pass `--force`
+or `--upgrade` for an intentional manager-owned repair. It seeds
 `~/.config/eggpool/config.toml` from the example template without
 overwriting an existing file and prints the resolved config path.
 
@@ -37,40 +36,36 @@ connections, configuration validation, and an optional server start.
 
 ```bash
 eggpool update          # install the newest published release when newer
-eggpool update 0.6.4    # install one exact PyPI release
-eggpool update v0.6.4   # equivalent spelling
-eggpool update 0.6.4 --check
+eggpool update 0.8.0    # exact Rust candidate/release
+eggpool update 0.7.4    # exact supported Python-era rollback
+eggpool update v0.7.4   # equivalent spelling
+eggpool update 0.8.0 --check
 ```
 
-Exact package updates are pinned and can intentionally downgrade. The
-command verifies the release on PyPI and verifies the installed version
-before restarting a running server. Exact targeting is refused for a local
-source checkout; change that checkout deliberately with `git checkout
-v0.6.4 && uv sync --no-dev`, or use a pipx/uv-tool installation.
+Exact updates are pinned and can intentionally downgrade. The command uses the
+current installation owner, verifies the catalogued target and installed
+version, then restarts a running service only after the self-check passes.
+Ambiguous provenance and unsupported targets fail closed. Source checkouts use
+the explicit developer workflow documented in [upgrading.md](upgrading.md);
+they are not silently converted by the public updater.
 
 The systemd step then takes over: `eggpool deploy systemd --install`
 generates a unit tailored to your system (correct binary path,
 absolute config path, `User=`/`Group=` set to the invoking user) and
 writes it to `/etc/systemd/system/eggpool.service`.
 
-### 2. Manual install (alternative)
-
-From a clone:
+### 2. Direct package-manager install (alternative)
 
 ```bash
-git clone https://github.com/eggstack/eggpool.git && cd eggpool
-uv sync --no-dev
-uv tool install .
-uv tool update-shell
-export PATH="$HOME/.local/bin:$PATH"
+uv tool install eggpool
+# or
+pipx install eggpool
 eggpool onboard
 ```
 
-`uv tool install .` builds a wheel from the cloned source and
-installs it into an isolated venv at `~/.local/share/uv/tools/eggpool/`,
-then symlinks `eggpool` into `~/.local/bin/`. This is the same end
-state as `pipx install eggpool` — `eggpool` works as a bare command
-from any directory once `~/.local/bin` is on your PATH.
+Both commands install the platform Rust wheel and keep the package manager as
+the update authority. For source/reference work, follow the separate
+developer instructions in [upgrading.md](upgrading.md).
 
 ### 3. Raspberry Pi / microSD deployment
 
@@ -184,7 +179,7 @@ For development or quick trials:
 
 ```bash
 eggpool serve                 # daemon mode (default); logs to ~/.local/state/eggpool/eggpool.log
-eggpool serve --verbose       # foreground (Granian logs to terminal)
+eggpool serve --verbose       # foreground (native Rust logs to terminal)
 ```
 
 `eggpool serve` runs in daemon mode by default. It validates the
@@ -260,7 +255,7 @@ families as `LIVE`, so editing ``[providers.<id>]``,
 ``[[providers.<id>.accounts]]``, ``[routing]``, ``[model_overrides.<id>]``,
 ``[model_capabilities.<id>]``, or ``[model_routers.<id>]`` applies without a
 restart. Other
-fields (server bind host/port, Granian construction, database path,
+fields (server bind host/port, runtime construction, database path,
 middleware, security headers and trusted-proxy attribution, metrics topology, backup paths,
 transcoder storage topology) remain `RESTART_REQUIRED` —
 use `eggpool restart` for those. A mixed live + restart-required
@@ -522,18 +517,13 @@ sudo chown root:eggpool /etc/eggpool
 sudo chmod 750 /var/lib/eggpool /var/log/eggpool
 sudo chmod 755 /etc/eggpool
 
-# 2. Install application
-cd /opt
-sudo git clone https://github.com/eggstack/eggpool.git
-sudo chown -R root:eggpool /opt/eggpool
-cd /opt/eggpool
-sudo uv sync --no-dev
-sudo chown -R root:eggpool /opt/eggpool
-sudo chmod -R o+rX /opt/eggpool
+# 2. Install the native wheel through the system-owned pipx authority
+sudo env PIPX_HOME=/var/lib/eggpool/pipx PIPX_BIN_DIR=/usr/local/bin \
+  pipx install --force eggpool
 
 # 3. Configure
-sudo cp config.example.toml /etc/eggpool/config.toml
-sudo cp deploy/env.example /etc/eggpool/env
+sudo /usr/local/bin/eggpool init-config /etc/eggpool/config.toml
+sudo touch /etc/eggpool/env
 sudo chown root:eggpool /etc/eggpool/config.toml /etc/eggpool/env
 sudo chmod 640 /etc/eggpool/config.toml /etc/eggpool/env
 
@@ -550,14 +540,17 @@ sudo nano /etc/eggpool/env
 # path = "/var/lib/eggpool/usage.sqlite3"
 
 # 4. Validate and start
-sudo -u eggpool bash -c 'set -a; source /etc/eggpool/env; set +a; /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml check-config'
-sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml migrate
+sudo -u eggpool env PIPX_HOME=/var/lib/eggpool/pipx \
+  PIPX_BIN_DIR=/usr/local/bin /usr/local/bin/eggpool \
+  --config /etc/eggpool/config.toml check-config
+sudo -u eggpool env PIPX_HOME=/var/lib/eggpool/pipx \
+  PIPX_BIN_DIR=/usr/local/bin /usr/local/bin/eggpool \
+  --config /etc/eggpool/config.toml migrate
 
 # 5. Install the hardened systemd unit
-sudo cp deploy/eggpool.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable eggpool
-sudo systemctl start eggpool
+sudo env PIPX_HOME=/var/lib/eggpool/pipx PIPX_BIN_DIR=/usr/local/bin \
+  /usr/local/bin/eggpool --config /etc/eggpool/config.toml \
+  deploy systemd --install --production
 sudo systemctl status eggpool
 
 # 6. Logrotate (no longer requires systemctl restart logrotate)
@@ -587,9 +580,9 @@ normal foreground `serve` command, and returns promptly with a short
 success message pointing at the log file.
 
 The parent only validates the config and refuses to start a second
-instance. The detached child runs the foreground supervisor (Granian +
-worker) unchanged. No daemon flag is forwarded to the child; detachment
-is purely a parent-side concern. The child owns its own PID file
+instance. The detached child runs the native Rust foreground process. No
+daemon flag is forwarded to the child; detachment is purely a parent-side
+concern. The child owns its own PID file
 lifecycle via `runtime.write_pid_file()` /
 `runtime.clear_pid_file()`.
 
@@ -626,17 +619,12 @@ set) and must not use daemon mode.
 
 ### Process model
 
-`eggpool serve` runs as a single supervisor process that invokes
-Granian with `workers=1`. The result is two processes under the
-canonical name `eggpool`: the supervisor and the Granian worker.
-Granian is launched with `process_name="eggpool"`, so both show up
-as `eggpool` in `ps` / `top` / `pgrep` rather than as a generic
-`python` entry. There is no multi-worker scaling — the knob
-operators tune is per-worker concurrency.
+`eggpool serve` runs as the native Rust process. It has one process identity
+under the canonical name `eggpool`; there is no Python worker or framework
+runtime hidden behind the package command.
 
-The supervisor owns the PID file via
-`runtime.write_pid_file()` / `runtime.clear_pid_file()`. The
-FastAPI lifespan does not touch the PID file. `eggpool serve` also
+The native process owns the PID file via
+`runtime.write_pid_file()` / `runtime.clear_pid_file()`. `eggpool serve`
 refuses to start a second instance: it checks the PID file and, if
 no live PID is recorded, probes `GET /v1/healthz` over `127.0.0.1`
 (the bind address `0.0.0.0` / `::` is rewritten to a loopback
@@ -644,11 +632,9 @@ address for the probe). Either a live PID or a 200 from the probe
 causes the new `serve` to exit non-zero so a stale PID file is
 never silently overwritten.
 
-`[server].threads` sets Granian `runtime_threads` and must remain `1`.
-One event-loop thread uses asyncio task concurrency for high-throughput
-streaming proxy traffic. Values greater than one fail configuration
-validation because all `asyncio.Lock` objects are loop-bound; multi-loop
-compatibility is not supported:
+`[server].threads` is retained as a compatibility setting for the Rust
+runtime's I/O worker count. The default is recommended for constrained
+systems:
 
 ```toml
 [server]
@@ -706,7 +692,7 @@ message.  It does not start the server.
 
 The output covers:
 
-- **Server** — PID, PPID, uptime, Python version, platform, configured threads.
+- **Server** — PID, PPID, uptime, native runtime version, platform, configured threads.
 - **Load** — OS load average (1m, 5m, 15m) and CPU-normalized 1m when available. Returns `N/A` on platforms without `os.getloadavg`.
 - **Dispatch overhead** — avg / p95 / p99 / max latency (ms) over the last 100 upstream attempts, plus sample count. Empty until the first attempt completes. Measures EggPool-local pre-dispatch work only (validation, routing, persistence, reservations) — upstream connect/TTFT/streaming/finalization are excluded.
 - **Processes** — observed EggPool process count vs expected; a warning
@@ -848,7 +834,7 @@ oldest pending request age without querying SQLite directly.
 
 `eggpool runtime-status` reports `eggpool_process_count` and
 `expected_worker_process_count`.  On a standard deployment the expected
-count is 2 (one Granian supervisor + one worker).
+count is 1.
 
 If the observed count exceeds expected:
 

@@ -865,6 +865,52 @@ impl PackageTransitionService {
                 return Err(UpdateError::ManagerMetadataMalformed);
             }
         }
+
+        // A standalone Rust binary is owned by the verified GitHub raw-asset
+        // authority, not by the package catalog. Exact requests still pass
+        // through the catalog so Python-era downgrades fail closed, while
+        // `latest` resolves the raw Rust release directly.
+        if matches!(provenance, InstallProvenance::StandaloneRust { .. }) {
+            let selection = match target {
+                ReleaseTarget::Exact(_) => {
+                    let selection = self.resolve_target(target)?;
+                    if selection.era != ReleaseEra::Rust {
+                        return Err(UpdateError::StandaloneTargetUnsupported);
+                    }
+                    Some(selection)
+                }
+                ReleaseTarget::Latest => None,
+            };
+            if selection
+                .as_ref()
+                .is_some_and(|selection| selection.version.equivalent(current))
+            {
+                return Ok(TransitionResult {
+                    target_version: current.as_str().to_owned(),
+                    manager: "standalone-rust".to_owned(),
+                    restarted: false,
+                });
+            }
+            if !context.db_config_compatible {
+                return Err(UpdateError::IncompatibleDatabaseConfig);
+            }
+            let report = self
+                .raw_updater
+                .apply_current_executable_with_guard(
+                    target,
+                    executable,
+                    was_running,
+                    restart,
+                    guard,
+                )
+                .await?;
+            return Ok(TransitionResult {
+                target_version: report.target_version,
+                manager: "standalone-rust".to_owned(),
+                restarted: report.restarted,
+            });
+        }
+
         let selection = self.resolve_target(target)?;
         if selection.version.equivalent(current)
             || (matches!(target, ReleaseTarget::Latest)
@@ -893,24 +939,7 @@ impl PackageTransitionService {
                 }
             }
             InstallProvenance::StandaloneRust { .. } => {
-                if selection.era != ReleaseEra::Rust {
-                    return Err(UpdateError::StandaloneTargetUnsupported);
-                }
-                let report = self
-                    .raw_updater
-                    .apply_current_executable_with_guard(
-                        target,
-                        executable,
-                        was_running,
-                        restart,
-                        guard,
-                    )
-                    .await?;
-                Ok(TransitionResult {
-                    target_version: report.target_version,
-                    manager: "standalone-rust".to_owned(),
-                    restarted: report.restarted,
-                })
+                unreachable!("standalone Rust provenance is handled before package resolution")
             }
             InstallProvenance::UvTool { .. }
             | InstallProvenance::Pipx { .. }

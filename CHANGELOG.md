@@ -5,6 +5,26 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - Release candidate (not published)
+
+### Changed
+
+- Rust is the intended canonical runtime for supported M11 installations;
+  config paths, database state, API URLs, CLI names, and dashboard behavior
+  remain compatible.
+- The PyPI channel publishes native platform wheels for Linux x86_64, Linux
+  aarch64, and macOS arm64. Windows remains unsupported and there is no source
+  or universal-wheel fallback.
+- Exact package-manager-owned upgrades and downgrades are supported, including
+  the catalogued Python-era rollback window. Standalone Rust binaries update
+  from verified GitHub raw assets instead.
+- The native runtime has a lower process/runtime dependency footprint than the
+  Python reference characterization; this is descriptive, not a benchmark
+  claim.
+- Python source and the root reference package remain in the repository for
+  differential and rollback tests through M11. Python retirement is deferred
+  to M12.
+
 ## [Unreleased]
 
 ### Changed

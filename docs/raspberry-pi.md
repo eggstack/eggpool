@@ -33,10 +33,9 @@ and production deployment paths.
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y git curl build-essential
-sudo apt install -y python3.11 python3.11-venv python3.11-dev
+sudo apt install -y curl
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Then follow the Quick Start above, or [deployment.md](deployment.md)
@@ -115,19 +114,10 @@ include_score_components = false
 
 ## Process Model
 
-EggPool's default process model is Pi-friendly: one `eggpool serve`
-supervisor process plus one Granian worker, with one required event-loop
-thread in the worker. Both
-processes appear as `eggpool` in `ps` / `top` (no generic `python`
-entry), so the total footprint is two processes and one runtime thread before
-considering any upstream outbound connections.
-
-`[server].threads` maps to Granian `runtime_threads` — the number of
-Rust I/O threads per worker. It does not create additional event loops:
-Granian always runs Python coroutines on a single asyncio loop per worker
-process regardless of this value, so loop-bound `asyncio.Lock` objects stay
-safe at any supported setting. Keep the default `1` on constrained SBC
-hardware; raising it only adds Rust-side network I/O parallelism:
+EggPool's native Rust runtime is one `eggpool serve` process. The installed
+wheel does not launch a Python interpreter or a separate web-framework worker.
+Keep the default `threads = 1` on constrained SBC hardware; it controls the
+Rust runtime's I/O worker count:
 
 ```toml
 [server]
