@@ -2981,7 +2981,7 @@ mod tests {
     }
 
     #[test]
-    fn copied_asset_manifest_matches_the_frozen_python_source() {
+    fn dashboard_asset_manifest_is_complete_and_stable() {
         let manifest: Vec<AssetRecord> =
             serde_json::from_str(include_str!("../assets/dashboard/manifest.json"))
                 .expect("asset manifest is valid JSON");
@@ -2989,10 +2989,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         for asset in manifest {
             let copied = root.join("assets/dashboard").join(&asset.path);
-            let source = root.join("../src/eggpool/dashboard").join(&asset.path);
             let copied_bytes = fs::read(&copied).expect("copied asset exists");
-            let source_bytes = fs::read(&source).expect("source asset exists");
-            assert_eq!(copied_bytes, source_bytes, "asset drift: {}", asset.path);
             let digest = Sha256::digest(&copied_bytes);
             let actual = digest
                 .iter()

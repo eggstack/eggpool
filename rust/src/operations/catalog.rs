@@ -6,8 +6,7 @@ use serde::Deserialize;
 
 use super::update::{Platform, ReleaseTarget, ReleaseVersion, UpdateError};
 
-const K001_CATALOG: &str =
-    include_str!("../../../migration-rs/fixtures/cutover/k001-installable-releases.json");
+const K001_CATALOG: &str = include_str!("../../assets/catalog/k001-installable-releases.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseEra {

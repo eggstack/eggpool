@@ -1,0 +1,1011 @@
+[server]
+host = "127.0.0.1"
+port = 11300
+# api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
+log_level = "INFO"
+access_log = false
+# Granian runtime threads inside the single worker process. Exactly one
+# event-loop thread is required; high concurrency is handled by asyncio tasks,
+# HTTP connection-pool sizing, and bounded writers.
+threads = 1
+# Whole JSON request ceiling. Provider-specific document/media limits are
+# additional constraints and can never raise this ingestion limit.
+max_request_body_bytes = 10485760
+
+[upstream]
+base_url = "https://opencode.ai/zen/go/v1"
+connect_timeout_s = 5
+read_timeout_s = 300
+write_timeout_s = 30
+max_connections = 16
+max_keepalive = 4
+keepalive_timeout_s = 30
+
+# Provider blocks may set stream_completion_policy = "strict" (default),
+# "compatible", or "permissive_observe". The setting is provider-bound;
+# strict requires [DONE] for OpenAI or message_stop for Anthropic.
+# Optional provider stream timers live under each provider's
+# [providers.<id>.stream_timeouts] table. Omitting them preserves the HTTPX
+# read_timeout_s guardrail; explicit timers are provider-bound and the client
+# read guardrail is raised to the largest configured interval.
+
+[database]
+path = "usage.sqlite3"
+busy_timeout_ms = 5000
+wal = true
+synchronous = "NORMAL"
+# aiosqlite uses one worker thread per connection. The lean default keeps one
+# primary read/write connection; set worker_threads = 2 to opt into a separate
+# read-only stats/dashboard connection for file-backed SQLite when dashboard
+# isolation is worth the extra connection and thread.
+worker_threads = 1
+# Optional: bound WAL file size after checkpoints (bytes).  ``None``/omitted
+# uses the SQLite default (unbounded).  A sensible SBC value is 67108864
+# (64 MiB).  See architecture/deep-dive-database.md for durability notes.
+# journal_size_limit = 67108864
+
+# ─── Maintenance Budgets ────────────────────────────────────────────
+# Bounds for periodic database maintenance tasks (retention cleanup,
+# stale request finalization, reservation reconciliation). These limits
+# prevent any single maintenance pass from monopolising the SQLite writer
+# connection.  Changes require a restart (not live-reloadable).
+# [maintenance]
+# max_rows_per_batch = 500        # max rows per cleanup batch (50–10000)
+# max_batches_per_tick = 4        # max batches per maintenance tick (1–20)
+# max_tick_duration_ms = 500      # wall-clock ceiling per tick in ms (50–10000)
+# contention_defer_above_lock_wait_p95_ms = 200  # defer P1/P2 when p95 exceeds this (0–5000)
+# max_deferral_age_s = 3600       # force execution after this many seconds of deferral (60–86400)
+# p0_max_rows_per_batch = 1000    # P0 (stale finalizer) row budget (100–20000)
+# p0_max_batches_per_tick = 2     # P0 batch budget (1–10)
+# p0_max_tick_duration_ms = 1000  # P0 wall-clock ceiling in ms (100–30000)
+
+[models]
+# How often to refresh the model catalog from upstream providers (seconds).
+# Also serves as the provider ping interval — each GET /models call measures
+# latency and records health data.
+refresh_interval_s = 300
+expose_mode = "union"
+startup_refresh = true
+stale_after_s = 7200
+allow_stale_catalog = true
+# How many days to retain provider ping data.
+ping_retain_days = 7
+# collapse_models = false  # when true, a base model exposed by multiple
+#                          # providers is collapsed to a single unsuffixed
+#                          # ID and routed across all of them. Default false
+#                          # emits one provider-suffixed entry per provider.
+# Catalog withdrawal policy controls whether a live refresh can remove
+# an account/model support row that the cache previously knew about.
+# Default "preserve_until_health" never de-pools on catalog uncertainty:
+# only explicit health/config state (auth failure, quota exhaustion,
+# rate-limit, cooldown, circuit open, account disabled) suppresses
+# routing. "confirmed_once" allows a successful authoritative non-empty
+# refresh that omits a model to remove that account/model support.
+# "confirmed_twice" requires two consecutive authoritative omissions.
+# Default is correct for subscription aggregation: a flaky /models
+# response or transient upstream parse error must not silently de-pool
+# a healthy subscription account.
+catalog_withdrawal_policy = "preserve_until_health"
+
+# Optional model-router definitions. These create exact client-visible virtual
+# model IDs and compile immutable selector policies during generation builds.
+# Sticky routers retain only bounded process-local model affinity. Use the
+# X-EggPool-Route-Session request header when clients have a stable conversation
+# ID; the value is hashed and is never forwarded to providers.
+# [model_routers.implementer]
+# selector_model = "qwen3-0.6b/llamacpp-local"
+# default_model = "muse-spark-1.3"
+# sticky = true
+# affinity_ttl_s = 43200
+# selector_timeout_s = 2.0
+# max_input_bytes = 2048
+# repair_attempts = 1
+#
+# [model_routers.implementer.routes.default]
+# model = "muse-spark-1.3"
+# description = "Use for general implementation requests and as the fallback."
+#
+# [model_routers.implementer.routes.hard]
+# model = "gpt-5.6-luna"
+# description = "Use for the most difficult implementation and reasoning tasks."
+#
+# [model_routers.implementer.routes.research]
+# model = "research-model"
+# description = "Use for research-heavy synthesis and long technical reading."
+#
+# These example models are illustrative, not bundled availability guarantees.
+# Selector and route targets use ordinary EggPool concrete model IDs and may
+# include a provider suffix such as "model/provider".
+
+# ─── Protocol Transcoding ────────────────────────────────────────────
+# Transcoding is **on by default**. Requests from clients using one
+# protocol (OpenAI or Anthropic) are automatically forwarded to upstream
+# accounts whose provider declares only the other protocol. EggPool
+# translates the request body, the streaming SSE events, and the response
+# body bidirectionally. The `[transcoder]` block is optional and rarely
+# needs to be touched.
+#
+# Use this when you want to mix protocol-native and protocol-transcoded
+# accounts (e.g. opencode-go native plus MiniMax International
+# Anthropic-only, both reachable from OpenCode clients).
+#
+# The `enabled` flag is a DEPRECATED escape hatch for operators who need
+# to disable translation (for example, while diagnosing routing issues).
+# Setting `enabled = false` reverts to legacy protocol-exact routing:
+# cross-protocol requests will fail with HTTP 400. This option will be
+# removed in a future release.
+[transcoder]
+# enabled = false          # DEPRECATED escape hatch; defaults to true
+loss_policy = "warn"      # "warn" or "reject" for loss-of-information
+prefer_native = true      # prefer native-protocol accounts in routing
+
+# Thinking/reasoning transcoding is enabled by default. Set this to false to
+# drop thinking controls and content instead of translating them.
+# [transcoder.features]
+# thinking = false
+
+# Global effort→budget token mapping for thinking/reasoning.
+# Values are used when the model's capability does not carry a
+# per-model effort_to_budget_tokens mapping.
+# [transcoder.thinking_budget_defaults]
+# low = 1024
+# medium = 4096
+# high = 16384
+
+# How to handle budget resolution edge cases.
+# "lenient" (default): omit unmapped efforts with a warning, allow clamping.
+# "strict": reject unknown efforts and clamped budgets before dispatch.
+# budget_resolution_policy = "lenient"
+
+# Configurable OpenAI Chat Completions-compatible reasoning field names.
+# Controls which JSON field names EggPool uses when exposing
+# upstream thinking/reasoning content in responses.
+# [transcoder.openai_reasoning_fields]
+# non_stream = ["reasoning_content"]    # message field(s) for non-streaming
+# stream_delta = ["reasoning"]          # delta field(s) for streaming
+# emit_compat_aliases = false           # emit extra aliases when true
+
+# ─── Model Capability Overrides ─────────────────────────────────────
+# Operator-controlled overrides for model capabilities. These take
+# precedence over discovered provider/catalog data and persist through
+# refresh cycles.
+#
+# Global overrides apply to all providers:
+# [model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+# budget_tokens_min = 1024
+# budget_tokens_max = 16384
+# Independent provider control facts (each: "supported", "unsupported", or
+# "unknown"). These are canonical; legacy supported_efforts/budget fields
+# below remain accepted as compatibility input.
+# toggle = "supported"
+# effort = "unsupported"
+# budget = "supported"
+# Native cross-protocol controls must be explicitly verified for a target;
+# protocol names alone do not enable them:
+# [model_capabilities."claude-opus".transcoding]
+# native_structured_outputs = ["anthropic"]
+# strict_tools = ["anthropic"]
+# parallel_tool_control = ["anthropic"]
+# prompt_cache_breakpoints.anthropic = { dialect = "first_party", supported_ttls = ["5m", "1h"], default_ttl = "5m", max_breakpoints = 4 }
+# reasoning_efforts = { openai = ["low", "medium", "high"] }
+#
+# Provider-scoped overrides take precedence over global:
+# [providers.minimax.model_capabilities."minimax-m3".thinking]
+# status = "supported"
+# native_protocols = ["anthropic"]
+
+[routing]
+strategy = "quota_fair"
+near_tie_epsilon = 0.1
+max_retries_before_stream = 3
+unknown_request_reservation_microdollars = 1000000
+inflight_penalty = 100000
+health_penalty = 500000
+randomize_near_ties = true
+# Maximum transient quota cooldown; runtime suppression is capped at 1,800s.
+quota_exhausted_cooldown_seconds = 300
+# Local quota mode controls whether locally estimated over-capacity
+# usage hard-excludes accounts from routing or only affects rank.
+# "score_only" (default) is safe for subscription aggregation: upstream
+# 429/402/5xx remain the authoritative suppression signal and accounts
+# above local quota still receive requests.
+# "hard_cap" is an opt-in escape hatch that re-enables local quota as a
+# hard eligibility gate (legacy pre-suppression behavior). Subscription
+# aggregators should normally leave this as "score_only".
+local_quota_mode = "score_only"
+# Same-tier fairness for effectively tied accounts. Keeps equal subscription
+# accounts from starving behind stable config order.
+# "round_robin" (default): deterministic rotation across the fairness band.
+# "random": choose randomly within the fairness band.
+# "off": existing behavior; useful for debugging or strict lowest-score routing.
+fairness_mode = "round_robin"
+# Defaults to near_tie_epsilon when omitted.
+# fairness_epsilon = 0.1
+# Fairness scope controls which accounts share a rotation group:
+# "provider_model_protocol" (default): separate rotor per provider, model, protocol, and priority tier.
+# "provider_model": separate rotor per provider, model, and priority tier.
+# "priority_model_protocol": co-balanced across providers sharing a model in the same priority tier.
+fairness_scope = "provider_model_protocol"
+
+# Bounded reactive wire-surface negotiation settings. Alternate-surface
+# discovery is single-flight per provider/model and uses the existing request
+# submission budget; ordinary known-good inference never waits on its gate.
+[routing.wire_negotiation]
+enabled = true
+max_concurrent_per_provider = 1
+min_negotiation_interval_s = 1.0
+rejection_cooldown_s = 300.0
+learned_preference_ttl_s = 86400.0
+cache_max_entries = 2048
+
+# Routing trace write pressure.  Routing traces are diagnostic rows
+# written alongside every attempt; they answer "why this account?" on the
+# dashboard but have no effect on billing, retry, or crash-recovery.
+# Reducing write volume here is safe for high-throughput or SBC installs.
+[routing.trace]
+# "sampled" – deterministic request-id sampling (default, low write pressure)
+# "all"     – every attempt (full diagnostics)
+# "off"     – no routing trace rows
+# Sampling is decided before upstream outcome is known, so sampled
+# does not force all errors to be traced.
+mode = "off"
+# Fraction of selection-time traces to persist in sampled mode (0.0–1.0).
+sample_rate = 0.0
+# Include score_components_json in persisted traces (larger rows).
+# Set to false to reduce per-row write size on high-throughput installs.
+include_score_components = false
+
+[limits]
+five_hour_microdollars = 12000000
+weekly_microdollars = 30000000
+monthly_microdollars = 60000000
+
+# --- Pricing resolution ----------------------------------------------
+# External pricing catalogs supplement upstream model metadata when
+# providers do not include pricing in /v1/models responses. The per-catalog
+# max_entries cap bounds steady-state RSS on SBC deployments.
+[pricing]
+fallback = "generic_estimate"
+
+[pricing.catalogs]
+
+[pricing.catalogs.openrouter]
+enabled = false
+priority = 100
+ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+# base_url = "https://openrouter.ai/api/v1"
+# api_key = "..."     # optional; only needed for higher rate limits
+
+[pricing.catalogs.opencode_zen]
+enabled = false
+priority = 200
+ttl_seconds = 86400
+# max_entries = 4096  # bound the in-memory catalog cache; oldest entries evict first
+
+# ─── Model Information ────────────────────────────────────────────────
+# The model_info subsystem provides a persistent metadata sidecar for
+# all known models. OpenRouter is the default catalog source; additional
+# enrichment providers (Artificial Analysis, Hugging Face) augment
+# metadata with display names, context limits, benchmarks, and pipeline
+# tags. Manual overrides and alias expansion are also supported.
+# [model_info]
+# enabled = true                   # metadata sidecar (default: true)
+# startup_refresh = true           # bounded external pass during startup
+# include_in_models_endpoint = true  # compact fields in /v1/models (default: true)
+# known_ttl_s = 86400               # refresh TTL for known/fresh rows
+# partial_ttl_s = 259200           # TTL for partially-known models (3 days)
+# sparse_new_initial_ttl_s = 3600   # first sparse-row retry (1 hour)
+# sparse_new_later_ttl_s = 21600    # later sparse-row retry (6 hours)
+# sparse_new_accelerated_days = 7   # sparse acceleration window
+# conflict_ttl_s = 7200             # retry TTL for conflicting rows
+# max_models_per_cycle = 50         # bound per startup/catalog tick
+# Recurring opportunities come from [models].refresh_interval_s. The
+# model-info next_refresh_at/status TTLs and source TTL/cooldown state decide
+# whether external work is due at each opportunity. If models.refresh_interval_s
+# = 0, only the bounded startup pass runs automatically; use the manual
+# refresh endpoint or restart for later enrichment.
+#
+# [model_info.sources.openrouter]
+# enabled = true                   # source used when model_info is enabled
+# priority = 100                   # higher = preferred when multiple sources agree
+# ttl_seconds = 86400              # how long to cache the OpenRouter /models catalog
+# # api_key = "..."                # optional; only needed for higher rate limits
+#
+# [model_info.sources.artificial_analysis]
+# enabled = false                  # Artificial Analysis benchmark source (default: disabled)
+# priority = 200
+# ttl_seconds = 86400
+# api_key = "..."                  # required; use an AA Data API key
+#                                   # (sent as x-api-key)
+#
+# [model_info.sources.huggingface]
+# enabled = false                  # Hugging Face model card metadata (default: disabled)
+# priority = 300
+# ttl_seconds = 86400
+# # api_key = "..."                # optional; unauthenticated has 60 req/min
+#
+# ─── Manual Overrides ─────────────────────────────────────────────────
+# Override canonical fields for specific models. Overrides take
+# precedence over all source-provided values.
+# [model_info.overrides."model-id"]
+# display_name = "Custom Display Name"
+# summary = "A custom summary for this model"
+#
+# ─── Alias Expansion ──────────────────────────────────────────────────
+# Map canonical model IDs to alternative identifiers used by external
+# sources. Source-specific aliases are matched during identity resolution.
+# [model_info.aliases]
+# "canonical-id" = ["alias-1", "alias-2"]
+
+# ─── Network ─────────────────────────────────────────────────────────
+# Outbound client transport tuning. HTTPX uses the operating-system
+# resolver and its long-lived connection pool.
+# [network]
+# connect_timeout_s = 5
+# read_timeout_s = 300
+# max_connections = 8
+# max_keepalive = 2
+# keepalive_expiry_s = 30
+#
+
+[readiness_probe]
+enabled = false
+
+[model_info]
+enabled = true
+
+[update_checker]
+enabled = false
+
+[dashboard]
+enabled = true
+public = false
+# Theme name (without .toml extension). "default" uses GitHub Primer colors.
+# Themes are from Halloy: https://themes.halloy.chat/
+# Bundled themes ship inside the package — no extra files needed.
+# To add custom themes, set themes_dir to a directory of .toml theme files.
+# Custom themes are merged with the bundled set (same-name custom themes
+# take precedence over bundled ones).
+theme = "Cyber Red"
+# themes_dir = "themes"  # Uncomment to add custom themes alongside bundled ones
+retain_request_stats_days = 30
+store_request_content = false
+refresh_interval_s = 60
+
+[metrics]
+# Controls observability write buffering for reduced microSD wear.
+# - "immediate": existing direct-write behavior (best for debugging).
+# - "balanced": buffer lossy analytics with short flush intervals.
+# - "low_wear": longer flush interval, coarser buckets, optional trace
+#   sampling — designed for microSD / Raspberry Pi deployments.
+#
+# Buffered analytics may lose at most flush_interval_s seconds of data
+# after abrupt power loss. Correctness-critical request state (request
+# rows, reservations, attempts, routing) is never buffered.
+write_mode = "low_wear"
+flush_interval_s = 120
+max_buffered_events = 250
+timeseries_bucket_s = 300
+trace_sample_rate = 0.05
+aggregate_only = true
+rollup_retain_days = 90
+cleanup_interval_s = 86400
+cleanup_max_rows_per_pass = 5000
+
+# ─── Dispatch span instrumentation (Plan 029) ──────────────────────
+# Fine-grained per-span latency instrumentation for the proxy request
+# and coordinator hot path. Coarse dispatch-overhead metrics remain
+# always-on; detailed spans use request-coherent sampling so one
+# sampled request records all spans (coherent trace).
+# [metrics.dispatch_spans]
+# sample_rate = 0.0         # 0.0 = coarse only; opt in to detailed spans
+# window_size = 200         # rolling-window samples per span
+
+# Deprecated: use [metrics.dispatch_spans].sample_rate instead. When this
+# field is explicitly set, it overrides the new setting and emits a warning.
+# detailed_span_sample_rate = 0.05
+# event_loop_lag_enabled = false # opt in to one-second lag diagnostics
+
+# ─── Low-wear profile for microSD / Raspberry Pi ──────────────────
+# Uncomment this block when running from microSD and dashboard traces
+# are not critical. Trades detailed trace fidelity and dashboard
+# freshness for materially fewer writes.
+# [metrics]
+# write_mode = "low_wear"
+# flush_interval_s = 120
+# max_buffered_events = 250
+# timeseries_bucket_s = 300
+# trace_sample_rate = 0.05
+# aggregate_only = true
+# rollup_retain_days = 90
+# cleanup_interval_s = 86400
+# cleanup_max_rows_per_pass = 5000
+
+[security]
+allowed_hosts = []
+cors_origins = []
+# Honor X-Forwarded-For/X-Real-IP only when the immediate peer is listed here.
+# Configure only proxies that overwrite or correctly append these headers;
+# X-Forwarded-For uses the nearest untrusted hop in the chain.
+# An empty list ignores forwarded client-attribution headers.
+#
+# List both IPv4 and IPv6 loopback addresses explicitly when the proxy is
+# reached over IPv6 loopback (for example ``::1`` from a client on the
+# same host) — the default ``trusted_proxies = []`` will silently fall
+# back to the peer address and ignore forwarded headers in that case.
+# trusted_proxies = ["127.0.0.1", "::1"]
+trusted_proxies = []
+redact_headers = ["authorization", "x-api-key"]
+persist_redacted_error_detail = false
+
+# ─── Automatic Backups ────────────────────────────────────────────────
+# EggPool can create automatic daily backups. Archives are
+# restore-compatible .zip files stored under $XDG_BACKUP_HOME/eggpool
+# (or ~/backups/eggpool). The eggpool deploy backup-cron path remains
+# available for operators who prefer external scheduling.
+[backup]
+enabled = false
+# interval_s = 86400           # every 24 hours when enabled
+# retain_count = 14            # keep last 14 backups
+# startup_delay_s = 300        # wait 5 min after boot before first backup
+# # directory = "/path/to/backups"  # override default backup location
+# include_env = true           # include .env file (may contain API keys)
+
+# Optional outbound proxies. Omit this section for direct upstream connections.
+# Values use pproxy URI syntax:
+# https://pypi.org/project/pproxy/#uri-syntax
+# Use url_env instead of url when the proxy URI contains credentials.
+# [proxies.residential-us]
+# url = "socks5://127.0.0.1:1080"
+#
+# [proxies.datacenter-eu]
+# url_env = "GOROUTER_DATACENTER_EU_PROXY_URL"
+
+# ─── Provider Accounts ─────────────────────────────────────────────────
+# Use `eggpool connect` to add providers interactively. This is the
+# recommended way to configure accounts — it handles API key storage,
+# config file updates, and server reload automatically.
+#
+# Manual configuration is possible but not recommended. If you prefer
+# editing this file directly, uncomment and customize the examples below.
+# Authenticated providers need an `api_key` (inline) or `api_key_env` (env var
+# name). Providers with `auth.mode = "none"` need neither.
+
+# [providers.opencode-go]
+# id = "opencode-go"
+# base_url = "https://opencode.ai/zen/go/v1"
+# protocols = ["openai", "anthropic"]
+# routing_priority = 0  # higher = preferred; default 0 means "load balance
+#                       # within this provider using the existing scorer".
+# [providers.opencode-go.stream_timeouts]
+# first_byte_timeout_s = 300  # headers → first non-empty payload chunk
+# idle_timeout_s = 300        # maximum gap between payload chunks
+# max_lifetime_s = 0          # deprecated compatibility field; parsed but ignored
+#
+# [[providers.opencode-go.accounts]]
+# name = "personal"
+# api_key = "sk-your-opencode-go-key"
+# weight = 1.0  # relative request/token capacity hint; 2.0 is ~double
+# # Optional per-key proxy. Omit this field for the default direct connection.
+# # proxy = "residential-us"
+# # proxy_url = "ss://chacha20:password@proxy.example.com:8388"
+# # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
+#
+# [providers.opencode-go.auth]
+# The selected wire surface supplies endpoint-specific auth.
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.openai_chat_completions]
+# path_template = "/chat/completions"
+# [providers.opencode-go.wire_surfaces.openai_chat_completions.auth]
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.openai_responses]
+# path_template = "/responses"
+# [providers.opencode-go.wire_surfaces.openai_responses.auth]
+# mode = "bearer"
+#
+# [providers.opencode-go.wire_surfaces.anthropic_messages]
+# path_template = "/messages"
+# [providers.opencode-go.wire_surfaces.anthropic_messages.auth]
+# mode = "api_key"
+# header = "x-api-key"
+#
+# Reasoning support and caller controls are discovered independently for each
+# provider/model from explicit upstream or model-info metadata. Do not add a
+# model-family default here; use an explicit override only when you have
+# provider-specific evidence that should intentionally replace discovery.
+#
+# # Provider-specific model context limits override upstream metadata.
+# # Use the base model ID (not the provider-suffixed ID).
+# [providers.opencode-go.model_overrides."MiniMax-M3"]
+# max_context_tokens = 220000
+# max_output_tokens = 16384
+# enforce_context_limit = true
+
+# ─── Popular Provider Defaults ─────────────────────────────────────────
+# Uncomment providers you want to use. Each requires an API key from the
+# provider's dashboard. Or use `eggpool connect` for interactive setup.
+
+# DeepSeek — OpenAI compatible, very cost-effective
+# Status: verified (official docs confirm OpenAI + Anthropic compatibility)
+# [providers.deepseek]
+# id = "deepseek"
+# base_url = "https://api.deepseek.com"
+# protocols = ["openai"]
+#
+# [[providers.deepseek.accounts]]
+# name = "default"
+# api_key = "sk-your-deepseek-key"
+#
+# [providers.deepseek.auth]
+# mode = "bearer"
+
+# OpenRouter — 400+ models through one API key
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint)
+# [providers.openrouter]
+# id = "openrouter"
+# base_url = "https://openrouter.ai/api/v1"
+# protocols = ["openai"]
+#
+# [[providers.openrouter.accounts]]
+# name = "default"
+# api_key = "sk-your-openrouter-key"
+#
+# [providers.openrouter.auth]
+# mode = "bearer"
+#
+# # Optional attribution headers:
+# # [[providers.openrouter.headers]]
+# # name = "HTTP-Referer"
+# # value = "https://example.local"
+# # [[providers.openrouter.headers]]
+# # name = "X-OpenRouter-Title"
+# # value = "EggPool"
+
+# Together AI — popular inference provider
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint)
+# [providers.together]
+# id = "together"
+# base_url = "https://api.together.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.together.accounts]]
+# name = "default"
+# api_key = "sk-your-together-key"
+#
+# [providers.together.auth]
+# mode = "bearer"
+
+# Fireworks AI — fast inference for open-source models
+# Status: verified (official docs confirm Bearer auth + OpenAI Chat Completions-compatible endpoint)
+# [providers.fireworks]
+# id = "fireworks"
+# base_url = "https://api.fireworks.ai/inference/v1"
+# protocols = ["openai"]
+#
+# [[providers.fireworks.accounts]]
+# name = "default"
+# api_key = "sk-your-fireworks-key"
+#
+# [providers.fireworks.auth]
+# mode = "bearer"
+
+# OpenAI — direct OpenAI API
+# Status: verified — reference OpenAI Chat Completions-compatible provider
+# [providers.openai]
+# id = "openai"
+# base_url = "https://api.openai.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.openai.accounts]]
+# name = "default"
+# api_key = "sk-your-openai-key"
+#
+# [providers.openai.auth]
+# mode = "bearer"
+#
+# # [providers.openai.verify]
+# # probe_model = "gpt-5.5-mini"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Google Gemini native APIs — stateless Interactions and generateContent.
+# [providers.gemini-native]
+# id = "gemini-native"
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# protocols = ["openai"]
+#
+# [[providers.gemini-native.accounts]]
+# name = "default"
+# api_key_env = "GEMINI_NATIVE_API_KEY"
+#
+# [providers.gemini-native.auth]
+# mode = "api_key"
+# header = "x-goog-api-key"
+#
+# [providers.gemini-native.wire_surfaces.gemini_interactions]
+# path_template = "/interactions"
+# priority = 90
+#
+# [providers.gemini-native.wire_surfaces.gemini_generate_content]
+# path_template = "/models/{model}:generateContent"
+# stream_path_template = "/models/{model}:streamGenerateContent"
+# priority = 100
+
+# Anthropic — direct Claude API
+# Status: verified — Anthropic Messages API with x-api-key auth and required version header
+# [providers.anthropic]
+# id = "anthropic"
+# base_url = "https://api.anthropic.com/v1"
+# protocols = ["anthropic"]
+# anthropic_path = "/messages"
+#
+# [[providers.anthropic.accounts]]
+# name = "default"
+# api_key = "sk-your-anthropic-key"
+#
+# [providers.anthropic.auth]
+# mode = "api_key"
+# header = "x-api-key"
+#
+# [[providers.anthropic.headers]]
+# name = "anthropic-version"
+# value = "2023-06-01"
+#
+# # [providers.anthropic.verify]
+# # probe_model = "claude-sonnet-4-5"
+# # probe_protocol = "anthropic"
+# # require_models = false
+
+# Groq — low-latency OpenAI Chat Completions-compatible inference
+# Status: verified — official docs use https://api.groq.com/openai/v1 with OpenAI Chat Completions clients
+# [providers.groq]
+# id = "groq"
+# base_url = "https://api.groq.com/openai/v1"
+# protocols = ["openai"]
+#
+# [[providers.groq.accounts]]
+# name = "default"
+# api_key = "sk-your-groq-key"
+#
+# [providers.groq.auth]
+# mode = "bearer"
+#
+# # [providers.groq.verify]
+# # probe_model = "openai/gpt-oss-20b"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# DeepInfra — OpenAI Chat Completions-compatible open-model inference
+# Status: verified — official docs use https://api.deepinfra.com/v1/openai
+# [providers.deepinfra]
+# id = "deepinfra"
+# base_url = "https://api.deepinfra.com/v1/openai"
+# protocols = ["openai"]
+#
+# [[providers.deepinfra.accounts]]
+# name = "default"
+# api_key = "sk-your-deepinfra-key"
+#
+# [providers.deepinfra.auth]
+# mode = "bearer"
+#
+# # [providers.deepinfra.verify]
+# # probe_model = "deepseek-ai/DeepSeek-V3"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Google Gemini — OpenAI Chat Completions-compatible Gemini API surface
+# Status: verified — official docs use OpenAI Chat Completions clients with Gemini API keys
+# [providers.gemini]
+# id = "gemini"
+# base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+# protocols = ["openai"]
+#
+# [[providers.gemini.accounts]]
+# name = "default"
+# api_key = "sk-your-gemini-key"
+#
+# [providers.gemini.auth]
+# mode = "bearer"
+#
+# # [providers.gemini.verify]
+# # probe_model = "gemini-3.5-flash"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# xAI — direct Grok API
+# Status: verified — API-key OpenAI Chat Completions client usage with https://api.x.ai/v1
+# [providers.xai]
+# id = "xai"
+# base_url = "https://api.x.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.xai.accounts]]
+# name = "default"
+# api_key = "sk-your-xai-key"
+#
+# [providers.xai.auth]
+# mode = "bearer"
+#
+# # [providers.xai.verify]
+# # probe_model = "grok-4.3"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Mistral — direct Mistral API
+# Status: verified — /v1/chat/completions with Bearer auth
+# [providers.mistral]
+# id = "mistral"
+# base_url = "https://api.mistral.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.mistral.accounts]]
+# name = "default"
+# api_key = "sk-your-mistral-key"
+#
+# [providers.mistral.auth]
+# mode = "bearer"
+#
+# # [providers.mistral.verify]
+# # probe_model = "mistral-small-latest"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# SiliconFlow — OpenAI Chat Completions-compatible Chinese model aggregator
+# Status: verified — /v1/chat/completions with Bearer auth; verify model listing live
+# [providers.siliconflow]
+# id = "siliconflow"
+# base_url = "https://api.siliconflow.cn/v1"
+# protocols = ["openai"]
+#
+# [[providers.siliconflow.accounts]]
+# name = "default"
+# api_key = "sk-your-siliconflow-key"
+#
+# [providers.siliconflow.auth]
+# mode = "bearer"
+#
+# # [providers.siliconflow.verify]
+# # probe_model = "Pro/zai-org/GLM-4.7"
+# # probe_protocol = "openai"
+# # require_models = true
+
+# Z.AI (ZhipuAI GLM) — OpenAI compatible
+# Status: live-verification-required — confirm base_url and endpoints before production use
+# [providers.zai]
+# id = "zai"
+# base_url = "https://api.z.ai/api/paas/v4"
+# protocols = ["openai"]
+#
+# [[providers.zai.accounts]]
+# name = "default"
+# api_key = "sk-your-zai-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
+# [providers.zai.auth]
+# mode = "bearer"
+
+# Alibaba Qwen — popular Chinese provider
+# Status: verified (official docs confirm OpenAI Chat Completions-compatible endpoint; use regional base_url)
+# [providers.alibaba]
+# id = "alibaba"
+# base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# protocols = ["openai"]
+#
+# [[providers.alibaba.accounts]]
+# name = "default"
+# api_key = "sk-your-alibaba-key"
+#
+# [providers.alibaba.auth]
+# mode = "bearer"
+#
+# # Regional alternatives:
+# # US Virginia: https://dashscope-us.aliyuncs.com/compatible-mode/v1
+# # China Beijing: https://dashscope.aliyuncs.com/compatible-mode/v1
+# # Hong Kong: https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1
+
+# Novita AI — various open-source models
+# Status: live-verification-required — confirm base_url and model-list endpoint
+# [providers.novita]
+# id = "novita"
+# base_url = "https://api.novita.ai/openai"
+# protocols = ["openai"]
+#
+# [[providers.novita.accounts]]
+# name = "default"
+# api_key = "sk-your-novita-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
+
+# MiniMax International — Anthropic-compatible endpoint for token-plan keys.
+# minimax.io token-plan keys use the Anthropic-compatible transport
+# (x-api-key + anthropic-version) at /anthropic/v1/messages, NOT the
+# OpenAI Chat Completions-compatible /v1/chat/completions surface. Live model discovery
+# is supported via the documented /v1/models endpoint.
+# Status: live-verification-required; use for keys from minimax.io
+# [providers.minimax]
+# id = "minimax"
+# base_url = "https://api.minimax.io/anthropic"
+# protocols = ["anthropic"]
+# anthropic_path = "/v1/messages"
+# models_method = "GET"
+# models_path = "/v1/models"
+#
+# [[providers.minimax.accounts]]
+# name = "default"
+# api_key = "sk-your-minimax-key"
+#
+# [providers.minimax.auth]
+# mode = "api_key"
+# header = "x-api-key"
+#
+# [[providers.minimax.headers]]
+# name = "anthropic-version"
+# value = "2023-06-01"
+#
+# [providers.minimax.models_endpoint]
+# method = "GET"
+# path = "/v1/models"
+# required = true
+#
+# # Live discovery is the source of truth for the international
+# # endpoint; no static model seeds are needed because the provider
+# # already accepts the anthropic value produced by the family mapping.
+# # Add [[providers.minimax.static_models]] rows here only if you want
+# # a fallback when /v1/models is unreachable, and mirror the live
+# # id / display_name exactly (e.g. "MiniMax-M2.7-highspeed" id with
+# # display_name "MiniMax-M2.7-Highspeed").
+
+# MiniMax China — live verification required before production use.
+# The China endpoint family and auth shape have not been confirmed against
+# api.minimaxi.com; do not assume parity with the international
+# Anthropic-compatible template without live testing.
+# Status: live-verification-required; use for keys from the China MiniMax console
+# [providers.minimax-cn]
+# id = "minimax-cn"
+# base_url = "https://api.minimaxi.com/v1"
+# protocols = ["openai"]
+# openai_path = "/chat/completions"
+# models_path = "/models"
+#
+# [[providers.minimax-cn.accounts]]
+# name = "default"
+# api_key = "sk-your-minimax-cn-key"
+#
+# [providers.minimax-cn.auth]
+# mode = "bearer"
+
+# GeneralCompute — plain OpenAI Chat Completions-compatible PAYG.
+# Default to the standard OpenAI Chat Completions surface (GET /models, POST /chat/completions,
+# Bearer auth). The previously-suspected POST /models/list endpoint is not
+# required for the known-working PAYG flow.
+# Status: live-verification-required; run verifier before production use
+# [providers.generalcompute]
+# id = "generalcompute"
+# base_url = "https://api.generalcompute.com/v1"
+# protocols = ["openai"]
+# openai_path = "/chat/completions"
+# models_method = "GET"
+# models_path = "/models"
+#
+# [[providers.generalcompute.accounts]]
+# name = "default"
+# api_key = "sk-your-generalcompute-key"
+#
+# [providers.generalcompute.auth]
+# mode = "bearer"
+
+# NeuralWatt — OpenAI compatible, energy-based pricing
+# Status: live-verification-required — confirm base_url and model-list endpoint
+# [providers.neuralwatt]
+# id = "neuralwatt"
+# base_url = "https://api.neuralwatt.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.neuralwatt.accounts]]
+# name = "default"
+# api_key = "sk-your-neuralwatt-key"
+#
+# # Live-verification-required: confirm base_url and endpoints before production use
+
+# Ollama (local) — OpenAI compatible, no auth required
+# Status: verified (well-known local service)
+# [providers.ollama-local]
+# id = "ollama-local"
+# base_url = "http://localhost:11434/v1"
+# protocols = ["openai"]
+#
+# [[providers.ollama-local.accounts]]
+# name = "default"
+#
+# [providers.ollama-local.auth]
+# mode = "none"
+
+# Ollama (cloud) — OpenAI compatible via /v1 endpoints
+# Status: unverified — confirm base_url and auth before production use
+# [providers.ollama-cloud]
+# id = "ollama-cloud"
+# base_url = "https://ollama.com/v1"
+# protocols = ["openai"]
+#
+# [[providers.ollama-cloud.accounts]]
+# name = "default"
+# api_key = "sk-your-ollama-key"
+#
+# [providers.ollama-cloud.auth]
+# mode = "bearer"
+
+# Cerebras — fast OpenAI Chat Completions-compatible inference
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.cerebras]
+# id = "cerebras"
+# base_url = "https://api.cerebras.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.cerebras.accounts]]
+# name = "default"
+# api_key = "sk-your-cerebras-key"
+
+# SambaNova Cloud — OpenAI Chat Completions-compatible hosted open models
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.sambanova]
+# id = "sambanova"
+# base_url = "https://api.sambanova.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.sambanova.accounts]]
+# name = "default"
+# api_key = "sk-your-sambanova-key"
+
+# Hyperbolic — OpenAI Chat Completions-compatible open-model inference
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.hyperbolic]
+# id = "hyperbolic"
+# base_url = "https://api.hyperbolic.xyz/v1"
+# protocols = ["openai"]
+#
+# [[providers.hyperbolic.accounts]]
+# name = "default"
+# api_key = "sk-your-hyperbolic-key"
+
+# Featherless AI — OpenAI Chat Completions-compatible serverless open-model API
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.featherless]
+# id = "featherless"
+# base_url = "https://api.featherless.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.featherless.accounts]]
+# name = "default"
+# api_key = "sk-your-featherless-key"
+
+# Moonshot AI / Kimi — direct OpenAI Chat Completions-compatible API
+# Status: live-verification-required — confirm base_url and model listing
+# [providers.moonshot]
+# id = "moonshot"
+# base_url = "https://api.moonshot.ai/v1"
+# protocols = ["openai"]
+#
+# [[providers.moonshot.accounts]]
+# name = "default"
+# api_key = "sk-your-moonshot-key"
+
+# Global model overrides apply to all providers. Provider-specific
+# overrides take precedence per field. Token limit fields:
+#   max_context_tokens  - total context window advertised to clients
+#   max_input_tokens    - input ceiling (when different from context)
+#   max_output_tokens   - effective generation ceiling
+#   enforce_context_limit - server-side rejection (default: true)
+# [model_overrides."model-id"]
+# max_context_tokens = 200000
+
+[model_overrides."claude-opus-4"]
+protocol = "anthropic"
+
+[model_overrides."claude-sonnet-4"]
+protocol = "anthropic"

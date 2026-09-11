@@ -4,7 +4,7 @@ mod build_support;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let schema_dir = manifest_dir.join("../src/eggpool/db/schema");
+    let schema_dir = manifest_dir.join("assets/db/migrations");
     let checksum_path = schema_dir.join("checksums.json");
     println!("cargo:rerun-if-changed={}", checksum_path.display());
 

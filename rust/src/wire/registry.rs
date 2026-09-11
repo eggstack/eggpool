@@ -12,10 +12,7 @@ use thiserror::Error;
 
 use super::codec::WireCodecId;
 
-const BUILTIN_WIRE_PROFILES: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../src/eggpool/providers/_wire_profiles.toml"
-));
+const BUILTIN_WIRE_PROFILES: &str = include_str!("../../assets/providers/_wire_profiles.toml");
 
 /// Stable upstream wire-surface identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

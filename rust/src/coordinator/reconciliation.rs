@@ -9,7 +9,7 @@
 //!
 //! ## Python oracle
 //!
-//! The frozen oracle is `_crash_recovery` in `src/eggpool/app.py`. On
+//! The frozen oracle is the historical Python `_crash_recovery` implementation. On
 //! startup it marks **all** `pending` requests `interrupted`, releases
 //! **all** `active` reservations with `release_reason = 'crash_recovery'`,
 //! and completes **all** open attempts with

@@ -1,9 +1,31 @@
+use std::{collections::BTreeSet, fs, path::PathBuf};
+
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
 #[path = "../build_support.rs"]
 mod build_support;
 
+#[derive(Debug, Deserialize)]
+struct RuntimeManifest {
+    manifest_version: String,
+    source_reference_commit: String,
+    source_reference_tree: String,
+    assets: Vec<RuntimeAsset>,
+    migration_count: usize,
+    schema_change: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeAsset {
+    path: String,
+    category: String,
+    sha256: String,
+}
+
 #[test]
 fn semantically_equivalent_reformatted_manifest_is_accepted() {
-    let original = include_str!("../../src/eggpool/db/schema/checksums.json");
+    let original = include_str!("../assets/db/migrations/checksums.json");
     let value: serde_json::Value = serde_json::from_str(original).expect("canonical JSON");
     let reformatted = serde_json::to_string(&value).expect("compact JSON");
 
@@ -27,4 +49,47 @@ fn malformed_checksum_content_is_rejected() {
             "manifest should be rejected: {manifest}"
         );
     }
+}
+
+#[test]
+fn rust_owned_runtime_assets_are_complete_and_hash_locked() {
+    let manifest: RuntimeManifest =
+        serde_json::from_str(include_str!("../assets/runtime-manifest.json"))
+            .expect("runtime asset manifest is valid JSON");
+    assert_eq!(manifest.manifest_version, "m12.runtime-assets.v1");
+    assert_eq!(manifest.source_reference_commit.len(), 40);
+    assert_eq!(manifest.source_reference_tree.len(), 40);
+    assert_eq!(manifest.migration_count, 54);
+    assert!(!manifest.schema_change);
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut categories = BTreeSet::new();
+    for asset in manifest.assets {
+        categories.insert(asset.category);
+        let path = root.join("assets").join(&asset.path);
+        let bytes = fs::read(&path).expect("Rust-owned runtime asset exists");
+        let digest = Sha256::digest(&bytes);
+        let actual = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(actual, asset.sha256, "runtime asset drift: {}", asset.path);
+    }
+    assert_eq!(
+        categories,
+        BTreeSet::from([
+            "release-catalog".to_owned(),
+            "configuration-template".to_owned(),
+            "dashboard-assets".to_owned(),
+            "provider-templates".to_owned(),
+            "sqlite-migrations".to_owned(),
+            "wire-profiles".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn historical_python_application_tree_is_absent() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    assert!(!root.join("../src/eggpool").exists());
 }

@@ -3,7 +3,7 @@
 use super::{Database, DatabaseError};
 use sha2::{Digest, Sha256};
 
-/// One migration copied from the canonical Python schema at build time.
+/// One migration embedded from the Rust-owned canonical asset tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Migration {
     pub version: u32,

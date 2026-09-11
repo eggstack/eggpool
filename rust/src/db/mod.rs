@@ -1,8 +1,8 @@
 //! SQLite compatibility boundary for the Rust migration candidate.
 //!
-//! The canonical schema remains `src/eggpool/db/schema`.  The build script
-//! embeds those exact files and their Python-era SHA-256 manifest so Rust
-//! cannot silently grow a second migration source.
+//! The Rust-owned asset tree contains the exact historical migrations and
+//! Python-era SHA-256 manifest so Rust cannot silently grow a second schema
+//! source.
 
 mod connection;
 pub mod migrations;

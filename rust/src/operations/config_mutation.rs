@@ -23,8 +23,8 @@ use crate::{
 };
 
 const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
-const DEFAULT_CONFIG: &str = include_str!("../../../config.example.toml");
-const BUNDLED_PROVIDERS: &str = include_str!("../../../src/eggpool/providers/_templates.toml");
+const DEFAULT_CONFIG: &str = include_str!("../../assets/config/config.example.toml");
+const BUNDLED_PROVIDERS: &str = include_str!("../../assets/providers/_templates.toml");
 
 static MUTATION_PATHS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 

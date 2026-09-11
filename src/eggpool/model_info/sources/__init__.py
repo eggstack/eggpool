@@ -1,1 +1,0 @@
-"""Model-info observation sources."""

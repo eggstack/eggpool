@@ -125,9 +125,9 @@ serialized on that connection; repositories never open pooled writers. The
 database options can be built directly from the closed F003 config model with
 `DatabaseConfig::from(&config.database)`.
 
-The build script reads `src/eggpool/db/schema/*.sql` and `checksums.json`
-through a structural JSON parser. It embeds those exact canonical files and
-validates their SHA-256 values before applying them. Rust uses the existing
+The build script reads the Rust-owned `rust/assets/db/migrations/*.sql` and
+`checksums.json` through a structural JSON parser. It embeds those exact
+canonical files and validates their SHA-256 values before applying them. Rust uses the existing
 `_migrations` ledger and accepts the historical no-extension ledger names in
 `tests/fixtures/schema/pre_phase17_v11.sql`; it does not renumber or rewrite
 migrations. A failed transaction explicitly rolls back. Rollback failure, or a
