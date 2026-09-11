@@ -644,7 +644,7 @@ fn parse_digest(value: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut output = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         output[index] = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(output)

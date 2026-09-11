@@ -311,16 +311,16 @@ fn decode_messages(
         return Ok(messages);
     }
     let mut messages = Vec::new();
-    if protocol == "anthropic" {
-        if let Some(system) = object.get("system") {
-            messages.push(CanonicalMessage {
-                role: CanonicalRole::System,
-                content: decode_content(system, CanonicalRole::System, surface)?,
-                tool_call_id: None,
-                name: None,
-                refusal: None,
-            });
-        }
+    if protocol == "anthropic"
+        && let Some(system) = object.get("system")
+    {
+        messages.push(CanonicalMessage {
+            role: CanonicalRole::System,
+            content: decode_content(system, CanonicalRole::System, surface)?,
+            tool_call_id: None,
+            name: None,
+            refusal: None,
+        });
     }
     let raw = object.get("messages").or_else(|| object.get("contents"));
     if let Some(value) = raw {
@@ -677,12 +677,12 @@ fn decode_media_block(
         .get("media_type")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    if let Some(media_type) = media_type.as_deref() {
-        if !validate_media_type(media_type) {
-            return Err(AdmissionError::InvalidField {
-                field: "media.media_type",
-            });
-        }
+    if let Some(media_type) = media_type.as_deref()
+        && !validate_media_type(media_type)
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "media.media_type",
+        });
     }
     let data = source
         .get("data")
@@ -717,17 +717,17 @@ fn decode_media_block(
             field: "media.source",
         });
     }
-    if let Some(uri) = uri.as_deref() {
-        if !valid_reference(uri) {
-            return Err(AdmissionError::InvalidField { field: "media.url" });
-        }
+    if let Some(uri) = uri.as_deref()
+        && !valid_reference(uri)
+    {
+        return Err(AdmissionError::InvalidField { field: "media.url" });
     }
-    if let Some(file_id) = file_id.as_deref() {
-        if !valid_reference(file_id) {
-            return Err(AdmissionError::InvalidField {
-                field: "media.file_id",
-            });
-        }
+    if let Some(file_id) = file_id.as_deref()
+        && !valid_reference(file_id)
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "media.file_id",
+        });
     }
     Ok(media_block(kind, uri.as_deref(), media_type, data, file_id))
 }
@@ -1215,17 +1215,17 @@ fn validate_media_limits(messages: &[CanonicalMessage]) -> Result<(), AdmissionE
                 }
             }
             if let Some(media) = &block.media {
-                if let Some(uri) = &media.uri {
-                    if uri.len() > MAX_MEDIA_URI_BYTES {
-                        return Err(AdmissionError::MediaLimit { kind: "media URI" });
-                    }
+                if let Some(uri) = &media.uri
+                    && uri.len() > MAX_MEDIA_URI_BYTES
+                {
+                    return Err(AdmissionError::MediaLimit { kind: "media URI" });
                 }
-                if let Some(file_id) = &media.file_id {
-                    if file_id.len() > MAX_MEDIA_URI_BYTES {
-                        return Err(AdmissionError::MediaLimit {
-                            kind: "file reference",
-                        });
-                    }
+                if let Some(file_id) = &media.file_id
+                    && file_id.len() > MAX_MEDIA_URI_BYTES
+                {
+                    return Err(AdmissionError::MediaLimit {
+                        kind: "file reference",
+                    });
                 }
                 if let Some(data) = &media.data {
                     let limit = if block.kind == CanonicalBlockKind::Image {
@@ -1257,19 +1257,19 @@ fn validate_media_limits(messages: &[CanonicalMessage]) -> Result<(), AdmissionE
                         }
                     }
                 }
-                if let Some(media_type) = &media.media_type {
-                    if !validate_media_type(media_type) {
-                        return Err(AdmissionError::InvalidField {
-                            field: "media.media_type",
-                        });
-                    }
+                if let Some(media_type) = &media.media_type
+                    && !validate_media_type(media_type)
+                {
+                    return Err(AdmissionError::InvalidField {
+                        field: "media.media_type",
+                    });
                 }
-                if let Some(detail) = &media.detail {
-                    if !matches!(detail.as_str(), "auto" | "low" | "medium" | "high") {
-                        return Err(AdmissionError::MediaLimit {
-                            kind: "image detail",
-                        });
-                    }
+                if let Some(detail) = &media.detail
+                    && !matches!(detail.as_str(), "auto" | "low" | "medium" | "high")
+                {
+                    return Err(AdmissionError::MediaLimit {
+                        kind: "image detail",
+                    });
                 }
             }
         }

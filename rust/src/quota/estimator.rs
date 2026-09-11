@@ -607,10 +607,11 @@ fn record_account_ewma(
         .entry(account.to_owned())
         .or_default();
     let models = state.model_lru.entry(account.to_owned()).or_default();
-    if !bucket.contains_key(model) && bucket.len() >= cap {
-        if let Some(oldest) = models.pop_front() {
-            bucket.remove(&oldest);
-        }
+    if !bucket.contains_key(model)
+        && bucket.len() >= cap
+        && let Some(oldest) = models.pop_front()
+    {
+        bucket.remove(&oldest);
     }
     let estimate = bucket.entry(model.to_owned()).or_default();
     estimate.update(rate, now);
@@ -673,10 +674,11 @@ fn record_global_ewma(
             state.global_outlier_lru.remove(position);
         }
     }
-    if !state.global_model_ewma.contains_key(model) && state.global_model_ewma.len() >= cap {
-        if let Some(oldest) = state.global_lru.pop_front() {
-            state.global_model_ewma.remove(&oldest);
-        }
+    if !state.global_model_ewma.contains_key(model)
+        && state.global_model_ewma.len() >= cap
+        && let Some(oldest) = state.global_lru.pop_front()
+    {
+        state.global_model_ewma.remove(&oldest);
     }
     state
         .global_model_ewma

@@ -1014,12 +1014,11 @@ impl ModelCatalogCache {
                     result.thinking.budget = parse_status_str(budget);
                 }
             }
-            if let Some(media) = &override_config.multimodal {
-                if let Some(image) = &media.image_input {
-                    if image.base64 == Some(true) || image.url == Some(true) {
-                        result.supports_vision = Some(true);
-                    }
-                }
+            if let Some(media) = &override_config.multimodal
+                && let Some(image) = &media.image_input
+                && (image.base64 == Some(true) || image.url == Some(true))
+            {
+                result.supports_vision = Some(true);
             }
         }
         result
@@ -1116,10 +1115,10 @@ fn parse_optional_protocol(value: Option<&str>) -> Result<Option<String>, Catalo
 }
 fn validate_model_input(input: &ModelInput) -> Result<(), CatalogCacheError> {
     required_id(&input.model_id)?;
-    if let Some(protocol) = &input.protocol {
-        if !SUPPORTED_PROTOCOLS.contains(&protocol.as_str()) {
-            return Err(CatalogCacheError::InvalidProtocol(protocol.clone()));
-        }
+    if let Some(protocol) = &input.protocol
+        && !SUPPORTED_PROTOCOLS.contains(&protocol.as_str())
+    {
+        return Err(CatalogCacheError::InvalidProtocol(protocol.clone()));
     }
     Ok(())
 }

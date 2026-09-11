@@ -1176,12 +1176,11 @@ fn apply_capability_overrides(config: &Config, provider_id: &str, model: &mut Mo
     let Some(override_config) = override_config else {
         return;
     };
-    if let Some(media) = &override_config.multimodal {
-        if let Some(image) = &media.image_input {
-            if image.base64 == Some(true) || image.url == Some(true) {
-                model.capabilities.supports_vision = Some(true);
-            }
-        }
+    if let Some(media) = &override_config.multimodal
+        && let Some(image) = &media.image_input
+        && (image.base64 == Some(true) || image.url == Some(true))
+    {
+        model.capabilities.supports_vision = Some(true);
     }
     if let Some(thinking) = &override_config.thinking {
         if let Some(status) = &thinking.status {

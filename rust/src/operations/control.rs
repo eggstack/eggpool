@@ -416,10 +416,10 @@ impl Drop for ControlServerHandle {
     fn drop(&mut self) {
         if Arc::strong_count(&self.inner) == 1 {
             self.inner.stop.notify_one();
-            if let Ok(mut task) = self.inner.accept_task.lock() {
-                if let Some(task) = task.take() {
-                    task.abort();
-                }
+            if let Ok(mut task) = self.inner.accept_task.lock()
+                && let Some(task) = task.take()
+            {
+                task.abort();
             }
             let _ = remove_socket(&self.inner.path, self.inner.identity);
         }

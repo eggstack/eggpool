@@ -232,10 +232,10 @@ fn resolve_runtime_dir(environment: &PathEnvironment, state_dir: &Path, home: &P
     if let Some(path) = &environment.eggpool_runtime_dir {
         return path.clone();
     }
-    if let Some(path) = &environment.xdg_runtime_dir {
-        if is_private_directory(path) {
-            return path.join("eggpool");
-        }
+    if let Some(path) = &environment.xdg_runtime_dir
+        && is_private_directory(path)
+    {
+        return path.join("eggpool");
     }
     if is_private_directory(state_dir) {
         let candidate = state_dir.join("runtime");

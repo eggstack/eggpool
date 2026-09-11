@@ -92,6 +92,9 @@ fn fixture(profile: StreamAdapterKind) -> Vec<u8> {
     bytes
 }
 
+// `as_chunks` is newer than the Rust 1.85 MSRV; retain the equivalent
+// `chunks_exact` fixture operation while the project supports that MSRV.
+#[allow(clippy::chunks_exact_to_as_chunks)]
 fn hex_bytes(value: &str) -> Vec<u8> {
     assert_eq!(value.len() % 2, 0);
     value

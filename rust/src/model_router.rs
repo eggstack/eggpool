@@ -665,15 +665,14 @@ impl Drop for FlightGuard {
         if !self.armed {
             return;
         }
-        if let Ok(mut state) = self.owner.lock() {
-            if state
+        if let Ok(mut state) = self.owner.lock()
+            && state
                 .flights
                 .get(&self.key)
                 .is_some_and(|flight| Arc::ptr_eq(flight, &self.flight))
-            {
-                state.flights.remove(&self.key);
-                self.flight.result.send_replace(Some(FlightResult::Aborted));
-            }
+        {
+            state.flights.remove(&self.key);
+            self.flight.result.send_replace(Some(FlightResult::Aborted));
         }
         self.armed = false;
     }

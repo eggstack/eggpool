@@ -3159,13 +3159,12 @@ impl Drop for PendingStreamFinalization {
         }
         parts.data.downstream_started = parts.handoff.started();
         parts.data.latency_ms = duration_i64(parts.elapsed());
-        if !parts.terminal_stored {
-            if let Some(usage) = parts.midstream_usage() {
-                parts.data.input_tokens = bounded_i64(usage.input_tokens);
-                parts.data.output_tokens = bounded_i64(usage.output_tokens);
-                parts.data.cache_counter_status =
-                    Some(cache_status(usage.cache_counter_status).into());
-            }
+        if !parts.terminal_stored
+            && let Some(usage) = parts.midstream_usage()
+        {
+            parts.data.input_tokens = bounded_i64(usage.input_tokens);
+            parts.data.output_tokens = bounded_i64(usage.output_tokens);
+            parts.data.cache_counter_status = Some(cache_status(usage.cache_counter_status).into());
         }
         parts.stream = None;
         let command = FinalizationCommand::Request {

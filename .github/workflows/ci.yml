@@ -45,6 +45,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
       - run: uv sync --frozen
       - run: uv run ruff format --check scripts/ tests/tooling/

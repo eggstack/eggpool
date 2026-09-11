@@ -550,8 +550,8 @@ fn encode_openai_content_lossless(content: &[CanonicalContentBlock]) -> Value {
                 if let Some(text) = &block.text {
                     values.push(json!({"type":"text", "text":text}));
                 }
-                if let Some(media) = block.media.as_ref() {
-                    if let Some(url) = media.uri.clone().or_else(|| {
+                if let Some(media) = block.media.as_ref()
+                    && let Some(url) = media.uri.clone().or_else(|| {
                         media.data.as_ref().map(|data| {
                             format!(
                                 "data:{};base64,{}",
@@ -562,9 +562,9 @@ fn encode_openai_content_lossless(content: &[CanonicalContentBlock]) -> Value {
                                 data
                             )
                         })
-                    }) {
-                        values.push(json!({"type":"image_url", "image_url":{"url":url}}));
-                    }
+                    })
+                {
+                    values.push(json!({"type":"image_url", "image_url":{"url":url}}));
                 }
             }
             CanonicalBlockKind::ToolCall | CanonicalBlockKind::Audio => {}
@@ -1663,15 +1663,15 @@ pub(crate) fn decode_response_media(
             target_surface: None,
         })?;
     }
-    if let Some(media_type) = media_type.as_deref() {
-        if !validate_media_type(media_type) {
-            return Err(codec_error(
-                CodecReasonCode::MalformedProviderResponse,
-                Some("content[].media.media_type"),
-                None,
-                None,
-            ));
-        }
+    if let Some(media_type) = media_type.as_deref()
+        && !validate_media_type(media_type)
+    {
+        return Err(codec_error(
+            CodecReasonCode::MalformedProviderResponse,
+            Some("content[].media.media_type"),
+            None,
+            None,
+        ));
     }
     if uri
         .as_ref()

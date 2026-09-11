@@ -45,6 +45,7 @@ Build and test the current application with Cargo:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 ```

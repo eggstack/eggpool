@@ -16,6 +16,11 @@ cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 ```
 
+Strict Clippy is a repository invariant across all Rust targets. Do not add a
+baseline allowlist or broad suppression; resolve new warnings locally and use
+narrow, justified allowances only when the intentional API or test shape is
+clearer and safer.
+
 ## Tooling
 
 Python is retained for release/validation scripts and their tests only:

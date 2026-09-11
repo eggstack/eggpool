@@ -1691,8 +1691,8 @@ fn validate_provider(
         }
     }
     for capabilities in provider.model_capabilities.values() {
-        if let Some(thinking) = &capabilities.thinking {
-            if thinking
+        if let Some(thinking) = &capabilities.thinking
+            && (thinking
                 .budget_tokens_min
                 .zip(thinking.budget_tokens_max)
                 .is_some_and(|(minimum, maximum)| minimum > maximum)
@@ -1701,12 +1701,11 @@ fn validate_provider(
                 || thinking
                     .effort_to_budget_tokens
                     .as_ref()
-                    .is_some_and(|map| map.values().any(|value| *value == 0))
-            {
-                return Err(ConfigError::validation(
-                    "thinking capability override is invalid",
-                ));
-            }
+                    .is_some_and(|map| map.values().any(|value| *value == 0)))
+        {
+            return Err(ConfigError::validation(
+                "thinking capability override is invalid",
+            ));
         }
     }
     for (model, preference) in &provider.model_wire {
@@ -1750,12 +1749,12 @@ fn validate_provider(
                 account.name
             )));
         }
-        if let Some(name) = &account.proxy {
-            if !proxies.contains_key(name) {
-                return Err(ConfigError::validation(
-                    "account references an unknown proxy",
-                ));
-            }
+        if let Some(name) = &account.proxy
+            && !proxies.contains_key(name)
+        {
+            return Err(ConfigError::validation(
+                "account references an unknown proxy",
+            ));
         }
         let needs_key = provider.auth.mode != "none"
             || provider

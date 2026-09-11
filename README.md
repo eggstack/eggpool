@@ -343,7 +343,7 @@ One GitHub Actions job on every PR:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
-| `check` | Rust + Python tooling | Cargo format/tests plus ruff, pyright, and `pytest tests/tooling/` |
+| `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests plus ruff, pyright, and `pytest tests/tooling/` |
 
 See `AGENTS.md` for focused test subset commands.
 

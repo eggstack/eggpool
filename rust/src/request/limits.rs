@@ -125,7 +125,7 @@ pub fn requested_output_tokens(
 }
 
 pub fn decoded_base64_len(encoded: &str) -> Option<u64> {
-    if encoded.is_empty() || encoded.len() % 4 != 0 {
+    if encoded.is_empty() || !encoded.len().is_multiple_of(4) {
         return None;
     }
     let padding = encoded
@@ -151,7 +151,7 @@ pub fn decoded_base64_len(encoded: &str) -> Option<u64> {
 }
 
 pub fn base64_definitely_exceeds(encoded: &str, limit_bytes: u64) -> bool {
-    if encoded.len() % 4 != 0 {
+    if !encoded.len().is_multiple_of(4) {
         return false;
     }
     let minimum_decoded = (encoded.len() as u64 / 4)

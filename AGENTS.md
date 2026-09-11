@@ -24,6 +24,7 @@ Fast focused iteration:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets
 uv run ruff format <changed tooling paths>
 uv run ruff check <changed tooling paths>
@@ -36,7 +37,8 @@ Run the same checks as the CI job:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml -- --check
-cargo test --manifest-path rust/Cargo.toml --all-targets
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
 uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
@@ -45,7 +47,10 @@ uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 
 ## CI
 
-One GitHub Actions job (`check`, Rust plus Python tooling): Cargo formatting/tests plus ruff, pyright, and `pytest tests/tooling/`. Reproduce locally for deterministic results.
+One GitHub Actions job (`check`, Rust plus Python tooling): Cargo formatting,
+strict Clippy, serial Rust tests, plus ruff, pyright, and
+`pytest tests/tooling/`. Reproduce locally for deterministic results. New
+Clippy warnings are not an accepted baseline; fix them before merging.
 
 CI ignores paths-only changes to `docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`, and `AGENTS.md` — docs-only PRs will show no CI run.
 

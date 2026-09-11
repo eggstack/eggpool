@@ -629,19 +629,17 @@ fn build_opencode_config_json(context: &IntegrationContext) -> Result<String, In
             .capabilities
             .get("thinking")
             .and_then(Value::as_object)
-        {
-            if thinking.get("status").and_then(Value::as_str)
+            && thinking.get("status").and_then(Value::as_str)
                 == Some(CapabilityStatus::Supported.as_str())
-            {
-                entry.insert("reasoning".to_owned(), Value::Bool(true));
-                if let Some(efforts) = thinking.get("supported_efforts").and_then(Value::as_array) {
-                    let mut variants = Map::new();
-                    for effort in efforts.iter().filter_map(Value::as_str) {
-                        variants.insert(effort.to_owned(), json!({"reasoningEffort": effort}));
-                    }
-                    if !variants.is_empty() {
-                        entry.insert("variants".to_owned(), Value::Object(variants));
-                    }
+        {
+            entry.insert("reasoning".to_owned(), Value::Bool(true));
+            if let Some(efforts) = thinking.get("supported_efforts").and_then(Value::as_array) {
+                let mut variants = Map::new();
+                for effort in efforts.iter().filter_map(Value::as_str) {
+                    variants.insert(effort.to_owned(), json!({"reasoningEffort": effort}));
+                }
+                if !variants.is_empty() {
+                    entry.insert("variants".to_owned(), Value::Object(variants));
                 }
             }
         }
@@ -870,10 +868,9 @@ fn apply_model_overrides(models: &mut [IntegrationModel], config: &Config) {
             .as_ref()
             .and_then(|media| media.image_input.as_ref())
             .is_some_and(|image| image.base64 == Some(true) || image.url == Some(true))
+            && let Some(base) = model.capabilities.as_object_mut()
         {
-            if let Some(base) = model.capabilities.as_object_mut() {
-                base.insert("supports_vision".to_owned(), Value::Bool(true));
-            }
+            base.insert("supports_vision".to_owned(), Value::Bool(true));
         }
     }
 }

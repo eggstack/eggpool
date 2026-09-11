@@ -446,13 +446,12 @@ impl WireResolver {
             };
             (rank, candidate.profile.priority, candidate.surface())
         });
-        if let Some(fixed) = fixed {
-            if candidates
+        if let Some(fixed) = fixed
+            && candidates
                 .first()
                 .is_some_and(|candidate| candidate.surface() == fixed)
-            {
-                candidates.truncate(1);
-            }
+        {
+            candidates.truncate(1);
         }
         increment_metric(&mut state, "wire_selection", config.max_metric_labels);
         touch_lru(&mut state, key, config.cache_capacity);
@@ -729,13 +728,13 @@ impl WireResolver {
         let mut state = self.state.lock().expect("wire resolver lock");
         let flight_key = (key.provider_id.clone(), key.model_id.clone());
         state.flights.remove(&flight_key);
-        if self.config().enabled {
-            if let NegotiationResult::Accepted(surface) = result {
-                state.entries.entry(key.clone()).or_default().learned = Some(Learned {
-                    surface,
-                    observed_at: now,
-                });
-            }
+        if self.config().enabled
+            && let NegotiationResult::Accepted(surface) = result
+        {
+            state.entries.entry(key.clone()).or_default().learned = Some(Learned {
+                surface,
+                observed_at: now,
+            });
         }
         touch_lru(&mut state, key.clone(), self.config().cache_capacity);
     }
@@ -818,10 +817,11 @@ fn fingerprint(
 }
 
 fn increment_metric(state: &mut ResolverState, label: &str, capacity: usize) {
-    if !state.metrics.contains_key(label) && state.metrics.len() >= capacity.max(1) {
-        if let Some(first) = state.metrics.keys().next().cloned() {
-            state.metrics.remove(&first);
-        }
+    if !state.metrics.contains_key(label)
+        && state.metrics.len() >= capacity.max(1)
+        && let Some(first) = state.metrics.keys().next().cloned()
+    {
+        state.metrics.remove(&first);
     }
     *state.metrics.entry(label.to_owned()).or_default() += 1;
 }

@@ -519,39 +519,36 @@ async fn resolve_virtual(
     let selector = SemanticSelector::new(state.finite.clone(), known)
         .with_virtual_check(move |model| registry_virtual.is_virtual(model));
     let canonical = admitted.canonical.clone();
-    if router.sticky {
-        if let Some(identity) = identity {
-            let resolution = state
-                .affinity
-                .resolve(router, &identity, || {
-                    let selector = selector.clone();
-                    let router = router.clone();
-                    let canonical = canonical.clone();
-                    async move {
-                        Ok(
-                            selector_affinity_selection(&selector, &router, &canonical, surface)
-                                .await,
-                        )
-                    }
-                })
-                .await
-                .map_err(|_| EndpointError::Attempt)?;
-            let source = match resolution.decision.source {
-                crate::model_router::AffinityDecisionSource::Selector => SelectionSource::Selector,
-                crate::model_router::AffinityDecisionSource::Default => SelectionSource::Default,
-            };
-            return finish_virtual_resolution(
-                state,
-                &raw_body,
-                router,
-                resolution.decision.concrete_model.clone(),
-                resolution.decision.route_id.clone(),
-                resolution.decision.route_label.clone(),
-                source,
-                resolution.cache_hit,
-                resolution.decision.selector_attempts_for_metrics(),
-            );
-        }
+    if router.sticky
+        && let Some(identity) = identity
+    {
+        let resolution = state
+            .affinity
+            .resolve(router, &identity, || {
+                let selector = selector.clone();
+                let router = router.clone();
+                let canonical = canonical.clone();
+                async move {
+                    Ok(selector_affinity_selection(&selector, &router, &canonical, surface).await)
+                }
+            })
+            .await
+            .map_err(|_| EndpointError::Attempt)?;
+        let source = match resolution.decision.source {
+            crate::model_router::AffinityDecisionSource::Selector => SelectionSource::Selector,
+            crate::model_router::AffinityDecisionSource::Default => SelectionSource::Default,
+        };
+        return finish_virtual_resolution(
+            state,
+            &raw_body,
+            router,
+            resolution.decision.concrete_model.clone(),
+            resolution.decision.route_id.clone(),
+            resolution.decision.route_label.clone(),
+            source,
+            resolution.cache_hit,
+            resolution.decision.selector_attempts_for_metrics(),
+        );
     }
     // Non-sticky, no session identity, or sticky=false bypass: direct select.
     let selection = selector.select(router, &canonical, surface).await;
@@ -656,10 +653,10 @@ pub async fn execute_finite(
     }
     let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
     let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
-    if surface == ClientSurface::Responses {
-        if let Some(rejection) = validate_responses_stateless(&payload) {
-            return Err(EndpointError::StatelessViolation(rejection));
-        }
+    if surface == ClientSurface::Responses
+        && let Some(rejection) = validate_responses_stateless(&payload)
+    {
+        return Err(EndpointError::StatelessViolation(rejection));
     }
     if stream_flag(&payload)? {
         return Err(EndpointError::Admission);
@@ -712,10 +709,10 @@ pub async fn execute_stream(
     }
     let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
     let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
-    if surface == ClientSurface::Responses {
-        if let Some(rejection) = validate_responses_stateless(&payload) {
-            return Err(EndpointError::StatelessViolation(rejection));
-        }
+    if surface == ClientSurface::Responses
+        && let Some(rejection) = validate_responses_stateless(&payload)
+    {
+        return Err(EndpointError::StatelessViolation(rejection));
     }
     if !stream_flag(&payload)? {
         return Err(EndpointError::Admission);

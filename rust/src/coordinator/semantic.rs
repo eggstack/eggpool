@@ -544,32 +544,32 @@ impl SemanticSelector {
                 false,
             );
         }
-        if let Some(route_id) = parse_route_id(Some(&body), router, self.max_response_bytes) {
-            if let Some(route) = router.route_for_id(&route_id) {
-                // Concrete target must not be virtual (structural guard).
-                if (self.is_virtual)(route.model.as_str()) {
-                    return self.fallback(
-                        router,
-                        started,
-                        attempts,
-                        SelectorFallback::Unavailable,
-                        false,
-                        false,
-                    );
-                }
-                return self.selection(
+        if let Some(route_id) = parse_route_id(Some(&body), router, self.max_response_bytes)
+            && let Some(route) = router.route_for_id(&route_id)
+        {
+            // Concrete target must not be virtual (structural guard).
+            if (self.is_virtual)(route.model.as_str()) {
+                return self.fallback(
                     router,
-                    &route_id,
-                    &route.label,
-                    &route.model,
-                    SelectionSource::Selector,
-                    attempts,
                     started,
-                    None,
+                    attempts,
+                    SelectorFallback::Unavailable,
                     false,
                     false,
                 );
             }
+            return self.selection(
+                router,
+                &route_id,
+                &route.label,
+                &route.model,
+                SelectionSource::Selector,
+                attempts,
+                started,
+                None,
+                false,
+                false,
+            );
         }
         // 2xx but invalid: exactly one repair with the same bounded context.
         if router.repair_attempts > 0 {
@@ -599,31 +599,31 @@ impl SemanticSelector {
                     false,
                 );
             }
-            if let Some(route_id) = parse_route_id(Some(&body), router, self.max_response_bytes) {
-                if let Some(route) = router.route_for_id(&route_id) {
-                    if (self.is_virtual)(route.model.as_str()) {
-                        return self.fallback(
-                            router,
-                            started,
-                            attempts,
-                            SelectorFallback::Unavailable,
-                            true,
-                            false,
-                        );
-                    }
-                    return self.selection(
+            if let Some(route_id) = parse_route_id(Some(&body), router, self.max_response_bytes)
+                && let Some(route) = router.route_for_id(&route_id)
+            {
+                if (self.is_virtual)(route.model.as_str()) {
+                    return self.fallback(
                         router,
-                        &route_id,
-                        &route.label,
-                        &route.model,
-                        SelectionSource::Selector,
-                        attempts,
                         started,
-                        None,
+                        attempts,
+                        SelectorFallback::Unavailable,
                         true,
-                        true,
+                        false,
                     );
                 }
+                return self.selection(
+                    router,
+                    &route_id,
+                    &route.label,
+                    &route.model,
+                    SelectionSource::Selector,
+                    attempts,
+                    started,
+                    None,
+                    true,
+                    true,
+                );
             }
             return self.fallback(
                 router,

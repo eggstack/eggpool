@@ -153,10 +153,10 @@ impl FairnessRotor {
         let mut state = self.state.lock().expect("fairness lock");
         if state.positions.contains_key(&key) {
             state.lru.retain(|item| item != &key);
-        } else if state.positions.len() >= FAIRNESS_KEY_HARD_CAP {
-            if let Some(oldest) = state.lru.pop_front() {
-                state.positions.remove(&oldest);
-            }
+        } else if state.positions.len() >= FAIRNESS_KEY_HARD_CAP
+            && let Some(oldest) = state.lru.pop_front()
+        {
+            state.positions.remove(&oldest);
         }
         let position = state.positions.get(&key).copied().unwrap_or(0);
         state.positions.insert(key.clone(), position + 1);

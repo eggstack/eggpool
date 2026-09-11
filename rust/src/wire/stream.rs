@@ -171,10 +171,10 @@ impl SseDecoder {
         } else if !self.line_buffer.is_empty() {
             self.finish_line(&mut frames)?;
         }
-        if !self.fields.is_empty() {
-            if let Some(frame) = self.emit_frame() {
-                frames.push(frame);
-            }
+        if !self.fields.is_empty()
+            && let Some(frame) = self.emit_frame()
+        {
+            frames.push(frame);
         }
         Ok(SseDecodeResult {
             frames,
@@ -898,21 +898,21 @@ fn decode_openai_chat(
         return;
     };
     if let Some(delta) = choice.get("delta").and_then(Value::as_object) {
-        if let Some(text) = string(delta.get("content")) {
-            if !text.is_empty() {
-                events.push(CanonicalEvent {
-                    delta: Some(text),
-                    ..canonical_event(CanonicalEventType::TextDelta)
-                });
-            }
+        if let Some(text) = string(delta.get("content"))
+            && !text.is_empty()
+        {
+            events.push(CanonicalEvent {
+                delta: Some(text),
+                ..canonical_event(CanonicalEventType::TextDelta)
+            });
         }
-        if let Some(text) = string(delta.get("reasoning_content")) {
-            if !text.is_empty() {
-                events.push(CanonicalEvent {
-                    delta: Some(text),
-                    ..canonical_event(CanonicalEventType::ReasoningDelta)
-                });
-            }
+        if let Some(text) = string(delta.get("reasoning_content"))
+            && !text.is_empty()
+        {
+            events.push(CanonicalEvent {
+                delta: Some(text),
+                ..canonical_event(CanonicalEventType::ReasoningDelta)
+            });
         }
         if let Some(calls) = array(delta.get("tool_calls")) {
             for call in calls.iter().filter_map(Value::as_object) {
@@ -1182,36 +1182,34 @@ fn decode_generate_content(payload: &Map<String, Value>, events: &mut Vec<Canoni
     if let Some(candidate) = array(payload.get("candidates"))
         .and_then(|items| items.first())
         .and_then(Value::as_object)
-    {
-        if let Some(parts) =
+        && let Some(parts) =
             object(candidate.get("content")).and_then(|content| array(content.get("parts")))
-        {
-            for part in parts.iter().filter_map(Value::as_object) {
-                if let Some(text) = string(part.get("text")) {
-                    events.push(CanonicalEvent {
-                        delta: Some(text),
-                        ..canonical_event(
-                            if part.get("thought").and_then(Value::as_bool) == Some(true) {
-                                CanonicalEventType::ReasoningDelta
-                            } else {
-                                CanonicalEventType::TextDelta
-                            },
-                        )
-                    });
-                }
-                if let Some(call) = object(part.get("functionCall")) {
-                    let mut start = canonical_event(CanonicalEventType::ToolCallStart);
-                    start.call_id = string(call.get("id"));
-                    start.name = string(call.get("name"));
-                    events.push(start);
-                    let mut args = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
-                    args.call_id = string(call.get("id"));
-                    let arguments = string(call.get("args")).or_else(|| {
-                        serde_json::to_string(call.get("args").unwrap_or(&Value::Null)).ok()
-                    });
-                    args.delta = arguments;
-                    events.push(args);
-                }
+    {
+        for part in parts.iter().filter_map(Value::as_object) {
+            if let Some(text) = string(part.get("text")) {
+                events.push(CanonicalEvent {
+                    delta: Some(text),
+                    ..canonical_event(
+                        if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                            CanonicalEventType::ReasoningDelta
+                        } else {
+                            CanonicalEventType::TextDelta
+                        },
+                    )
+                });
+            }
+            if let Some(call) = object(part.get("functionCall")) {
+                let mut start = canonical_event(CanonicalEventType::ToolCallStart);
+                start.call_id = string(call.get("id"));
+                start.name = string(call.get("name"));
+                events.push(start);
+                let mut args = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
+                args.call_id = string(call.get("id"));
+                let arguments = string(call.get("args")).or_else(|| {
+                    serde_json::to_string(call.get("args").unwrap_or(&Value::Null)).ok()
+                });
+                args.delta = arguments;
+                events.push(args);
             }
         }
     }
@@ -1224,19 +1222,18 @@ fn decode_generate_content(payload: &Map<String, Value>, events: &mut Vec<Canoni
     if let Some(candidate) = array(payload.get("candidates"))
         .and_then(|items| items.first())
         .and_then(Value::as_object)
+        && let Some(reason) = string(candidate.get("finishReason"))
     {
-        if let Some(reason) = string(candidate.get("finishReason")) {
-            events.push(CanonicalEvent {
-                finish_reason: Some(reason),
-                ..canonical_event(
-                    if candidate.get("finishReason").and_then(Value::as_str) == Some("STOP") {
-                        CanonicalEventType::ResponseComplete
-                    } else {
-                        CanonicalEventType::ResponseIncomplete
-                    },
-                )
-            });
-        }
+        events.push(CanonicalEvent {
+            finish_reason: Some(reason),
+            ..canonical_event(
+                if candidate.get("finishReason").and_then(Value::as_str) == Some("STOP") {
+                    CanonicalEventType::ResponseComplete
+                } else {
+                    CanonicalEventType::ResponseIncomplete
+                },
+            )
+        });
     }
 }
 
@@ -1375,19 +1372,19 @@ fn encode_chat_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
         Value::String(event.model.clone().unwrap_or_default()),
     );
     payload.insert("choices".into(), Value::Array(vec![Value::Object(choice)]));
-    if event.event_type == CanonicalEventType::Usage {
-        if let Some(usage) = &event.usage {
-            payload.insert(
-                "usage".into(),
-                json!({
-                    "prompt_tokens": usage.input_tokens.unwrap_or(0),
-                    "completion_tokens": usage.output_tokens.unwrap_or(0),
-                    "total_tokens": usage.total_tokens.unwrap_or(0),
-                    "cache_creation_tokens": usage.cache_write_input_tokens.unwrap_or(0),
-                    "cache_read_tokens": usage.cache_read_input_tokens.unwrap_or(0),
-                }),
-            );
-        }
+    if event.event_type == CanonicalEventType::Usage
+        && let Some(usage) = &event.usage
+    {
+        payload.insert(
+            "usage".into(),
+            json!({
+                "prompt_tokens": usage.input_tokens.unwrap_or(0),
+                "completion_tokens": usage.output_tokens.unwrap_or(0),
+                "total_tokens": usage.total_tokens.unwrap_or(0),
+                "cache_creation_tokens": usage.cache_write_input_tokens.unwrap_or(0),
+                "cache_read_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+            }),
+        );
     }
     Ok(sse(None, &Value::Object(payload)))
 }

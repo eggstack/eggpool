@@ -434,25 +434,25 @@ pub fn resolve_server_key(path: &Path) -> Result<(String, bool), MutationError> 
         .and_then(Value::as_table)
         .ok_or_else(|| MutationError::Invalid("[server] section is missing".into()))?;
 
-    if let Some(key) = server.get("api_key").and_then(Value::as_str) {
-        if !key.is_empty() {
-            return Ok((key.to_owned(), false));
-        }
+    if let Some(key) = server.get("api_key").and_then(Value::as_str)
+        && !key.is_empty()
+    {
+        return Ok((key.to_owned(), false));
     }
-    if let Some(env_name) = server.get("api_key_env").and_then(Value::as_str) {
-        if !env_name.trim().is_empty() {
-            let key = env::var(env_name).map_err(|_| {
+    if let Some(env_name) = server.get("api_key_env").and_then(Value::as_str)
+        && !env_name.trim().is_empty()
+    {
+        let key = env::var(env_name).map_err(|_| {
                 MutationError::Invalid(
                     "[server].api_key_env is configured, but the referenced environment variable is not available to this process".into(),
                 )
             })?;
-            if key.trim().is_empty() {
-                return Err(MutationError::Invalid(
+        if key.trim().is_empty() {
+            return Err(MutationError::Invalid(
                     "[server].api_key_env is configured, but the referenced environment variable is empty".into(),
                 ));
-            }
-            return Ok((key, false));
         }
+        return Ok((key, false));
     }
 
     let key = generate_key()?;
@@ -663,11 +663,12 @@ fn account_names(text: &str) -> Vec<String> {
         } else if line_header(line).is_some() {
             in_account = false;
         }
-        if in_account && assignment_key(line) == Some("name") {
-            if let Some((_, raw)) = line.split_once('=') {
-                let value = raw.trim().trim_matches(['"', '\'']);
-                names.push(value.to_owned());
-            }
+        if in_account
+            && assignment_key(line) == Some("name")
+            && let Some((_, raw)) = line.split_once('=')
+        {
+            let value = raw.trim().trim_matches(['"', '\'']);
+            names.push(value.to_owned());
         }
     }
     names

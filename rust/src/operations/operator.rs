@@ -303,12 +303,12 @@ pub async fn explain_accounts(
         "catalog_version": plan.catalog_version,
         "health_version": plan.health_version,
     });
-    if !include_scores {
-        if let Some(candidates) = result.get_mut("candidates").and_then(Value::as_array_mut) {
-            for candidate in candidates {
-                if let Some(object) = candidate.as_object_mut() {
-                    object.remove("score");
-                }
+    if !include_scores
+        && let Some(candidates) = result.get_mut("candidates").and_then(Value::as_array_mut)
+    {
+        for candidate in candidates {
+            if let Some(object) = candidate.as_object_mut() {
+                object.remove("score");
             }
         }
     }

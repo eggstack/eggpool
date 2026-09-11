@@ -332,15 +332,15 @@ fn candidate_for_account(
         exclude("auth_failed");
         return None;
     }
-    if let Some(requested_provider) = &facts.provider_id {
-        if identity.provider_id != *requested_provider {
-            exclude(if identity.provider_id.is_empty() {
-                "no_provider"
-            } else {
-                "wrong_provider"
-            });
-            return None;
-        }
+    if let Some(requested_provider) = &facts.provider_id
+        && identity.provider_id != *requested_provider
+    {
+        exclude(if identity.provider_id.is_empty() {
+            "no_provider"
+        } else {
+            "wrong_provider"
+        });
+        return None;
     }
     if facts.request_surface != "chat_completions"
         && !identity
@@ -367,23 +367,22 @@ fn candidate_for_account(
             return None;
         }
     }
-    if let Some(health) = health {
-        if !health.is_model_healthy_read_only(&identity.account_name, &facts.canonical_model_id) {
-            let reason =
-                health
-                    .snapshot(&identity.account_name)
-                    .map_or("circuit_open", |snapshot| {
-                        match snapshot.health_state.as_str() {
-                            "authentication_failed" => "auth_failed",
-                            "quota_exhausted" => "quota_exhausted",
-                            "cooldown" => "cooldown",
-                            "rate_limited" => "rate_limited",
-                            _ => "circuit_open",
-                        }
-                    });
-            exclude(reason);
-            return None;
-        }
+    if let Some(health) = health
+        && !health.is_model_healthy_read_only(&identity.account_name, &facts.canonical_model_id)
+    {
+        let reason = health
+            .snapshot(&identity.account_name)
+            .map_or("circuit_open", |snapshot| {
+                match snapshot.health_state.as_str() {
+                    "authentication_failed" => "auth_failed",
+                    "quota_exhausted" => "quota_exhausted",
+                    "cooldown" => "cooldown",
+                    "rate_limited" => "rate_limited",
+                    _ => "circuit_open",
+                }
+            });
+        exclude(reason);
+        return None;
     }
     let provider_model =
         catalog.get_provider_model(&facts.canonical_model_id, &identity.provider_id);
@@ -425,23 +424,24 @@ fn candidate_for_account(
         exclude("no_model");
         return None;
     }
-    if let Some(ttl) = facts.catalog_stale_after_s {
-        if !catalog.account_model_is_fresh(&identity.account_name, ttl, facts.now) {
-            exclude("model_stale");
-            return None;
-        }
+    if let Some(ttl) = facts.catalog_stale_after_s
+        && !catalog.account_model_is_fresh(&identity.account_name, ttl, facts.now)
+    {
+        exclude("model_stale");
+        return None;
     }
-    if let Some(requirement) = &facts.thinking {
-        if requirement.requested && !requirement.explicit_disable {
-            if let Some(entry) = provider_model {
-                if let Some(reason) = thinking_exclusion(entry, requirement, capability_policy) {
-                    exclude(reason);
-                    return None;
-                }
-            } else {
-                exclude("thinking_unknown");
+    if let Some(requirement) = &facts.thinking
+        && requirement.requested
+        && !requirement.explicit_disable
+    {
+        if let Some(entry) = provider_model {
+            if let Some(reason) = thinking_exclusion(entry, requirement, capability_policy) {
+                exclude(reason);
                 return None;
             }
+        } else {
+            exclude("thinking_unknown");
+            return None;
         }
     }
     if quota_mode == LocalQuotaMode::HardCap
@@ -561,10 +561,10 @@ fn thinking_exclusion(
             _ => None,
         }
     };
-    if requirement.requested_toggle.is_some() {
-        if let Some(reason) = control(capability.toggle, "toggle") {
-            return Some(reason);
-        }
+    if requirement.requested_toggle.is_some()
+        && let Some(reason) = control(capability.toggle, "toggle")
+    {
+        return Some(reason);
     }
     if let Some(effort) = &requirement.effort {
         if let Some(reason) = control(capability.effort, "effort") {

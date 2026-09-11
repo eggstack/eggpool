@@ -264,10 +264,10 @@ impl HealthManager {
             account.health_state = "healthy".to_owned();
             account.cooldown_until = 0.0;
         }
-        if let Some(model_id) = model_id {
-            if !account.terminal_models.contains(model_id) {
-                account.disabled_models.remove(model_id);
-            }
+        if let Some(model_id) = model_id
+            && !account.terminal_models.contains(model_id)
+        {
+            account.disabled_models.remove(model_id);
         }
         account.circuit_breaker.record_success();
     }

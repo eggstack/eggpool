@@ -373,10 +373,8 @@ fn decrement_active(book: &mut ClaimBook, account_name: &str) -> Result<(), Clai
 }
 
 fn release_probe(health: &Option<HealthManager>, account_name: &str, owns_probe: bool) {
-    if owns_probe {
-        if let Some(health) = health {
-            health.release_request(account_name);
-        }
+    if owns_probe && let Some(health) = health {
+        health.release_request(account_name);
     }
 }
 

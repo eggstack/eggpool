@@ -27,6 +27,9 @@ fn w012_oracle() -> Value {
     serde_json::from_str(W012_OBSERVATIONS).expect("committed W012 fixture is valid JSON")
 }
 
+// `as_chunks` is newer than the Rust 1.85 MSRV; retain the equivalent
+// `chunks_exact` fixture operation while the project supports that MSRV.
+#[allow(clippy::chunks_exact_to_as_chunks)]
 fn hex_bytes(hex: &str) -> Vec<u8> {
     hex.as_bytes()
         .chunks_exact(2)

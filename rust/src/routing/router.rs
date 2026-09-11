@@ -702,14 +702,14 @@ impl RoutingRouter {
             attempts.retain(|_, timestamp| {
                 now - *timestamp < self.state.recovery_min_interval_s.max(1.0)
             });
-            if attempts.len() >= RECOVERY_KEY_HARD_CAP && !attempts.contains_key(&account) {
-                if let Some(oldest) = attempts
+            if attempts.len() >= RECOVERY_KEY_HARD_CAP
+                && !attempts.contains_key(&account)
+                && let Some(oldest) = attempts
                     .iter()
                     .min_by(|left, right| left.1.total_cmp(right.1))
                     .map(|(name, _)| name.clone())
-                {
-                    attempts.remove(&oldest);
-                }
+            {
+                attempts.remove(&oldest);
             }
             let allowed = attempts
                 .get(&account)

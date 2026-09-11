@@ -128,12 +128,11 @@ impl BackupService {
         let started = std::time::Instant::now();
         validate_source_file(&self.paths.config, MAX_CONFIG_BYTES, CONFIG_BASENAME)?;
         validate_source_file(&self.paths.database, MAX_DATABASE_BYTES, DB_BASENAME)?;
-        if self.include_env {
-            if let Some(env) = &self.paths.env {
-                if env.exists() {
-                    validate_source_file(env, MAX_ENV_BYTES, ENV_BASENAME)?;
-                }
-            }
+        if self.include_env
+            && let Some(env) = &self.paths.env
+            && env.exists()
+        {
+            validate_source_file(env, MAX_ENV_BYTES, ENV_BASENAME)?;
         }
         ensure_private_directory(&self.paths.output_dir)?;
         let staging = private_staging_dir(&self.paths.output_dir, "backup")?;

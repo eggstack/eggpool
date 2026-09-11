@@ -1250,14 +1250,13 @@ pub struct TaskShutdownReport {
 async fn stop_task(task: Arc<TaskState>) {
     cancel_task(&task);
     let join = task.join.lock().expect("task join lock").take();
-    if let Some(mut join) = join {
-        if tokio::time::timeout(DEFAULT_SHUTDOWN_TIMEOUT, &mut join)
+    if let Some(mut join) = join
+        && tokio::time::timeout(DEFAULT_SHUTDOWN_TIMEOUT, &mut join)
             .await
             .is_err()
-        {
-            join.abort();
-            let _ = join.await;
-        }
+    {
+        join.abort();
+        let _ = join.await;
     }
     task.running.store(false, Ordering::Release);
 }

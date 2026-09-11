@@ -596,15 +596,15 @@ pub fn uninstall<R: CommandRunner>(
     .filter(|path| path.exists())
     .cloned()
     .collect::<Vec<_>>();
-    if let Some(config_dir) = &targets.config_dir {
-        if config_dir.exists() {
-            leftovers.push(config_dir.clone());
-        }
+    if let Some(config_dir) = &targets.config_dir
+        && config_dir.exists()
+    {
+        leftovers.push(config_dir.clone());
     }
-    if let Some(backup_dir) = &targets.backup_dir {
-        if backup_dir.exists() {
-            leftovers.push(backup_dir.clone());
-        }
+    if let Some(backup_dir) = &targets.backup_dir
+        && backup_dir.exists()
+    {
+        leftovers.push(backup_dir.clone());
     }
     Ok(leftovers)
 }

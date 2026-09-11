@@ -430,10 +430,10 @@ fn reasoning_for_responses(request: &CanonicalRequest) -> Option<Value> {
     if request.reasoning.requested != Some(true) {
         return None;
     }
-    if request.reasoning.mode == ReasoningMode::Effort {
-        if let Some(effort) = &request.reasoning.effort {
-            return Some(json!({"effort":effort}));
-        }
+    if request.reasoning.mode == ReasoningMode::Effort
+        && let Some(effort) = &request.reasoning.effort
+    {
+        return Some(json!({"effort":effort}));
     }
     None
 }
@@ -493,31 +493,31 @@ fn encode_generate_content_request(
     }
     let mut generation = Map::new();
     add_generation_controls(&mut generation, request, true);
-    if let Some(format) = &request.response_format {
-        if matches!(
+    if let Some(format) = &request.response_format
+        && matches!(
             format.get("type").and_then(Value::as_str),
             Some("json_object") | Some("json_schema")
-        ) {
-            generation.insert(
-                "responseMimeType".into(),
-                Value::String("application/json".into()),
-            );
-            if let Some(schema) = format
-                .get("json_schema")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("schema"))
-                .and_then(Value::as_object)
-            {
-                generation.insert("responseSchema".into(), Value::Object(schema.clone()));
-            }
+        )
+    {
+        generation.insert(
+            "responseMimeType".into(),
+            Value::String("application/json".into()),
+        );
+        if let Some(schema) = format
+            .get("json_schema")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("schema"))
+            .and_then(Value::as_object)
+        {
+            generation.insert("responseSchema".into(), Value::Object(schema.clone()));
         }
     }
     if request.reasoning.requested == Some(false) {
         generation.insert("thinkingConfig".into(), json!({"thinkingBudget":0}));
-    } else if request.reasoning.mode == ReasoningMode::FixedBudget {
-        if let Some(budget) = request.reasoning.budget_tokens {
-            generation.insert("thinkingConfig".into(), json!({"thinkingBudget":budget}));
-        }
+    } else if request.reasoning.mode == ReasoningMode::FixedBudget
+        && let Some(budget) = request.reasoning.budget_tokens
+    {
+        generation.insert("thinkingConfig".into(), json!({"thinkingBudget":budget}));
     }
     if !generation.is_empty() {
         out.insert("generationConfig".into(), Value::Object(generation));
@@ -538,10 +538,10 @@ fn encode_generate_content_request(
                 .into(),
             ),
         );
-        if choice.mode == ToolChoiceMode::Function {
-            if let Some(name) = &choice.function_name {
-                config.insert("allowedFunctionNames".into(), json!([name]));
-            }
+        if choice.mode == ToolChoiceMode::Function
+            && let Some(name) = &choice.function_name
+        {
+            config.insert("allowedFunctionNames".into(), json!([name]));
         }
         out.insert("toolConfig".into(), json!({"functionCallingConfig":config}));
     }
@@ -690,11 +690,10 @@ fn gemini_parts(
                 Value::String(block.name.clone().unwrap_or_default()),
             );
             call.insert("args".into(), tool_args(block)?);
-            if preserve_call_ids {
-                if let Some(call_id) = &block.call_id {
+            if preserve_call_ids
+                && let Some(call_id) = &block.call_id {
                     call.insert("id".into(), Value::String(call_id.clone()));
                 }
-            }
             Ok(json!({"functionCall":call}))
         }
         CanonicalBlockKind::ToolResult => {
@@ -703,11 +702,10 @@ fn gemini_parts(
                 "result".into(),
                 Value::String(block.text.clone().unwrap_or_default()),
             );
-            if preserve_call_ids {
-                if let Some(call_id) = &block.call_id {
+            if preserve_call_ids
+                && let Some(call_id) = &block.call_id {
                     response.insert("id".into(), Value::String(call_id.clone()));
                 }
-            }
             Ok(json!({"functionResponse":{"name":block.name.clone().unwrap_or_default(), "response":response}}))
         }
         CanonicalBlockKind::Refusal => Ok(json!({"text":block.text.clone().unwrap_or_default()})),
