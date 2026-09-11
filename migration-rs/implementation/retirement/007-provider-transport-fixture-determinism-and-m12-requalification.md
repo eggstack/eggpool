@@ -1,6 +1,6 @@
 # P007 — Provider Transport Fixture Determinism and M12 Requalification
 
-Status: dependency-ready corrective plan
+Status: accepted/closed 2026-09-11; see `migration-rs/closure/retirement/007-status.md`
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

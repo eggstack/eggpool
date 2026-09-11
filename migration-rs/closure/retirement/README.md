@@ -1,6 +1,6 @@
 # M12 Python Retirement Closure Records
 
-Status: corrective requalification open after post-P006 hosted-CI failure; P007 is current corrective closure authority when accepted
+Status: M12 closed after accepted P007; P007 is the current closure authority
 
 This directory stores append-only closure evidence for M12 Python application/runtime retirement and final Rust-only migration closure.
 
@@ -20,4 +20,4 @@ Each record must include implementation commit(s), exact verification commands/r
 
 Historical M11/M10 records are never rewritten to make retirement appear successful. A failed M12 gate receives a new corrective P-plan and closure record.
 
-`006-status.md` remains append-only and records what the local P006 qualification proved. Because hosted CI subsequently failed the provider-transport identical-proxy account-isolation test, P006 is not the current final closure authority. Only an accepted `007-status.md` that records root-cause resolution and a successful hosted CI run on the corrected tree may restore M12 closure.
+`006-status.md` remains append-only and records what the local P006 qualification proved. Because hosted CI subsequently failed the provider-transport identical-proxy account-isolation test, accepted `007-status.md` records the root-cause resolution and successful hosted CI run that restored M12 closure.

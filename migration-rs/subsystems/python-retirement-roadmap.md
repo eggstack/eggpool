@@ -1,6 +1,6 @@
 # M12 Python Retirement Roadmap
 
-Status: corrective requalification open after post-P006 hosted-CI failure; P001-P006 remain accepted historical evidence; P007 dependency-ready
+Status: closed after accepted P007; P001-P006 remain accepted historical evidence
 
 Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77` (M11 closed; provisional M12 boundary planning)
 
@@ -85,7 +85,7 @@ P001 final Python reference/fixture/disposition freeze
  -> P007 provider-transport fixture determinism + hosted-CI requalification
 ```
 
-Only `../registry.md` authorizes implementation. P001-P006 remain accepted and append-only. A hosted-CI failure discovered after P006 invalidated P006 as the current final closure authority without erasing what its local qualification proved. P007 is the sole dependency-ready corrective plan.
+Only `../registry.md` authorizes implementation. P001-P006 remain accepted and append-only. A hosted-CI failure discovered after P006 invalidated P006 as the current final closure authority without erasing what its local qualification proved. P007 is accepted/closed and is the current M12 closure authority.
 
 ## P001 — Reference boundary and fixture freeze
 
@@ -127,7 +127,7 @@ P006 is **accepted historical closure evidence**. Its local qualification remain
 
 Root-cause the hosted-CI `ReadTimeout` in the identical-proxy account-isolation regression, correct the fixture or smallest production defect without loosening production timeout policy, repeatedly qualify both account-isolation paths, rerun the complete Rust/retirement gates, and require a successful hosted GitHub Actions CI run before re-closing M12.
 
-Exit: provider/account isolation is deterministic locally and in hosted CI, all broad qualification gates are green, and no unresolved high/medium finding remains. P007 then supersedes P006 only as the **current M12 closure authority**; P006 remains append-only historical evidence.
+Exit: provider/account isolation is deterministic locally and in hosted CI, all broad qualification gates are green, and no unresolved high/medium finding remains. **Accepted/closed by P007; P007 supersedes P006 only as the current M12 closure authority, while P006 remains append-only historical evidence.**
 
 ## Qualification posture
 
@@ -149,8 +149,8 @@ No broad new target matrix or live-provider campaign is required unless the corr
 
 ## M12 closure
 
-P006 remains an accepted historical record. Current final closure is reopened by the post-P006 hosted-CI failure and may be restored only by accepted P007.
+P006 remains an accepted historical record. Current final closure was reopened by the post-P006 hosted-CI failure and is restored by accepted P007.
 
-The P007 closure record must be written to `closure/retirement/007-status.md` and must record the root-cause classification plus a successful hosted CI run for the corrected tree. Until then, M12 is in corrective requalification and the migration program has one dependency-ready plan: P007.
+The accepted P007 closure record is `closure/retirement/007-status.md`; it records the root-cause classification plus the successful hosted CI run for the corrected tree. M12 is closed and the migration program has no dependency-ready implementation plan.
 
 After accepted P007 re-closure, further EggPool work returns to normal product/maintenance roadmaps rather than continuing the migration milestone series. No M13 plan is auto-created.

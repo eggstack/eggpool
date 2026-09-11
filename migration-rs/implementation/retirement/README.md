@@ -1,6 +1,6 @@
 # M12 Python Retirement Implementation Plans
 
-Status: corrective requalification open; P001-P006 accepted historical evidence; P007 dependency-ready
+Status: M12 closed after accepted P007; P001-P006 remain accepted historical evidence
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 
@@ -18,9 +18,9 @@ These plans retire the historical Python application from the **current** produc
 4. [P004 — Oracle, differential, test, and Python tooling retirement](004-oracle-differential-test-and-python-tooling-retirement.md) — **accepted/closed**.
 5. [P005 — Repository, installer, release, and documentation consolidation](005-repository-installer-release-and-documentation-consolidation.md) — **accepted/closed**.
 6. [P006 — Rust-only qualification and M12 closure](006-rust-only-qualification-and-m12-closure.md) — **accepted historical closure evidence**.
-7. [P007 — Provider transport fixture determinism and M12 requalification](007-provider-transport-fixture-determinism-and-m12-requalification.md) — **dependency-ready corrective plan**.
+7. [P007 — Provider transport fixture determinism and M12 requalification](007-provider-transport-fixture-determinism-and-m12-requalification.md) — **accepted/closed; current M12 closure authority**.
 
-Only `migration-rs/registry.md` authorizes implementation. Hosted CI exposed a provider-transport account-isolation failure after P006, so P006 remains append-only evidence but is no longer the current final closure authority. P007 is the sole dependency-ready M12 plan.
+Only `migration-rs/registry.md` authorizes implementation. Hosted CI exposed a provider-transport account-isolation failure after P006; accepted P007 is the current final closure authority while P006 remains append-only historical evidence.
 
 ## Hard boundaries
 
@@ -39,4 +39,4 @@ Only `migration-rs/registry.md` authorizes implementation. Hosted CI exposed a p
 
 Each accepted plan writes `migration-rs/closure/retirement/<NNN>-status.md` with implementation commit(s), exact verification, retained/removed evidence, unresolved findings, and the registry transition it authorizes.
 
-`006-status.md` remains historical accepted evidence for the local P006 qualification. Only accepted `007-status.md`, including a successful hosted CI run on the corrected tree, may restore current M12 closure authority after the post-P006 CI failure.
+`006-status.md` remains historical accepted evidence for the local P006 qualification. Accepted `007-status.md` records the successful hosted CI run and restores current M12 closure authority after the post-P006 CI failure.

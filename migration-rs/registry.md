@@ -32,13 +32,13 @@ Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77`
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
 | M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | closed after accepted Q012 corrective pass | Q012 closed |
 | M11 Rust cutover/package/versioning | [cutover-roadmap](subsystems/cutover-roadmap.md) | closed after accepted K012/K014 recovery chain | M11 closed |
-| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **corrective requalification open after P006 hosted-CI failure** | **P007 dependency-ready** |
+| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **closed after accepted P007** | **P007 closed** |
 
 ## Dependency-ready implementation plans
 
-- **M12-P007 — [Provider transport fixture determinism and M12 requalification](implementation/retirement/007-provider-transport-fixture-determinism-and-m12-requalification.md).** P001-P006 remain accepted append-only evidence; P007 is required because hosted CI failed the identical-proxy account-isolation test after P006 local qualification.
+- No migration implementation plan is dependency-ready. M12-P007 is accepted/closed below as the corrective closure authority after the hosted-CI account-isolation failure.
 
-No other migration implementation plan is dependency-ready. P007 is a bounded corrective pass, not a new migration phase or M13 milestone.
+P007 was a bounded corrective pass, not a new migration phase or M13 milestone. Subsequent work returns to ordinary product and maintenance roadmaps.
 
 ## M12 implementation closure handoffs
 
@@ -50,7 +50,7 @@ No other migration implementation plan is dependency-ready. P007 is a bounded co
 | M12-P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | invariant/polish | `8980616cda2b92ef0a449369806688536e2b8e10` | [accepted/closed](closure/retirement/004-status.md) |
 | M12-P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | capability/polish/invariant | `c2f8fdd` | [accepted/closed](closure/retirement/005-status.md) |
 | M12-P006 | [Rust-only qualification and M12 closure](implementation/retirement/006-rust-only-qualification-and-m12-closure.md) | invariant/capability | `9916071` qualification baseline; closure commit | [accepted historical closure evidence](closure/retirement/006-status.md) |
-| M12-P007 | [Provider transport fixture determinism and M12 requalification](implementation/retirement/007-provider-transport-fixture-determinism-and-m12-requalification.md) | invariant/corrective/polish | pending | pending `closure/retirement/007-status.md` |
+| M12-P007 | [Provider transport fixture determinism and M12 requalification](implementation/retirement/007-provider-transport-fixture-determinism-and-m12-requalification.md) | invariant/corrective/polish | `967184b` (with `b0ad7e5`, `252341e`) | [accepted/closed; current M12 authority](closure/retirement/007-status.md) |
 
 ## Recently closed corrective plans
 
@@ -60,7 +60,7 @@ No other migration implementation plan is dependency-ready. P007 is a bounded co
 | K014 | [PyPI Trusted Publisher configuration and recovery completion](implementation/cutover/014-pypi-trusted-publisher-configuration-and-recovery-completion.md) | accepted/closed; [closure](closure/cutover/014-status.md) |
 | K012 | [Aggregate M11 cutover qualification and closure](implementation/cutover/012-aggregate-m11-cutover-qualification-and-closure.md) | accepted/closed; [closure](closure/cutover/012-status.md) |
 
-Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 P001-P006 remain accepted append-only evidence, but P006 is no longer the current final closure authority after hosted CI failed the provider-transport account-isolation test on the closing trees. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions remain preserved.
+Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 P001-P006 remain accepted append-only evidence, and accepted P007 is the current final closure authority after correcting the hosted-CI provider-transport account-isolation failure. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions remain preserved.
 
 ## Completed implementation plans
 
@@ -203,16 +203,16 @@ M12 removes the historical Python application from the current production/runtim
 | P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | **accepted/closed** |
 | P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | **accepted/closed** |
 | P006 | [Rust-only qualification and M12 closure](implementation/retirement/006-rust-only-qualification-and-m12-closure.md) | **accepted historical closure evidence** |
-| P007 | [Provider transport fixture determinism and M12 requalification](implementation/retirement/007-provider-transport-fixture-determinism-and-m12-requalification.md) | **dependency-ready** |
+| P007 | [Provider transport fixture determinism and M12 requalification](implementation/retirement/007-provider-transport-fixture-determinism-and-m12-requalification.md) | **accepted/closed; current closure authority** |
 
-ADR-0005 is accepted. P001-P006 remain accepted append-only evidence. The hosted-CI provider-transport failure discovered after P006 reopens only the final M12 closure authority; P007 is the current corrective plan.
+ADR-0005 is accepted. P001-P006 remain accepted append-only evidence. The hosted-CI provider-transport failure discovered after P006 reopened only the final M12 closure authority; accepted P007 is now the current corrective closure authority.
 
 Historical public Python releases are immutable external artifacts. Compatible explicit package-managed historical targets remain supported, while latest/default resolution and all current/future publication remain Rust-only.
 
 ## Future work and block state
 
-No post-M12 migration milestone is planned. P007 is a bounded corrective requalification required before governance can return to ordinary EggPool product/maintenance planning. Failed P007 closure gates create another bounded corrective P-plan rather than a new broad migration phase.
+No post-M12 migration milestone is planned. P007 completed the bounded corrective requalification, and governance returns to ordinary EggPool product/maintenance planning. Any future failed closure gate would require a bounded corrective P-plan rather than a new broad migration phase.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 P001-P006 remain accepted evidence, but final M12 closure is under corrective requalification with P007 as the sole dependency-ready plan. Accepted P007 may re-close M12; no M13 milestone is implied.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, M11 K001-K014, and M12 P001-P007 are closed. P001-P006 remain accepted historical evidence; accepted P007 is the current M12 closure authority. No migration implementation plan is dependency-ready and no M13 milestone is implied.
