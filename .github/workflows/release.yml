@@ -55,7 +55,7 @@ jobs:
         with:
           python-version: "3.11"
       - id: identity
-    name: validate release tag and workflow contract
+        name: validate release tag and workflow contract
         env:
           RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
