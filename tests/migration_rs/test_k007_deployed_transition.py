@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import subprocess
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,6 +14,7 @@ import pytest
 
 from scripts.qualification_deployed_transition import (
     bounded,
+    cleanup_personal_user,
     main,
     write_unit,
 )
@@ -70,3 +72,41 @@ def test_k007_unit_uses_one_stable_executable_and_redacts_output(
     assert str(tmp_path / "venv/bin/eggpool") in text
     assert "api_key" not in text
     assert bounded("Bearer q007-provider-key token=secret") == "<redacted>"
+
+    personal_unit = tmp_path / "personal.service"
+    write_unit(
+        personal_unit,
+        tmp_path / "venv/bin/eggpool",
+        tmp_path / "config.toml",
+        "operator",
+        tmp_path / "home",
+        include_identity=False,
+        wanted_by="default.target",
+    )
+    personal_text = personal_unit.read_text(encoding="utf-8")
+    assert "User=operator" not in personal_text
+    assert "Group=operator" not in personal_text
+    assert "WantedBy=default.target" in personal_text
+
+
+def test_k007_personal_cleanup_disables_linger_before_user_delete() -> None:
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[str]]] = []
+
+        def run(
+            self, name: str, argv: list[str], *, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            del check
+            self.calls.append((name, argv))
+            return subprocess.CompletedProcess(argv, 0)
+
+    runner = RecordingRunner()
+    cleanup_personal_user(runner, "k007-test")  # type: ignore[arg-type]
+
+    assert [name for name, _ in runner.calls] == [
+        "disable-linger",
+        "terminate-user",
+        "user-delete",
+    ]
+    assert runner.calls[-1][1] == ["userdel", "-r", "k007-test"]

@@ -31,6 +31,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -220,8 +221,18 @@ def write_config(path: Path, database: Path, backup: Path, port: int) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def write_unit(path: Path, binary: Path, config: Path, user: str, home: Path) -> str:
+def write_unit(
+    path: Path,
+    binary: Path,
+    config: Path,
+    user: str,
+    home: Path,
+    *,
+    include_identity: bool = True,
+    wanted_by: str = "multi-user.target",
+) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
+    identity = [f"User={user}", f"Group={user}"] if include_identity else []
     content = "\n".join(
         [
             "[Unit]",
@@ -230,8 +241,7 @@ def write_unit(path: Path, binary: Path, config: Path, user: str, home: Path) ->
             "",
             "[Service]",
             "Type=simple",
-            f"User={user}",
-            f"Group={user}",
+            *identity,
             f"ExecStart={binary} --config {config} serve --verbose",
             f"WorkingDirectory={home}",
             f"Environment=HOME={home}",
@@ -241,7 +251,7 @@ def write_unit(path: Path, binary: Path, config: Path, user: str, home: Path) ->
             "TimeoutStopSec=15",
             "",
             "[Install]",
-            "WantedBy=multi-user.target",
+            f"WantedBy={wanted_by}",
             "",
         ]
     )
@@ -254,6 +264,18 @@ def service_command(mode: str, user: str, env: dict[str, str], *args: str) -> li
     if mode == "production":
         return ["systemctl", *args]
     return user_command(user, env, ["systemctl", "--user", *args])
+
+
+def cleanup_personal_user(runner: Runner, user: str) -> None:
+    """Stop and remove the disposable personal-mode systemd user cleanly."""
+    runner.run("disable-linger", ["loginctl", "disable-linger", user], check=False)
+    runner.run("terminate-user", ["loginctl", "terminate-user", user], check=False)
+    argv = ["userdel", "-r", user]
+    for attempt in range(10):
+        result = runner.run("user-delete", argv, check=False)
+        if result.returncode == 0 or attempt == 9:
+            return
+        time.sleep(0.5)
 
 
 def install_initial(
@@ -277,7 +299,6 @@ def install_initial(
                 "PIPX_HOME": str(PRODUCTION_PIPX_HOME),
                 "PIPX_BIN_DIR": "/usr/local/bin",
                 "PIP_FIND_LINKS": str(wheelhouse),
-                "PIP_NO_INDEX": "1",
             }
         )
         runner.run(
@@ -296,7 +317,6 @@ def install_initial(
                 "-m",
                 "pip",
                 "install",
-                "--no-index",
                 "--find-links",
                 str(wheelhouse),
                 str(python_wheel),
@@ -323,7 +343,6 @@ def install_leg(
                 "PIPX_HOME": str(PRODUCTION_PIPX_HOME),
                 "PIPX_BIN_DIR": "/usr/local/bin",
                 "PIP_FIND_LINKS": str(wheelhouse),
-                "PIP_NO_INDEX": "1",
             }
         )
         runner.run(
@@ -340,7 +359,6 @@ def install_leg(
                     "-m",
                     "pip",
                     "install",
-                    "--no-index",
                     "--find-links",
                     str(wheelhouse),
                     str(wheel),
@@ -387,19 +405,24 @@ def run_cycle(
                 ["useradd", "-m", "-d", str(user_home), "-s", "/bin/sh", user],
             )
             uid = pwd.getpwnam(user).pw_uid
-            (root / "venv").mkdir()
-            runner.run("venv", ["python3", "-m", "venv", str(root / "venv")])
             shutil.chown(root, user=user, group=user)
-            shutil.chown(root / "venv", user=user, group=user)
             env = {
                 "HOME": str(user_home),
                 "XDG_CONFIG_HOME": str(user_home / ".config"),
                 "XDG_DATA_HOME": str(user_home / ".local/share"),
                 "XDG_RUNTIME_DIR": f"/run/user/{uid}",
                 "PATH": f"{root / 'venv/bin'}:/usr/bin:/bin",
-                "PIP_NO_INDEX": "1",
                 "TZ": "UTC",
             }
+            runner.run(
+                "venv",
+                user_command(
+                    user,
+                    env,
+                    ["python3", "-m", "venv", str(root / "venv")],
+                ),
+                env=os.environ.copy(),
+            )
             runner.run("linger", ["loginctl", "enable-linger", user], check=False)
         else:
             user = "eggpool"
@@ -408,7 +431,6 @@ def run_cycle(
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PIPX_HOME": str(PRODUCTION_PIPX_HOME),
                 "PIPX_BIN_DIR": "/usr/local/bin",
-                "PIP_NO_INDEX": "1",
                 "TZ": "UTC",
             }
             runner.run(
@@ -431,14 +453,17 @@ def run_cycle(
                 Path("/var/backups/eggpool"),
             ):
                 directory.mkdir(parents=True)
+                shutil.chown(directory, user=user, group=user)
         config.parent.mkdir(parents=True, exist_ok=True)
         database.parent.mkdir(parents=True, exist_ok=True)
         backup.mkdir(parents=True, exist_ok=True)
         write_config(config, database, backup, port)
         python = root / "venv/bin/python"
         if mode == "personal":
+            shutil.chown(config.parent.parent, user=user, group=user)
             shutil.chown(config.parent, user=user, group=user)
             shutil.chown(config, user=user, group=user)
+            shutil.chown(database.parent.parent.parent, user=user, group=user)
             shutil.chown(database.parent, user=user, group=user)
             shutil.chown(backup, user=user, group=user)
         installed, manager_python = install_initial(
@@ -446,7 +471,17 @@ def run_cycle(
         )
         if mode == "personal":
             unit = user_home / ".config/systemd/user/eggpool.service"
-            unit_hash = write_unit(unit, installed, config, user, user_home)
+            unit_hash = write_unit(
+                unit,
+                installed,
+                config,
+                user,
+                user_home,
+                include_identity=False,
+                wanted_by="default.target",
+            )
+            shutil.chown(unit.parent, user=user, group=user)
+            shutil.chown(unit, user=user, group=user)
             runner.run(
                 "daemon-reload",
                 service_command(mode, user, env, "daemon-reload"),
@@ -553,7 +588,7 @@ def run_cycle(
             except KeyError:
                 pass
             else:
-                runner.run("user-delete", ["userdel", "-r", user], check=False)
+                cleanup_personal_user(runner, user)
         report["commands"] = runner.commands
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
@@ -586,12 +621,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     except QualificationError as error:
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        prior: dict[str, Any] = {}
+        with suppress(OSError, json.JSONDecodeError):
+            prior = json.loads(args.output.read_text(encoding="utf-8"))
         args.output.write_text(
             json.dumps(
                 {
                     "schema": "m11-k007.v1",
                     "status": "blocked",
                     "reason": bounded(str(error)),
+                    "commands": prior.get("commands", []),
                 },
                 indent=2,
             )
