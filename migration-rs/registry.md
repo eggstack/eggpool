@@ -35,9 +35,9 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| K007 | [Deployed-service cross-era transition and recovery](implementation/cutover/007-deployed-service-cross-era-transition-and-recovery.md) | invariant/capability | accepted K006 | **ready for handoff** |
+| K007 | [Deployed-service cross-era transition and recovery](implementation/cutover/007-deployed-service-cross-era-transition-and-recovery.md) | invariant/capability | accepted K006 | **conditionally closed; real Linux evidence required** |
 
-Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is now the sole dependency-ready M11 plan. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is conditionally closed pending mandatory real Linux evidence. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -179,8 +179,8 @@ Q012 corrects and requalifies only this dashboard/evidence boundary, plus any na
 
 ## Future work and block state
 
-M11 Rust cutover is active. K001-K006 are closed; K007 is promoted as the sole dependency-ready plan. K008-K012 remain queued behind their direct predecessors, and K012 alone may close M11. M12 remains sequenced behind M11.
+M11 Rust cutover is active. K001-K006 are closed; K007 is conditionally closed pending its mandatory real-Linux deployment cycle. K008-K012 remain queued/blocked behind their direct predecessors, and K012 alone may close M11. M12 remains sequenced behind M11.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K006 are closed with K007 ready; K008-K012 remain blocked behind their direct predecessors.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K006 are closed; K007 is conditionally closed pending real Linux evidence; K008-K012 remain blocked behind their direct predecessors.
