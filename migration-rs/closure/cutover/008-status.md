@@ -21,7 +21,7 @@ production publication.
 
 ## Implementation
 
-- `6029e33` — dedicated K008 release workflow, immutable candidate/publication
+- `fcb9956` — dedicated K008 release workflow, immutable candidate/publication
   validators, deterministic supply-chain tests, closure evidence, and K009
   dependency promotion.
 - `release.yml` — dedicated tag/manual workflow with separate validation,
