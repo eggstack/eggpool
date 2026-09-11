@@ -1,6 +1,10 @@
 # K006 — Quick Installer and Existing-Install Adoption Cutover
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-11
+
+Implementation commit: `d8bddcb1f931bbdc0f2682213c300fe3e976d124`
+
+Closure record: `migration-rs/closure/cutover/006-status.md`
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

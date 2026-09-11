@@ -1,6 +1,6 @@
 # M11 Rust Cutover, Packaging, Release, and Cross-Era Versioning Roadmap
 
-Status: active implementation; K006 dependency-ready; K001-K005 closed
+Status: active implementation; K007 dependency-ready; K001-K006 closed
 
 Repository baseline for planning: `aec794a060f6a9e71853a515fe50992446c41ebd` (accepted Q012 / M10 closure).
 
@@ -75,8 +75,8 @@ K001 cutover/package/version-catalog contract freeze
  -> K003 supported wheel + raw release artifact matrix/catalog
  -> K004 install provenance + package-manager transition engine
  -> K005 cross-era exact upgrade/downgrade and rollback matrix (closed)
- -> K006 quick installer + existing-install adoption cutover (ready)
- -> K007 deployed-service cross-era transition and recovery
+ -> K006 quick installer + existing-install adoption cutover (closed)
+ -> K007 deployed-service cross-era transition and recovery (ready)
  -> K008 trusted publishing, attestations, and supply-chain release workflow
  -> K009 local wheelhouse/TestPyPI staged release rehearsal
  -> K010 public metadata/docs/default-channel release-candidate freeze
@@ -87,7 +87,7 @@ K001 cutover/package/version-catalog contract freeze
 M12 planning eligibility only after accepted K012 closure
 ```
 
-Only `../registry.md` authorizes implementation. K006 is the sole dependency-ready plan after K005 closure.
+Only `../registry.md` authorizes implementation. K007 is the sole dependency-ready plan after K006 closure.
 
 ## K001 — Cutover/package/version-catalog contract freeze
 

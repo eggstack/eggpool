@@ -1,6 +1,6 @@
 # K007 — Deployed-Service Cross-Era Transition and Recovery
 
-Status: queued; blocked on accepted K006
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

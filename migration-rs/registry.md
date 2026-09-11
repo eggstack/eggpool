@@ -35,9 +35,9 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| K006 | [Quick installer and existing-install adoption cutover](implementation/cutover/006-quick-installer-and-existing-install-adoption-cutover.md) | capability/invariant | accepted K005 | **ready for handoff** |
+| K007 | [Deployed-service cross-era transition and recovery](implementation/cutover/007-deployed-service-cross-era-transition-and-recovery.md) | invariant/capability | accepted K006 | **ready for handoff** |
 
-Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is now the sole dependency-ready M11 plan. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is now the sole dependency-ready M11 plan. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -83,6 +83,7 @@ Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/pack
 | K003 | [Supported wheel and raw release artifact matrix](implementation/cutover/003-supported-wheel-and-raw-artifact-matrix.md) | infrastructure/capability | `a15adc4` + follow-up qualification commits | [closed](closure/cutover/003-status.md) |
 | K004 | [Install provenance and package-manager transition engine](implementation/cutover/004-install-provenance-and-package-manager-transition-engine.md) | invariant/capability | `b33658be47d337c2c8a875b41d50ff436eb0f10b` | [closed](closure/cutover/004-status.md) |
 | K005 | [Cross-era exact version transitions and rollback](implementation/cutover/005-cross-era-exact-version-transitions-and-rollback.md) | invariant/capability | `393745ba5c8afe46024923922f360672ee92aa6e` | [closed](closure/cutover/005-status.md) |
+| K006 | [Quick installer and existing-install adoption cutover](implementation/cutover/006-quick-installer-and-existing-install-adoption-cutover.md) | capability/invariant | `d8bddcb1f931bbdc0f2682213c300fe3e976d124`, `aaad99b2f6e9f8f8ea67634a1fc2a54274e3b841` | [closed](closure/cutover/006-status.md) |
 | C001 | [Coordinator contract and deterministic failure corpus](implementation/coordinator/001-contract-and-failure-corpus-freeze.md) | invariant/infrastructure | `59eda5ab` | [closed](closure/coordinator/001-status.md) |
 | C002 | [Durable dispatch publication and lifecycle identity](implementation/coordinator/002-durable-dispatch-publication-and-lifecycle-identity.md) | invariant/capability | `8caae259` | [closed](closure/coordinator/002-status.md) |
 | C003 | [Runtime wire resolution and negotiation ownership](implementation/coordinator/003-runtime-wire-resolution-and-negotiation.md) | capability/invariant | `97a4846` | [historical closure](closure/coordinator/003-status.md) |
@@ -178,8 +179,8 @@ Q012 corrects and requalifies only this dashboard/evidence boundary, plus any na
 
 ## Future work and block state
 
-M11 Rust cutover is active. K001-K005 are closed; K006 is promoted as the sole dependency-ready plan. K007-K012 remain queued behind their direct predecessors, and K012 alone may close M11. M12 remains sequenced behind M11.
+M11 Rust cutover is active. K001-K006 are closed; K007 is promoted as the sole dependency-ready plan. K008-K012 remain queued behind their direct predecessors, and K012 alone may close M11. M12 remains sequenced behind M11.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K005 are closed with K006 ready; K007-K012 remain blocked behind their direct predecessors.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K006 are closed with K007 ready; K008-K012 remain blocked behind their direct predecessors.

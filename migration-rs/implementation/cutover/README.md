@@ -1,6 +1,6 @@
 # M11 Rust Cutover Implementation Plans
 
-Status: active; K001-K005 closed; K006 dependency-ready
+Status: active; K001-K006 closed; K007 dependency-ready
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -15,15 +15,15 @@ These plans make the qualified Rust implementation the canonical public runtime 
 3. [K003 — Supported wheel and raw release artifact matrix](003-supported-wheel-and-raw-artifact-matrix.md) — **accepted/closed**.
 4. [K004 — Install provenance and package-manager transition engine](004-install-provenance-and-package-manager-transition-engine.md) — **accepted/closed**.
 5. [K005 — Cross-era exact version transitions and rollback](005-cross-era-exact-version-transitions-and-rollback.md) — **accepted/closed**.
-6. [K006 — Quick installer and existing-install adoption cutover](006-quick-installer-and-existing-install-adoption-cutover.md) — **ready for handoff**.
-7. [K007 — Deployed-service cross-era transition and recovery](007-deployed-service-cross-era-transition-and-recovery.md) — queued behind K006.
+6. [K006 — Quick installer and existing-install adoption cutover](006-quick-installer-and-existing-install-adoption-cutover.md) — **accepted/closed**.
+7. [K007 — Deployed-service cross-era transition and recovery](007-deployed-service-cross-era-transition-and-recovery.md) — **ready for handoff**.
 8. [K008 — Trusted publishing, attestations, and release supply chain](008-trusted-publishing-attestations-and-release-supply-chain.md) — queued behind K007.
 9. [K009 — Local wheelhouse and TestPyPI staged release rehearsal](009-wheelhouse-testpypi-staged-release-rehearsal.md) — queued behind K008.
 10. [K010 — Public metadata, documentation, and release-candidate freeze](010-public-metadata-docs-and-release-candidate-freeze.md) — queued behind K009.
 11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — queued behind K010 and explicit production publish authority.
 12. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — queued behind K011.
 
-Only `migration-rs/registry.md` authorizes implementation. K006 is now the sole dependency-ready plan.
+Only `migration-rs/registry.md` authorizes implementation. K007 is now the sole dependency-ready plan.
 
 ## Hard boundaries
 
