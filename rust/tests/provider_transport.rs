@@ -777,11 +777,13 @@ impl FixtureServer {
         let tls_certificate = tls_material.as_ref().map(|material| material.2.clone());
         let connection_count = Arc::clone(&connections);
         let request_log = Arc::clone(&requests);
+        let served_requests = Arc::new(AtomicUsize::new(0));
+        let served_request_count = Arc::clone(&served_requests);
         let thread = thread::spawn(move || {
             let tls_config = tls_material.as_ref().map(server_tls_config);
-            let mut served = 0;
+            let mut workers = Vec::new();
             let mut idle_deadline = Instant::now() + idle_timeout;
-            while served < expected_requests {
+            while served_request_count.load(Ordering::SeqCst) < expected_requests {
                 let (stream, _) = loop {
                     match listener.accept() {
                         Ok(connection) => break connection,
@@ -799,31 +801,25 @@ impl FixtureServer {
                     .set_nonblocking(false)
                     .expect("fixture stream blocking mode");
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .set_read_timeout(Some(Duration::from_millis(100)))
                     .expect("fixture read timeout");
                 connection_count.fetch_add(1, Ordering::SeqCst);
-                let mut stream = if let Some(config) = &tls_config {
-                    TestStream::Tls(Box::new(rustls::StreamOwned::new(
-                        ServerConnection::new(Arc::clone(config)).expect("server connection"),
+                let request_log = Arc::clone(&request_log);
+                let served_request_count = Arc::clone(&served_request_count);
+                let tls_config = tls_config.clone();
+                workers.push(thread::spawn(move || {
+                    serve_fixture_connection(
                         stream,
-                    )))
-                } else {
-                    TestStream::Plain(stream)
-                };
-                loop {
-                    let Some(request) = read_request(&mut stream) else {
-                        if tls {
-                            return;
-                        }
-                        break;
-                    };
-                    request_log.lock().unwrap().push(request);
-                    write_response(&mut stream, mode);
-                    served += 1;
-                    if served == expected_requests {
-                        break;
-                    }
-                }
+                        mode,
+                        expected_requests,
+                        tls_config,
+                        &request_log,
+                        &served_request_count,
+                    );
+                }));
+            }
+            for worker in workers {
+                worker.join().expect("fixture worker");
             }
         });
         Self {
@@ -865,12 +861,60 @@ impl FixtureServer {
     }
 }
 
+fn serve_fixture_connection(
+    stream: TcpStream,
+    mode: ResponseMode,
+    expected_requests: usize,
+    tls_config: Option<Arc<ServerConfig>>,
+    request_log: &Arc<Mutex<Vec<RequestObservation>>>,
+    served_requests: &Arc<AtomicUsize>,
+) {
+    let mut stream = if let Some(config) = tls_config {
+        TestStream::Tls(Box::new(rustls::StreamOwned::new(
+            ServerConnection::new(config).expect("server connection"),
+            stream,
+        )))
+    } else {
+        TestStream::Plain(stream)
+    };
+    loop {
+        if served_requests.load(Ordering::SeqCst) >= expected_requests {
+            break;
+        }
+        let Some(request) = read_request(&mut stream) else {
+            break;
+        };
+        request_log.lock().unwrap().push(request);
+        write_response(&mut stream, mode);
+        let served = served_requests.fetch_add(1, Ordering::SeqCst) + 1;
+        if served >= expected_requests {
+            break;
+        }
+    }
+}
+
 impl Drop for FixtureServer {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
             thread.join().expect("fixture thread");
         }
     }
+}
+
+#[test]
+fn fixture_shutdown_is_bounded_when_request_never_arrives() {
+    let started = Instant::now();
+    {
+        let _server = FixtureServer::http_with_idle_timeout(
+            ResponseMode::Normal,
+            1,
+            Duration::from_millis(50),
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "fixture shutdown exceeded bounded teardown"
+    );
 }
 
 enum TestStream {
@@ -1491,6 +1535,9 @@ async fn proxied_accounts_keep_separate_pools_even_with_identical_proxy_uris() {
     let second = pool
         .get_client("provider", Some("second"))
         .expect("second client");
+    // Keep the first account client alive while the second request is sent;
+    // the old serial accept/keep-alive fixture would leave this request
+    // waiting behind the first connection instead of proving pool isolation.
     let mut first_response = first
         .send(Method::GET, "/first", HeaderMap::new(), Bytes::new())
         .await
