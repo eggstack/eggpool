@@ -2,7 +2,7 @@
 
 Status: active
 
-Planning baseline: `66faa89826e82ea9c4bcbaf5045776fdd6e1e0f3`
+Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77`
 
 ## Canonical documents
 
@@ -17,10 +17,7 @@ Planning baseline: `66faa89826e82ea9c4bcbaf5045776fdd6e1e0f3`
 - [ADR-0002 — Rust runtime, HTTP stack, SSR parity, and implementation location](adrs/ADR-0002-rust-runtime-http-ssr.md)
 - [ADR-0003 — Eggress in-process outbound connector replaces pproxy](adrs/ADR-0003-eggress-outbound-connector.md)
 - [ADR-0004 — PyPI remains the canonical package channel; Rust ships as binary wheels](adrs/ADR-0004-pypi-rust-wheel-and-install-authority.md)
-
-## Proposed ADRs under review
-
-- [ADR-0005 — M12 pure-Rust production boundary and Python reference retirement](adrs/ADR-0005-m12-pure-rust-production-and-reference-retirement.md)
+- [ADR-0005 — M12 pure-Rust production boundary with immutable historical-version compatibility](adrs/ADR-0005-m12-pure-rust-production-and-reference-retirement.md)
 
 ## Subsystem roadmaps
 
@@ -33,14 +30,17 @@ Planning baseline: `66faa89826e82ea9c4bcbaf5045776fdd6e1e0f3`
 | M7 coordinator/retry/finalization | [coordinator-roadmap](subsystems/coordinator-roadmap.md) | closed after C011 | M7 closed |
 | M8 runtime generations/rehash/background lifecycle | [runtime-lifecycle-roadmap](subsystems/runtime-lifecycle-roadmap.md) | closed after R013 corrective pass | R013 closed |
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
-| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | **closed after accepted Q012 corrective pass** | **Q012 closed** |
-| M12 Python retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | planning review complete; P001 dependency-ready | P001 |
+| M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | closed after accepted Q012 corrective pass | Q012 closed |
+| M11 Rust cutover/package/versioning | [cutover-roadmap](subsystems/cutover-roadmap.md) | closed after accepted K012/K014 recovery chain | M11 closed |
+| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **implementation planning complete; P001 dependency-ready** | **P001 ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| M12-P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | invariant/infrastructure | M11 closed; ADR-0001–0004 | dependency-ready |
+| M12-P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | invariant/infrastructure | M11 closed; ADR-0001–0005 | **dependency-ready** |
+
+P002-P006 are registered but serially blocked by their direct predecessors. No destructive Python application removal is authorized until P001 closes.
 
 ## Recently closed corrective plans
 
@@ -50,7 +50,7 @@ Planning baseline: `66faa89826e82ea9c4bcbaf5045776fdd6e1e0f3`
 | K014 | [PyPI Trusted Publisher configuration and recovery completion](implementation/cutover/014-pypi-trusted-publisher-configuration-and-recovery-completion.md) | accepted/closed; [closure](closure/cutover/014-status.md) |
 | K012 | [Aggregate M11 cutover qualification and closure](implementation/cutover/012-aggregate-m11-cutover-qualification-and-closure.md) | accepted/closed; [closure](closure/cutover/012-status.md) |
 
-Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is accepted and closes the deployed-service cross-era transition after real Linux evidence; K008 is accepted and closes the Trusted Publishing/release supply-chain boundary; K009 is accepted and closes the staged release rehearsal; K010 is accepted and closes the public metadata/docs/release-candidate freeze; K011 is accepted and closes the first public Rust release and rollback drill; K013 is accepted and closes the recovery workflow correction; K014 is accepted and closes the external publisher configuration and recovery; K012 is accepted and closes M11. M12 planning review is complete: P001 is the sole dependency-ready retirement plan, while P002-P004 remain queued behind its evidence freeze and proposed ADR-0005. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 planning is complete under accepted ADR-0005: P001 is the sole dependency-ready plan; P002-P006 are queued. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions are preserved by M12 rather than removed.
 
 ## Completed implementation plans
 
@@ -173,39 +173,35 @@ M8 is closed after accepted R013. R001-R010 remain closed; R011/R012 remain hist
 
 M9 is closed after accepted O010. O001-O010 are closed. The complete Rust CLI/operations surface and all process task callbacks are implemented and qualified.
 
-## M10 sequence and corrective state
+## M10 closure state
 
-M10 owns migration-wide deterministic qualification, DB rollback/backup compatibility, dashboard visual/content review, supported-target portability, disposable rootful Linux acceptance, bounded live-provider smoke, ARM64 SBC characterization, and sustained resource/failure stability. It does not own M11 public cutover.
+M10 is closed after accepted Q012. Q001-Q003/Q005-Q009/Q011 evidence is accepted; Q004/Q010 remain historical for the dashboard finding; Q012 is the current closure authority.
+
+## M11 closure state
+
+M11 is closed. K001-K014 are accepted/closed, with the initial blocked K011/K012/K013 records preserved as append-only history. Rust `0.8.0` is the canonical public runtime on the three qualified target classes; compatible historical exact-version transitions remain part of the package-manager contract.
+
+## M12 sequence and state
+
+M12 removes the historical Python application from the current production/runtime and active source tree without removing immutable historical versions from the user-facing exact-version catalog.
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| Q001 | [Qualification contract, target matrix, and evidence schema freeze](implementation/qualification/001-qualification-contract-target-matrix-and-evidence-freeze.md) | accepted |
-| Q002 | [Migration-wide deterministic differential qualification runner](implementation/qualification/002-migration-wide-differential-qualification-runner.md) | accepted |
-| Q003 | [Database upgrade, rollback, backup, and recovery compatibility](implementation/qualification/003-database-upgrade-rollback-backup-recovery-compatibility.md) | accepted |
-| Q004 | [Dashboard SSR, DOM, static asset, and visual parity review](implementation/qualification/004-dashboard-dom-static-and-visual-parity.md) | historical accepted closure; superseded for dashboard-state/content findings by Q012 |
-| Q005 | [Supported-target build and non-root runtime portability](implementation/qualification/005-supported-target-build-and-runtime-portability.md) | accepted |
-| Q006 | [Disposable rootful Linux operational acceptance](implementation/qualification/006-rootful-linux-operational-acceptance.md) | accepted |
-| Q007 | [Bounded live-provider interoperability smoke](implementation/qualification/007-live-provider-interoperability-smoke.md) | historical blocked attempt; corrected by accepted Q011 |
-| Q008 | [ARM64 SBC functional and resource characterization](implementation/qualification/008-arm64-sbc-functional-and-resource-characterization.md) | accepted by append-only re-acceptance |
-| Q009 | [Sustained failure, reload, streaming, and resource-stability qualification](implementation/qualification/009-sustained-failure-reload-stream-resource-stability.md) | accepted by append-only re-acceptance |
-| Q010 | [Aggregate M10 closure and M11 readiness report](implementation/qualification/010-aggregate-m10-closure-and-m11-readiness.md) | historical aggregate closure; current M10 closure superseded by Q012 audit |
-| Q011 | [Q007 live-provider corrective closure](implementation/qualification/011-q007-live-provider-corrective-closure.md) | accepted |
-| Q012 | [Dashboard state, semantic content, and visual requalification](implementation/qualification/012-dashboard-state-semantic-content-and-visual-requalification.md) | **accepted corrective closure; M10 re-closed** |
+| P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | **dependency-ready** |
+| P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | queued behind P001 |
+| P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | queued behind P002 |
+| P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | queued behind P003 |
+| P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | queued behind P004 |
+| P006 | [Rust-only qualification and M12 closure](implementation/retirement/006-rust-only-qualification-and-m12-closure.md) | queued behind P005 |
 
-### Q012 audit findings
+ADR-0005 is accepted. P001 is non-destructive and is the only authorized handoff. P002 changes current package/update authority without source deletion; P003 is the first Python application-source deletion; P004 retires live-oracle machinery; P005 consolidates repository/release/docs; P006 is the sole M12 closure authority.
 
-Post-Q011 review found that Q004's runner exercised fresh empty databases while mandatory populated/multi-provider states were only described as reserved fixture shapes; its DOM comparator did not compare meaningful page text/table rows/card values; and its 224 screenshot entries were metadata rather than actual captures, with only three manually reviewed PNGs recorded. Those gaps conflict with Q004 and the frozen Q001 `q001.dashboard.states` contract. The registry also retained completed Q002/Q003/Q005 rows in its dependency-ready table; this corrective planning pass removes that ambiguity.
-
-Q012 corrects and requalifies only this dashboard/evidence boundary, plus any narrow Rust dashboard parity defect the stronger corpus exposes. Accepted Q005-Q009/Q011 evidence remains valid subject to a source-freshness review after Q012 implementation.
+Historical public Python releases are immutable external artifacts. Compatible explicit package-managed historical targets remain supported, while latest/default resolution and all current/future publication remain Rust-only.
 
 ## Future work and block state
 
-M11 Rust cutover is closed. K001-K014 are accepted/closed, with the initial
-blocked K011/K012/K013 records preserved as append-only history. M12 planning
-review is complete and P001 is the sole dependency-ready retirement plan; no
-production/runtime removal is authorized until its non-destructive boundary
-freeze closes and ADR-0005 is accepted or superseded.
+No post-M12 migration milestone is planned. After accepted P006 closure, migration governance transitions back to normal EggPool product/maintenance planning. Failed M12 gates create bounded corrective P-plans rather than a new broad migration phase.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K014 are accepted/closed; M12 has completed planning review, with P001 dependency-ready and implementation still unstarted.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 implementation planning is complete; P001 is dependency-ready and implementation has not started.

@@ -1,140 +1,145 @@
 # M12 Python Retirement Roadmap
 
-Status: planning review complete 2026-09-11; P001 dependency-ready; no
-production/runtime removal authorized yet
+Status: implementation planning complete 2026-09-11; P001 dependency-ready; P002-P006 serially gated
 
-Planning baseline: `66faa89826e82ea9c4bcbaf5045776fdd6e1e0f3` (accepted M11
-closure and current main)
+Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77` (M11 closed; provisional M12 boundary planning)
 
-Canonical sources: `../000-long-term-specification.md`,
-`../001-terminology-and-domain-model.md`, `../002-long-term-roadmap.md`,
-`../003-planning-process.md`, ADR-0001 through ADR-0004, proposed ADR-0005,
-and accepted M11 closure evidence.
+Canonical sources: `../000-long-term-specification.md`, `../001-terminology-and-domain-model.md`, `../002-long-term-roadmap.md`, `../003-planning-process.md`, accepted ADR-0001 through ADR-0005, closed M4-M11 roadmaps, and accepted M11 closure evidence.
+
+Research notes: `../python-retirement-planning-notes.md`.
 
 ## Purpose
 
-M12 removes Python from the production/runtime and canonical release path after
-the Rust cutover has stabilized. It preserves the useful historical evidence
-and differential fixtures needed to explain and audit the migration without
-retaining a supported second production implementation.
+M12 removes the historical Python **application** from the current production/runtime and active repository path after the Rust cutover. It preserves the useful evidence needed to audit the migration and preserves the user-facing ability to select compatible immutable historical releases explicitly through package-manager ownership.
 
-M12 is a packaging, ownership, and evidence-retirement milestone. It is not a
-second Rust feature migration and must not change established runtime behavior
-as a side effect of deleting the Python oracle.
+M12 is an ownership/evidence retirement milestone. It is not another Rust feature migration. Current runtime semantics are already qualified by M4-M11 and must not be changed merely to make deletion easier.
 
-## Planning-review conclusion
+## Key research conclusions
 
-The milestone is eligible for planning because M11 is accepted and the public
-Rust release is qualified. It is not ready for broad implementation as one
-change because the repository has not yet separated these current roles:
+1. Public historical Python wheels are immutable external evidence. PyPI now rejects adding files to releases older than 14 days and never permits filename reuse, so M12 must reference existing identities rather than plan historical republishing.
+2. PyPI remains appropriate for the native Rust program. Wheel `.dist-info`/`RECORD` metadata defines package-manager ownership independently of whether the payload is an importable Python application.
+3. The M11 cross-era transition engine is useful and already qualified. A pure-Rust **current** runtime does not require deleting the ability to request an old compatible version explicitly.
+4. `Requires-Python >=3.11` should remain during M12 because it keeps package-manager environments capable of compatible historical Python transitions; it does not cause the native Rust process to invoke Python.
+5. Full Python source need not be copied into a legacy directory. Immutable Git history plus a bounded reference manifest/selected fixtures gives better provenance with less active-tree maintenance.
+6. Python may remain for developer tooling, but application imports, console scripts, publishable Python EggPool metadata and live dual-run oracle dependencies must disappear.
 
-| Surface | Current role | M12 review result |
-|---|---|---|
-| `src/eggpool/` | Python runtime and behavioral oracle | freeze provenance before removal |
-| root `pyproject.toml` | Python package plus dev/test environment | requires an explicit tooling-manifest decision |
-| `packaging/pypi/pyproject.toml` | Rust production wheel publication | ready to become sole publication authority |
-| `scripts/` | release tooling, operational diagnostics, and Python/Rust qualification | classify; retain only non-runtime tooling |
-| `tests/` and `tests/migration_rs/` | Python behavior tests and differential harness | retain Rust contract coverage; archive/remove obsolete oracle paths deliberately |
-| K001/K005/K012 records | historical rollback/catalog evidence | preserve append-only; do not silently rewrite history |
+## Ownership target
 
-Proposed ADR-0005 records the unresolved packaging/reference boundary. P001 is
-safe to start because it inventories and freezes evidence without deleting or
-changing production behavior. P002 and later remain blocked until P001 closes
-and ADR-0005 is accepted or superseded.
+### Current production/runtime
 
-## Invariants
+Owned entirely by:
 
-1. The installed EggPool process is Rust-only; no Python import, interpreter,
-   worker, or fallback is introduced.
-2. Existing supported Rust config, database, API, CLI, dashboard, provider,
-   routing, retry, lifecycle, and security contracts remain unchanged.
-3. SQLite schema 54 and existing Rust-owned state remain readable and writable;
-   M12 never resets or forks the database to simplify retirement.
-4. Historical closure records remain append-only and continue to identify the
-   final Python source/oracle commit used for M11 evidence.
-5. Retained fixtures are bounded, secret-free, deterministic, and useful for
-   Rust regression tests; they do not require a live Python server.
-6. The public release path has one production manifest, one runtime
-   implementation, and no unsupported source-build or Python fallback path.
-7. Development-only Python tooling is clearly separated from the production
-   artifact and is not required by an installed service.
+- `rust/` application/runtime;
+- `packaging/pypi/` current PyPI publication manifest;
+- Rust-owned runtime assets/migrations/config defaults;
+- existing deployment/update/release workflows operating on the Rust artifact set.
 
-## Exact versus semantic parity
+### Historical compatibility
 
-M12 does not re-qualify a new implementation behavior. Existing M11 Rust
-qualification remains the exact authority for the supported user-visible
-   runtime surfaces. Retained reference fixtures preserve exact bytes or
-   structured observations only where the earlier contract declared them
-   meaningful. Historical Python-vs-Rust comparisons may use the previously
-   approved normalization for ephemeral IDs, timestamps, ports, and temporary
-   roots; no new normalization may hide semantic differences.
+Owned by:
 
-The retirement work itself is semantic: it proves that deleting the Python
-runtime and rollback machinery does not alter the Rust package, service,
-configuration/database ownership, or operator-facing failure contract.
+- immutable PyPI/GitHub release artifacts and hashes;
+- the K001 installable-release catalog;
+- K004/K005 package-manager transition logic;
+- accepted DB/config compatibility evidence;
+- P001 retained reference fixtures/provenance.
 
-## Ordered implementation slices
+An explicit exact historical Python target is not a current runtime fallback. `latest` and automatic default resolution remain Rust-only.
 
-### P001 — Final Python reference boundary and fixture freeze
+### Development tooling
 
-Primary class: invariant/infrastructure. Dependency-ready after this review.
+Python may survive only where it is clearly a repository tool: release/catalog validators, bounded fixture processors, or similar utilities. No retained Python code may provide a current `eggpool` application/runtime package.
 
-Inventory every Python runtime, package, test, script, workflow, fixture, and
-document dependency; record the final source identity; freeze the selected
-machine-readable differential corpus; and classify each path as retain,
-archive, replace, or remove. No production deletion occurs in P001.
+## M12 invariants
 
-### P002 — Production packaging and release-path retirement
+1. Current installed EggPool execution is Rust-only; normal serve/inference/operator paths do not start/import the historical application.
+2. Current/future release publication uses `packaging/pypi/pyproject.toml` and the native Rust binary wheel only.
+3. Existing config/database/API/CLI/dashboard/provider/routing/retry/lifecycle behavior remains unchanged by retirement.
+4. SQLite schema 54, migration ordering/checksums and canonical state paths remain unchanged.
+5. Historical closure records/source identities remain append-only/auditable.
+6. Retained fixtures are deterministic, bounded, secret-free and do not require a live Python EggPool server.
+7. Compatible historical exact-version transitions remain available to package-manager-owned installs; incompatible state fails before mutation.
+8. `eggpool update` latest/default cannot choose a Python-era release.
+9. Standalone Rust raw installs cannot transition directly to Python.
+10. No full duplicate Python application archive remains in the active tree; full source is referenced by immutable Git identity.
+11. Retained Python development tooling is not shipped as the current application and is not required by service startup.
+12. No historical PyPI release is rebuilt, modified, yanked or deleted to simplify M12.
+13. No Rust sdist/source-build fallback is introduced for unqualified targets.
+14. Source deletion occurs only after P001/P002 prove the replacement authority.
+15. Live oracle/test deletion occurs only after P001/P004 prove fixture/Rust replacement coverage.
+16. Failed destructive or closure gates create new corrective P-plans.
 
-Primary class: infrastructure/capability. Depends on accepted ADR-0005 and
-P001. Make the Rust publication manifest, installer, updater, catalog, release
-workflow, and public documentation agree that Rust is the only production
-runtime. Decide and verify the final Python metadata/tooling boundary.
+## Ordered implementation sequence
 
-### P003 — Oracle and dual-run machinery retirement
+```text
+M11 K012/K013/K014 accepted; Rust 0.8.0 canonical
+  |
+  v
+P001 final Python reference/fixture/disposition freeze
+ -> P002 Rust production package/catalog/cross-era authority
+ -> P003 Python application source + runtime-asset retirement
+ -> P004 oracle/differential/test + Python tooling retirement
+ -> P005 repository/installer/release/docs consolidation
+ -> P006 Rust-only qualification + M12 closure
+```
 
-Primary class: invariant/polish. Depends on P002. Remove or archive the
-Python application tests, Python/Rust launchers, rollback-only workflows, and
-runtime imports that P001 classified as migration-only. Preserve selected
-fixtures and Rust-native contract tests with no source fallback.
+Only `../registry.md` authorizes implementation. P001 is the sole dependency-ready plan at registration time.
 
-### P004 — Rust-only M12 qualification and closure
+## P001 — Reference boundary and fixture freeze
 
-Primary class: invariant/capability. Depends on P002 and P003. Run fresh
-Rust-only package, install, update, restart, backup/recovery, database,
-unsupported-target, security/redaction, and release-integrity checks. Record
-the final closure and update the registry only if every exit condition passes.
+Inventory the final Python application, tests, tooling, assets, migrations, public historical package identities and Rust replacement coverage. Create the machine-readable M12 reference manifest. No production behavior changes.
+
+Exit: every destructive target has a disposition and named surviving authority.
+
+## P002 — Production package/catalog/cross-era authority
+
+Apply ADR-0005 before source deletion. Make the Rust publication manifest uniquely current, prevent root Python publication, preserve package-manager exact historical transitions under compatibility checks, retain the Python compatibility floor, and prove latest/default behavior is Rust-only.
+
+Exit: package/update/release authority is coherent without deleting the oracle yet.
+
+## P003 — Python application source/runtime assets
+
+Delete the historical Python application only after migrations, defaults, templates/static assets and other runtime material have independent Rust/fixture ownership. Do not copy the full app elsewhere.
+
+Exit: Rust builds/packages/runs with `src/eggpool` absent and runtime assets intact.
+
+## P004 — Oracle/test/tooling retirement
+
+Replace live Python/Rust comparisons with retained fixtures or Rust-native contract tests, remove migration-only server launchers/application tests, and shrink Python to clearly development-only tooling.
+
+Exit: no CI/test path needs the historical application source or a live Python EggPool server.
+
+## P005 — Repository/release/installer/docs consolidation
+
+Remove stale Python-current assumptions from the installer, updater, release validators/workflow, repository metadata and documentation. Preserve explicit compatible historical exact-version selection and existing-install adoption.
+
+Exit: the repository and public docs have one coherent current Rust authority.
+
+## P006 — Rust-only aggregate qualification
+
+Build/install the supported production artifacts from the post-retirement tree; qualify state/recovery/security/release behavior and a package-managed historical Python -> post-retirement Rust -> Python -> Rust cycle; close M12 only if no high/medium finding remains.
+
+Exit: production repository/release/runtime are pure Rust with auditable history and preserved compatible exact-version behavior.
+
+## Qualification posture
+
+M12 should reuse accepted M10/M11 evidence when source-freshness is valid, but any gate whose owner/path changes during P002-P005 must be rerun. The final closure must include fresh current-wheel construction from the post-retirement tree and fresh cross-era package-manager transition evidence.
+
+No broad new target matrix or live-provider campaign is required unless a retirement change touches those surfaces. Linux x86_64 is the minimum manager-transition closure host; artifact builds still cover all three M11 targets.
 
 ## Non-goals
 
-- no new provider, routing, wire, dashboard, database, or lifecycle feature;
-- no dashboard redesign or frontend migration;
-- no schema reset, schema fork, or data migration solely for Python removal;
-- no removal of historical closure records, release manifests, hashes, or
-  source-identity evidence;
-- no automatic deletion of all Python-based development tools;
-- no M13 planning or post-retirement feature work;
-- no claim that M12 is closed before P004 evidence is accepted.
+- no provider/routing/wire/dashboard/lifecycle feature work;
+- no DB schema reset/fork;
+- no dashboard redesign;
+- no target expansion;
+- no requirement to remove Python as a developer tooling language;
+- no deletion/yank/rebuild of historical public packages;
+- no replacement package name;
+- no M13 migration milestone.
 
-## Review gates and evidence
+## M12 closure
 
-The planning review must be rechecked before each destructive slice:
+Only accepted P006 may close M12. The closure record must prove the active production/release tree is Rust-only, retained evidence is sufficient to audit prior parity decisions, compatible historical exact-version transitions still work without repository-local Python source, and no unresolved high/medium packaging/compatibility/security/lifecycle/evidence-loss/data-loss finding remains.
 
-- current baseline and source identity are recorded;
-- Python oracle modules/tests and Rust replacements are named;
-- exact/semantic parity and normalization are explicit;
-- ADR-0005 is accepted before packaging ownership changes;
-- hard dependencies and retained rollback implications are explicit;
-- failure, cancellation, restart, contention, and durable-state effects are
-  covered where a removed path previously owned them;
-- narrow and broad verification commands are listed in each plan;
-- closure evidence is externally meaningful and proves the production artifact,
-  not merely a clean source tree.
-
-## Exit condition
-
-M12 closes only when the production repository/release path and installed
-runtime are pure Rust; selected reference history and useful fixtures remain
-auditable; no supported command or workflow silently invokes Python; Rust-only
-package/update/deploy/recovery qualification passes; and no high/medium
-packaging, compatibility, security, lifecycle, or data-loss finding remains.
+After M12 closure, further EggPool work returns to normal product/maintenance roadmaps rather than continuing the migration milestone series.
