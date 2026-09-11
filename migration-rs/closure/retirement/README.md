@@ -1,5 +1,7 @@
 # M12 Python Retirement Closure Records
 
+Status: M12 closed after accepted P006
+
 This directory stores append-only closure evidence for M12 Python application/runtime retirement and final Rust-only migration closure.
 
 Expected records:
@@ -10,6 +12,8 @@ Expected records:
 - `004-status.md` — P004 oracle/differential/test/Python-tooling retirement
 - `005-status.md` — P005 repository/installer/release/docs consolidation
 - `006-status.md` — P006 Rust-only aggregate qualification and M12 closure
+
+Machine-readable aggregate evidence for P006 is `006-run.json`.
 
 Each record must include implementation commit(s), exact verification commands/results, removed/retained evidence, source-freshness decisions, unresolved findings, and the registry transition it authorizes.
 

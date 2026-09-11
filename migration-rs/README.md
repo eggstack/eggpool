@@ -1,10 +1,18 @@
 # EggPool Rust Migration Planning System
 
-Status: active
+Status: migration program closed; planning archive retained
 
-This directory governs the side-by-side migration of EggPool from the current Python implementation to a pure Rust implementation while preserving the existing EggPool product contract.
+This directory records the completed side-by-side migration of EggPool from
+the historical Python implementation to a pure Rust implementation while
+preserving the existing EggPool product contract. M12 is closed by accepted
+P006 evidence; subsequent work belongs in ordinary product and maintenance
+roadmaps.
 
-The Python implementation remains live and authoritative during migration. The Rust implementation is developed in this repository under `rust/` and is qualified against Python before any cutover. `migration-rs/` contains planning, architecture decisions, implementation handoffs, and closure evidence; production Rust source MUST NOT be placed here.
+The Rust implementation under `rust/` is the current production authority.
+Historical Python source is recoverable from immutable Git history and is not
+an active application package. Retained Python is tooling-only.
+`migration-rs/` contains planning, architecture decisions, implementation
+handoffs, and closure evidence; production Rust source MUST NOT be placed here.
 
 ## Canonical long-term documents
 

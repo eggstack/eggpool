@@ -1,0 +1,111 @@
+{
+  "schema_version": "m12-p006-qualification.v1",
+  "status": "pass",
+  "run_date": "2026-09-11",
+  "source": {
+    "pre_closure_commit": "9916071456a1e218690d4f7308df1460825bece4",
+    "pre_closure_tree": "15cc479b4074fb40fa7f2a8f97960a7a50ad96f8",
+    "p001_reference_commit": "c6b5d2c25038a8ac155c71f68fd50afea03fa459",
+    "p001_reference_tree": "2887b6b6a3be38ad8b386781cda76f888d5ac0dc"
+  },
+  "source_boundary": {
+    "retirement_validator": "pass",
+    "package_boundary_validator": "pass",
+    "retired_application_tree_present": false,
+    "current_publication_manifest": "packaging/pypi/pyproject.toml",
+    "retained_python_scope": ["scripts/", "tests/tooling/"],
+    "runtime_asset_count": 7,
+    "sqlite_migration_count": 54,
+    "sqlite_schema_change": false
+  },
+  "artifacts": {
+    "version": "0.8.0",
+    "manifest_sha256": "ebd13450ed617a8cac8fcb2ad4e798c0bf791edd61b8a09265b3ae4727f435f5",
+    "targets": [
+      {
+        "target": "linux-x86_64",
+        "wheel": "eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "wheel_sha256": "637f11e68cde0cb1178d55ada1fd979a13dca037c18e0b45b072e6dcdd812f9b",
+        "wheel_size": 10807561,
+        "raw": "eggpool-0.8.0-linux-x86_64",
+        "raw_sha256": "4a23f9ceb8fc87acf95cfedc85707afbead5a41eeaeeaff5cc709e3b9c819223",
+        "raw_size": 26154688,
+        "build": "fresh local locked release build",
+        "inspection": "pass",
+        "runtime": "pass by source-fresh hosted M11 qualification"
+      },
+      {
+        "target": "linux-aarch64",
+        "wheel": "eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+        "wheel_sha256": "2f5cebadfa963b72a676b8713ff92180d7e10964f5f569306afa146dfa250031",
+        "wheel_size": 10357005,
+        "raw": "eggpool-0.8.0-linux-aarch64",
+        "raw_sha256": "8d693f8123bbeb9bc1d70cd616644eb97ed7eb522da25d6f4d5c255428da0eb2",
+        "raw_size": 22975432,
+        "build": "fresh local locked release build",
+        "inspection": "pass",
+        "runtime": "pass by source-fresh hosted M11 qualification"
+      },
+      {
+        "target": "macos-arm64",
+        "wheel": "eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl",
+        "wheel_sha256": "549fdfce7b6b0c78d7387d632c8547ece6788d4153a56242f92d6297af3acce5",
+        "wheel_size": 10984307,
+        "raw": "eggpool-0.8.0-macos-aarch64",
+        "raw_sha256": "14a669e49d6f7f889e2f1ace3b6899c1e287fe2da1b4977dea710162d0818a80",
+        "raw_size": 28077552,
+        "build": "fresh local locked release build",
+        "inspection": "pass",
+        "runtime": "pass; native wheel version/help/check-config/health/dashboard qualification"
+      }
+    ],
+    "linux_portability": "source-fresh hosted M11/Q005 evidence; local macOS host has no readelf",
+    "wheel_contract": "all wheels contain exactly one native eggpool executable, no Python dependencies, and Requires-Python >=3.11"
+  },
+  "historical_transition": {
+    "historical_version": "0.7.4",
+    "cycle": ["python-0.7.4", "rust-0.8.0", "python-0.7.4", "rust-0.8.0"],
+    "local_arm64_managers": {
+      "uv-tool": {"result": "pass", "rollback_result": "pass"},
+      "isolated-pip": {"result": "pass", "rollback_result": "pass"}
+    },
+    "hosted_target_managers": {
+      "linux-x86_64": ["uv-tool", "pipx", "isolated-pip"],
+      "linux-aarch64": ["uv-tool"],
+      "macos-arm64": ["uv-tool"]
+    },
+    "state": {
+      "config_preserved": true,
+      "sqlite_integrity": "ok",
+      "migration_maximum": 54,
+      "metadata_and_cli_version": "0.8.0"
+    },
+    "historical_wheel_sha256": "47b61c1c9db3ee9fa8945bebed89c7294cb867240b2204b1bfc39e443d1a9581"
+  },
+  "state_and_recovery": {
+    "schema_54_integrity": "pass",
+    "backup_restore": "pass by source-fresh accepted Q003/O010 evidence",
+    "stop_restart_rehash_runtime_status": "pass by source-fresh accepted O010/R013 evidence",
+    "abrupt_restart_reconciliation_no_replay": "pass by source-fresh accepted C011/R013 evidence"
+  },
+  "release_security": {
+    "catalog": "pass",
+    "docs": "pass",
+    "workflow": "pass",
+    "no_publish_performed": true,
+    "secret_or_credential_finding": "none",
+    "high_medium_retirement_findings": "none"
+  },
+  "clippy_disposition": {
+    "result": "reviewed_pre_existing_baseline",
+    "command": "cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings",
+    "errors": 66,
+    "warnings": 1,
+    "disposition": "unchanged M11 runtime baseline; no P006 Rust runtime changes; not a retirement-introduced finding"
+  },
+  "future_plan_audit": {
+    "dependency_ready_plans": [],
+    "m12_status": "closed",
+    "next_workstream": "ordinary project roadmaps and maintenance; no M13 migration plan auto-created"
+  }
+}

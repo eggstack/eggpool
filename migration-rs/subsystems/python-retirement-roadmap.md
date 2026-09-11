@@ -1,6 +1,6 @@
 # M12 Python Retirement Roadmap
 
-Status: implementation planning complete 2026-09-11; P001-P005 accepted/closed; P006 dependency-ready
+Status: M12 closed 2026-09-11 after accepted P006; P001-P006 accepted/closed
 
 Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77` (M11 closed; provisional M12 boundary planning)
 
@@ -83,7 +83,9 @@ P001 final Python reference/fixture/disposition freeze
  -> P006 Rust-only qualification + M12 closure
 ```
 
-Only `../registry.md` authorizes implementation. P006 is now the sole dependency-ready plan after accepted P001-P005 closures.
+Only `../registry.md` authorizes implementation. P006 was the sole
+dependency-ready plan after accepted P001-P005 closures and is now accepted;
+M12 is closed.
 
 ## P001 — Reference boundary and fixture freeze
 
@@ -119,7 +121,7 @@ Exit: the repository and public docs have one coherent current Rust authority.
 
 Build/install the supported production artifacts from the post-retirement tree; qualify state/recovery/security/release behavior and a package-managed historical Python -> post-retirement Rust -> Python -> Rust cycle; close M12 only if no high/medium finding remains.
 
-Exit: production repository/release/runtime are pure Rust with auditable history and preserved compatible exact-version behavior.
+Exit: production repository/release/runtime are pure Rust with auditable history and preserved compatible exact-version behavior. **Satisfied by accepted P006 closure.**
 
 ## Qualification posture
 
@@ -140,6 +142,14 @@ No broad new target matrix or live-provider campaign is required unless a retire
 
 ## M12 closure
 
-Only accepted P006 may close M12. The closure record must prove the active production/release tree is Rust-only, retained evidence is sufficient to audit prior parity decisions, compatible historical exact-version transitions still work without repository-local Python source, and no unresolved high/medium packaging/compatibility/security/lifecycle/evidence-loss/data-loss finding remains.
+Only accepted P006 may close M12. The accepted closure record
+[`closure/retirement/006-status.md`](../closure/retirement/006-status.md)
+proves the active production/release tree is Rust-only, retained evidence is
+sufficient to audit prior parity decisions, compatible historical exact-version
+transitions still work without repository-local Python source, and no unresolved
+high/medium packaging/compatibility/security/lifecycle/evidence-loss/data-loss
+finding remains.
 
-After M12 closure, further EggPool work returns to normal product/maintenance roadmaps rather than continuing the migration milestone series.
+After M12 closure, further EggPool work returns to normal product/maintenance
+roadmaps rather than continuing the migration milestone series. No M13 plan is
+auto-created.

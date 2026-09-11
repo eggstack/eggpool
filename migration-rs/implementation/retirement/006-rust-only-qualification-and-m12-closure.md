@@ -1,6 +1,6 @@
 # P006 — Rust-Only Qualification and M12 Closure
 
-Status: dependency-ready after accepted P005 closure
+Status: accepted/closed 2026-09-11; see `migration-rs/closure/retirement/006-status.md`
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

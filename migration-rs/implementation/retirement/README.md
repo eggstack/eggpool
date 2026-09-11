@@ -1,6 +1,6 @@
 # M12 Python Retirement Implementation Plans
 
-Status: implementation planning complete; P001-P005 accepted/closed; P006 dependency-ready
+Status: M12 closed; P001-P006 accepted/closed
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 
@@ -17,9 +17,10 @@ These plans retire the historical Python application from the **current** produc
 3. [P003 — Python application source and runtime-asset retirement](003-python-application-source-and-runtime-asset-retirement.md) — **accepted/closed**.
 4. [P004 — Oracle, differential, test, and Python tooling retirement](004-oracle-differential-test-and-python-tooling-retirement.md) — **accepted/closed**.
 5. [P005 — Repository, installer, release, and documentation consolidation](005-repository-installer-release-and-documentation-consolidation.md) — **accepted/closed**.
-6. [P006 — Rust-only qualification and M12 closure](006-rust-only-qualification-and-m12-closure.md) — **dependency-ready**.
+6. [P006 — Rust-only qualification and M12 closure](006-rust-only-qualification-and-m12-closure.md) — **accepted/closed**.
 
-Only `migration-rs/registry.md` authorizes implementation. P006 is now the sole dependency-ready M12 plan after accepted P005 closure.
+Only `migration-rs/registry.md` authorizes implementation. M12 is closed by
+the accepted P006 record; no dependency-ready M12 plan remains.
 
 ## Hard boundaries
 
@@ -37,4 +38,5 @@ Only `migration-rs/registry.md` authorizes implementation. P006 is now the sole 
 
 Each accepted plan writes `migration-rs/closure/retirement/<NNN>-status.md` with implementation commit(s), exact verification, retained/removed evidence, unresolved findings, and the registry transition it authorizes.
 
-Only accepted P006 may mark M12 and the Rust migration program closed.
+Only accepted P006 may mark M12 and the Rust migration program closed. That
+closure is recorded in [`migration-rs/closure/retirement/006-status.md`](../../closure/retirement/006-status.md).

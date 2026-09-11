@@ -264,11 +264,10 @@ After stabilization, remove Python production/runtime packaging and migration-on
 
 M12 planning review is recorded in
 [`subsystems/python-retirement-roadmap.md`](subsystems/python-retirement-roadmap.md).
-P005 is now the sole dependency-ready plan after accepted P001-P004 closures.
-M11 does not auto-promote Python removal; the remaining M12 plans continue to
-be gated by their direct predecessors under ADR-0005.
+P001-P006 are accepted/closed under ADR-0005. P006 is the accepted closure
+authority; no dependency-ready M12 plan remains.
 
-Exit condition: production repository/release path is pure Rust with traceable parity evidence.
+Exit condition: production repository/release path is pure Rust with traceable parity evidence. **Satisfied by accepted P006 closure.**
 
 ## Cross-cutting constraints
 
