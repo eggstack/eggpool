@@ -16,9 +16,11 @@ cargo build --manifest-path rust/Cargo.toml --release
 ./rust/target/release/eggpool --config /path/to/config.toml serve --verbose
 ```
 
-The deployment commands resolve the actual running Rust executable. Copy the
-binary to its reviewed destination before installing a service; they do not
-install or replace the public `eggpool` command.
+The deployment commands preserve the invoked manager-exposed command path.
+For a personal uv/pipx install, invoke deployment through `command -v
+eggpool`; the resulting unit keeps that stable exposed path while the manager
+replaces the wheel behind it. Copying a checkout binary remains a separate
+foreground/qualification flow and is not a package-manager deployment.
 
 ## systemd
 
@@ -26,24 +28,34 @@ Personal mode runs as the invoking user and creates a unit with the resolved
 Rust binary, config, data, state, and optional `.env` paths:
 
 ```bash
-sudo env "PATH=$PATH" "/path/to/eggpool" \
+sudo env "PATH=$PATH" "$(command -v eggpool)" \
   --config "$HOME/.config/eggpool/config.toml" deploy systemd --install
 ```
 
 The install validates the config before writing the unit, prepares the XDG
 directories, writes `/etc/systemd/system/eggpool.service` atomically, then
 runs `systemctl daemon-reload`, `enable`, and `start` in that order. Direct
-root personal installs are refused unless `--as-root` is explicit. Production
-mode is a separate root-owned layout:
+root personal installs are refused unless `--as-root` is explicit.
+
+Production mode has one explicit package authority: a system-owned pipx root,
+not a root user's private tool environment. Prepare the exact package under
+the dedicated paths, then install the unit:
 
 ```bash
-sudo "/path/to/eggpool" --config /etc/eggpool/config.toml \
+sudo env PIPX_HOME=/var/lib/eggpool/pipx PIPX_BIN_DIR=/usr/local/bin \
+  pipx install --force eggpool==VERSION
+sudo /usr/local/bin/eggpool --config /etc/eggpool/config.toml \
   deploy systemd --install --production
 ```
 
 Production uses the dedicated `eggpool` user and `/etc/eggpool`,
 `/var/lib/eggpool`, `/var/log/eggpool`, and `/var/backups/eggpool`. It does
-not use systemd socket activation or a second scheduler.
+not use systemd socket activation or a second scheduler. The unit always
+executes `/usr/local/bin/eggpool`; `HOME`, `PATH`, `PIPX_HOME`, and
+`PIPX_BIN_DIR` are explicit, so update/rollback does not depend on shell
+initialization. Run production package transitions as the operator with those
+same environment values; the service user never mutates a root-owned manager
+directory.
 
 ## cron watchdog and backups
 
@@ -115,3 +127,21 @@ path. If the host is interrupted after the ownership marker is written, run
 the same command with `--cleanup --i-understand-disposable-host`; cleanup
 refuses to proceed without that marker. Never run this procedure against a
 production host.
+
+K007's deployed-service cycle uses the same guard and stable path with one
+stateful package environment. Supply the immutable Python and Rust wheels to
+the dedicated runner:
+
+```bash
+sudo -E uv run python scripts/qualification_deployed_transition.py \
+  --python-wheel /path/to/eggpool-python.whl \
+  --rust-wheel /path/to/eggpool-rust.whl \
+  --mode personal \
+  --output migration-rs/closure/cutover/007-run-personal.json \
+  --i-understand-disposable-host
+```
+
+Use `--mode production` only on a disposable host after verifying the
+system-owned pipx executable and paths. The report contains hashes, service
+state, and bounded command results; it never records config or environment
+contents.

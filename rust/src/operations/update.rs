@@ -721,6 +721,9 @@ pub struct TransitionContext {
     /// Optional config path used for the target's read-only `check-config`
     /// probe after the package manager returns.
     pub config_path: Option<PathBuf>,
+    /// Explicit manager environment for deployment-owned package roots.  The
+    /// values are fixed by the caller and are never copied into diagnostics.
+    pub manager_environment: Option<Vec<(String, String)>>,
 }
 
 impl TransitionContext {
@@ -728,6 +731,7 @@ impl TransitionContext {
         python_version: Some((3, 11)),
         db_config_compatible: true,
         config_path: None,
+        manager_environment: None,
     };
 }
 
@@ -771,6 +775,23 @@ pub struct TransitionRequest<'a> {
     pub executable: &'a Path,
     pub context: TransitionContext,
     pub was_running: bool,
+    /// Held by the caller across service stop, package mutation, validation,
+    /// and recovery.  `None` keeps the service boundary usable by callers
+    /// that do not own a running deployment.
+    pub guard: Option<TransitionGuard>,
+}
+
+/// One ownership guard for the complete deployed-service transition.
+pub struct TransitionGuard {
+    _lock: UpdateLock,
+}
+
+impl TransitionGuard {
+    pub fn acquire(executable: &Path) -> Result<Self, UpdateError> {
+        Ok(Self {
+            _lock: UpdateLock::acquire(executable)?,
+        })
+    }
 }
 
 /// Package-manager transition authority.  It owns no package-manager state;
@@ -835,6 +856,7 @@ impl PackageTransitionService {
             executable,
             context,
             was_running,
+            guard,
         } = request;
         if let Some(metadata) = provenance.package_metadata() {
             let observed = ReleaseVersion::parse(&metadata.version)
@@ -876,7 +898,13 @@ impl PackageTransitionService {
                 }
                 let report = self
                     .raw_updater
-                    .apply_current_executable(target, executable, was_running, restart)
+                    .apply_current_executable_with_guard(
+                        target,
+                        executable,
+                        was_running,
+                        restart,
+                        guard,
+                    )
                     .await?;
                 Ok(TransitionResult {
                     target_version: report.target_version,
@@ -894,8 +922,16 @@ impl PackageTransitionService {
                 {
                     return Err(UpdateError::IncompatiblePythonEnvironment);
                 }
-                let _lock = UpdateLock::acquire(executable)?;
-                let command = self.command_for(provenance, &selection)?;
+                let manager_executable = provenance.exposed_executable().unwrap_or(executable);
+                let _guard = match guard {
+                    Some(guard) => guard,
+                    None => TransitionGuard::acquire(manager_executable)?,
+                };
+                let command = build_manager_command_with_environment(
+                    provenance,
+                    &selection,
+                    context.manager_environment.as_deref().unwrap_or_default(),
+                )?;
                 if let Err(error) = run_manager(command).await {
                     if !matches!(error, UpdateError::ManagerUnavailable) {
                         return Err(self
@@ -903,7 +939,7 @@ impl PackageTransitionService {
                                 provenance,
                                 current,
                                 &selection,
-                                executable,
+                                manager_executable,
                                 &context,
                                 was_running,
                                 restart.as_ref(),
@@ -916,7 +952,7 @@ impl PackageTransitionService {
                 if let Err(error) = verify_package_install(
                     provenance,
                     &selection,
-                    executable,
+                    manager_executable,
                     context.config_path.as_deref(),
                 )
                 .await
@@ -926,7 +962,7 @@ impl PackageTransitionService {
                             provenance,
                             current,
                             &selection,
-                            executable,
+                            manager_executable,
                             &context,
                             was_running,
                             restart.as_ref(),
@@ -945,7 +981,7 @@ impl PackageTransitionService {
                                 provenance,
                                 current,
                                 &selection,
-                                executable,
+                                manager_executable,
                                 &context,
                                 was_running,
                                 restart.as_ref(),
@@ -1023,6 +1059,14 @@ fn build_manager_command(
     provenance: &InstallProvenance,
     target: &CatalogRelease,
 ) -> Result<ManagerCommand, UpdateError> {
+    build_manager_command_with_environment(provenance, target, &[])
+}
+
+fn build_manager_command_with_environment(
+    provenance: &InstallProvenance,
+    target: &CatalogRelease,
+    overrides: &[(String, String)],
+) -> Result<ManagerCommand, UpdateError> {
     let requirement = exact_requirement(&target.version)?;
     let (program, args, manager) = match provenance {
         InstallProvenance::UvTool { manager, .. } => {
@@ -1068,7 +1112,7 @@ fn build_manager_command(
     Ok(ManagerCommand {
         program,
         args,
-        environment: allowed_environment(manager),
+        environment: allowed_environment(manager, overrides),
     })
 }
 
@@ -1085,7 +1129,7 @@ fn exact_requirement(version: &ReleaseVersion) -> Result<String, UpdateError> {
     Ok(format!("eggpool=={value}"))
 }
 
-fn allowed_environment(manager: &str) -> Vec<(String, String)> {
+fn allowed_environment(manager: &str, overrides: &[(String, String)]) -> Vec<(String, String)> {
     const COMMON: &[&str] = &[
         "PATH",
         "HOME",
@@ -1132,7 +1176,7 @@ fn allowed_environment(manager: &str) -> Vec<(String, String)> {
         ]),
         _ => {}
     }
-    env::vars_os()
+    let mut environment = env::vars_os()
         .filter_map(|(key, value)| {
             let key = key.into_string().ok()?;
             if !names.contains(&key.as_str()) {
@@ -1140,7 +1184,14 @@ fn allowed_environment(manager: &str) -> Vec<(String, String)> {
             }
             Some((key, value.into_string().ok()?))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    for (key, value) in overrides {
+        if names.contains(&key.as_str()) {
+            environment.retain(|(existing, _)| existing != key);
+            environment.push((key.clone(), value.clone()));
+        }
+    }
+    environment
 }
 
 const MANAGER_TIMEOUT: Duration = Duration::from_secs(300);
@@ -1319,7 +1370,7 @@ impl UpdateService {
         bytes: &[u8],
     ) -> Result<ApplyReport, UpdateError> {
         replace_executable::<fn() -> std::future::Ready<Result<(), UpdateError>>, _>(
-            executable, target, bytes, false, None,
+            executable, target, bytes, false, None, None,
         )
         .await
     }
@@ -1363,6 +1414,22 @@ impl UpdateService {
         F: Fn() -> Fut + Send + Sync,
         Fut: Future<Output = Result<(), UpdateError>> + Send,
     {
+        self.apply_current_executable_with_guard(target, executable, was_running, restart, None)
+            .await
+    }
+
+    pub async fn apply_current_executable_with_guard<F, Fut>(
+        &self,
+        target: &ReleaseTarget,
+        executable: &Path,
+        was_running: bool,
+        restart: Option<F>,
+        guard: Option<TransitionGuard>,
+    ) -> Result<ApplyReport, UpdateError>
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(), UpdateError>> + Send,
+    {
         validate_managed_executable(executable)?;
         let metadata = self.resolve(target).await?;
         let artifact = metadata
@@ -1370,7 +1437,15 @@ impl UpdateService {
             .as_ref()
             .ok_or(UpdateError::NoCompatibleArtifact)?;
         let bytes = self.download(artifact).await?;
-        replace_executable(executable, &metadata.version, &bytes, was_running, restart).await
+        replace_executable(
+            executable,
+            &metadata.version,
+            &bytes,
+            was_running,
+            restart,
+            guard,
+        )
+        .await
     }
 }
 
@@ -1505,13 +1580,17 @@ async fn replace_executable<F, Fut>(
     bytes: &[u8],
     was_running: bool,
     restart: Option<F>,
+    guard: Option<TransitionGuard>,
 ) -> Result<ApplyReport, UpdateError>
 where
     F: Fn() -> Fut + Send + Sync,
     Fut: Future<Output = Result<(), UpdateError>> + Send,
 {
     validate_managed_executable(executable)?;
-    let _lock = UpdateLock::acquire(executable)?;
+    let _guard = match guard {
+        Some(guard) => guard,
+        None => TransitionGuard::acquire(executable)?,
+    };
     let parent = executable
         .parent()
         .ok_or(UpdateError::UnsupportedInstallPath)?;
@@ -1746,6 +1825,22 @@ mod tests {
     }
 
     #[test]
+    fn transition_guard_covers_the_deployed_service_lock_boundary() {
+        let root = tempfile::tempdir().expect("root");
+        let executable = root.path().join("bin/eggpool");
+        std::fs::create_dir_all(executable.parent().expect("bin")).expect("bin");
+        std::fs::write(&executable, b"managed").expect("executable");
+
+        let guard = TransitionGuard::acquire(&executable).expect("first guard");
+        assert!(matches!(
+            TransitionGuard::acquire(&executable),
+            Err(UpdateError::UpdateInProgress)
+        ));
+        drop(guard);
+        TransitionGuard::acquire(&executable).expect("guard after release");
+    }
+
+    #[test]
     fn manager_commands_are_fixed_argv_and_never_shell_strings() {
         let root = tempfile::tempdir().expect("root");
         let python = root.path().join("bin/python");
@@ -1854,6 +1949,7 @@ mod tests {
                     executable: &executable,
                     context: TransitionContext::SAFE_DEFAULT,
                     was_running: false,
+                    guard: None,
                 },
                 None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
             )
@@ -1934,6 +2030,7 @@ mod tests {
                     executable: &executable,
                     context: TransitionContext::SAFE_DEFAULT,
                     was_running: false,
+                    guard: None,
                 },
                 None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
             )
@@ -1999,6 +2096,7 @@ mod tests {
                     executable: &executable,
                     context: TransitionContext::SAFE_DEFAULT,
                     was_running: false,
+                    guard: None,
                 },
                 None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
             )

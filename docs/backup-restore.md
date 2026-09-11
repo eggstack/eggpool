@@ -197,7 +197,7 @@ After restoring a backup from an older version, run migrations:
 
 ```bash
 sudo systemctl stop eggpool
-sudo -u eggpool /opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml migrate
+sudo -u eggpool /usr/local/bin/eggpool --config /etc/eggpool/config.toml migrate
 sudo systemctl start eggpool
 ```
 

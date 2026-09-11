@@ -296,6 +296,15 @@ pub enum HealthProbe {
 
 /// Probe the data-plane health endpoint separately from PID state.
 pub async fn probe_health(host: &str, port: u16) -> HealthProbe {
+    probe_endpoint(host, port, "/v1/healthz").await
+}
+
+/// Probe readiness independently from PID and health state.
+pub async fn probe_readiness(host: &str, port: u16) -> HealthProbe {
+    probe_endpoint(host, port, "/v1/readyz").await
+}
+
+async fn probe_endpoint(host: &str, port: u16, path: &str) -> HealthProbe {
     #[cfg(not(unix))]
     {
         let _ = (host, port);
@@ -314,7 +323,7 @@ pub async fn probe_health(host: &str, port: u16) -> HealthProbe {
                 Err(_) => return HealthProbe::Unreachable,
             },
         };
-        let result = timeout(HEALTH_PROBE_TIMEOUT, health_request(addresses)).await;
+        let result = timeout(HEALTH_PROBE_TIMEOUT, endpoint_request(addresses, path)).await;
         match result {
             Ok(Ok(healthy)) => {
                 if healthy {
@@ -328,11 +337,10 @@ pub async fn probe_health(host: &str, port: u16) -> HealthProbe {
     }
 }
 
-async fn health_request(addresses: Vec<SocketAddr>) -> io::Result<bool> {
+async fn endpoint_request(addresses: Vec<SocketAddr>, path: &str) -> io::Result<bool> {
     let mut stream = TcpStream::connect(addresses.as_slice()).await?;
-    stream
-        .write_all(b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await?;
+    let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await?;
     let mut response = Vec::with_capacity(256);
     let mut chunk = [0_u8; 1024];
     while response.len() < MAX_HEALTH_RESPONSE_BYTES {

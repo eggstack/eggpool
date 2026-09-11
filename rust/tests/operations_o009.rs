@@ -56,6 +56,9 @@ fn renderers_are_deterministic_and_quote_path_arguments() {
     assert!(production.contains("ExecStart=") && production.contains("serve --verbose"));
     assert!(production.contains("StartLimitIntervalSec=300\nStartLimitBurst=5"));
     assert!(production.contains("ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool"));
+    assert!(production.contains("Environment=HOME=/var/lib/eggpool"));
+    assert!(production.contains("Environment=PIPX_HOME=/var/lib/eggpool/pipx"));
+    assert!(production.contains("Environment=PIPX_BIN_DIR=/usr/local/bin"));
     assert!(render_logrotate(PathBuf::from("/var/log/eggpool").as_path()).contains("rotate 14"));
 }
 

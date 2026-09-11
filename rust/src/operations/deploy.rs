@@ -26,6 +26,9 @@ pub const PRODUCTION_LOG_DIR: &str = "/var/log/eggpool";
 pub const PRODUCTION_BACKUP_DIR: &str = "/var/backups/eggpool";
 pub const PRODUCTION_CRON_PATH: &str = "/etc/cron.d/eggpool-backup";
 pub const BACKUP_SCRIPT_PATH: &str = "/usr/local/bin/eggpool-backup";
+/// Stable manager-exposed command used by the production unit.
+pub const PRODUCTION_BINARY_PATH: &str = "/usr/local/bin/eggpool";
+pub const PRODUCTION_PACKAGE_HOME: &str = "/var/lib/eggpool/pipx";
 
 const WATCHDOG_BEGIN: &str = "# BEGIN EggPool watchdog (managed by eggpool deploy cron)";
 const WATCHDOG_END: &str = "# END EggPool watchdog";
@@ -266,7 +269,7 @@ pub fn render_personal_systemd(spec: &PersonalSystemdSpec) -> String {
 
 pub fn render_production_systemd(spec: &ProductionSystemdSpec) -> String {
     format!(
-        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve --verbose\nRestart=on-failure\nRestartSec=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=EggPool\nDocumentation=https://github.com/eggstack/eggpool\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=eggpool\nGroup=eggpool\nWorkingDirectory=/var/lib/eggpool\nExecStart={} --config /etc/eggpool/config.toml serve --verbose\nRestart=on-failure\nRestartSec=5\n\n# Graceful shutdown\nTimeoutStopSec=30\nKillSignal=SIGTERM\n\n# Security hardening\nNoNewPrivileges=yes\nProtectSystem=strict\nProtectHome=yes\nReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups /var/log/eggpool /var/backups/eggpool\nPrivateTmp=yes\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nRestrictNamespaces=yes\nRestrictRealtime=yes\nLockPersonality=yes\n\n# Network\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\n\n# System call filtering\nSystemCallFilter=@system-service\nSystemCallArchitectures=native\n\nEnvironmentFile=/etc/eggpool/env\nEnvironment=HOME=/var/lib/eggpool\nEnvironment=PATH=/usr/local/bin:/usr/bin:/bin\nEnvironment=PIPX_HOME=/var/lib/eggpool/pipx\nEnvironment=PIPX_BIN_DIR=/usr/local/bin\nEnvironment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log\n\n[Install]\nWantedBy=multi-user.target\n",
         systemd_quote(&spec.binary),
     )
 }
@@ -511,11 +514,31 @@ pub struct KeepFlags {
 }
 
 pub fn resolve_rust_binary() -> Result<PathBuf, DeployError> {
-    let path = env::current_exe().map_err(DeployError::Io)?;
-    if !path.is_file() {
+    let resolved = env::current_exe().map_err(DeployError::Io)?;
+    if !resolved.is_file() {
         return Err(DeployError::Requires("a resolvable Rust executable"));
     }
-    Ok(path)
+    let invoked = env::args_os().next().map(PathBuf::from);
+    let candidate = invoked
+        .as_deref()
+        .and_then(|value| {
+            if value.components().count() > 1 {
+                Some(value.to_owned())
+            } else {
+                env::var_os("PATH").and_then(|path| {
+                    env::split_paths(&path)
+                        .map(|directory| directory.join(value))
+                        .find(|path| path.is_file())
+                })
+            }
+        })
+        .filter(|path| {
+            fs::canonicalize(path)
+                .ok()
+                .zip(fs::canonicalize(&resolved).ok())
+                .is_some_and(|(candidate, actual)| candidate == actual)
+        });
+    Ok(candidate.unwrap_or(resolved))
 }
 
 pub fn uninstall<R: CommandRunner>(

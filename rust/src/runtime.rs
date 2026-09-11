@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    process::Command as TokioCommand,
     time::{Instant, sleep, timeout},
 };
 
@@ -24,8 +25,8 @@ use crate::{
         paths::RuntimePaths,
         process,
         update::{
-            InstallProvenance, PackageTransitionService, ReleaseTarget, TransitionContext,
-            TransitionRequest, UpdateError, UpdateService,
+            InstallProvenance, PackageTransitionService, ProvenanceEnvironment, ReleaseTarget,
+            TransitionContext, TransitionGuard, TransitionRequest, UpdateError, UpdateService,
         },
     },
     version::PACKAGE_VERSION,
@@ -150,7 +151,13 @@ async fn deploy_systemd(
 ) -> Result<(), BootstrapError> {
     use crate::operations::deploy::{self as deployment, CommandRunner};
 
-    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    let binary = if args.production {
+        let binary = PathBuf::from(deployment::PRODUCTION_BINARY_PATH);
+        validate_production_package_authority(&binary).map_err(deployment_error)?;
+        binary
+    } else {
+        deployment::resolve_rust_binary().map_err(deployment_error)?
+    };
     let mut runner = deployment::SystemCommandRunner;
     if args.production {
         #[cfg(unix)]
@@ -309,6 +316,53 @@ async fn deploy_systemd(
     Ok(())
 }
 
+fn validate_production_package_authority(
+    binary: &Path,
+) -> Result<(), crate::operations::deploy::DeployError> {
+    use crate::operations::{deploy, update::InstallProvenance};
+
+    if !binary.is_file() {
+        return Err(crate::operations::deploy::DeployError::Requires(
+            "a production pipx-managed /usr/local/bin/eggpool (install it with PIPX_HOME=/var/lib/eggpool/pipx and PIPX_BIN_DIR=/usr/local/bin first)",
+        ));
+    }
+    let provenance = InstallProvenance::detect_with(
+        &crate::operations::update::ProvenanceEnvironment {
+            cwd: env::current_dir().ok(),
+            home: Some(PathBuf::from(deploy::PRODUCTION_DATA_DIR)),
+            path: [
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+            .into_iter()
+            .collect(),
+        },
+        binary,
+    );
+    let valid = match provenance {
+        InstallProvenance::Pipx {
+            manager: Some(manager),
+            environment,
+            ..
+        } => {
+            let manager = fs::canonicalize(manager).unwrap_or_default();
+            let expected_home = Path::new(deploy::PRODUCTION_PACKAGE_HOME);
+            manager.is_absolute()
+                && !manager.starts_with("/root")
+                && environment.starts_with(expected_home)
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(crate::operations::deploy::DeployError::Requires(
+            "an explicit system-owned pipx production package authority; root-private uv/pipx and standalone binaries are not accepted",
+        ))
+    }
+}
+
 fn deploy_cron(path: &Path, args: crate::cli::DeployCronArgs) -> Result<(), BootstrapError> {
     use crate::operations::deploy as deployment;
 
@@ -352,7 +406,13 @@ fn deploy_backup_cron(
 ) -> Result<(), BootstrapError> {
     use crate::operations::deploy as deployment;
 
-    let binary = deployment::resolve_rust_binary().map_err(deployment_error)?;
+    let binary = if args.production {
+        validate_production_package_authority(Path::new(deployment::PRODUCTION_BINARY_PATH))
+            .map_err(deployment_error)?;
+        PathBuf::from(deployment::PRODUCTION_BINARY_PATH)
+    } else {
+        deployment::resolve_rust_binary().map_err(deployment_error)?
+    };
     let config = fs::canonicalize(path)
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
     let block = deployment::render_backup_cron(&binary, &config, args.production);
@@ -2172,19 +2232,36 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
     }
     let target = ReleaseTarget::parse(args.requested_version.as_deref()).map_err(update_error)?;
     let service = UpdateService::new().map_err(update_error)?;
-    let executable = std::env::current_exe().map_err(|error| {
-        command_error(
-            EXIT_VALIDATION,
-            format!("cannot resolve eggpool executable: {error}"),
-        )
-    })?;
-    let executable = fs::canonicalize(executable).map_err(|_| {
+    let exposed_executable = crate::operations::deploy::resolve_rust_binary()
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let executable = fs::canonicalize(&exposed_executable).map_err(|_| {
         command_error(
             EXIT_VALIDATION,
             "current executable path is unsupported or not writable",
         )
     })?;
-    let provenance = InstallProvenance::detect(&executable);
+    let production_config =
+        PathBuf::from(crate::operations::deploy::PRODUCTION_CONFIG_DIR).join("config.toml");
+    let provenance = if path == production_config {
+        InstallProvenance::detect_with(
+            &ProvenanceEnvironment {
+                cwd: env::current_dir().ok(),
+                home: Some(PathBuf::from(
+                    crate::operations::deploy::PRODUCTION_DATA_DIR,
+                )),
+                path: [
+                    PathBuf::from("/usr/local/bin"),
+                    PathBuf::from("/usr/bin"),
+                    PathBuf::from("/bin"),
+                ]
+                .into_iter()
+                .collect(),
+            },
+            &exposed_executable,
+        )
+    } else {
+        InstallProvenance::detect(&exposed_executable)
+    };
     let current = provenance
         .package_metadata()
         .map(|metadata| ReleaseTarget::parse(Some(&metadata.version)))
@@ -2238,26 +2315,53 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
             return Err(update_error(UpdateError::SourceCheckout));
         }
         config::Config::from_toml(path)?;
+        let transition_path = provenance.exposed_executable().unwrap_or(&executable);
+        let guard = TransitionGuard::acquire(transition_path).map_err(update_error)?;
         let paths = RuntimePaths::resolve();
-        let was_running = server_is_running(path, &paths).await;
+        let systemd = systemd_service_state(path).await;
+        let was_running = systemd.as_ref().is_some_and(|state| state.active)
+            || server_is_running(path, &paths).await;
         if was_running {
-            stop(path, 10.0).await?;
+            if let Some(state) = systemd.as_ref().copied().filter(|state| state.active) {
+                stop_systemd_service(state).await?;
+            } else {
+                stop(path, 10.0).await?;
+            }
         }
         println!(
             "Updating from {} to {}...",
             current.as_str(),
             selection.version.as_str()
         );
+        let restart_systemd = systemd.as_ref().copied().filter(|state| state.active);
         let restart = || async {
-            restart_server_inner(path, Duration::from_secs(10), false, true)
-                .await
-                .map(|_| ())
-                .map_err(|_| UpdateError::RestartFailed)
+            if let Some(state) = restart_systemd {
+                start_systemd_service(state, path).await
+            } else {
+                restart_server_inner(path, Duration::from_secs(10), false, true)
+                    .await
+                    .map(|_| ())
+                    .map_err(|_| UpdateError::RestartFailed)
+            }
         };
         let context = TransitionContext {
             python_version: Some((3, 11)),
             db_config_compatible: selection.rollback_compatible,
             config_path: Some(path.to_owned()),
+            manager_environment: (path == production_config).then(|| {
+                vec![
+                    (
+                        "HOME".to_owned(),
+                        crate::operations::deploy::PRODUCTION_DATA_DIR.to_owned(),
+                    ),
+                    ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
+                    (
+                        "PIPX_HOME".to_owned(),
+                        crate::operations::deploy::PRODUCTION_PACKAGE_HOME.to_owned(),
+                    ),
+                    ("PIPX_BIN_DIR".to_owned(), "/usr/local/bin".to_owned()),
+                ]
+            }),
         };
         let result = transition
             .transition(
@@ -2268,6 +2372,7 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
                     executable: &executable,
                     context,
                     was_running,
+                    guard: Some(guard),
                 },
                 Some(restart),
             )
@@ -2284,7 +2389,7 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
             }
             Err(error) => {
                 if was_running {
-                    let _ = restart_server_inner(path, Duration::from_secs(10), false, true).await;
+                    let _ = restart().await;
                 }
                 Err(update_error(error))
             }
@@ -2294,12 +2399,8 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
 }
 
 fn install_provenance(shell: bool) -> Result<(), BootstrapError> {
-    let executable = std::env::current_exe().map_err(|error| {
-        command_error(
-            EXIT_VALIDATION,
-            format!("cannot resolve eggpool executable: {error}"),
-        )
-    })?;
+    let executable = crate::operations::deploy::resolve_rust_binary()
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
     let provenance = InstallProvenance::detect(&executable);
     if shell {
         println!("{}", provenance.shell_report());
@@ -2321,6 +2422,141 @@ fn provenance_kind(provenance: &InstallProvenance) -> &'static str {
         InstallProvenance::SourceCheckout { .. } => "source-checkout",
         InstallProvenance::Ambiguous { .. } => "ambiguous",
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SystemdServiceState {
+    system_scope: bool,
+    active: bool,
+    enabled: bool,
+    stopped: bool,
+}
+
+impl SystemdServiceState {
+    fn argv(self, action: &str) -> Vec<String> {
+        let mut args = Vec::with_capacity(3);
+        if !self.system_scope {
+            args.push("--user".to_owned());
+        }
+        args.push(action.to_owned());
+        args.push(crate::operations::deploy::SERVICE_NAME.to_owned());
+        args
+    }
+}
+
+async fn systemd_service_state(path: &Path) -> Option<SystemdServiceState> {
+    let system_scope = path
+        == Path::new(
+            &PathBuf::from(crate::operations::deploy::PRODUCTION_CONFIG_DIR).join("config.toml"),
+        );
+    systemd_service_state_for_scope(system_scope).await
+}
+
+async fn systemd_service_state_for_scope(system_scope: bool) -> Option<SystemdServiceState> {
+    let mut command = TokioCommand::new("systemctl");
+    if !system_scope {
+        command.arg("--user");
+    }
+    let output = timeout(
+        Duration::from_secs(3),
+        command
+            .args(["show", crate::operations::deploy::SERVICE_NAME])
+            .args([
+                "-p",
+                "LoadState",
+                "-p",
+                "ActiveState",
+                "-p",
+                "UnitFileState",
+                "-p",
+                "MainPID",
+            ])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut load_state = "";
+    let mut active_state = "";
+    let mut unit_file_state = "";
+    let mut main_pid = 0_u32;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("LoadState=") {
+            load_state = value;
+        } else if let Some(value) = line.strip_prefix("ActiveState=") {
+            active_state = value;
+        } else if let Some(value) = line.strip_prefix("UnitFileState=") {
+            unit_file_state = value;
+        } else if let Some(value) = line.strip_prefix("MainPID=") {
+            main_pid = value.parse().unwrap_or_default();
+        }
+    }
+    if load_state != "loaded" {
+        return None;
+    }
+    Some(SystemdServiceState {
+        system_scope,
+        active: matches!(active_state, "active" | "activating"),
+        enabled: matches!(unit_file_state, "enabled" | "enabled-runtime"),
+        stopped: matches!(active_state, "inactive" | "failed") && main_pid == 0,
+    })
+}
+
+async fn systemctl_action(state: SystemdServiceState, action: &str) -> Result<(), UpdateError> {
+    let output = timeout(
+        Duration::from_secs(10),
+        TokioCommand::new("systemctl")
+            .args(state.argv(action))
+            .output(),
+    )
+    .await
+    .map_err(|_| UpdateError::RestartFailed)?
+    .map_err(|_| UpdateError::RestartFailed)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(UpdateError::RestartFailed)
+    }
+}
+
+async fn stop_systemd_service(state: SystemdServiceState) -> Result<(), BootstrapError> {
+    let _ = state.enabled;
+    systemctl_action(state, "stop")
+        .await
+        .map_err(update_error)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if !systemd_service_state_for_scope(state.system_scope)
+            .await
+            .is_some_and(|current| current.stopped)
+        {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Err(command_error(
+        EXIT_VALIDATION,
+        "systemd service did not stop within 10s; package mutation was not attempted",
+    ))
+}
+
+async fn start_systemd_service(state: SystemdServiceState, path: &Path) -> Result<(), UpdateError> {
+    systemctl_action(state, "start").await?;
+    let config = config::Config::from_toml(path).map_err(|_| UpdateError::RestartFailed)?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let health = process::probe_health(&config.server.host, config.server.port).await;
+        let ready = process::probe_readiness(&config.server.host, config.server.port).await;
+        if health == process::HealthProbe::Healthy && ready == process::HealthProbe::Healthy {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Err(UpdateError::RestartFailed)
 }
 
 async fn server_is_running(path: &Path, paths: &RuntimePaths) -> bool {
