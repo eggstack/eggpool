@@ -1,6 +1,6 @@
 # K011 — First Rust-Backed Public Release and Immediate Rollback Drill
 
-Status: dependency-ready after accepted K010
+Status: blocked pending production PyPI Trusted Publisher configuration
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

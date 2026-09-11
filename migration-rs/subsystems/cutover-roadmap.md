@@ -1,6 +1,6 @@
 # M11 Rust Cutover, Packaging, Release, and Cross-Era Versioning Roadmap
 
-Status: active implementation; K011 dependency-ready; K001-K010 closed
+Status: active implementation; K011 blocked on production PyPI Trusted Publisher configuration; K001-K010 closed
 
 Repository baseline for planning: `aec794a060f6a9e71853a515fe50992446c41ebd` (accepted Q012 / M10 closure).
 
@@ -15,6 +15,14 @@ M11 makes the already-qualified Rust implementation the canonical public EggPool
 The cutover is a distribution and ownership transition, not another server rewrite. M4-M10 have already qualified the Rust runtime. M11 must establish trustworthy artifacts, package/install/update provenance, cross-era exact-version transitions, public installer/release workflows, deployed-service rollback, and the actual first Rust-backed public release.
 
 M11 does **not** remove Python source or the final Python oracle. That remains M12 after the Rust cutover has stabilized.
+
+## Current cutover block
+
+The first `v0.8.0` GitHub release is public, but PyPI publication did not
+complete. K013 corrected the workflow and proved exact-bundle recovery through
+artifact validation; PyPI then rejected the OIDC exchange because the
+`eggstack/eggpool` Trusted Publisher is not configured. K014 owns that external
+configuration and recovery. K012 remains blocked until K011 is accepted.
 
 ## Packaging decision
 

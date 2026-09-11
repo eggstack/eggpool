@@ -17,6 +17,8 @@ Expected records:
 - `010-status.md` — K010 public metadata/docs/release-candidate freeze
 - `011-status.md` — K011 first public Rust-backed release/rollback drill
 - `012-status.md` — K012 aggregate M11 cutover closure
+- `013-status.md` — K013 PyPI publication recovery workflow correction
+- `014-status.md` — K014 PyPI Trusted Publisher configuration/recovery completion
 
 Every record must identify implementation commit(s), release/artifact identity where applicable, exact verification commands/results, unresolved findings, and the registry transition it authorizes.
 

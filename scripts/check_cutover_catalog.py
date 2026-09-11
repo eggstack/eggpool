@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate the frozen K001 release catalog and version authorities.
+"""Validate the K001 release catalog and version authorities.
 
-This is a contract checker, not an updater.  It intentionally treats the
-root Hatchling project as the historical Python oracle and Cargo as the Rust
-candidate authority while the cutover version is still reserved.
+This is a contract checker, not an updater.  It treats the root Hatchling
+project as the historical Python oracle and Cargo as the Rust authority after
+the cutover is published.
 """
 
 from __future__ import annotations
@@ -165,8 +165,10 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         _require_string(authority.get("cutover_version"), "cutover_version")
     )
     phase = authority.get("phase")
-    if phase not in {"reserved", "candidate"}:
-        raise CatalogError("K001 catalog phase must be reserved or candidate")
+    if phase not in {"reserved", "candidate", "published"}:
+        raise CatalogError(
+            "K001 catalog phase must be reserved, candidate, or published"
+        )
     for field in ("historical_python_project_version", "rust_cargo_version"):
         normalize_version(
             _require_string(authority.get(field), f"version_authority.{field}")
@@ -178,6 +180,8 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         raise CatalogError("historical Python and current Rust versions disagree")
     if phase == "candidate" and authority["rust_cargo_version"] != cutover:
         raise CatalogError("candidate Cargo version must equal the cutover version")
+    if phase == "published" and authority["rust_cargo_version"] != cutover:
+        raise CatalogError("published Cargo version must equal the cutover version")
     if authority.get("cutover_tag") != f"v{cutover}":
         raise CatalogError(
             "cutover tag must be the normalized version with a leading v"
@@ -189,6 +193,10 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         raise CatalogError("cutover source commit is not immutable")
     if phase == "reserved" and source_commit is not None:
         raise CatalogError("reserved cutover cannot claim a source commit")
+    if phase == "candidate" and source_commit is not None:
+        raise CatalogError("candidate cutover cannot claim a source commit")
+    if phase == "published" and source_commit is None:
+        raise CatalogError("published cutover must claim a source commit")
 
     releases_value = catalog.get("releases")
     if not isinstance(releases_value, list) or not releases_value:
@@ -202,7 +210,9 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         if version in seen:
             raise CatalogError(f"duplicate release version: {version}")
         seen.add(version)
-        if _version_key(version) >= _version_key(cutover):
+        if _version_key(version) > _version_key(cutover) or (
+            _version_key(version) == _version_key(cutover) and phase != "published"
+        ):
             raise CatalogError(f"cutover is not newer than release {version}")
         if release.get("implementation_era") not in {"python", "rust"}:
             raise CatalogError(f"invalid implementation era for {version}")
@@ -276,6 +286,11 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
                 raise CatalogError(
                     f"Rust release has incomplete supported wheels: {version}"
                 )
+        if phase == "published" and version == cutover:
+            if release["implementation_era"] != "rust":
+                raise CatalogError("published cutover must be a Rust release")
+            if release.get("source_commit") != source_commit:
+                raise CatalogError("published cutover source commit disagrees")
         _require_string(
             release.get("db_config_compatibility"), f"compatibility for {version}"
         )
@@ -292,9 +307,13 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         raise CatalogError(
             "current catalog must record that no PyPI versions are missing"
         )
-    if _version_key(cutover) <= _version_key(
+    latest = _version_key(
         _require_string(inventory.get("latest_stable_version"), "latest version")
-    ):
+    )
+    if phase == "published":
+        if latest != _version_key(cutover):
+            raise CatalogError("published cutover must be the latest stable release")
+    elif _version_key(cutover) <= latest:
         raise CatalogError("cutover must be newer than latest stable release")
 
     rollback = _as_mapping(catalog.get("rollback_window"), "rollback_window")

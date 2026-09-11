@@ -1,6 +1,7 @@
 # K013 — PyPI Publication Recovery Workflow Correction
 
-Status: dependency-ready after failed K011 publication attempt
+Status: implementation complete; acceptance blocked pending production PyPI
+Trusted Publisher configuration
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

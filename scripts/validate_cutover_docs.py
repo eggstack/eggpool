@@ -116,6 +116,7 @@ def validate_cutover_docs() -> dict[str, object]:
     installer = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    phase = authority.get("phase")
 
     target_labels = {
         "linux-x86_64": ("linux x86_64", "linux-x86_64"),
@@ -157,11 +158,13 @@ def validate_cutover_docs() -> dict[str, object]:
     ):
         _require(upgrading, phrase, "upgrade/rollback guide")
     _require(releasing, "validate_cutover_docs.py", "release guard documentation")
-    _require(
-        changelog,
-        f"## [{version}] - Release candidate",
-        "changelog candidate heading",
-    )
+    _require(changelog, f"## [{version}]", "changelog release heading")
+    if (
+        phase == "published"
+        and "Release candidate"
+        in changelog.split(f"## [{version}]", 1)[1].split("## [", 1)[0]
+    ):
+        raise CutoverDocsError("published release retains candidate changelog wording")
     for phrase in ("remain in the repository", "M12", "unsupported"):
         _require(changelog, phrase, "changelog Python-reference/supported-target note")
 
@@ -202,7 +205,9 @@ def validate_cutover_docs() -> dict[str, object]:
         "version": version,
         "targets": sorted(expected_targets),
         "docs_checked": len(PUBLIC_DOCS),
-        "production_release": "guarded until K011",
+        "production_release": (
+            f"published {version}" if phase == "published" else "guarded until K011"
+        ),
         "python_reference": "preserved through M11",
     }
 

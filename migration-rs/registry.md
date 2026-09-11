@@ -35,9 +35,16 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| K011 | [First Rust-backed public release and immediate rollback drill](implementation/cutover/011-first-rust-public-release-and-rollback-drill.md) | capability/invariant | accepted K010 | **dependency-ready** |
+| K011 | [First Rust-backed public release and immediate rollback drill](implementation/cutover/011-first-rust-public-release-and-rollback-drill.md) | capability/invariant | accepted K010 | **blocked: PyPI Trusted Publisher configuration** |
 
-Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is accepted and closes the deployed-service cross-era transition after real Linux evidence; K008 is accepted and closes the Trusted Publishing/release supply-chain boundary; K009 is accepted and closes the staged release rehearsal; K010 is accepted and closes the public metadata/docs/release-candidate freeze. K011 is now dependency-ready. Historical Q004/Q010/Q011 closure records remain append-only.
+## Active corrective/blocker plans
+
+| ID | Plan | Status |
+|---|---|---|
+| K013 | [PyPI publication recovery workflow correction](implementation/cutover/013-pypi-publication-recovery-workflow-correction.md) | implementation complete; acceptance blocked at external PyPI publisher exchange |
+| K014 | [PyPI Trusted Publisher configuration and recovery completion](implementation/cutover/014-pypi-trusted-publisher-configuration-and-recovery-completion.md) | blocked pending maintainer PyPI account access |
+
+Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is accepted and closes the deployed-service cross-era transition after real Linux evidence; K008 is accepted and closes the Trusted Publishing/release supply-chain boundary; K009 is accepted and closes the staged release rehearsal; K010 is accepted and closes the public metadata/docs/release-candidate freeze. K011 is blocked on production PyPI Trusted Publisher configuration; K012 remains queued behind accepted K011. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 
@@ -183,8 +190,8 @@ Q012 corrects and requalifies only this dashboard/evidence boundary, plus any na
 
 ## Future work and block state
 
-M11 Rust cutover is active. K001-K010 are closed; K011 is dependency-ready after accepted K010; K012 remains queued/blocked behind K011, and K012 alone may close M11. M12 remains sequenced behind M11.
+M11 Rust cutover is active. K001-K010 are closed; K011 is blocked on production PyPI Trusted Publisher configuration; K013 is implemented but its acceptance is blocked at the same external exchange; K014 owns the external configuration and recovery. K012 remains queued/blocked behind accepted K011, and K012 alone may close M11. M12 remains sequenced behind M11.
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K010 are closed; K011 is dependency-ready; K012 remains blocked behind K011.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, and M9 O001-O010 remain closed. M10 is closed after accepted Q012: Q001-Q003/Q005-Q009/Q011 evidence is accepted, Q004/Q010 remain historical for the dashboard finding, and Q012 is the current closure authority. M11 K001-K010 are closed; K011 is not accepted and is blocked on production PyPI Trusted Publisher configuration; K013 is an incomplete corrective implementation; K014 owns the external recovery; K012 remains blocked behind accepted K011.
