@@ -8,8 +8,7 @@ dedicated system user (opt-in via `eggpool deploy systemd --install
 ## Personal layout (default)
 
 Personal deployments honor the XDG Base Directory specification. The
-defaults are resolved by `eggpool.deploy_user.default_config_dir`,
-`default_data_dir`, and `default_state_dir`.
+defaults are resolved by the native runtime's path helpers.
 
 ```
 ~/.config/eggpool/
@@ -29,8 +28,8 @@ defaults are resolved by `eggpool.deploy_user.default_config_dir`,
 
 The CLI's config-path precedence is `--config PATH` > `$EGGPOOL_CONFIG`
 > `~/.config/eggpool/config.toml` (when present) > `./config.toml`
-(source-checkout default). The resolver lives in
-`eggpool.deploy_user.resolve_config_path()`.
+(deliberate checkout default). The resolver is implemented by the Rust CLI
+and operations path.
 
 ### Personal permissions
 
@@ -62,8 +61,7 @@ deploy user before writing the unit file.
 └── eggpool.log         # Application log (if using file logging)
 
 /opt/eggpool/
-├── .venv/               # Python virtual environment
-└── src/eggpool/         # Application source code
+└── eggpool              # Optional standalone deployment asset
 
 /var/backups/eggpool/    # Daily-backup destination (production)
 /usr/local/bin/eggpool-backup  # Production backup script

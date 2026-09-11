@@ -14,8 +14,9 @@ catalogued as immutable external PyPI history; the repository-root
 `pyproject.toml` is development-only and is not a current publication
 authority.
 
-The package channel keeps `Requires-Python >=3.11` during the M12 transition:
-that requirement belongs to the packaging environment, not to the native
-runtime. Exact-version updates can return to a catalogued Python-era release
-without moving the configuration or database. `latest` is Rust-only, and no
-Rust download/install failure silently falls back to Python.
+The package keeps `Requires-Python >=3.11` while compatible historical
+transitions remain supported. That requirement belongs to the package manager,
+not to the native runtime. An explicit catalogued exact-version request may
+return to a compatible Python-era release without moving the configuration or
+database. `latest` is Rust-only, and no Rust download/install failure silently
+falls back to Python.

@@ -46,7 +46,7 @@ Status values (`CapabilityStatus`):
 | `mixed` | Some backing providers support thinking, others do not |
 | `conflicting` | External sources disagree on support status; requires operator resolution via manual override |
 
-Source: `src/eggpool/catalog/capabilities.py`
+Source: `rust/src/catalog/cache.rs`
 
 ## 2. Thinking Transcoding
 
@@ -78,7 +78,7 @@ Example config for strict loss policy:
 loss_policy = "reject"
 ```
 
-Source: `src/eggpool/transcoder/policy.py:217-225`
+Source: `rust/src/wire/adaptation.rs`
 
 ## 3. Configuration Reference
 
@@ -261,7 +261,7 @@ budget_tokens_max = 128000
 effort_to_budget_tokens = { low = 1024, medium = 10000, high = 128000 }
 ```
 
-Source: `src/eggpool/models/config.py`, `src/eggpool/catalog/capabilities.py`
+Source: `rust/src/config.rs`, `rust/src/catalog/cache.rs`
 
 ## 5. `/v1/models` Metadata
 
@@ -332,7 +332,7 @@ When `models.collapse_models = true`, a single entry aggregates all providers:
 
 The `providers` dict in the thinking block shows per-provider status so clients can understand why the aggregate is `mixed`.
 
-Source: `src/eggpool/catalog/capabilities.py`
+Source: `rust/src/catalog/cache.rs`
 
 ## 6. Routing Policy
 
@@ -376,7 +376,7 @@ Source: `src/eggpool/catalog/capabilities.py`
 | `ModelNotFoundError` | 404 | Model does not exist in the catalog |
 | `ModelUnavailableError` | 503 | Model exists but is currently unavailable (health, quota, etc.) |
 
-Source: `src/eggpool/catalog/capabilities.py:783-819`, `src/eggpool/errors.py:98-112`
+Source: `rust/src/catalog/cache.rs`, `rust/src/error.rs`
 
 ### Provider-bound control policy
 
@@ -411,7 +411,7 @@ legacy translation policy uses:
 | `medium` | 4096 |
 | `high` | 16384 |
 
-Source: `src/eggpool/transcoder/budget_resolver.py:228`
+Source: `rust/src/wire/adaptation.rs`
 
 ### Resolution Order
 
@@ -439,7 +439,7 @@ When `budget_tokens_min` or `budget_tokens_max` are known (from capability data 
 
 Under `"strict"` policy, clamped budgets cause rejection. Under `"lenient"` policy, clamping is silently applied with a warning.
 
-Source: `src/eggpool/transcoder/budget_resolver.py:296-341`
+Source: `rust/src/wire/adaptation.rs`
 
 ## 8. Client Examples
 
@@ -487,7 +487,7 @@ For streaming, include `"stream": true` as usual. Thinking stream deltas are tra
 
 ### Discovery Logic
 
-The generator (`src/eggpool/integrations/opencode.py`) inspects each model's `capabilities.thinking.status`:
+The generator (`rust/src/operations/integrations.rs`) inspects each model's `capabilities.thinking.status`:
 
 - **`"supported"`** → emits `"thinking": "supported"` in the model entry.
 - **All other statuses** (`"unknown"`, `"unsupported"`, `"mixed"`, `"conflicting"`) → the `thinking` field is **omitted**.
@@ -528,13 +528,13 @@ When `collapse_models = false`, the generator renders provider-suffixed model ID
 
 Note that `gpt-4o/openai` has no `thinking` field — its capability status is `unknown` or `unsupported`, so the annotation is omitted.
 
-Source: `src/eggpool/integrations/opencode.py:12-30`
+Source: `rust/src/operations/integrations.rs`
 
 ## 10. Observability
 
 ### In-Memory Counters
 
-`ThinkingMetricsCounter` (`src/eggpool/metrics/thinking.py`) tracks per-request thinking decisions using pipe-delimited label keys:
+`ThinkingMetricsCounter` (`rust/src/operations/metrics.rs`) tracks per-request thinking decisions using pipe-delimited label keys:
 
 | Counter Category | Key Format | Example |
 |---|---|---|
@@ -564,7 +564,7 @@ Every request that involves thinking decisions stores a `thinking_trace_json` co
 
 The overview page shows a **Thinking/Reasoning** stat card when counters are non-zero. It displays total thinking requests with a breakdown: requested, transcoded, dropped, rejected, unknown-cap, unsupported-cap, and budget-clamped counts.
 
-Source: `src/eggpool/metrics/thinking.py`, `src/eggpool/api/stats.py:452-463`, `src/eggpool/dashboard/render.py:1521-1579`
+Source: `rust/src/operations/metrics.rs`, `rust/src/server.rs`
 
 ## 11. Troubleshooting
 
@@ -664,7 +664,8 @@ This section documents the semantic hardening applied to thinking/reasoning hand
 
 Routing now treats a catalog entry with **no** `capabilities.thinking` block as semantically equivalent to an explicit `status = "unknown"`. Previously, missing metadata would silently fall through to `"supported"`, masking misconfiguration.
 
-The helper `extract_thinking_status_from_entry()` (`src/eggpool/catalog/capabilities.py`) is the single source of truth for this classification — both `get_eligible_accounts()` and `Router._collect_gate_status()` route through it.
+The catalog cache and routing gate in `rust/src/catalog/cache.rs` and
+`rust/src/coordinator/` are the single source of truth for this classification.
 
 Operator impact:
 - Models with unconfigured thinking capability now participate in the `unknown_thinking` policy evaluation (default: `reject`).

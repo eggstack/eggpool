@@ -21,8 +21,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
 - Thinking/reasoning capability metadata with compositional toggle/effort/budget
   controls and explicit translation-policy budget mapping
-- Per-account outbound proxy support ([pproxy](https://pypi.org/project/pproxy/) — install with `uv sync --extra proxy`)
-- Optional `orjson` backend for faster JSON handling (`uv sync --extra fast`)
+- Per-account outbound proxy support in the native runtime
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).
@@ -324,19 +323,18 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 ## Development
 
 ```bash
-uv sync --extra dev      # install dependencies
+cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo build --manifest-path rust/Cargo.toml --locked
 
-# Reproduce the exact CI environment (without local coverage tooling)
-uv sync --frozen --extra ci
+# Install the Python tooling environment when working on scripts/tests
+uv sync --dev
 
-# Before-push check (matches CI job)
-uv run ruff format --check src/ tests/ scripts/
-uv run ruff check src/ tests/ scripts/
-uv run pyright src/ scripts/
-uv run pytest tests/smoke/ -q --tb=short --maxfail=1
-
-# Optional `orjson` backend for the JSON helper (transcoding hot paths)
-uv sync --extra fast     # or: uv pip install 'eggpool[fast]'
+uv run ruff format --check scripts/ tests/tooling/
+uv run ruff check scripts/ tests/tooling/
+uv run pyright scripts/
+uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
 ### CI
@@ -345,7 +343,7 @@ One GitHub Actions job on every PR:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
-| `check` | 3.11 | ruff format + ruff check + pyright + `pytest tests/smoke/` |
+| `check` | Rust + Python tooling | Cargo format/tests plus ruff, pyright, and `pytest tests/tooling/` |
 
 See `AGENTS.md` for focused test subset commands.
 

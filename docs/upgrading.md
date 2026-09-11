@@ -1,14 +1,14 @@
 # Upgrade, rollback, and installation ownership
 
-EggPool's normal package is a native Rust executable distributed as a
+EggPool's current package is a native Rust executable distributed as a
 platform-specific wheel. The package channel is PyPI; the supported wheel
 targets are Linux x86_64, Linux aarch64, and macOS arm64. Windows and other
 unqualified targets have no Rust wheel and are unsupported.
 
-The wheel keeps `Requires-Python >=3.11` during M11 so package managers can
-install the native executable and the documented rollback path can reopen a
-supported Python-era release. The running EggPool process does not import the
-package's Python runtime.
+The wheel keeps `Requires-Python >=3.11` because package managers need a
+compatible environment when an operator explicitly selects a supported
+historical Python-era release. The running EggPool process does not import or
+execute the package-management interpreter.
 
 ## Fresh installs
 
@@ -116,12 +116,25 @@ installation or self-check fails.
 ## Source checkouts and unsupported targets
 
 A source checkout is a developer/reference workflow, not a normal install.
-Use the repository's uv commands deliberately and do not use it to simulate a
-public package upgrade. The root Hatchling package and `src/eggpool` remain
-temporarily available for P003/P004 evidence; they are historical development
-tooling, not the Rust release authority. The Rust wheel's
-`Requires-Python >=3.11` is a package-manager compatibility floor for explicit
-historical transitions, not a runtime interpreter dependency.
+Build and run the current Rust application with explicit Cargo paths:
+
+```bash
+cargo build --manifest-path rust/Cargo.toml
+rust/target/debug/eggpool --help
+rust/target/debug/eggpool --config ./config.toml check-config
+```
+
+Use the checkout's `packaging/pypi/pyproject.toml` only when building a local
+Rust wheel for qualification. The repository root `pyproject.toml` contains
+tooling configuration only; it is not an EggPool package and is never a
+runtime fallback. Historical Python source is recoverable from the immutable
+reference commit recorded in `migration-rs/fixtures/retirement/`, not from a
+current source package.
+
+The Rust wheel's `Requires-Python >=3.11` is a package-manager compatibility
+floor for explicit historical transitions, not a runtime interpreter
+dependency. On Windows or another unsupported target, installation fails
+before any existing installation is changed; no source-build fallback exists.
 
 On Windows or another unsupported target, no Rust wheel is selected and no
 source-build fallback is allowed. Existing installations are not mutated by a

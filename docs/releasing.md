@@ -1,9 +1,9 @@
-# Rust release procedure
+# Current Rust release procedure
 
-Current Rust releases are built and published by the pinned
-.github/workflows/release.yml workflow. The workflow is the production
-authority; it consumes `packaging/pypi/pyproject.toml` and never selects the
-historical root Hatchling project.
+Current EggPool releases are built and published by the pinned
+`.github/workflows/release.yml` workflow. The workflow is the production
+authority; it consumes `packaging/pypi/pyproject.toml` and packages only the
+Rust executable plus distribution metadata/assets.
 
 ## Candidate checks
 
@@ -18,13 +18,13 @@ uv run python scripts/validate_m12_package_boundary.py
 git diff --check
 ~~~
 
-The checks must agree on the K001 candidate (0.8.0 for this cutover), Cargo
-version, package metadata, supported targets, changelog heading, and source
-commit. The root `pyproject.toml` is deliberately pinned to historical Python
-0.7.4 and marked development-only; it must not be built or uploaded for a Rust
-release. `Requires-Python >=3.11` on the Rust wheel exists for package-manager
-compatibility when an operator explicitly selects a historical Python target,
-not because the Rust process imports or spawns Python.
+The checks must agree on the K001 candidate (0.8.0 for the current public
+release), Cargo version, package metadata, supported targets, changelog
+heading, and source commit. The root `pyproject.toml` is tooling-only and
+cannot be built or uploaded as an EggPool release. `Requires-Python >=3.11` on
+the Rust wheel exists for package-manager compatibility when an operator
+explicitly selects a historical Python target, not because the Rust process
+imports or spawns Python.
 
 The candidate release set is exactly:
 
@@ -53,12 +53,11 @@ target artifact acceptable.
 
 ## Production workflow
 
-K011 is the first operation authorized to publish. It must use a clean,
-immutable vX.Y.Z tag, maintainer approval, the protected PyPI Trusted
-Publisher environment, and the exact downloaded artifact bundle. The
-production jobs build and qualify each target, aggregate the hashes, then
-publish PyPI wheels and matching GitHub raw assets. They do not rebuild in a
-publish job and do not consume a long-lived PyPI token.
+The workflow uses a clean, immutable vX.Y.Z tag, maintainer approval, the
+protected PyPI Trusted Publisher environment, and the exact downloaded
+artifact bundle. The production jobs build and qualify each target, aggregate
+the hashes, then publish PyPI wheels and matching GitHub raw assets. They do
+not rebuild in a publish job and do not consume a long-lived PyPI token.
 
 After publication, verify the public metadata and release asset digests:
 
@@ -79,12 +78,24 @@ manifest, and sidecar hashes, and publishes only those wheels through the
 protected PyPI environment. This is a recovery path for the same release, not
 a normal release trigger or a substitute for the post-publication verifier.
 
-## Historical Python packaging
+## Historical exact-version compatibility
 
-The root Hatchling project remains temporarily available for P003/P004 evidence
-and exact historical rollback targets. It is explicitly historical tooling,
-not a current EggPool distribution authority. The canonical production build is
-`packaging/pypi/pyproject.toml`, whose Maturin `bin` backend packages the Rust
-executable with no Python application dependencies. Historical PyPI files are
-immutable external artifacts: M12 never backfills, deletes, yanks, or
-re-uploads them.
+Historical Python releases remain immutable external PyPI artifacts. They may
+be selected only by an explicit exact version when the K001 catalog, Python
+environment, and database/config compatibility checks allow it. They are not
+rebuilt, uploaded, or used as a current source package. The root
+`pyproject.toml` is tooling-only and contains no EggPool application package;
+the current publication authority is `packaging/pypi/pyproject.toml`.
+
+Use a non-publishing rehearsal before any upload:
+
+```bash
+uv run python scripts/qualification_cutover_rehearsal.py \
+  --manifest migration-rs/closure/cutover/009-run.json
+```
+
+Manual `workflow_dispatch` with `destination: validate` builds and validates
+the complete supported artifact set without publishing. `testpypi` is an
+explicit staged destination, while `pypi-resume` is reserved for recovery of
+one failed immutable tag run. Never modify, yank, delete, or re-upload files
+belonging to an existing historical release.

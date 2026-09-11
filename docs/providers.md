@@ -42,11 +42,12 @@ keys unless noted otherwise.
 
 ## Experimental Providers
 
-These providers are present as templates but require live verification before production use. Run the verifier to confirm they work with your credentials:
+These providers are present as templates but require live verification before production use. Validate the configuration and refresh the provider catalog with the native CLI:
 
 ```bash
 set -a; source .env; set +a
-uv run python scripts/verify_upstream_auth.py --config config.toml --provider <provider-id>
+eggpool --config config.toml check-config
+eggpool --config config.toml models refresh
 ```
 
 | Provider | ID | Base URL | Protocols | Notes |
@@ -66,13 +67,13 @@ or well-known local runtimes.
 
 ```bash
 # List available providers
-uv run eggpool connect list
+eggpool connect list
 
 # Connect to a provider interactively
-uv run eggpool connect
+eggpool connect
 
 # Connect to a specific provider
-uv run eggpool connect groq
+eggpool connect groq
 ```
 
 ### Manual Configuration
@@ -458,16 +459,11 @@ Verify a provider's auth, model listing, and chat endpoints:
 set -a; source .env; set +a
 
 # Verify config is valid
-uv run eggpool --config config.toml check-config
+eggpool --config config.toml check-config
 
-# Verify a specific provider
-uv run python scripts/verify_upstream_auth.py --config config.toml --provider groq
-
-# Verify all providers
-uv run python scripts/verify_upstream_auth.py --config config.toml --all
-
-# Verbose output with resolved URLs
-uv run python scripts/verify_upstream_auth.py --config config.toml --provider groq --verbose
+# Refresh provider models and inspect account health
+eggpool --config config.toml models refresh
+eggpool --config config.toml accounts status
 ```
 
 ## Provider-Specific Notes
@@ -555,7 +551,7 @@ settings split into three independent axes that are easy to confuse:
 
 | Setting | Scope | Effect |
 |---------|-------|--------|
-| `server.threads` | Granian worker threads inside one process | Required to remain `1`; request concurrency uses asyncio tasks |
+| `server.threads` | Native runtime I/O threads | Tunable within the validated range |
 | `database.worker_threads` | Read-only stats DB connections | Dashboard / metrics concurrency |
 | `<provider>.max_connections` | HTTPX connection pool per provider | Outbound HTTP connection parallelism |
 
@@ -640,7 +636,8 @@ stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
 - **Provider throttling:** some upstreams rate-limit aggressively when
   they see bursty TLS handshakes. Raise `keepalive_timeout_s` to keep
   the pool warm rather than relying on short-lived connections.
-- **Worker count:** Granian runs with `workers=1` by design. Adding
+- **Runtime ownership:** the native executable owns one lifecycle and generation
+  model by design. Adding
   workers creates multiple EggPool processes that each open their own
   HTTPX pool, which multiplies the connection budget and can push you
   past upstream per-IP rate limits.

@@ -287,12 +287,12 @@ sudo journalctl -u eggpool -f
 ## Configuration path resolution
 
 Every CLI command resolves `--config` against this precedence (single
-source of truth: `eggpool.deploy_user.resolve_config_path()`):
+source of truth: the native runtime's config path resolver):
 
 1. `--config PATH` (highest)
 2. `$EGGPOOL_CONFIG` environment variable
 3. `~/.config/eggpool/config.toml` (XDG default for installed copies)
-4. `./config.toml` (CWD fallback for source checkouts)
+4. `./config.toml` (CWD fallback for deliberate checkout workflows)
 
 For the environment file:
 
@@ -327,7 +327,8 @@ exact line to add.
 The XDG defaults honor `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, and
 `$XDG_STATE_HOME`. The resolvers (`default_config_dir()`,
 `default_data_dir()`, `default_state_dir()`, `default_config_path()`,
-`default_env_path()`) live in `src/eggpool/deploy_user.py`.
+`default_env_path()`) are implemented in the Rust operations path under
+`rust/src/operations/paths.rs` and `rust/src/operations/deploy.rs`.
 
 ---
 
@@ -344,8 +345,7 @@ The XDG defaults honor `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, and
 └── usage.sqlite3-shm    # Shared memory file
 
 /opt/eggpool/
-├── .venv/               # Python virtual environment
-└── src/                 # Application source
+└── eggpool              # Optional standalone deployment asset
 ```
 
 `eggpool deploy systemd --install --production` automates the full
@@ -376,7 +376,7 @@ metadata-enrichment sidecar (SBC profile does this by default). Host DNS
 behavior is provided by the operating system; EggPool does not add a
 process-local resolver cache.
 
-For a short deployment comparison, use the same host, Python, config shape,
+For a short deployment comparison, use the same host, config shape,
 database state, and stabilization interval for each build. Capture
 `eggpool runtime-status --json`, the startup `Operational profile` line, and
 host process/socket counts. Compare at least three runs. Treat these as
@@ -591,22 +591,20 @@ lifecycle via `runtime.write_pid_file()` /
 - `start_new_session=True` so the child survives shell exit and signals to the parent CLI do not propagate
 - `stdin=subprocess.DEVNULL` to detach from the calling terminal
 - `stdout`/`stderr` redirected to a log file (or `/dev/null` when `--quiet` is set without `--log-file`)
-- Default log file: `~/.local/state/eggpool/eggpool.log` (resolvable via `eggpool.runtime_paths.default_log_file()`); override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
+- Default log file: `~/.local/state/eggpool/eggpool.log` (resolved by the native runtime); override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
 - The `subprocess.Popen` handle is intentionally not awaited by the CLI parent; the parent returns as soon as the child has been spawned
 
 ### PID file resolution
 
-PID file path resolution lives in `eggpool.runtime_paths.default_pid_file()` and is the single source of truth shared by `serve`, `croncheck`, `ensure-running`, `stop`, `restart`, systemd, and the cron watchdog. Precedence:
+PID file path resolution lives in `rust/src/operations/paths.rs` and is the single source of truth shared by the CLI, systemd, and the cron watchdog. Precedence:
 
 1. `$EGGPOOL_PID_FILE` (if set)
 2. `$XDG_RUNTIME_DIR/eggpool.pid` (if `XDG_RUNTIME_DIR` is set)
 3. `~/.local/state/eggpool/eggpool.pid` (state dir auto-created)
 4. `/tmp/eggpool-<UID>.pid` (UID-scoped fallback)
 
-The `eggpool.constants.PID_FILE` constant is now a `_PIDFileProxy`
-that resolves through `default_pid_file()` on every read, so the
-constant inherits the same resolver for backwards compatibility
-with code that imports it directly.
+The native runtime owns the PID-file path; there is no Python compatibility
+constant to import.
 
 ### Root-user guard
 

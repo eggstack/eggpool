@@ -1,186 +1,94 @@
 # Architecture
 
-This directory is the current design index. Historical implementation plans
-remain under `plans/`; this index describes the runtime that is shipped today.
-
-EggPool's public protocol scope is OpenAI Chat Completions at
-`POST /v1/chat/completions`, the stateless OpenAI Responses surface at
-`POST /v1/responses`, Anthropic Messages at `POST /v1/messages`, and
-OpenAI-style model listing at `GET /v1/models`. Responses rejects stateful
-fields before provider selection, but its canonical payload and stream
-grammar can be adapted to eligible upstream Chat, Messages, Responses, or
-native Gemini profiles. `response.completed` is the only successful Responses
-terminal; native Gemini terminals are `interaction.completed` or a candidate
-`finishReason`. Transport EOF never manufactures a terminal event.
-
-For repository work, start here and follow the relevant deep dive. Active
-plans provide scope and sequencing when needed; completed plans are historical
-records and should not be traversed as a chain for ordinary changes. Regression
-tests follow capability contracts, while historical phase matrices and manual
-performance diagnostics are intentionally outside the routine CI surface.
+This directory is the current design index. It describes the native Rust
+runtime shipped by EggPool; migration plans and historical evidence remain
+under `migration-rs/`.
 
 ## Runtime shape
 
-`src/eggpool/cli.py` bootstraps the fast stdlib-only commands and delegates
-ordinary commands to the full Click CLI. The production process is a supervisor
-and one Granian worker (`workers = 1`, one asyncio event-loop thread). The
-worker owns a process-level database, readiness probe, task supervisor, and
-`RuntimeManager`.
+`rust/src/main.rs` and `rust/src/cli.rs` own the executable and command tree.
+The process owns configuration, SQLite, readiness, task supervision, runtime
+generations, provider clients, routing, request coordination, wire adaptation,
+operations, and graceful shutdown. The repository-root `pyproject.toml` and
+the scripts under `scripts/` are development/release tooling only.
 
-`RuntimeManager` publishes immutable generation slots. A generation contains
-the provider pool, outbound clients, catalog, router, coordinator, health
-manager, statistics service, and generation-leased background tasks. Rehash
-prepares a complete candidate through `RuntimeGenerationFactory`, then swaps
-it atomically; leases keep in-flight requests on the generation they acquired.
-The optional `ModelRouterRegistry` is also generation-owned. It contains only
-compiled configuration for exact virtual model aliases, so changing
-`[model_routers.<id>]` publishes a fresh registry atomically without adding
-catalog, health, quota, database, network, or background-task work. The
-generation-independent `ModelRouterSelector` consumes one compiled router
-through a child `ProxyRequestContext` and the same `RequestCoordinator`; it
-does not create a loopback HTTP request or selector-specific client. Public
-virtual aliases resolve before concrete catalog/provider routing. Sticky
-routers use `ProcessRuntime.model_router_affinity`, a bounded process-local
-TTL/LRU cache keyed by virtual model, semantic router fingerprint, and a
-hashed explicit or conservative automatic session identity. It never pins an
-account/provider or stores raw request/header data. Automatic Chat/Messages
-identities reserve bounded first-user entropy before consuming the shared
-system/developer prefix budget; Responses requires explicit session identity.
+`RuntimeManager` publishes immutable active and retiring generation slots. A
+generation contains provider clients, catalog, router, coordinator, health,
+statistics, and generation-leased background work. Rehash builds a complete
+candidate and swaps it atomically; request leases keep in-flight work on the
+generation it acquired. The model-router registry is generation-owned, while
+bounded affinity is process-owned and never stores raw request or credential
+data.
 
 ## Request lifecycle
 
-`RequestCoordinator` orchestrates endpoint detection, request parsing, model and
-account routing, durable request/attempt/reservation state, provider dispatch,
-response adaptation, and terminal finalization. Local preparation and response
-adaptation failures are terminal local errors. Only typed HTTPX transport
-failures may retry, and only across distinct accounts before downstream handoff.
-The optional model-router selector is a pre-routing semantic helper: its bounded
-non-streaming selector and optional repair requests are concrete child requests
-with independent IDs and ordinary accounting. Only a successful 2xx selector
-response with invalid route text is eligible for the one repair request, which
-reuses the initial bounded semantic context. Non-2xx selector responses are
-unavailable and fall back without repair; malformed successful output after
-repair returns the compiled router's default route. Parent cancellation remains
-cancellation. Sticky virtual routers can reuse a process-owned concrete-model
-affinity decision keyed by a hashed session identity and the router fingerprint;
-the selector is skipped on a hit.
+`rust/src/coordinator/` owns endpoint detection, bounded request preparation,
+model/account routing, durable request and attempt state, provider dispatch,
+response adaptation, retry classification, and terminal finalization.
+Canonical wire intent is captured before provider adaptation in
+`rust/src/wire/ir.rs`; all alternate targets encode from that source rather
+than chaining translated payloads. Native stream adapters require provider
+terminal evidence and never synthesize a terminal event from transport EOF.
 
-The database uses SQLite WAL, one serialized primary connection, and caller-owned
-`async with db.transaction()` boundaries for DML. Durable identities are created
-before ambiguous commit boundaries; indeterminate outcomes fail closed and are
-repaired on startup.
+## Subsystem ownership
 
-Shutdown ownership is ordered: request work and generation-owned finalization /
-background tasks are joined first, process-owned database users are stopped
-next, and only then does `Database.disconnect()` close the aiosqlite connection.
-The event loop is the final owner to tear down. Tests that create databases
-directly must mirror this with `try/finally` fixture cleanup; no warning filter
-is used to hide a worker thread publishing after loop teardown.
+| Subsystem | Current implementation |
+|---|---|
+| CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
+| Request and coordinator | `rust/src/request/`, `rust/src/coordinator/` |
+| Routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
+| Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
+| SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
+| Runtime and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs` |
+| Dashboard and operations | `rust/src/server.rs`, `rust/src/operations/` |
 
-## Providers and network
+See the corresponding deep dive for details:
 
-Provider/model contracts define URLs, protocol families, wire surfaces,
-capabilities, authentication, and prompt-cache dialects. `compose_provider_url()`
-is the URL authority. `WireSurfaceName` and `WireProfile` keep concrete
-upstream endpoint/codec/auth facts independent from the compatibility
-`ProtocolName` values.
-`ProviderClientPool` and `OutboundClientManager` use bounded HTTPX connection
-pools. Per-account pproxy routing remains supported. Host resolution is
-delegated to the operating system; there is no EggPool process-local DNS cache.
-
-See [deep-dive-providers.md](deep-dive-providers.md).
-
-## Protocol transcoding
-
-OpenAI Chat Completions and Anthropic Messages requests/responses are converted
-through the transcoder
-package. Request encoders receive the provider-bound payload as a read-only
-`Mapping`, build a fresh target graph, and hand that graph across the trusted
-`adopt_provider_payload()` boundary. `MultimodalCapabilities` in
-`catalog/capabilities.py` gives granular per-model media support; provider-
-sensitive media forces a final recompute against the selected provider's row.
-Native prompt-cache fields are capability-gated by provider/model contract.
-TTLs are never silently converted, tool-definition boundaries are not moved
-to message boundaries, and cache keys are never synthesized or logged. Loss
-policy determines whether unsupported
-fields warn or reject. Strict image/PDF base64 validation rejects obvious
-encoded-size overflow before decoding and releases the temporary validation
-buffer before translated output is built.
-
-The Responses surface is a stateless client surface, not a byte-only
-passthrough. `request_surface` identifies the client grammar while the
-selected `WireProfile.surface` identifies the concrete upstream endpoint and
-codec. The canonical request is captured before provider adaptation; concrete
-codecs in `wire/codecs/defaults.py` encode alternate requests and translate
-typed response/stream events back to the client grammar. Chat-specific
-transforms remain scoped to Chat, and native terminal evidence is required for
-successful streaming completion. `responses_path` remains a legacy shorthand
-for an `openai_responses` candidate.
-
-`wire/ir.py` defines the deliberately small canonical request, response,
-content, tool, usage, reasoning-intent, and streaming-event vocabulary.
-`wire/codecs/base.py` defines the codec contract; `compat.py` covers Chat and
-Messages, and `defaults.py` implements Responses, Gemini Interactions, and
-Gemini `generateContent`. `wire/codecs/runtime.py` adapts selected upstream
-responses and streams back to the public client surface. Alternate targets
-always encode from the original canonical request, never from a prior target
-payload.
-
-See [deep-dive-transcoder.md](deep-dive-transcoder.md).
-
-## Routing and health
-
-Routing is tier-based and load-based. `QuotaFairScorer` uses request/token load,
-active requests, health, priority, and account weight; it never uses monetary
-cost. Suppression is upstream-authoritative and transient backoff is bounded.
-Circuit breakers, per-account health, scoped model quarantine, and readiness
-database probes live under `src/eggpool/health/`.
-
-## Background work and observability
-
-`TaskSupervisor` owns process and generation task lifetimes. Optional features
-construct no clients/tasks when disabled. Runtime diagnostics are bounded and
-redacted; request bodies, credential values, cache keys, and raw tool content
-are not persisted. `/readyz` reads a process-owned cached probe snapshot and
-never writes.
-
-Model-info external enrichment piggybacks on the generation-leased
-`catalog_refresh` event. Startup performs one bounded pass when enabled;
-subsequent ticks select due canonical rows by `next_refresh_at` and status/source
-TTL state. No standalone `model_info_refresh` scheduler exists, and a source
-failure cannot fail catalog discovery or routing.
+- [Core](deep-dive-core.md)
+- [Request lifecycle](deep-dive-request-lifecycle.md)
+- [Transcoding](deep-dive-transcoder.md)
+- [Routing](deep-dive-routing.md)
+- [Providers](deep-dive-providers.md)
+- [Database](deep-dive-database.md)
+- [Runtime](deep-dive-runtime.md)
+- [Health](deep-dive-health.md)
+- [Background work](deep-dive-background.md)
+- [Dashboard](deep-dive-dashboard.md)
+- [Catalog](deep-dive-catalog.md)
+- [Model info](deep-dive-model-info.md)
+- [Control plane](deep-dive-control.md)
+- [Data models](deep-dive-models.md)
+- [Integrations](deep-dive-integrations.md)
+- [Security](deep-dive-security.md)
+- [Observability](deep-dive-observability.md)
+- [Retry](deep-dive-retry.md)
+- [Metrics](deep-dive-metrics.md)
+- [Lifecycle](deep-dive-lifecycle.md)
+- [Deployment](deep-dive-deployment.md)
 
 ## Configuration and deployment
 
-`config.toml` plus `.env` configure the service. The copyable profiles bind to
-loopback by default; LAN or wildcard binds require the existing server API key.
-Live-reloadable settings are explicitly listed in
-`src/eggpool/config_reload_policy.py`; unknown fields are rejected.
-`[model_routers.<id>]` is an optional live-reloadable configuration surface;
-its structural validation does not check current catalog availability.
+Configuration resolves in this order: explicit `--config`,
+`$EGGPOOL_CONFIG`, the XDG user config path, then `./config.toml`. API keys
+come from the environment or the adjacent `.env`. Live reload policy is owned
+by `rust/src/config_reload_policy.rs`; unsupported or disruptive changes fail
+closed and require restart.
 
-See [deep-dive-deployment.md](deep-dive-deployment.md), `docs/deployment.md`,
-`docs/live-config-rehash.md`, and [the model-routing guide](../docs/model-routing.md).
+The current release is a native Rust wheel with embedded runtime assets. The
+supported release target classes are Linux x86_64, Linux aarch64, and macOS
+arm64. Historical Python wheels remain immutable external artifacts and are
+available only for explicit catalogued exact-version compatibility transitions.
 
-## Manual SBC characterization
+## Source development
 
-Resource characterization is an operational confidence check, not a product
-benchmark. On a representative SBC, use a fixed short stabilization window,
-`eggpool runtime-status --json`, the startup operational-profile line, and
-standard process/socket tools. Provider-backed requests must use real
-configured accounts and synthetic, non-sensitive request shapes. Keep
-provider/network latency separate from EggPool-local preparation and dispatch
-timings. If hardware, safe credentials, or a request dimension is unavailable,
-record it as `not measured`; do not extrapolate from a workstation or create a
-load/soak harness, performance threshold, or hardware CI gate. See
-[Plan 126](../plans/126-provider-backed-sbc-characterization.md) for the
-completed evidence record.
+Run current runtime checks from the repository root:
 
-## Schema policy
+```bash
+cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo build --manifest-path rust/Cargo.toml --locked
+```
 
-The historical `requests` table is frozen. New persistence must justify durable
-lifecycle/accounting or externally visible compatibility value. Feature-specific
-diagnostics use existing bounded fields or narrowly scoped sidecars; cosmetic
-migrations and generic EAV storage are prohibited. Historical synthetic-cache
-columns from earlier migrations remain for compatibility but are no longer
-written or exposed.
+Use the Python tooling environment only for release validators and tooling
+tests. Do not import, run, or recreate the retired application source tree.

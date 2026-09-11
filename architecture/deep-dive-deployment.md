@@ -4,7 +4,7 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Production deployment, systemd integration, operational scripts, and the tools needed to run EggPool in production.
+Production deployment, systemd integration, operational scripts, and the tools needed to run the native EggPool executable.
 
 ## Deployment Artifacts
 
@@ -16,39 +16,26 @@ Production deployment, systemd integration, operational scripts, and the tools n
 | `eggpool-logrotate.conf` | Logrotate configuration |
 | `env.example` | Production env example |
 
-### `src/eggpool/deploy/`
+### `rust/src/operations/deploy.rs`
 
-Bundled systemd/logrotate/cron snippets for CLI output. `eggpool.service` is byte-for-byte identical to `eggpool.deploy.SYSTEMD_UNIT`.
+Rust-owned systemd/logrotate/cron snippets for CLI output. Deployment
+rendering and process commands are implemented in `rust/src/operations/`.
 
 ## Installation
 
 ### `scripts/install.sh`
 
-One-shot installer:
-1. Clones repo
-2. Installs uv
-3. Installs EggPool via pipx or uv tool
+One-shot installer for the current Rust wheel. It recognizes existing package
+manager and standalone installations, refuses ambiguous ownership, checks the
+supported OS/architecture before mutation, and preserves configuration.
 
-### `scripts/install_prompt.py`
+## Operational tooling
 
-Interactive install prompt for guided setup.
-
-## Operational Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/smoke_test.py` | Deployment smoke test (requires 4 env vars) |
-| `scripts/check_database.py` | Database invariant checker (exit 0/1/2) |
-| `scripts/verify_upstream_auth.py` | Direct upstream auth verifier |
-| `scripts/validate_routing.py` | Routing validation |
-| `scripts/repro_high_concurrency_streams.py` | High-concurrency stream reproducer |
-| `scripts/test_model_info_identity.sh` | Model-info identity test runner |
-| `scripts/debug_model_info_openrouter.sh` | OpenRouter debug helper |
-| `scripts/install.sh` | One-shot installer (pipx or uv tool) |
-| `scripts/install_prompt.py` | Post-install interactive onboarding prompt |
-| `scripts/admission_race_stress.py` | Repeated-run admission race stress test |
-| `scripts/bench_sqlite_writepath.py` | SQLite write-path benchmark |
-| `scripts/run_tests_with_timeout.py` | pytest runner with hard wall-clock timeout |
+The `scripts/` directory contains release, package-boundary, installer,
+portability, and qualification tooling. The most relevant commands are
+`qualify_quick_installer.py`, `validate_m12_retirement.py`,
+`validate_m12_package_boundary.py`, `validate_release_workflow.py`,
+`build_cutover_artifacts.py`, and `verify_published_release.py`.
 
 ## Systemd Integration
 
@@ -64,7 +51,7 @@ Type=simple
 User=eggpool
 Group=eggpool
 WorkingDirectory=/var/lib/eggpool
-ExecStart=/opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml serve
+ExecStart=/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve
 Restart=on-failure
 RestartSec=5
 StartLimitIntervalSec=300
@@ -97,7 +84,7 @@ WantedBy=multi-user.target
 ### `config.toml`
 
 Runtime configuration. Key sections:
-- `[server]` — host, port, workers
+- `[server]` — host, port, runtime threads
 - `[upstream]` — default upstream settings
 - `[database]` — SQLite path, WAL mode
 - `[routing]` — fairness mode/epsilon/scope
@@ -118,7 +105,7 @@ API key storage. Never committed.
 ## Live Reload
 
 `eggpool rehash` applies supported changes without restart:
-- Control socket at `<runtime_dir>/eggpool.sock` (`control_socket_path()` → `runtime_paths.runtime_dir()`: `$EGGPOOL_RUNTIME_DIR` → suitable `$XDG_RUNTIME_DIR/eggpool` → private state/runtime fallback → UID-scoped `/tmp` fallback). The server requires the runtime directory to be an owner-only `0o700` directory and the socket to be an owner-only `0o600` socket.
+- Control socket at `<runtime_dir>/eggpool.sock`, resolved by the native path helpers from `$EGGPOOL_RUNTIME_DIR`, suitable `$XDG_RUNTIME_DIR`, private state, and UID-scoped `/tmp` fallbacks. The server requires the runtime directory to be an owner-only `0o700` directory and the socket to be an owner-only `0o600` socket.
 - LIVE fields: provider/account/routing families, transcoder, cache, subset of models, retention durations
 - RESTART_REQUIRED: everything else
 - JSON output pinned at 9 keys
@@ -162,13 +149,13 @@ Automatic backup task (zip archives):
 - Database
 - Scheduled via `[backup]` config
 - Disabled in the copyable low-wear SBC profile unless explicitly enabled
-- Runtime snapshot/archive work runs off the canonical asyncio event loop
+- Runtime snapshot/archive work uses bounded native task scheduling
 
 ## Key Invariants
 
 - Systemd unit is byte-for-byte identical to bundled deploy artifact
 - `eggpool rehash` serializes reload transactions (one at a time)
-- `reload_in_progress` exits with code 4 (`EXIT_RELOAD_BUSY`)
+- `reload_in_progress` uses the stable reload-busy exit code
 - `eggpool connect`/`logout` don't silently restart
 - Daemon mode is default for `eggpool serve`
 - `--verbose` for foreground mode

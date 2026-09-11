@@ -22,4 +22,4 @@ def test_k006_quick_installer_harness_passes() -> None:
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["status"] == "pass"
-    assert len(report["cases"]) == 12
+    assert len(report["cases"]) == 14

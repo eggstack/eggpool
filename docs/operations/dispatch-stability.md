@@ -16,13 +16,7 @@ work from provider latency. Inspect `stream_diagnostics` for provider-bound
 connect, read, write, protocol, and timeout outcomes. After a failure or
 cancellation, verify that active requests and reservations return to zero.
 
-For a stream-specific issue, use the bounded reproducer:
-
-```bash
-uv run python scripts/repro_high_concurrency_streams.py --help
-```
-
-Run the focused tests for the changed ownership boundary. In particular,
+Run the focused Rust tests for the changed ownership boundary. In particular,
 streaming tests distinguish canonical terminal evidence (`[DONE]` or
 `message_stop`) from premature EOF; a timeout is a separate upstream outcome.
 Runtime metrics are operational signals and should not be converted into

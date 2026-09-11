@@ -25,7 +25,7 @@ The default backup directory depends on the installation type:
 
 The automatic task uses `sqlite3.Connection.backup()` for consistent
 snapshots and writes archives atomically (write-to-temp + rename). Snapshot,
-archive-copy, and staging cleanup work runs off the asyncio event loop.
+archive-copy, and staging cleanup work uses bounded native task scheduling.
 No external `sqlite3` binary is required.
 
 The `eggpool deploy backup-cron` path remains available for operators

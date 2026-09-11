@@ -26,7 +26,7 @@ The transcoder sits in the request path and:
 
 ### Canonical request and reasoning boundary
 
-`src/eggpool/wire/ir.py` contains the portable subset used for cross-surface
+`rust/src/wire/ir.rs` contains the portable subset used for cross-surface
 replay: ordered messages/content blocks, function tools and choices, response
 format intent, normalized usage, response blocks, and bounded stream events.
 `ReasoningIntent` records `unspecified`, explicit disable, named effort,
@@ -454,7 +454,7 @@ The following `kind` values may appear on `TranscodeContext.loss_warnings`:
 | `budget_rejected` | Strict policy rejected an unresolvable thinking budget | `requested`, `policy` |
 | `budget_resolution_no_input` | Budget resolution was requested but no input was provided | `policy` |
 
-The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
+The complete catalogue lives in the Rust wire-adaptation registry.
 
 Loss warnings are safe to emit to ordinary logs: malformed tool arguments and
 inputs are represented by structural metadata only. Raw request content is
@@ -599,7 +599,7 @@ Additional context fields that may appear:
 | `default` | Shows the synthetic default for `missing_field` |
 | `id` | Tool-call id associated with the warning (e.g., `malformed_tool_arguments`) |
 
-The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
+The complete catalogue lives in the Rust wire-adaptation registry.
 
 ### Known Lossy Mappings
 
@@ -628,7 +628,7 @@ The complete catalogue lives in `eggpool.transcoder.LOSS_WARNING_KINDS`.
 
 ## Performance Characteristics
 
-- **Body translation**: ~50µs per request. This is a pure Python dict transformation — no I/O, no network calls.
+- **Body translation**: a bounded in-process Rust transformation — no I/O or network calls.
 - **Streaming translation**: One state machine per request. The state machine processes SSE frames incrementally — no buffering of the full stream.
 - **Memory**: The shared decoder bounds each incomplete line/event to 64KB; the transcoder retains only protocol state and bounded tool/reasoning buffers.
 - **No additional network hops**: Transcoding happens inside the existing request path. There is no sidecar or proxy.
@@ -672,20 +672,15 @@ pressure when many transcoded streams are in flight concurrently:
   JSON payload and never rely on preserved whitespace, so this
   reduces both output bytes and serialization work.
 
-Tests live under `tests/unit/test_transcoder/test_streaming_fixtures.py`
-(replay-based decoded event assertions), `tests/perf/test_streaming_transcoder_perf.py`
-(microbenchmarks), and `tests/integration/test_streaming_transcode_concurrency.py`
-(E2E concurrency regression). The fixtures themselves are JSON files
-under `tests/fixtures/streaming_transcode/`.
+Streaming codec contracts are covered by the Rust integration targets under
+`rust/tests/`, including `wire_stream.rs` and `wire_codecs.rs`. Use the native
+Cargo test flow for replay and terminal-evidence checks.
 
 ## Cache Stability
 
 Provider-visible prompt caching (Anthropic's `cache_control` breakpoints) is **observational** in v1 — the transcoder preserves or annotates every `cache_control` event but never reorders key material, mutates prompt content, or synthesises cache hints that the caller did not provide. Two helpers make the cache surface explicit:
 
-- `eggpool.transcoder.cache_stability.CacheBoundaryTracker` — per-request, append-only, bounded (cap = 64 annotations) tracker carried on `TranscodeContext.cache_boundary_tracker`. Records every `cache_control` boundary event with `kind`, source/target protocol, dot path, and `cache_control_type`.
-- `eggpool.transcoder.cache_stability.extract_cache_boundaries(body)` — structural walker that returns every `cache_control` annotation in a body, in document order. Used by both transcoders to compute their boundary summary.
-- `eggpool.transcoder.cache_stability.extract_provider_visible_prefix(body)` — returns the body minus volatile fields (the last message, the `stream` flag), suitable for cache-key comparison.
-- `eggpool.transcoder.cache_stability.stable_dumps` / `stable_hash` — deterministic JSON serialisation and SHA-256 hashing for the cache prefix; key order is canonicalised so wire bytes match across processes.
+- `rust/src/wire/` owns the per-request cache-boundary tracker, structural boundary extraction, provider-visible prefix handling, and deterministic hashing.
 
 Cache-boundary annotation kinds emitted by the tracker:
 
@@ -698,11 +693,14 @@ Cache-boundary annotation kinds emitted by the tracker:
 | `dropped_invalid_shape` | The annotation failed shape validation (missing or non-string `type`). |
 | `synthesized` | Reserved for future phases that synthesise cache hints on behalf of the caller. |
 
-Operators can read the boundary tracker through the structured loss warnings (`stable_prefix_preserved`, `stable_prefix_reordered_canonically`, `cache_control_*`) — every entry carries a path so dashboards can attribute cache hit-rate loss to specific fields. Routing (`QuotaFairScorer`) does **not** consume these annotations; cache observability is reporting-only and asserted by `tests/unit/test_routing.py::test_scorer_does_not_consume_cache_counter_status`.
+Operators can read the boundary tracker through structured loss warnings
+(`stable_prefix_preserved`, `stable_prefix_reordered_canonically`,
+`cache_control_*`). Routing does **not** consume these annotations; cache
+observability is reporting-only.
 
 ### Loss-policy enforcement
 
-When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body transcoder raises `eggpool.transcoder.errors.TranscodeLossError` (rendered as HTTP 400 with `invalid_request_error`) before upstream dispatch whenever any of the protected loss kinds is recorded:
+When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body transcoder raises the Rust wire-adaptation error (rendered as HTTP 400 with `invalid_request_error`) before upstream dispatch whenever any of the protected loss kinds is recorded:
 
 | Kind | When fired |
 |---|---|
@@ -716,7 +714,9 @@ When the operator has set `loss_policy = "reject"` on `[transcoder]`, the body t
 | `media_tool_result_flattened` | Non-text media inside a tool result was flattened to text because the target does not support media-bearing tool results. |
 | `document_media_type_unsupported` | A document media type (e.g. non-PDF) is not supported by the target provider. |
 
-The `warn` default preserves the v1 behaviour: the request proceeds and the loss is recorded in `TranscodeContext.loss_warnings` for audit. The transcoder never injects warning text into the translated body — regression-guarded by `tests/unit/test_transcoder/test_cache_stability_integration.py::TestWarningsNotInModelVisibleContent`.
+The `warn` default preserves the v1 behaviour: the request proceeds and the
+loss is recorded for audit. The transcoder never injects warning text into the
+translated body.
 
 ## Pricing Catalog Cache
 
@@ -801,7 +801,7 @@ eggpool stats transcoding --period 30d --json
 
 `GET /api/stats/transcoding?period=24h` returns the same counters as the
 Runtime card. JSON responses encode direction keys as strings such as
-`"openai→anthropic"` under `per_direction`; Python-internal tuple keys are never
+`"openai→anthropic"` under `per_direction`; internal tuple keys are never
 exposed on the API surface.
 
 ### Disable transcoding (deprecated escape hatch)

@@ -1,9 +1,9 @@
-# EggPool Rust migration scaffold
+# EggPool Rust application
 
-This is the non-published, side-by-side Rust candidate described by the
-[migration plan](../migration-rs/implementation/foundation/001-rust-workspace-and-build-scaffold.md).
-Python remains the canonical production implementation; this package must not
-replace the installed `eggpool` command.
+This directory owns the current EggPool application and runtime. The
+publication manifest in `../packaging/pypi/pyproject.toml` builds this binary
+as a platform-specific wheel; the repository-root `pyproject.toml` is
+tooling-only.
 
 ## W002 canonical request boundary
 
@@ -23,24 +23,23 @@ first stable toolchain with edition-2024 support. The current development
 toolchain may be newer, but code should remain compatible with the declared
 MSRV and intended deployment targets.
 
-## Explicit-path development
+## Source-development flow
 
 Run commands from the repository root and always pass the manifest path:
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml
-cargo build --manifest-path rust/Cargo.toml
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo build --manifest-path rust/Cargo.toml --locked
 rust/target/debug/eggpool --help
-rust/target/debug/eggpool --version
 rust/target/debug/eggpool version
 ```
 
 The build output is confined to `rust/target/`. Do not use `cargo install` or
-copy the binary into a global/user executable directory during migration.
-Later parity work and black-box invocation conventions are tracked in the
-[`migration-rs` guide](../migration-rs/README.md).
+copy the binary into a global/user executable directory for routine
+development. Use the built binary directly, or build a local wheel through
+`packaging/pypi/pyproject.toml` when qualifying package installation.
 
 ## T002 direct provider transport
 
@@ -86,36 +85,18 @@ server drops the pool after graceful shutdown, releasing direct and proxied
 Hyper connection pools; routing, credentials, retries, and generation swaps
 remain downstream work.
 
-## F005 Axum read-plane server
+## Runtime and server
 
-The Rust candidate now has a development-only Axum server for the first
-dashboard/read-plane slice. Build it, choose a port different from the Python
-server, and run it with an existing compatible config:
+Build and run the application with an existing compatible config:
 
 ```bash
 cargo build --manifest-path rust/Cargo.toml
 rust/target/debug/eggpool --config ./config.toml serve --verbose
 ```
 
-The current Rust routes are `/v1/healthz`, `/v1/readyz`, `/`,
-`/api/stats/summary`, and the dashboard resources under `/static/`. The
-inference paths `/v1/chat/completions`, `/v1/messages`, and `/v1/responses`
-are explicit placeholders for a later provider milestone. Python remains the
-production server and should continue to run on its own port during migration.
-The explicit `serve --verbose` form is the only supported Rust invocation at
-this stage. Plain `serve` (Python's daemon mode), `--log-file`, `--quiet`, and
-`--as-root` are parsed for CLI compatibility but fail explicitly because daemon
-and root-gated lifecycle behavior belongs to the later runtime milestone.
-Choose separate writable database paths for Python and Rust, or copy a source
-fixture once and give each candidate its own writable copy; do not run both
-implementations against the same writable SQLite file.
-
-Copied dashboard resources are checked against the Python source tree by the
-manifest test:
-
-```bash
-cargo test --manifest-path rust/Cargo.toml copied_asset_manifest_matches_the_frozen_python_source
-```
+The runtime is Rust-only. Current development and qualification must use a
+disposable configuration/database when isolation is needed; never share a
+writable SQLite database between independent processes.
 
 ## F004 SQLite compatibility baseline
 
@@ -135,11 +116,10 @@ commit failure whose rollback cannot prove the connection clean, closes
 admission and the worker; a commit failure with a verified rollback remains a
 typed, usable failure just as in the Python oracle.
 
-F004 currently exposes typed account, model, request, provider-ping, and
-usage-rollup repositories for the first read plane. Full request finalization,
-quota reservations, catalog maintenance, backups, and runtime recovery remain
-unported and belong to later milestones. Python remains the production
-implementation.
+The Rust repositories and runtime own account, model, request, provider-ping,
+usage, finalization, quota, catalog, backup, and recovery behavior. Historical
+compatibility fixtures live under `migration-rs/fixtures/` and are not read by
+the production runtime.
 
 ## F003 config and CLI compatibility
 
@@ -149,7 +129,7 @@ it exists, and finally `./config.toml`. It validates the supported TOML shape,
 defaults, legacy flat accounts, provider/auth/proxy forms, wire surfaces,
 model routers, and cross-field safety rules without printing credential values.
 
-Useful migration-only probes are:
+Useful source-development probes are:
 
 ```bash
 rust/target/debug/eggpool --config ./config.toml check-config
@@ -157,9 +137,7 @@ rust/target/debug/eggpool --help
 rust/target/debug/eggpool serve --help
 ```
 
-`version`, `--help`, `check-config`, and the development-only `serve` command
-are implemented in Rust. Other commands and options are represented by the
-full parser tree but currently exit with `not implemented in Rust candidate`;
-this is an explicit migration-stage boundary and is not a final cutover
-behavior. The Python `eggpool` executable remains the production command
-throughout migration.
+`version`, `--help`, `check-config`, and the complete operational command tree
+are implemented in Rust. Historical Python releases remain external,
+explicit exact-version package-manager targets only; they are not a source or
+runtime fallback for this checkout.

@@ -1,12 +1,12 @@
 # Rust dashboard qualification
 
-Q004 uses an isolated, deterministic Python/Rust server comparison. It does
-not add a browser or screenshot dependency to the Rust runtime.
+Dashboard qualification uses an isolated, deterministic native Rust build. It
+does not add a browser or screenshot dependency to the runtime.
 
 Run the machine-checked qualification from the repository root:
 
 ```text
-uv run python scripts/qualification_dashboard.py --screenshots
+cargo test --manifest-path rust/Cargo.toml --test operations_o008 -- --test-threads=1
 ```
 
 The command writes `migration-rs/closure/qualification/004-run.json` and

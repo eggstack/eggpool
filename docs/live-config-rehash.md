@@ -79,7 +79,7 @@ candidate builder already constructs as generation-owned objects:
 
 The D2 milestone adds background-task cadences and retention
 durations as LIVE fields.  It introduces a dual-ownership model
-via ``TaskOwnership`` (``src/eggpool/runtime_task_inventory.py``):
+via the runtime task supervisor (``rust/src/task_supervisor.rs``):
 
 - **Process-owned** tasks (``checkpoint``, ``metrics_flush``,
   ``update_checker``, ``automatic_backup``) register on
@@ -102,7 +102,7 @@ D2 LIVE families:
   ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling
   ``enabled`` adds/removes the task.
 
-The ``_run_periodic_loop`` in ``src/eggpool/background/__init__.py``
+The periodic task loop in ``rust/src/task_supervisor.rs``
 re-reads ``self._interval_s`` and ``self._initial_delay_s`` each
 iteration so live interval changes take effect at the next tick
 boundary — not from the last completion time.  For tasks changed via
@@ -119,7 +119,7 @@ deprecated and does not control a task. The existing `catalog_refresh` task
 provides recurring opportunities, and the model-info service selects due
 rows using per-row TTLs and source cooldowns.
 
-``ProcessRuntime`` (``src/eggpool/runtime_manager.py``) now carries
+the runtime lifecycle state (``rust/src/runtime_lifecycle.rs``) now carries
 ``process_supervisor``, ``task_spec_version``, and
 ``last_task_transition`` fields.  Diagnostics are exposed under
 ``/api/stats/runtime`` via ``_snapshot_runtime_manager``.
@@ -139,7 +139,7 @@ secret-shaped values. The focused reload integration, failure-injection,
 security, and inventory suites cover these contracts; manual performance
 measurements are not a reload acceptance gate.
 
-Fields that stay ``RESTART_REQUIRED`` include server binding and Granian
+Fields that stay ``RESTART_REQUIRED`` include server binding and runtime
 construction, database path and topology, middleware, metrics storage
 topology, security header construction, the ``[upstream]`` registry, and the
 ``[model_info]`` service. These resources are built by the supervisor or
@@ -255,7 +255,7 @@ deployment tooling can rely on:
 | `5` | Candidate preparation or publication failure |
 | `6` | Digest mismatch between CLI preflight and server read |
 
-The constants are pinned in `src/eggpool/cli_exit_codes.py`. Every
+The constants are pinned in `rust/src/cli.rs`. Every
 `--json` response always includes the `exit_code` key so programmatic
 consumers do not need to map stages themselves.
 
@@ -287,9 +287,8 @@ Every outcome (success, failure, busy, no-op) always includes these
 | `retirement_pending` | `bool` | `True` when the old generation is still draining |
 | `message` | `str` | Human-readable summary |
 
-The `format_rehash_json()` function in `src/eggpool/cli_rehash_format.py`
-is the single source of truth; tests in
-`tests/unit/test_cli_rehash_format.py` pin the contract.
+The rehash JSON formatter in `rust/src/cli.rs` is the single source of truth;
+the Rust operation suites pin the contract.
 
 ### Error messages
 
@@ -313,8 +312,7 @@ The validation result carries two distinct hashes:
 
 ## Reload policy
 
-Every `AppConfig` field is classified in the `_FIELD_DISPOSITION` map
-in `config_reload_policy.py`:
+Every configuration field is classified in `rust/src/config_reload_policy.rs`:
 
 | Disposition | Meaning |
 |-------------|---------|
@@ -337,7 +335,7 @@ and `backup.startup_delay_s`. Model-info service construction and its
 per-source/row policy remain restart-required, except for the existing
 generation-owned `model_info.enabled` switch. Every other field remains
 `RESTART_REQUIRED` because it is owned by the supervisor process
-(Granian construction, DB connection, middleware, JSON backend,
+(runtime construction, DB connection, middleware, JSON backend,
 deployment paths, `[upstream]` registry, `[model_info]` service
 construction). When reviewing a future change, move the
 corresponding entry to `LIVE` in the same diff that introduces the
@@ -352,7 +350,7 @@ The policy map is the single reviewable inventory.  To print a
 live/restart summary from a checkout:
 
 ```python
-from eggpool.config_reload_policy import _FIELD_DISPOSITION
+from the Rust reload policy (`rust/src/config_reload_policy.rs`)
 for path, disp in sorted(_FIELD_DISPOSITION.items()):
     print(f"{disp.value:18s} {path}")
 ```
@@ -376,7 +374,7 @@ and replace the table.
 `eggpool connect` and `eggpool logout` route through the same
 validate-and-reload helper (`cli_rehash_helper.validate_and_rehash`)
 that `eggpool rehash` uses. The safe-fallback decision tree in
-`resolve_apply_outcome()` (`src/eggpool/providers/connect.py`) is:
+the reload outcome resolver (`rust/src/operations/config_mutation.rs`) is:
 
 1. **Validate locally** — invalid config → return immediately, no
    restart attempted.
@@ -484,11 +482,9 @@ a healthy server — the operator must intervene:
 
 - `architecture/README.md` § Live Configuration Rehash — validation
   contract, diff shape, wire types, and runtime generations
-- `src/eggpool/config_validation.py` — reusable validation contract
-- `src/eggpool/config_reload_policy.py` — typed diff and reload policy
-- `src/eggpool/cli_rehash_format.py` — standardized JSON and human output
-- `src/eggpool/cli_exit_codes.py` — stable exit code constants
-- `src/eggpool/control/server.py` — control socket server
-- `src/eggpool/control/client.py` — control socket client
-- `src/eggpool/control/reload_manager.py` — transactional reload manager
-- `src/eggpool/providers/connect.py` — safe connect/logout fallback policy
+- `rust/src/config.rs` — reusable validation contract
+- `rust/src/config_reload_policy.rs` — typed diff and reload policy
+- `rust/src/cli.rs` — standardized JSON, human output, and exit code constants
+- `rust/src/operations/control.rs` — control socket server/client
+- `rust/src/reload.rs` — transactional reload manager
+- `rust/src/operations/config_mutation.rs` — safe connect/logout fallback policy

@@ -1,139 +1,33 @@
 # Deep Dive: Background Tasks
 
-Back to [Overview](overview.md)
+Back to [Architecture](README.md)
 
-## Purpose
+`rust/src/task_supervisor.rs` manages startup and periodic work. Tasks are
+either process-owned, surviving safe generation swaps, or generation-leased,
+retiring with the generation that created them.
 
-The `TaskSupervisor` manages periodic and startup tasks for maintenance, cleanup, monitoring, and operational housekeeping. Tasks are classified as process-owned (survive generation swaps) or generation-leased (retired with their generation).
+## Task classes
 
-## Architecture
+Process-owned tasks cover WAL checkpointing, metrics flushing, optional update
+checking, and optional automatic backups. Generation-leased tasks cover catalog
+refresh and retention/reconciliation. Catalog refresh is also the opportunity
+for bounded model-info enrichment; there is no separate model-info scheduler.
 
-```
-┌─────────────────────────────────────┐
-│         TaskSupervisor               │
-│  Fixed-delay scheduler               │
-│  Next interval after previous tick   │
-└──────────────┬──────────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Process-Owned Tasks │ (survive generation swaps)
-    │ • checkpoint        │ (default)
-    │ • metrics_flush     │ (default)
-    │ • update_checker    │ (opt-in)
-    │ • automatic_backup  │ (opt-in)
-    └─────────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │ Generation-Leased   │ (retired with generation)
-    │ Tasks               │
-    │ • catalog_refresh   │
-    │ • retention_cleanup │
-    └─────────────────────┘
-```
+The supervisor uses fixed-delay scheduling: the next interval starts after the
+previous tick completes. Task inventory and operational profiles are bounded
+diagnostics, not a performance benchmark or a runtime authority.
 
-## Key Modules
+## Recovery and shutdown
 
-### `background/maintenance.py` — TaskSupervisor
+Startup reconciliation repairs interrupted requests and expired reservations
+under the database transaction contract. Backup and metrics tasks preserve
+bounded queues and report failures without losing the active generation.
+Shutdown joins request, finalization, and generation-owned work before closing
+the process-owned database.
 
-Fixed-delay scheduler:
-- Next interval begins after previous tick completes
-- `initial_delay_s` consumed exactly once per task lifecycle
-- Tasks registered via `register_periodic()`
-- Process-owned and generation-leased classifications
+## Update authority
 
-### `background/cleanup.py`
-
-Retention cleanup and reservation reconciliation. Active requests are not
-reclaimed by age; crash repair runs once during startup after a previous
-process has exited.
-
-### `background/backup.py`
-
-Automatic backup task (zip archives).
-
-### Rust O007 operator services and metrics boundary
-
-The migration candidate keeps operator behavior in
-`rust/src/operations/operator.rs`: catalog refresh delegates to the catalog
-service, account explanation uses the read-only routing plan, model-info work
-uses the canonical tables, and cost/statistics operations use bounded SQL
-transactions. `rust/src/runtime.rs` is only the command adapter; it does not
-reimplement routing, catalog, pricing, or repair policy.
-
-`rust/src/operations/metrics.rs` owns the process-level
-`MetricsWriteCoalescer`. Request finalization contributes only bounded scalar
-usage facts. The coalescer aggregates by the canonical rollup key, enforces
-both a distinct-row cap and a pending-event cap, and writes additive
-`usage_rollups` upserts under one SQLite transaction. A failed write is
-re-buffered only within those same bounds and counted in diagnostics. The
-`metrics_flush` callback is registered with the existing M8 process task
-supervisor, honors immediate versus buffered mode, and the server performs one
-deadline-bounded final flush during shutdown.
-
-## Task Classification
-
-### Process-Owned Tasks
-
-Survive generation swaps (live reload). The ordinary low-wear profile registers
-the default rows below; update checking and automatic backups are explicit
-opt-ins:
-- **`checkpoint`** — Database WAL checkpoint
-- **`metrics_flush`** — Metrics buffer flush
-- **`update_checker`** — optional PyPI update check (conservative, no freshness bypass)
-- **`automatic_backup`** — Scheduled backup
-
-The task inventory is exposed through `eggpool runtime-status --json` and the
-startup `Operational profile` log line. Those are bounded diagnostics for a
-fixed short measurement window, not a benchmark framework or a steady-state
-resource guarantee across hosts.
-
-### Generation-Leased Tasks
-
-Retired when their generation is retired:
-- **`catalog_refresh`** — Upstream model catalog refresh
-- **`retention_cleanup`** — Bounded daily retention and reservation reconciliation
-
-Catalog refresh is also the event source for model-info reconciliation,
-bounded due external enrichment, and health/model recovery. Each tick uses
-the leased generation's model-info service; reconciliation, canonical
-backfill, and due refresh are isolated so external metadata failures cannot
-fail catalog discovery or routing. `models.refresh_interval_s` controls the
-opportunity cadence, while model-info row TTLs and source cooldowns control
-the actual work. There is no separate `model_info_refresh` task. Usage
-windows are hydrated while constructing a generation, so neither concern
-needs a second periodic reload task.
-
-The five-minute default discovery cadence is a fetch cadence, not a full
-SQLite catalog rewrite. Successful refresh freshness is written to compact
-per-account state, unchanged semantic catalog rows are skipped, and steady
-successful ping history is sampled internally at a coarse cadence. Failure
-pings and success/failure transitions remain immediate diagnostics.
-
-## Safety-Net Tasks
-
-Two recovery functions record `operational_events` rows. They are not
-supervised background tasks — both are invoked directly at startup
-(`_crash_recovery` once, `reconcile_expired_reservations` once and
-also periodically inside `retention_cleanup`):
-- **`_crash_recovery`** — Startup sweep: mark all pending requests as
-  interrupted and release all active reservations (no time gate)
-- **`reconcile_expired_reservations`** — Release reservations past
-  their expiry; also runs periodically inside `retention_cleanup`
-
-## Update Checker
-
-`src/eggpool/update_checker.py` — two paths:
-- **Background probe**: `UpdateChecker` via `TaskSupervisor.register_periodic()`. Conservative (no freshness bypass). Caches latest `UpdateInfo`.
-- **CLI one-shot**: `async_check_for_update()`. Live PyPI lookup with freshness-aware double-fetch. Never reads `UpdateChecker.snapshot()`.
-- **Exact CLI target**: `normalize_requested_version()` and `check_exact_release()` validate one requested release and query its PyPI metadata directly; this path is separate from the cached background snapshot.
-
-## Key Invariants
-
-- Fixed-delay: next interval begins after previous tick completes
-- `initial_delay_s` consumed exactly once per task lifecycle
-- Process-owned tasks survive generation swaps; the PyPI checker is only
-  registered when `[update_checker].enabled = true`
-- Generation-leased tasks retired with their generation
-- Safety-net tasks record `operational_events` in same transaction as state mutation
-- Update checker CLI never consults `UpdateChecker.snapshot()`
-- Background update probe is conservative (minimal PyPI traffic)
+`rust/src/operations/update.rs` separates conservative background freshness
+probes from explicit exact-version resolution. Latest/default resolution is
+Rust-only; a historical Python release is considered only when an operator
+requests an exact catalogued compatible target.

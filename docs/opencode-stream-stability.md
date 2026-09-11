@@ -47,7 +47,7 @@ The 10 s shielded finalizer hit the SQLite lock. Two usual causes:
 The HTTPX pool exhausted. Open the relevant provider in
 `config.toml` and raise `max_connections` and `max_keepalive`. See
 `docs/providers.md` for the high-concurrency profile. Do not raise
-`server.threads` — Granian already serializes the event loop.
+`server.threads` — the native runtime owns request scheduling.
 
 ### "Read timeouts spike during long model runs (status_code=504, error_class=ReadTimeout)"
 
@@ -122,25 +122,13 @@ connection budget per upstream IP and is not supported.
 
 ## Closure validation
 
-After deploying the stream-stability changes, run these commands to
-verify the runtime diagnostics and harness are working correctly:
+After deploying stream-stability changes, run the native runtime tests and
+inspect the bounded diagnostics:
 
 ```bash
-# Unit tests for stream diagnostics, finalization supervision, and runtime metrics
-uv run pytest tests/unit/test_runtime_metrics.py -q
-uv run pytest tests/unit/test_stream_diagnostics.py -q
-uv run pytest tests/unit/test_request_finalization_supervisor.py -q
-
-# Integration test: 50 concurrent streams, no cancellations
-uv run pytest tests/integration/test_high_concurrency_streaming.py -q
-
-# CLI reproducer: 50 streams with 25% cancellation
-python scripts/repro_high_concurrency_streams.py \
-    --concurrency 50 --cancel-rate 0.25 --scenario slow-stream
-
-# CLI reproducer: 100 streams with 50% cancellation
-python scripts/repro_high_concurrency_streams.py \
-    --concurrency 100 --cancel-rate 0.50 --scenario slow-stream
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o008 -- --test-threads=1
+eggpool runtime-status --json
 ```
 
 ### Expected summary values

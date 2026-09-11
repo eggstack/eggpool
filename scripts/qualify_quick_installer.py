@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Qualify the quick installer in disposable fake-manager environments.
 
-This deterministic K006 harness never touches a real package manager or user
-state. Real wheel/index qualification remains owned by K009 and K011.
+This deterministic installer harness never touches a real package manager or
+user state. Real wheel/index qualification remains owned by the release tests.
 """
 
 from __future__ import annotations
@@ -129,11 +129,22 @@ def _run(
     source: bool = False,
     expected: int = 0,
     manager_failure: bool = False,
+    platform: tuple[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = root / "fake-bin"
     fake_bin.mkdir(parents=True, exist_ok=True)
     environment = _env(root, fake_bin)
     (root / "home").mkdir(parents=True, exist_ok=True)
+    platform = platform or ("Linux", "x86_64")
+    if platform:
+        _exe(
+            fake_bin / "uname",
+            f"""#!{sys.executable}
+import sys
+
+print({platform[0]!r} if sys.argv[1:] == ["-s"] else {platform[1]!r})
+""",
+        )
     if manager:
         _fake_manager(fake_bin / manager, kind=manager_kind)
     if existing:
@@ -320,6 +331,23 @@ def _negative_cases() -> list[dict[str, str]]:
         result = _run(Path(value), manager="uv", args=["--unknown"], expected=2)
         assert "Unknown argument" in result.stderr
         cases.append({"case": "unknown-argument-exit-2", "status": "pass"})
+    with tempfile.TemporaryDirectory(prefix="eggpool-installer-") as value:
+        root = Path(value)
+        result = _run(root, manager="uv", args=["--version", "0.1.0"], expected=1)
+        assert "not in the schema-compatible catalog" in result.stderr
+        assert not (root / "manager.log").exists()
+        cases.append({"case": "uncatalogued-historical-refusal", "status": "pass"})
+    with tempfile.TemporaryDirectory(prefix="eggpool-installer-") as value:
+        root = Path(value)
+        result = _run(
+            root,
+            manager="uv",
+            platform=("FreeBSD", "x86_64"),
+            expected=1,
+        )
+        assert "unsupported platform" in result.stderr
+        assert not (root / "manager.log").exists()
+        cases.append({"case": "unsupported-platform-refusal", "status": "pass"})
     return cases
 
 

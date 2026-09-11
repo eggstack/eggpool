@@ -4,42 +4,27 @@ Back to [Overview](overview.md)
 
 ## Purpose
 
-Manages the EggPool process lifecycle, runtime generations, and the supervisor + Granian worker process model. Designed for reliability on resource-constrained devices (Raspberry Pi).
+Manages the EggPool process lifecycle and runtime generations. Designed for
+reliability on resource-constrained devices (Raspberry Pi).
 
 ## Process Model
 
-```
-┌─────────────────────────────────────┐
-│         Supervisor Process           │
-│  • PID file ownership               │
-│  • Health probes                    │
-│  • Restart management               │
-│  • Daemon mode (default)            │
-└──────────────┬──────────────────────┘
-               │ spawns
-    ┌──────────▼──────────┐
-    │   Granian Worker     │
-    │   workers=1          │
-    │   runtime_threads=N  │
-    │   (single event loop)│
-    └─────────────────────┘
-```
+The native executable owns PID management, health probes, restart management,
+the daemon/foreground mode, and the active/retiring runtime generations.
 
 ## Key Modules
 
-### `runtime.py` — Process Lifecycle
+### `runtime_lifecycle.rs` — Process Lifecycle
 
 - PID management (start/stop/restart)
 - Daemon mode (default for `eggpool serve`)
 - `--verbose` for foreground mode
 - Health probes for supervisor
-- `runtime_threads` maps to Granian Rust I/O threads per worker; any value in
-  the validated range is safe because Granian dispatches all Python work onto
-  the single per-worker asyncio loop (`loop.call_soon_threadsafe`)
+- configured runtime threads are owned by the native process
 - Runtime database integrity/indeterminate-state failures close admission and
   exit the worker; systemd restart runs startup integrity and crash repair.
 
-### `runtime_manager.py` — RuntimeManager
+### `runtime_lifecycle.rs` — runtime lifecycle
 
 Runtime generation ownership:
 - **`RuntimeManager`**: owns active/retiring generation slots
@@ -147,7 +132,7 @@ to inspect RSS context, thread count, known background tasks, local dispatch
 timings, SQLite/WAL facts, and generation-retirement ownership. Pair it with
 the host's process and socket tools when file-descriptor or outbound-socket
 counts are needed. Compare baseline and final runs only on the same host,
-Python, config shape, database state, and measurement window; upstream latency
+config shape, database state, and measurement window; upstream latency
 must remain separate from `local_pre_upstream` and `dispatch_overhead`. These
 observations are descriptive and non-gating. A workstation cannot stand in for
 an ARM64 SBC result. When provider accounts are available, a short
@@ -230,13 +215,10 @@ failed durable clear leaves the current in-memory suppression intact.
 
 ## Key Invariants
 
-- Single event-loop thread is canonical: Granian's `workers=1` process model
-  guarantees exactly one asyncio loop regardless of `runtime_threads`, which
-  only sizes the Rust-side I/O pool
-- All `asyncio.Lock` objects are loop-bound
-- `MetricsWriteCoalescer` and `CircuitBreaker` use short-held
-  `threading.Lock` guards for their synchronous cross-boundary methods
-- `fastcli` and `runtime_paths` are stdlib-only
+- The native process is the lifecycle authority; generation mirrors are not
+  independent owners
+- Runtime and database state transitions are explicit and fail closed
+- Operational probes and diagnostic output remain bounded and redacted
 - PID file owned by supervisor
 - Generation swap never interrupts in-flight requests or accepted retained terminal jobs
 - Process-owned containers outlive any generation

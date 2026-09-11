@@ -1,90 +1,14 @@
-# Deep Dive: Security
+# Deep Dive: Security and Redaction
 
-Back to [Overview](overview.md)
+Back to [Architecture](README.md)
 
-## Purpose
+The native runtime applies request limits, API-key authentication, header
+filtering, credential redaction, safe filesystem permissions, and metadata-only
+diagnostics. Configuration and deployment operations preserve secret values in
+the environment or adjacent `.env`; they do not echo them into logs or
+structured events.
 
-Header redaction, API key authentication, trusted reverse-proxy attribution,
-and security utilities to protect sensitive data in transit and at rest.
-
-## Key Modules
-
-### `app.py` — `_HeaderRedactionMiddleware`
-
-Strips sensitive headers from upstream responses before they reach clients:
-- `Authorization` → redacted
-- `X-Api-Key` → redacted
-- Provider-specific auth headers → redacted
-- Custom headers via config → redacted
-
-### Forwarded client attribution
-
-`[security].trusted_proxies` is an exact immediate-peer allowlist. The proxy
-uses `X-Forwarded-For` or `X-Real-IP` only when the ASGI peer address is in
-that list. For `X-Forwarded-For`, it walks from the EggPool-facing side and
-uses the first bounded, control-character-free hop that is not itself trusted,
-so a leftmost client-supplied value cannot override a proxy-appended client
-identity. Configured proxies must overwrite or correctly append these headers;
-`X-Real-IP` is necessarily trusted as supplied by that configured peer. An
-empty list ignores forwarded attribution headers and falls back to the
-immediate peer.
-
-### `auth.py` — Local API Key Authentication
-
-The copyable SBC configuration binds to loopback by default. A LAN or wildcard
-bind is an explicit configuration change and shared startup/`check-config`
-validation rejects it unless paired with the existing server API key
-(`[server].api_key` or `[server].api_key_env`). Loopback-only development may
-omit the key. This is a deployment guardrail, not a new
-identity system; onboarding already generates a key before offering the LAN
-bind choice.
-
-Constant-time API key comparison to prevent timing attacks:
-- Used for local API authentication
-- Compares against `SERVER_API_KEY` env var (default for `[server].api_key_env`)
-- Constant-time via `hmac.compare_digest()`
-
-### `providers/contract.py` — Auth Header Construction
-
-`build_auth_headers()` constructs provider-specific auth headers:
-- `bearer` mode: `Authorization: Bearer <token>`
-- `api_key` mode: custom header
-- `raw_authorization` mode: verbatim value
-- `none` mode: no auth header
-
-### Model-router session identity
-
-`X-EggPool-Route-Session` is an EggPool-only request header. It is accepted
-only as a bounded, control-character-free opaque value for sticky virtual
-routers, hashed immediately with SHA-256, and never logged or persisted. The
-upstream request sanitizer drops it case-insensitively, so it cannot leak to a
-provider. Invalid or oversized values simply disable explicit affinity for
-that request; they do not turn into a fallback identity.
-
-### Bearer-Prefix Guard
-
-`AppConfig.validate_account_credentials()` rejects API keys beginning with `Bearer` for providers using `auth.mode = "bearer"`. Prevents double-scheme auth errors.
-
-## Config Security
-
-- API keys stored in `.env` (never committed)
-- `.env.example` shipped without real keys
-- `config.toml` contains no secrets
-- Provider `api_key_env` references environment variables
-
-## Dashboard Security
-
-- Dashboard auth gate protects all routes
-- `/api/stats/runtime` always auth-gated even with public dashboard
-- No raw prompts, tool outputs, or auth headers in any card or JSON response
-- HTML escaping via `dashboard/escape.py`
-
-## Key Invariants
-
-- Constant-time API key comparison
-- Sensitive headers redacted from upstream responses
-- API keys never committed to repository
-- `.env` files never committed
-- Dashboard auth gate always active
-- No raw prompts in any output surface
-- Forwarded client-IP headers are never trusted from an unconfigured peer
+Provider credentials are added only at dispatch-header construction. Raw
+request/response bodies, prompts, cache keys, and token values are excluded
+from persistence and operational snapshots. Control sockets and state files
+use owner-only permissions and fail closed when ownership is ambiguous.

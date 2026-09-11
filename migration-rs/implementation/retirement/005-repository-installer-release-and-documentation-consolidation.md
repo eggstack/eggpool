@@ -1,6 +1,6 @@
 # P005 — Repository, Installer, Release, and Documentation Consolidation
 
-Status: dependency-ready after accepted P004 closure
+Status: accepted/closed 2026-09-11; see `migration-rs/closure/retirement/005-status.md`
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # EggPool quick install: install the native Rust wheel through one package
 # manager. This script is intentionally usable as a curl pipeline and does
-# not clone, build, or execute the repository's Python application.
+# not clone, build, or execute a repository-local application.
 
 FORCE_REINSTALL=0
 UPGRADE_ONLY=0
@@ -23,6 +23,17 @@ version_at_or_after_cutover() {
     ((10#$major > 10#$cutover_major)) ||
         { ((10#$major == 10#$cutover_major && 10#$minor > 10#$cutover_minor)) ||
             { ((10#$major == 10#$cutover_major && 10#$minor == 10#$cutover_minor && 10#$patch >= 10#$cutover_patch)); }; }
+}
+
+catalogued_historical_version() {
+    case "$1" in
+        0.6.7|0.6.8|0.6.9|0.7.0|0.7.1|0.7.2|0.7.3|0.7.4)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 usage() {
@@ -136,16 +147,31 @@ while (($#)); do
     esac
 done
 
+if ((VERSION_REQUESTED)) && ! version_at_or_after_cutover "$TARGET_VERSION"; then
+    catalogued_historical_version "$TARGET_VERSION" ||
+        fail "requested historical version $TARGET_VERSION is not in the schema-compatible catalog"
+fi
+
 if [[ "$(id -u)" == 0 ]]; then
     fail "personal quick install refuses root; use the explicit system deployment command instead"
 fi
+
+HOST_OS="$(uname -s 2>/dev/null || true)"
+HOST_ARCH="$(uname -m 2>/dev/null || true)"
+case "$HOST_OS:$HOST_ARCH" in
+    Linux:x86_64|Linux:amd64|Linux:aarch64|Linux:arm64|Darwin:arm64)
+        ;;
+    *)
+        fail "unsupported platform $HOST_OS/$HOST_ARCH; no supported Rust wheel is available"
+        ;;
+esac
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" 2>/dev/null && pwd || true)"
 SOURCE_CHECKOUT=0
 PROJECT_DIR=""
 if [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/../rust/Cargo.toml" ]] && \
-    [[ -f "$SCRIPT_DIR/../pyproject.toml" ]]; then
+    [[ -f "$SCRIPT_DIR/../packaging/pypi/pyproject.toml" ]]; then
     SOURCE_CHECKOUT=1
     PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi

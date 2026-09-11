@@ -73,9 +73,9 @@ sampled internally while failures remain immediately durable.
 
 ## Recommended Performance Profile
 
-The default config is tuned for Pi-class devices. The supported
-single-event-loop default (`threads = 1`) uses asyncio task
-concurrency for high throughput. If you need to explicitly set the
+The default config is tuned for Pi-class devices. The supported native runtime
+default (`threads = 1`) uses bounded task concurrency for high throughput. If
+you need to explicitly set the
 recommended profile:
 
 ```toml
@@ -124,7 +124,7 @@ Rust runtime's I/O worker count:
 threads = 1
 ```
 
-The PID file path is resolved by `eggpool.runtime_paths.default_pid_file()` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe — check `pgrep -f eggpool` before retrying.
+The PID file path is resolved by `rust/src/operations/paths.rs` in this precedence: `$EGGPOOL_PID_FILE` → `$XDG_RUNTIME_DIR/eggpool.pid` → `~/.local/state/eggpool/eggpool.pid` → `/tmp/eggpool-<UID>.pid`, and is owned by the supervisor. If `eggpool serve` ever exits non-zero with a message about an existing instance, that is the duplicate-instance guard catching a live PID or a successful `/v1/healthz` probe — check `pgrep -f eggpool` before retrying.
 
 ## Reduce SD Card Wear
 

@@ -1,6 +1,6 @@
 # P006 — Rust-Only Qualification and M12 Closure
 
-Status: queued behind accepted P005
+Status: dependency-ready after accepted P005 closure
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

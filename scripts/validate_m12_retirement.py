@@ -21,6 +21,8 @@ CURRENT_PATHS = (
     ROOT / "rust/build_support.rs",
     ROOT / "packaging",
     ROOT / ".github/workflows/release.yml",
+    ROOT / "scripts/install.sh",
+    ROOT / "scripts/qualify_quick_installer.py",
     ROOT / "scripts/build_cutover_artifacts.py",
     ROOT / "scripts/check_cutover_catalog.py",
     ROOT / "scripts/create_cutover_manifest.py",
@@ -30,6 +32,25 @@ CURRENT_PATHS = (
     ROOT / "scripts/validate_cutover_docs.py",
     ROOT / "scripts/validate_cutover_release.py",
     ROOT / "scripts/validate_release_workflow.py",
+)
+
+ACTIVE_DOCUMENTATION = (
+    ROOT / "README.md",
+    ROOT / "AGENTS.md",
+    ROOT / "rust/README.md",
+    ROOT / "docs",
+    ROOT / "architecture",
+    ROOT / ".opencode/skills",
+)
+
+STALE_DOCUMENTATION_REFERENCES = (
+    re.compile(r"src/eggpool"),
+    re.compile(r"python\s+-m\s+eggpool", re.IGNORECASE),
+    re.compile(
+        r"Python remains the canonical production implementation", re.IGNORECASE
+    ),
+    re.compile(r"root Hatchling project remains temporarily", re.IGNORECASE),
+    re.compile(r"root reference package remains in the repository", re.IGNORECASE),
 )
 
 FORBIDDEN_CURRENT_REFERENCES = (
@@ -81,6 +102,23 @@ def _validate_references() -> None:
                     raise RetirementBoundaryError(
                         "current production/release path references retired "
                         f"Python application: {path}"
+                    )
+
+    if (ROOT / "scripts/install_prompt.py").exists():
+        raise RetirementBoundaryError(
+            "retired Python onboarding helper remains in the active scripts tree"
+        )
+
+    for root in ACTIVE_DOCUMENTATION:
+        for path in _iter_files(root):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for pattern in STALE_DOCUMENTATION_REFERENCES:
+                if pattern.search(text):
+                    raise RetirementBoundaryError(
+                        f"active documentation retains retired Python guidance: {path}"
                     )
 
 
