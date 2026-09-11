@@ -131,8 +131,12 @@ impl InstallProvenance {
                     evidence: bound_evidence(evidence),
                 };
             }
-            if installer.as_deref().is_some_and(|value| {
-                (value == "uv" && !uv_signal) || (value == "pipx" && !pipx_signal)
+            if installer.as_deref().is_some_and(|value| match value {
+                // pipx 1.17 may use uv as its internal installation backend;
+                // the enclosing pipx/venvs structure remains the owner.
+                "uv" => !uv_signal && !pipx_signal,
+                "pipx" => !pipx_signal,
+                _ => false,
             }) {
                 evidence.push("INSTALLER conflicts with environment ownership".to_owned());
                 return Self::Ambiguous {
@@ -599,6 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn pipx_uv_backend_metadata_remains_pipx_owned() {
+        let root = tempdir().unwrap();
+        let pipx = root.path().join("pipx/venvs/eggpool");
+        fs::create_dir_all(&pipx).unwrap();
+        let executable = wheel(&pipx, "uv", "0.8.0");
+        assert!(matches!(
+            InstallProvenance::detect(&executable),
+            InstallProvenance::Pipx { .. }
+        ));
+    }
+
+    #[test]
     fn malformed_direct_url_is_not_transition_evidence() {
         let root = tempdir().unwrap();
         let executable = wheel(root.path(), "pip", "0.8.0");
@@ -637,5 +653,16 @@ mod tests {
         let result = InstallProvenance::detect(&exposed);
         assert!(matches!(result, InstallProvenance::StandaloneRust { .. }));
         assert_eq!(result.exposed_executable(), Some(exposed.as_path()));
+    }
+
+    #[test]
+    fn native_wheel_executable_with_dist_info_is_package_managed() {
+        let root = tempdir().unwrap();
+        let executable = wheel(root.path(), "pip", "0.8.0");
+        fs::write(&executable, b"\x7fELF native").unwrap();
+        assert!(matches!(
+            InstallProvenance::detect(&executable),
+            InstallProvenance::PipEnvironment { .. }
+        ));
     }
 }

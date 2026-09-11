@@ -329,6 +329,15 @@ pub enum UpdateError {
     UnsafeExecutable,
     #[error("another update is already in progress")]
     UpdateInProgress,
+    #[error(
+        "automatic rollback failed after target {target_version} was installed; previous version {previous_version} requires manual recovery with `{recovery_command}` ({reason})"
+    )]
+    RollbackFailed {
+        previous_version: String,
+        target_version: String,
+        reason: String,
+        recovery_command: String,
+    },
     #[error("staged executable self-check failed")]
     SelfCheckFailed,
     #[error("executable replacement failed")]
@@ -378,6 +387,7 @@ impl UpdateError {
             Self::UnsupportedInstallPath => "unsupported_install_path",
             Self::UnsafeExecutable => "unsafe_executable",
             Self::UpdateInProgress => "update_in_progress",
+            Self::RollbackFailed { .. } => "rollback_failed",
             Self::SelfCheckFailed => "self_check_failed",
             Self::ReplacementFailed => "replacement_failed",
             Self::RestartFailed => "restart_failed",
@@ -886,17 +896,63 @@ impl PackageTransitionService {
                 }
                 let _lock = UpdateLock::acquire(executable)?;
                 let command = self.command_for(provenance, &selection)?;
-                run_manager(command).await?;
-                verify_package_install(
+                if let Err(error) = run_manager(command).await {
+                    if !matches!(error, UpdateError::ManagerUnavailable) {
+                        return Err(self
+                            .rollback_after_mutation(
+                                provenance,
+                                current,
+                                &selection,
+                                executable,
+                                &context,
+                                was_running,
+                                restart.as_ref(),
+                                error,
+                            )
+                            .await);
+                    }
+                    return Err(error);
+                }
+                if let Err(error) = verify_package_install(
                     provenance,
                     &selection,
                     executable,
                     context.config_path.as_deref(),
                 )
-                .await?;
+                .await
+                {
+                    return Err(self
+                        .rollback_after_mutation(
+                            provenance,
+                            current,
+                            &selection,
+                            executable,
+                            &context,
+                            was_running,
+                            restart.as_ref(),
+                            error,
+                        )
+                        .await);
+                }
                 if was_running {
-                    let restart = restart.as_ref().ok_or(UpdateError::RestartFailed)?;
-                    restart().await?;
+                    let restart_error = match restart.as_ref() {
+                        Some(restart) => restart().await.err(),
+                        None => Some(UpdateError::RestartFailed),
+                    };
+                    if let Some(error) = restart_error {
+                        return Err(self
+                            .rollback_after_mutation(
+                                provenance,
+                                current,
+                                &selection,
+                                executable,
+                                &context,
+                                was_running,
+                                restart.as_ref(),
+                                error,
+                            )
+                            .await);
+                    }
                 }
                 Ok(TransitionResult {
                     target_version: selection.version.as_str().to_owned(),
@@ -904,6 +960,61 @@ impl PackageTransitionService {
                     restarted: was_running,
                 })
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn rollback_after_mutation<F, Fut>(
+        &self,
+        provenance: &InstallProvenance,
+        current: &ReleaseVersion,
+        target: &CatalogRelease,
+        executable: &Path,
+        context: &TransitionContext,
+        was_running: bool,
+        restart: Option<&F>,
+        original: UpdateError,
+    ) -> UpdateError
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<(), UpdateError>> + Send,
+    {
+        let previous_version = current.as_str().to_owned();
+        let target_version = target.version.as_str().to_owned();
+        let recovery_command = format!("eggpool update {previous_version}");
+        let rollback_target = self
+            .catalog
+            .resolve(&ReleaseTarget::Exact(current.clone()), &self.platform);
+        let rollback_result = async {
+            let rollback_target = rollback_target?;
+            if rollback_target.version.equivalent(&target.version) {
+                return Err(UpdateError::TargetNotCatalogued);
+            }
+            let command = self.command_for(provenance, &rollback_target)?;
+            run_manager(command).await?;
+            verify_package_install(
+                provenance,
+                &rollback_target,
+                executable,
+                context.config_path.as_deref(),
+            )
+            .await?;
+            if was_running {
+                let restart = restart.ok_or(UpdateError::RestartFailed)?;
+                restart().await?;
+            }
+            Ok::<(), UpdateError>(())
+        }
+        .await;
+
+        match rollback_result {
+            Ok(()) => original,
+            Err(error) => UpdateError::RollbackFailed {
+                previous_version,
+                target_version,
+                reason: error.category().to_owned(),
+                recovery_command,
+            },
         }
     }
 }
@@ -976,6 +1087,7 @@ fn exact_requirement(version: &ReleaseVersion) -> Result<String, UpdateError> {
 
 fn allowed_environment(manager: &str) -> Vec<(String, String)> {
     const COMMON: &[&str] = &[
+        "PATH",
         "HOME",
         "USERPROFILE",
         "XDG_CONFIG_HOME",
@@ -992,13 +1104,32 @@ fn allowed_environment(manager: &str) -> Vec<(String, String)> {
     match manager {
         "uv" => names.extend([
             "UV_TOOL_DIR",
+            "UV_TOOL_BIN_DIR",
             "UV_CACHE_DIR",
+            "UV_NO_CONFIG",
             "UV_INDEX_URL",
             "UV_DEFAULT_INDEX",
             "UV_EXTRA_INDEX_URL",
+            "UV_FIND_LINKS",
+            "UV_NO_INDEX",
+            "UV_PYTHON",
         ]),
-        "pipx" => names.extend(["PIPX_HOME", "PIPX_BIN_DIR", "PIPX_MAN_DIR"]),
-        "pip" => names.extend(["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST"]),
+        "pipx" => names.extend([
+            "PIPX_HOME",
+            "PIPX_BIN_DIR",
+            "PIPX_MAN_DIR",
+            "PIPX_DEFAULT_PYTHON",
+            "PIP_INDEX_URL",
+            "PIP_FIND_LINKS",
+            "PIP_NO_INDEX",
+        ]),
+        "pip" => names.extend([
+            "PIP_INDEX_URL",
+            "PIP_EXTRA_INDEX_URL",
+            "PIP_TRUSTED_HOST",
+            "PIP_FIND_LINKS",
+            "PIP_NO_INDEX",
+        ]),
         _ => {}
     }
     env::vars_os()
@@ -1284,24 +1415,81 @@ struct UpdateLock {
 impl UpdateLock {
     fn acquire(executable: &Path) -> Result<Self, UpdateError> {
         let path = executable.with_file_name(".eggpool-update.lock");
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::AlreadyExists {
-                    UpdateError::UpdateInProgress
-                } else {
-                    UpdateError::Io(error)
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if !recover_stale_lock(&path, executable)? {
+                    return Err(UpdateError::UpdateInProgress);
                 }
-            })?;
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|retry| {
+                        if retry.kind() == io::ErrorKind::AlreadyExists {
+                            UpdateError::UpdateInProgress
+                        } else {
+                            UpdateError::Io(retry)
+                        }
+                    })?
+            }
+            Err(error) => return Err(UpdateError::Io(error)),
+        };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .map_err(UpdateError::Io)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+                let _ = fs::remove_file(&path);
+                UpdateError::Io(error)
+            })?;
+        }
+        let record = serde_json::json!({
+            "pid": std::process::id(),
+            "executable": fs::canonicalize(executable)
+                .unwrap_or_else(|_| executable.to_owned())
+                .to_string_lossy(),
+            "created_at": unix_timestamp(),
+        });
+        if file
+            .write_all(record.to_string().as_bytes())
+            .and_then(|_| file.sync_all())
+            .is_err()
+        {
+            let _ = fs::remove_file(&path);
+            return Err(UpdateError::Io(io::Error::other(
+                "could not write update lock record",
+            )));
         }
         Ok(Self { path, _file: file })
+    }
+}
+
+fn recover_stale_lock(path: &Path, executable: &Path) -> Result<bool, UpdateError> {
+    let contents = fs::read(path).map_err(UpdateError::Io)?;
+    if contents.len() > 1024 {
+        return Ok(false);
+    }
+    let Ok(record) = serde_json::from_slice::<serde_json::Value>(&contents) else {
+        return Ok(false);
+    };
+    let Some(pid) = record.get("pid").and_then(serde_json::Value::as_u64) else {
+        return Ok(false);
+    };
+    let Some(recorded_path) = record.get("executable").and_then(serde_json::Value::as_str) else {
+        return Ok(false);
+    };
+    let expected_path = fs::canonicalize(executable).unwrap_or_else(|_| executable.to_owned());
+    if recorded_path != expected_path.to_string_lossy()
+        || pid == 0
+        || pid > i32::MAX as u64
+        || super::process::process_exists(pid as i32)
+    {
+        return Ok(false);
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(UpdateError::Io(error)),
     }
 }
 
@@ -1693,5 +1881,174 @@ mod tests {
         })
         .await;
         assert!(matches!(result, Err(UpdateError::ManagerOutputTooLarge)));
+    }
+
+    #[tokio::test]
+    async fn package_failure_after_mutation_restores_the_previous_exact_release() {
+        let root = tempfile::tempdir().expect("root");
+        let environment = root.path();
+        let site = environment.join("lib/python3.11/site-packages/eggpool-0.8.0.dist-info");
+        let bin = environment.join("bin");
+        std::fs::create_dir_all(&site).expect("site");
+        std::fs::write(site.join("METADATA"), "Name: eggpool\nVersion: 0.7.4\n").expect("metadata");
+        std::fs::write(site.join("INSTALLER"), "pip\n").expect("installer");
+        std::fs::write(environment.join("pyvenv.cfg"), "version = 3.11.0\n").expect("venv");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let executable = bin.join("eggpool");
+        std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' 0.7.4\n").expect("eggpool");
+        let python = bin.join("python");
+        let manager = format!(
+            "#!/bin/sh\ncase \"$*\" in *eggpool==0.8.0*) \\\n             printf 'Name: eggpool\\nVersion: 0.8.0\\n' > '{}'; \\\n             printf '#!/bin/sh\\nprintf %%s\\\\n 0.8.0\\n' > '{}'; chmod 755 '{}'; exit 7; \\\n             ;; esac; \\\n             printf 'Name: eggpool\\nVersion: 0.7.4\\n' > '{}'; \\\n             printf '#!/bin/sh\\nprintf %%s\\\\n 0.7.4\\n' > '{}'; chmod 755 '{}'; exit 0\n",
+            site.join("METADATA").display(),
+            executable.display(),
+            executable.display(),
+            site.join("METADATA").display(),
+            executable.display(),
+            executable.display(),
+        );
+        std::fs::write(&python, manager).expect("manager");
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("manager mode");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("eggpool mode");
+        let provenance = InstallProvenance::PipEnvironment {
+            python: python.clone(),
+            environment: environment.to_owned(),
+            exposed_executable: executable.clone(),
+            package_metadata: package_metadata(environment, "0.7.4"),
+        };
+        let service = PackageTransitionService::with_catalog(
+            UpdateService::new().expect("raw service"),
+            ReleaseCatalog::embedded().expect("catalog"),
+            Platform {
+                os: "linux".into(),
+                architecture: "x86_64".into(),
+            },
+        );
+        let result = service
+            .transition(
+                TransitionRequest {
+                    provenance: &provenance,
+                    target: &ReleaseTarget::Exact(ReleaseVersion::parse("0.8.0").unwrap()),
+                    current: &ReleaseVersion::parse("0.7.4").unwrap(),
+                    executable: &executable,
+                    context: TransitionContext::SAFE_DEFAULT,
+                    was_running: false,
+                },
+                None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+            )
+            .await;
+        assert!(matches!(result, Err(UpdateError::ManagerFailed)));
+        assert!(
+            std::fs::read_to_string(site.join("METADATA"))
+                .expect("metadata")
+                .contains("Version: 0.7.4")
+        );
+        let version = std::process::Command::new(&executable)
+            .output()
+            .expect("restored executable");
+        assert!(String::from_utf8_lossy(&version.stdout).contains("0.7.4"));
+        assert!(!environment.join(".eggpool-update.lock").exists());
+    }
+
+    #[tokio::test]
+    async fn rollback_failure_is_typed_with_manual_recovery() {
+        let root = tempfile::tempdir().expect("root");
+        let environment = root.path();
+        let site = environment.join("lib/python3.11/site-packages/eggpool-0.8.0.dist-info");
+        let bin = environment.join("bin");
+        std::fs::create_dir_all(&site).expect("site");
+        std::fs::write(site.join("METADATA"), "Name: eggpool\nVersion: 0.7.4\n").expect("metadata");
+        std::fs::write(site.join("INSTALLER"), "pip\n").expect("installer");
+        std::fs::write(environment.join("pyvenv.cfg"), "version = 3.11.0\n").expect("venv");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let executable = bin.join("eggpool");
+        std::fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' 0.7.4\n").expect("eggpool");
+        let python = bin.join("python");
+        let manager = format!(
+            "#!/bin/sh\nprintf 'Name: eggpool\nVersion: 0.8.0\n' > '{}'\nprintf '#!/bin/sh\nprintf %%s\\n 0.8.0\n' > '{}'\nchmod 755 '{}'\ncase \"$*\" in *eggpool==0.8.0*) exit 7;; *) exit 8;; esac\n",
+            site.join("METADATA").display(),
+            executable.display(),
+            executable.display(),
+        );
+        std::fs::write(&python, manager).expect("manager");
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
+            .expect("manager mode");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("eggpool mode");
+        let provenance = InstallProvenance::PipEnvironment {
+            python: python.clone(),
+            environment: environment.to_owned(),
+            exposed_executable: executable.clone(),
+            package_metadata: package_metadata(environment, "0.7.4"),
+        };
+        let service = PackageTransitionService::with_catalog(
+            UpdateService::new().expect("raw service"),
+            ReleaseCatalog::embedded().expect("catalog"),
+            Platform {
+                os: "linux".into(),
+                architecture: "x86_64".into(),
+            },
+        );
+        let result = service
+            .transition(
+                TransitionRequest {
+                    provenance: &provenance,
+                    target: &ReleaseTarget::Exact(ReleaseVersion::parse("0.8.0").unwrap()),
+                    current: &ReleaseVersion::parse("0.7.4").unwrap(),
+                    executable: &executable,
+                    context: TransitionContext::SAFE_DEFAULT,
+                    was_running: false,
+                },
+                None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(UpdateError::RollbackFailed {
+                ref previous_version,
+                ref target_version,
+                ref recovery_command,
+                ..
+            }) if previous_version == "0.7.4"
+                && target_version == "0.8.0"
+                && recovery_command == "eggpool update 0.7.4"
+        ));
+        assert!(!environment.join(".eggpool-update.lock").exists());
+    }
+
+    #[test]
+    fn stale_lock_is_recovered_only_when_identity_matches() {
+        let root = tempfile::tempdir().expect("root");
+        let executable = root.path().join("eggpool");
+        std::fs::write(&executable, b"native").expect("executable");
+        let lock = root.path().join(".eggpool-update.lock");
+        let mut stale = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("stale owner");
+        let stale_pid = stale.id();
+        stale.wait().expect("stale owner exit");
+        std::fs::write(
+            &lock,
+            serde_json::json!({
+                "pid": stale_pid,
+                "executable": std::fs::canonicalize(&executable)
+                    .expect("canonical executable")
+                    .to_string_lossy(),
+                "created_at": 1,
+            })
+            .to_string(),
+        )
+        .expect("stale lock");
+        let guard = UpdateLock::acquire(&executable).expect("stale lock recovery");
+        assert!(lock.is_file());
+        assert!(matches!(
+            UpdateLock::acquire(&executable),
+            Err(UpdateError::UpdateInProgress)
+        ));
+        drop(guard);
+        assert!(!lock.exists());
     }
 }
