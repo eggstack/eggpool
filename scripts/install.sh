@@ -12,6 +12,17 @@ TARGET_VERSION=""
 VERSION_REQUESTED=0
 RUST_CUTOVER_VERSION="0.8.0"
 
+version_at_or_after_cutover() {
+    local version="$1"
+    local major minor patch
+    local cutover_major cutover_minor cutover_patch
+    IFS=. read -r major minor patch <<< "$version"
+    IFS=. read -r cutover_major cutover_minor cutover_patch <<< "$RUST_CUTOVER_VERSION"
+    ((10#$major > 10#$cutover_major)) ||
+        { ((10#$major == 10#$cutover_major && 10#$minor > 10#$cutover_minor)) ||
+            { ((10#$major == 10#$cutover_major && 10#$minor == 10#$cutover_minor && 10#$patch >= 10#$cutover_patch)); }; }
+}
+
 usage() {
     cat <<'EOF'
 EggPool quick install
@@ -432,7 +443,7 @@ fi
 
 REPORT=""
 NATIVE_REQUIRED=1
-if ((VERSION_REQUESTED)) && [[ "$TARGET_VERSION" != "$RUST_CUTOVER_VERSION" ]]; then
+if ((VERSION_REQUESTED)) && ! version_at_or_after_cutover "$TARGET_VERSION"; then
     NATIVE_REQUIRED=0
 fi
 if REPORT="$("$ACTIVE_BIN" install-provenance --shell 2>/dev/null)" && parse_provenance_report "$REPORT"; then
