@@ -23,7 +23,7 @@ Type=simple
 User=eggpool
 Group=eggpool
 WorkingDirectory=/var/lib/eggpool
-ExecStart=/opt/eggpool/.venv/bin/eggpool --config /etc/eggpool/config.toml serve
+ExecStart=/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve
 # Live configuration reload is not supported; changes require
 # `sudo systemctl restart eggpool`. SIGHUP is intentionally not
 # wired to any reload action.
@@ -60,6 +60,10 @@ SystemCallArchitectures=native
 
 # Environment
 EnvironmentFile=/etc/eggpool/env
+Environment=HOME=/var/lib/eggpool
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PIPX_HOME=/var/lib/eggpool/pipx
+Environment=PIPX_BIN_DIR=/usr/local/bin
 Environment=EGGPOOL_LOG_FILE=/var/log/eggpool/eggpool.log
 
 [Install]

@@ -50,7 +50,7 @@ class TestDeployBundledAssets:
         """Sanity check: the unit has the required systemd sections."""
         for section in ("[Unit]", "[Service]", "[Install]"):
             assert section in SYSTEMD_UNIT
-        assert "ExecStart=/opt/eggpool/.venv/bin/eggpool" in SYSTEMD_UNIT
+        assert "ExecStart=/usr/local/bin/eggpool" in SYSTEMD_UNIT
         assert "EnvironmentFile=/etc/eggpool/env" in SYSTEMD_UNIT
 
     def test_cron_backup_file_is_valid_cron(self) -> None:
