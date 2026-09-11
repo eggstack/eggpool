@@ -57,7 +57,10 @@ def _bounded_error(error: BaseException) -> dict[str, str]:
     category = next(
         (value for marker, value in markers if marker in text), "manager_failure"
     )
-    return {"category": category, "detail": "bounded qualification failure"}
+    detail = "bounded qualification failure"
+    if os.environ.get("K005_DIAGNOSTIC_ERRORS"):
+        detail = str(error)[:MAX_OUTPUT] or detail
+    return {"category": category, "detail": detail}
 
 
 def _run(

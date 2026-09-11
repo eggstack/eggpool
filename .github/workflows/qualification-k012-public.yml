@@ -82,6 +82,8 @@ jobs:
             --target-class "${{ matrix.target_class }}" \
             --version "${{ inputs.version }}"
       - name: qualify public Python to Rust rollback cycle
+        env:
+          K005_DIAGNOSTIC_ERRORS: "1"
         run: |
           set -eu
           python_wheel="$(find dist/public -type f -name 'eggpool-${{ inputs.python_version }}-*.whl' -print -quit)"
