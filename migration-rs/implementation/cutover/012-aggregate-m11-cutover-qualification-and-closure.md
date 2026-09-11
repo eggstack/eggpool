@@ -1,6 +1,6 @@
 # K012 — Aggregate M11 Cutover Qualification and Closure
 
-Status: queued; blocked on accepted K011
+Status: blocked; closure review recorded 2026-09-11; pending accepted K011
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -299,3 +299,9 @@ K012 closes M11 only when all of the following are true:
 - no unresolved high/medium cutover, packaging, data-loss, lifecycle, security or compatibility finding remains.
 
 Accepted K012 closes M11 and makes M12 eligible for separate planning only.
+
+The 2026-09-11 closure review is recorded in
+[`../../closure/cutover/012-status.md`](../../closure/cutover/012-status.md).
+It is blocked because K011 has no public PyPI wheel publication or
+package-managed public rollback evidence; the review does not authorize M11
+closure or M12 planning.

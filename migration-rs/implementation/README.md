@@ -17,5 +17,6 @@ A corrective pass receives a new plan and references the failed closure evidence
 The active cutover sequence is K011 -> K012. K011 is currently blocked because
 the production PyPI Trusted Publisher is not configured. K013 corrected the
 recovery workflow but stopped at that external publisher exchange; K014 owns
-the maintainer-side configuration and exact-bundle recovery. K012 must not be
-unblocked until K011 has an accepted closure record.
+the maintainer-side configuration and exact-bundle recovery. K012's closure
+review is recorded but blocked; it must not be accepted or unblocked until
+K011 has an accepted closure record.

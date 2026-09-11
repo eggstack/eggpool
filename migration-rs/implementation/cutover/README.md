@@ -1,6 +1,7 @@
 # M11 Rust Cutover Implementation Plans
 
-Status: active; K001-K010 closed; K011 incomplete pending K013 correction
+Status: active; K001-K010 closed; K011/K013/K014 incomplete; K012 blocked
+pending accepted K011
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
@@ -20,11 +21,12 @@ These plans make the qualified Rust implementation the canonical public runtime 
 8. [K008 — Trusted publishing, attestations, and release supply chain](008-trusted-publishing-attestations-and-release-supply-chain.md) — **accepted/closed**.
 9. [K009 — Local wheelhouse and TestPyPI staged release rehearsal](009-wheelhouse-testpypi-staged-release-rehearsal.md) — **accepted/closed**.
 10. [K010 — Public metadata, documentation, and release-candidate freeze](010-public-metadata-docs-and-release-candidate-freeze.md) — **accepted/closed**.
-11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — **dependency-ready after accepted K010** and explicit production publish authority.
-12. [K013 — PyPI publication recovery workflow correction](013-pypi-publication-recovery-workflow-correction.md) — **dependency-ready after the failed K011 production attempt**.
-13. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — queued behind accepted K011.
+11. [K011 — First Rust-backed public release and immediate rollback drill](011-first-rust-public-release-and-rollback-drill.md) — **blocked on production PyPI Trusted Publisher configuration**.
+12. [K013 — PyPI publication recovery workflow correction](013-pypi-publication-recovery-workflow-correction.md) — **implementation complete; acceptance blocked at the external publisher exchange**.
+13. [K014 — PyPI Trusted Publisher configuration and recovery completion](014-pypi-trusted-publisher-configuration-and-recovery-completion.md) — **blocked pending maintainer PyPI account access**.
+14. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — **blocked pending accepted K011; closure review recorded**.
 
-Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008-K010 are accepted/closed, K011 has an incomplete production attempt, and K013 owns its corrective recovery. K012 remains queued behind accepted K011.
+Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008-K010 are accepted/closed, K011 has an incomplete production attempt, K013 owns its corrective recovery, and K014 owns the maintainer-side publisher configuration. K012's closure review is blocked and does not change the M11 or M12 dependency state.
 
 ## Hard boundaries
 
