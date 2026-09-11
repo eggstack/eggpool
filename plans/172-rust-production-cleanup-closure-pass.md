@@ -170,8 +170,7 @@ uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ```
 
-The closure implementation was committed as `<final-closure-commit>` and
-pushed to `main`; hosted CI is expected to run because the README CI guidance
-was corrected alongside the closure metadata. The hosted result and final
-commit SHA will be filled in after that run completes. No residual maintenance
-item remains within this cleanup line.
+The closure implementation was committed as
+`341c31b726dcac019a2fcac0a571d430f2b32d21` and pushed to `main`. Hosted CI
+passed for that head in [run 34657132426](https://github.com/eggstack/eggpool/actions/runs/34657132426).
+No residual maintenance item remains within this cleanup line.
