@@ -1,6 +1,6 @@
 # P002 — Rust Production Package, Catalog, and Cross-Era Authority
 
-Status: queued; promote only after accepted P001 closure
+Status: accepted/closed 2026-09-11; see [closure record](../../closure/retirement/002-status.md)
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

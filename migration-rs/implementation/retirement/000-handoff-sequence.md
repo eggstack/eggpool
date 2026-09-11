@@ -1,6 +1,6 @@
 # M12 Python Retirement Handoff Sequence
 
-Status: implementation planning complete; P001 ready; P002-P006 blocked by direct predecessors
+Status: implementation planning complete; P001/P002 accepted/closed; P003 dependency-ready; P004-P006 blocked by direct predecessors
 
 Execute and accept in this order:
 

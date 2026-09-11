@@ -1,6 +1,6 @@
 # P003 — Python Application Source and Runtime-Asset Retirement
 
-Status: queued behind accepted P002
+Status: dependency-ready after accepted P001/P002 closure
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

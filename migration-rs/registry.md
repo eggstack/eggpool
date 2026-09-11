@@ -32,15 +32,22 @@ Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77`
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
 | M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | closed after accepted Q012 corrective pass | Q012 closed |
 | M11 Rust cutover/package/versioning | [cutover-roadmap](subsystems/cutover-roadmap.md) | closed after accepted K012/K014 recovery chain | M11 closed |
-| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **implementation planning complete; P001 dependency-ready** | **P001 ready** |
+| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **implementation planning complete; P001/P002 accepted/closed; P003 dependency-ready** | **P003 dependency-ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| M12-P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | invariant/infrastructure | M11 closed; ADR-0001–0005 | **dependency-ready** |
+| M12-P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | invariant/infrastructure | accepted P001/P002; ADR-0005 | **dependency-ready** |
 
-P002-P006 are registered but serially blocked by their direct predecessors. No destructive Python application removal is authorized until P001 closes.
+P004-P006 are registered but serially blocked by their direct predecessors. P003 is now authorized as the first destructive Python application removal plan; no P004 work is authorized until P003 closes.
+
+## M12 implementation closure handoffs
+
+| ID | Plan | Class | Implementation commit | Closure |
+|---|---|---|---|---|
+| M12-P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | invariant/infrastructure | reference manifest and handoff evidence | [accepted/closed](closure/retirement/001-status.md) |
+| M12-P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | infrastructure/invariant | `36605a8d890855fa255b9cf96b1ba29f914a9826` | [accepted/closed](closure/retirement/002-status.md) |
 
 ## Recently closed corrective plans
 
@@ -50,7 +57,7 @@ P002-P006 are registered but serially blocked by their direct predecessors. No d
 | K014 | [PyPI Trusted Publisher configuration and recovery completion](implementation/cutover/014-pypi-trusted-publisher-configuration-and-recovery-completion.md) | accepted/closed; [closure](closure/cutover/014-status.md) |
 | K012 | [Aggregate M11 cutover qualification and closure](implementation/cutover/012-aggregate-m11-cutover-qualification-and-closure.md) | accepted/closed; [closure](closure/cutover/012-status.md) |
 
-Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 planning is complete under accepted ADR-0005: P001 is the sole dependency-ready plan; P002-P006 are queued. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions are preserved by M12 rather than removed.
+Q012 re-closed M10. K001-K014 are accepted/closed and M11 is closed. M12 planning is complete under accepted ADR-0005: P001/P002 are accepted/closed, P003 is the sole dependency-ready plan, and P004-P006 remain queued. Historical Python public artifacts remain immutable exact-version evidence, and compatible explicit historical transitions are preserved by M12 rather than removed.
 
 ## Completed implementation plans
 
@@ -187,14 +194,14 @@ M12 removes the historical Python application from the current production/runtim
 
 | ID | Plan | Dependency state |
 |---|---|---|
-| P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | **dependency-ready** |
-| P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | queued behind P001 |
-| P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | queued behind P002 |
+| P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | **accepted/closed** |
+| P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | **accepted/closed** |
+| P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | **dependency-ready** |
 | P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | queued behind P003 |
 | P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | queued behind P004 |
 | P006 | [Rust-only qualification and M12 closure](implementation/retirement/006-rust-only-qualification-and-m12-closure.md) | queued behind P005 |
 
-ADR-0005 is accepted. P001 is non-destructive and is the only authorized handoff. P002 changes current package/update authority without source deletion; P003 is the first Python application-source deletion; P004 retires live-oracle machinery; P005 consolidates repository/release/docs; P006 is the sole M12 closure authority.
+ADR-0005 is accepted. P001 and P002 are accepted/closed; P003 is the authorized first Python application-source deletion; P004 retires live-oracle machinery; P005 consolidates repository/release/docs; P006 is the sole M12 closure authority.
 
 Historical public Python releases are immutable external artifacts. Compatible explicit package-managed historical targets remain supported, while latest/default resolution and all current/future publication remain Rust-only.
 
@@ -204,4 +211,4 @@ No post-M12 migration milestone is planned. After accepted P006 closure, migrati
 
 ## Closure state
 
-F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 implementation planning is complete; P001 is dependency-ready and implementation has not started.
+F001-F006, M4 T001-T006, M5 D001-D009, M6 W001-W012, M7 C001-C011 with C012-C014 corrective passes, M8 R001-R013, M9 O001-O010, M10 through Q012, and M11 K001-K014 remain closed. M12 implementation planning is complete; P001/P002 are accepted/closed, P003 is dependency-ready, and P004-P006 remain gated by direct predecessors. M12 itself remains open until accepted P006 closure.

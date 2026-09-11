@@ -1,6 +1,6 @@
 # P001 — Final Python Reference Boundary and Fixture Freeze
 
-Status: dependency-ready after M12 planning review 2026-09-11
+Status: accepted/closed 2026-09-11; see [closure record](../../closure/retirement/001-status.md)
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 
