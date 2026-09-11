@@ -1,8 +1,0 @@
-{
-    "error": {
-        "message": "Invalid API key",
-        "type": "invalid_api_key",
-        "param": null,
-        "code": "invalid_api_key"
-    }
-}

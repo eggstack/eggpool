@@ -40,7 +40,7 @@ jobs:
         if: startsWith(matrix.target_class, 'linux-')
         with:
           version: 0.13.0
-      - run: uv sync --frozen --extra ci
+      - run: uv sync --frozen
       - run: >-
           uv run --no-project --with maturin==1.14.1 python
           scripts/build_cutover_artifacts.py

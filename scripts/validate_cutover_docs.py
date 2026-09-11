@@ -89,15 +89,20 @@ def validate_cutover_docs() -> dict[str, object]:
     cargo = _read_toml(ROOT / "rust/Cargo.toml")["package"]
     publication = _read_toml(PACKAGING)
     project = cast("dict[str, Any]", publication["project"])
-    root_project = _read_toml(ROOT_PYPROJECT)["project"]
+    root_tooling = cast(
+        "dict[str, Any]",
+        cast("dict[str, Any]", _read_toml(ROOT_PYPROJECT).get("tool", {})).get(
+            "eggpool", {}
+        ),
+    )
     if cargo["version"] != version:
         raise CutoverDocsError("Cargo version disagrees with K001")
     if project.get("dynamic") != ["version"] or project.get("name") != "eggpool":
         raise CutoverDocsError("Rust publication manifest is not Maturin-owned")
     if project.get("requires-python") != ">=3.11":
         raise CutoverDocsError("Rust wheel Requires-Python floor changed")
-    if root_project.get("version") == version:
-        raise CutoverDocsError("root Hatchling project uses the Rust cutover version")
+    if root_tooling.get("historical_python_version") == version:
+        raise CutoverDocsError("tooling marker uses the Rust cutover version")
     classifiers = {str(item) for item in project.get("classifiers", [])}
     if {"Framework :: FastAPI", "Framework :: AsyncIO"} & classifiers:
         raise CutoverDocsError("Rust wheel retains Python-runtime classifiers")

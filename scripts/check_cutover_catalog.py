@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Validate the K001 release catalog and version authorities.
 
-This is a contract checker, not an updater.  It treats the root Hatchling
-project as the historical Python oracle and Cargo as the Rust authority after
-the cutover is published.
+This is a contract checker, not an updater. Cargo is the current authority;
+the root project records only the immutable historical Python version.
 """
 
 from __future__ import annotations
@@ -369,26 +368,27 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
 
 
 def check_version_authorities(repo_root: Path, catalog: Mapping[str, Any]) -> None:
-    """Check the current side-by-side source versions against K001 metadata."""
+    """Check Rust version authority and the tooling-only historical marker."""
 
     authority = _as_mapping(catalog["version_authority"], "version_authority")
     try:
-        with (repo_root / "pyproject.toml").open("rb") as handle:
-            python_project = tomllib.load(handle)
         with (repo_root / "rust/Cargo.toml").open("rb") as handle:
             rust_project = tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise CatalogError("version authority source could not be read") from exc
-    python_version = python_project.get("project", {}).get("version")
-    root_tools = _as_mapping(python_project.get("tool", {}), "tool")
+    try:
+        with (repo_root / "pyproject.toml").open("rb") as handle:
+            tooling_project = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise CatalogError("tooling project could not be read") from exc
+    root_tools = _as_mapping(tooling_project.get("tool", {}), "tool")
     root_eggpool = _as_mapping(root_tools.get("eggpool", {}), "tool.eggpool")
-    if root_eggpool.get("project_role") != "historical-development-only":
-        raise CatalogError(
-            "root Python project is not marked historical development-only"
-        )
+    if root_eggpool.get("project_role") != "migration-tooling-only":
+        raise CatalogError("root project is not marked migration tooling-only")
+    python_version = root_eggpool.get("historical_python_version")
     rust_version = rust_project.get("package", {}).get("version")
     if python_version != authority["historical_python_project_version"]:
-        raise CatalogError("root Python oracle version disagrees with K001")
+        raise CatalogError("tooling historical version disagrees with K001")
     if rust_version != authority["rust_cargo_version"]:
         raise CatalogError("Rust Cargo version disagrees with K001")
     if (

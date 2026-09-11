@@ -1,0 +1,116 @@
+{
+  "schema_version": "m12-p004-disposition.v1",
+  "plan": "P004",
+  "purpose": "Map retired Python application tests and oracle machinery to retained tooling, frozen data, or Rust authorities.",
+  "reference": {
+    "manifest": "migration-rs/fixtures/retirement/m12-reference-manifest.json",
+    "python_source_commit": "c6b5d2c25038a8ac155c71f68fd50afea03fa459",
+    "python_source_tree": "2887b6b6a3be38ad8b386781cda76f888d5ac0dc",
+    "source_recoverability": "immutable Git history; no active source archive"
+  },
+  "dispositions": [
+    {
+      "classification": "retain as tooling test",
+      "paths": [
+        "tests/tooling/",
+        "scripts/check_cutover_catalog.py",
+        "scripts/validate_cutover_docs.py",
+        "scripts/validate_m12_package_boundary.py",
+        "scripts/validate_m12_retirement.py",
+        "scripts/validate_release_workflow.py",
+        "scripts/qualify_cutover_transitions.py",
+        "scripts/qualification_deployed_transition.py",
+        "scripts/qualification_live_provider.py",
+        "scripts/qualification_portability.py",
+        "scripts/qualification_rootful_linux.py",
+        "scripts/qualification_sbc.py",
+        "scripts/qualification_stability.py"
+      ],
+      "authority": "retained release/catalog/package validators and Rust-only qualification runners; 76 tests in tests/tooling"
+    },
+    {
+      "classification": "replace with Rust-native test",
+      "paths": [
+        "tests/contract/",
+        "tests/helpers/",
+        "tests/integration/",
+        "tests/live/",
+        "tests/perf/",
+        "tests/smoke/",
+        "tests/support/",
+        "tests/unit/",
+        "tests/conftest.py"
+      ],
+      "authority": "rust/src unit tests, rust/tests integration/contract tests, and accepted M4-M11 closure records; cargo test --all-targets is the active gate"
+    },
+    {
+      "classification": "freeze as data fixture",
+      "paths": [
+        "tests/migration_rs/fixtures/config/",
+        "tests/migration_rs/fixtures/tls/",
+        "tests/fixtures/schema/pre_phase17_v11.sql",
+        "migration-rs/fixtures/canonical-wire/",
+        "migration-rs/fixtures/coordinator/",
+        "migration-rs/fixtures/dashboard/",
+        "migration-rs/fixtures/operations/",
+        "migration-rs/fixtures/provider-transport/",
+        "migration-rs/fixtures/routing-domain/",
+        "migration-rs/fixtures/runtime-lifecycle/"
+      ],
+      "successor": "migration-rs/fixtures/ and rust/assets/ neutral fixtures consumed by named Rust tests; qualification config/TLS fixtures moved to migration-rs/fixtures/qualification/"
+    },
+    {
+      "classification": "remove as migration-only",
+      "paths": [
+        "tests/migration_rs/harness.py",
+        "tests/migration_rs/__init__.py",
+        "tests/migration_rs/*_fixtures.py",
+        "tests/migration_rs/w012_canonical_wire.py",
+        "tests/migration_rs/test_*.py except retained tests moved to tests/tooling/",
+        "tests/__init__.py",
+        "tests/fixtures/model_info/",
+        "tests/fixtures/streaming_transcode/",
+        "scripts/qualification_runner.py",
+        "scripts/qualification_database.py",
+        "scripts/qualification_dashboard.py",
+        "scripts/smoke_test.py",
+        "scripts/check_database.py",
+        "scripts/validate_routing.py",
+        "scripts/verify_upstream_auth.py",
+        "scripts/admission_race_stress.py",
+        "scripts/bench_sqlite_writepath.py",
+        "scripts/repro_high_concurrency_streams.py",
+        "scripts/debug_model_info_openrouter.sh",
+        "scripts/test_model_info_identity.sh",
+        "scripts/run_tests_with_timeout.py"
+      ],
+      "authority": "named Rust suites and retained neutral fixtures above; no live Python server, local Python oracle, or application import remains"
+    }
+  ],
+  "fixture_moves": [
+    {
+      "from": "tests/migration_rs/fixtures/config/",
+      "to": "migration-rs/fixtures/qualification/config/",
+      "reason": "keep Rust qualification inputs outside the retired Python test tree"
+    },
+    {
+      "from": "tests/migration_rs/fixtures/tls/",
+      "to": "migration-rs/fixtures/qualification/tls/",
+      "reason": "retain synthetic localhost transport material as bounded qualification data"
+    }
+  ],
+  "retained_python_boundary": {
+    "root_project": "tool-only pyproject.toml with no project, build-system, console script, or application dependency graph",
+    "dependencies": ["pyright", "pytest", "ruff"],
+    "runtime_import": "none; no retained path imports eggpool",
+    "production_or_service_dependency": false,
+    "historical_public_packages": "external immutable PyPI evidence only"
+  },
+  "verification_authorities": {
+    "rust": ["rust/tests/", "rust/src/", "rust/assets/runtime-manifest.json"],
+    "fixtures": ["migration-rs/fixtures/", "tests/fixtures/schema/pre_phase17_v11.sql"],
+    "tooling": ["scripts/", "tests/tooling/"],
+    "closure": ["migration-rs/closure/retirement/", "migration-rs/closure/README.md"]
+  },
+  "secret_safety": "No credentials, provider response bodies, absolute paths, environment dumps, or generated caches are retained."
+}

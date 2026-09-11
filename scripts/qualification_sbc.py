@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q008-sbc.toml"
+DEFAULT_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q008-sbc.toml"
 DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/008-run.json"
 SCHEMA_VERSION = "m10-q008.v1"
 MANIFEST_VERSION = "m10-q001.v1"

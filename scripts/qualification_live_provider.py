@@ -48,8 +48,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q007-live.toml"
-Q011_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q011-live.toml"
+DEFAULT_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q007-live.toml"
+Q011_FIXTURE = ROOT / "migration-rs/fixtures/qualification/config/q011-live.toml"
 DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/007-run.json"
 MANIFEST_VERSION = "m10-q001.v1"
 SCHEMA_VERSION = "m10-q007.v1"

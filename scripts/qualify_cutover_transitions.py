@@ -379,7 +379,9 @@ class Manager:
 
 def _config(root: Path) -> Path:
     path = root / "config.toml"
-    source = (ROOT / "tests/migration_rs/fixtures/config/valid.toml").read_text()
+    source = (
+        ROOT / "migration-rs/fixtures/qualification/config/valid.toml"
+    ).read_text()
     source = source.replace(
         'path = "migration.sqlite3"', f'path = "{root / "usage.sqlite3"}"'
     )

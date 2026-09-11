@@ -1,6 +1,6 @@
-"""Helper entrypoint for EggPool operational scripts.
+"""Helper package for retained EggPool release and qualification tooling.
 
 The scripts under ``scripts/`` are designed to be runnable directly with
-``uv run scripts/smoke_test.py`` etc.; this package marker keeps the
-directory importable so editors and linters treat it as a Python package.
+``uv run python scripts/<name>.py``; this package marker keeps the directory
+importable so validators and tests can share small tooling helpers.
 """

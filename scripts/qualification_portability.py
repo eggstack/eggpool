@@ -9,7 +9,8 @@ Usage::
 
     uv run python scripts/qualification_portability.py \
         --binary rust/target/release/eggpool \
-        --config-fixture tests/migration_rs/fixtures/config/q005-portability.toml \
+        --config-fixture \
+        migration-rs/fixtures/qualification/config/q005-portability.toml \
         --target-id macos-arm64 \
         --output /tmp/q005.json
 """
@@ -40,7 +41,9 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_FIXTURE = ROOT / "tests/migration_rs/fixtures/config/q005-portability.toml"
+DEFAULT_FIXTURE = (
+    ROOT / "migration-rs/fixtures/qualification/config/q005-portability.toml"
+)
 DEFAULT_OUTPUT = ROOT / "migration-rs/closure/qualification/005-run.json"
 MAX_DIAGNOSTIC_BYTES = 768
 MAX_METADATA_BYTES = 4096

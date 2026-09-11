@@ -36,7 +36,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
-      - run: uv sync --frozen --extra ci
+      - run: uv sync --frozen
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --target ${{ matrix.rust_target }} -- -D warnings
       - run: cargo build --manifest-path rust/Cargo.toml --release --target ${{ matrix.rust_target }}
@@ -44,7 +44,7 @@ jobs:
       - run: >-
           uv run python scripts/qualification_portability.py
           --binary rust/target/${{ matrix.rust_target }}/release/eggpool
-          --config-fixture tests/migration_rs/fixtures/config/q005-portability.toml
+          --config-fixture migration-rs/fixtures/qualification/config/q005-portability.toml
           --target-id ${{ matrix.target_id }}
           --output migration-rs/closure/qualification/005-run-${{ matrix.target_id }}.json
       - uses: actions/upload-artifact@v4

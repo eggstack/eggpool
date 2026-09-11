@@ -54,14 +54,13 @@ def validate_package_boundary(
     """Validate that only the packaging/pypi manifest is current authority."""
 
     root_project = _read_toml(root / "pyproject.toml")
-    root_metadata = cast("dict[str, Any]", root_project.get("project", {}))
     retirement = cast(
         "dict[str, Any]",
         cast("dict[str, Any]", root_project.get("tool", {})).get("eggpool", {}),
     )
-    if retirement.get("project_role") != "historical-development-only":
+    if retirement.get("project_role") != "migration-tooling-only":
         raise PackageBoundaryError(
-            "root pyproject.toml must declare historical-development-only role"
+            "root pyproject.toml must declare migration-tooling-only role"
         )
     if retirement.get("current_runtime") != "rust":
         raise PackageBoundaryError("root project must identify Rust as current runtime")
@@ -72,24 +71,18 @@ def validate_package_boundary(
 
     catalog = _read_json(root / CATALOG.relative_to(ROOT))
     authority = cast("dict[str, Any]", catalog.get("version_authority", {}))
-    cutover = _version(authority.get("cutover_version"), "catalog cutover")
-    historical = _version(
+    _version(authority.get("cutover_version"), "catalog cutover")
+    _version(
         authority.get("historical_python_project_version"),
         "historical Python version",
     )
-    root_version = _version(root_metadata.get("version"), "root project version")
-    if root_version != historical:
+    tooling_version = retirement.get("historical_python_version")
+    if tooling_version != authority["historical_python_project_version"]:
         raise PackageBoundaryError(
-            "root project is not pinned to the historical Python version"
+            "tooling project is not pinned to the historical Python version"
         )
-    if root_version >= cutover:
-        raise PackageBoundaryError(
-            "root historical project is at or beyond Rust cutover"
-        )
-    if root_metadata.get("name") != "eggpool":
-        raise PackageBoundaryError(
-            "historical root project must retain EggPool identity"
-        )
+    if "project" in root_project or "build-system" in root_project:
+        raise PackageBoundaryError("root pyproject.toml must not define a package")
 
     publication = _read_toml(root / PUBLICATION.relative_to(ROOT))
     project = cast("dict[str, Any]", publication.get("project", {}))
@@ -132,9 +125,7 @@ def validate_package_boundary(
         "status": "pass",
         "current_runtime": "rust",
         "publication_manifest": "packaging/pypi/pyproject.toml",
-        "historical_python_version": str(
-            authority["historical_python_project_version"]
-        ),
+        "historical_python_version": str(tooling_version),
         "cutover_version": str(authority["cutover_version"]),
     }
 

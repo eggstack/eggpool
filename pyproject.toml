@@ -1,124 +1,23 @@
-# Historical Python application and migration-tooling project. Rust-era
-# production publication uses packaging/pypi/pyproject.toml exclusively. This
-# project remains executable while P003/P004 retire the reference boundary,
-# but it is never a current-release authority.
-[project]
-name = "eggpool"
-version = "0.7.4"
-description = "A lightweight proxy that aggregates multiple LLM provider accounts behind an OpenAI Chat Completions-compatible endpoint"
-readme = "README.md"
-requires-python = ">=3.11"
-authors = [{ name = "David Bowman", email = "dbowman91@proton.me" }]
-keywords = [
-    "llm",
-    "proxy",
-    "openai",
-    "anthropic",
-    "aggregation",
-    "router",
-    "multi-account",
-    "opencode",
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Framework :: AsyncIO",
-    "Framework :: FastAPI",
-    "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3 :: Only",
-    "Topic :: System :: Monitoring",
-    "Typing :: Typed",
-]
-dependencies = [
-    "fastapi>=0.115,<1",
-    "granian[pname]>=2.0,<3",
-    "httpx>=0.27,<1",
-    "aiosqlite>=0.20,<1",
-    "pydantic>=2.0,<3",
-    "click>=8,<9",
-]
+# Development-only tooling configuration. The current EggPool application and
+# publication manifest live under rust/ and packaging/pypi/ respectively.
 
-[project.urls]
-Homepage = "https://github.com/eggstack/eggpool"
-Repository = "https://github.com/eggstack/eggpool"
-Issues = "https://github.com/eggstack/eggpool/issues"
-Documentation = "https://github.com/eggstack/eggpool/tree/main/docs"
-Changelog = "https://github.com/eggstack/eggpool/blob/main/CHANGELOG.md"
+[tool.uv]
+package = false
 
-[project.optional-dependencies]
-ci = [
-    "ruff",
-    "pyright",
-    "pytest",
-    "pytest-asyncio",
-    "respx",
-]
+[dependency-groups]
 dev = [
-    "ruff",
-    "pyright",
-    "pytest",
-    "pytest-asyncio",
-    "pytest-cov",
-    "respx",
+    "pyright>=1.1.390,<2",
+    "pytest>=8,<9",
+    "ruff>=0.11,<1",
 ]
-# ``fast`` enables the orjson-backed JSON helper used by the transcoding
-# hot paths.  EggPool falls back to the stdlib implementation when this
-# extra is not installed, so lightweight Raspberry Pi / SBC targets keep
-# working without a Rust-built wheel.  Install with ``uv pip install
-# 'eggpool[fast]'`` to enable it.
-# orjson is intentionally bounded to the current major line; stdlib JSON
-# remains the supported fallback for lightweight SBC installs.
-fast = ["orjson>=3.10,<4"]
-proxy = ["pproxy>=2.7.9,<3"]
-
-[project.scripts]
-eggpool = "eggpool.cli:main"
 
 [tool.eggpool]
-project_role = "historical-development-only"
+project_role = "migration-tooling-only"
 current_runtime = "rust"
 publication_manifest = "packaging/pypi/pyproject.toml"
+historical_python_version = "0.7.4"
 historical_artifacts = "immutable-external-pypi"
 requires_python_semantics = "package-manager-compatibility-only"
-
-[build-system]
-requires = ["hatchling>=1.21,<1.24"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/eggpool"]
-
-[tool.hatch.build.targets.sdist]
-exclude = [
-    ".opencode",
-    ".agents",
-    ".venv",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".pyright",
-    "dist",
-    "build",
-    "*.egg-info",
-    "*.sqlite3",
-    "*.sqlite3-wal",
-    "*.sqlite3-shm",
-    "coverage.xml",
-    ".coverage",
-    ".coverage.*",
-    "htmlcov",
-    "*.log",
-    "/var",
-    "plans",
-    "tests",
-]
-exclude-globs = [
-    "**/__pycache__",
-    "**/.DS_Store",
-]
 
 [tool.ruff]
 target-version = "py311"
@@ -131,22 +30,13 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
-include = ["src", "scripts"]
-exclude = ["tests"]
+include = ["scripts"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "strict"
-asyncio_default_fixture_loop_scope = "function"
-xfail_strict = true
 addopts = "--strict-markers"
+pythonpath = [".", "scripts"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "performance: manually invoked real-runtime performance checks",
-    "live: opt-in live provider/network verification tests",
-    "live_provider: opt-in live upstream provider verification",
-    "live_opencode_go: opt-in live OpenCode Go wire verification",
-    "live_gemini: opt-in live Gemini provider verification",
-    "network: tests requiring network access or external services",
-    "integration: integration tests requiring full component wiring",
-    "unit: unit tests",
+    "performance: manually invoked performance checks",
+    "live: opt-in live provider/network verification",
 ]

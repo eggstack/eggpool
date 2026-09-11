@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # EggPool CI
 #
-# Single job: format + lint + typecheck + smoke tests on Python 3.11
+# Single job: Rust qualification plus retained tooling checks.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -40,11 +40,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.11"
-      - run: uv sync --frozen --extra ci
-      - run: uv run ruff format --check src/ tests/ scripts/
-      - run: uv run ruff check src/ tests/ scripts/
-      - run: uv run pyright src/ scripts/
-      - run: uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+      - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - run: cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+      - run: uv sync --frozen
+      - run: uv run ruff format --check scripts/ tests/tooling/
+      - run: uv run ruff check scripts/ tests/tooling/
+      - run: uv run pyright scripts/
+      - run: uv run pytest tests/tooling/ -q --tb=short --maxfail=1
