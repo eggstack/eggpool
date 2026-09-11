@@ -257,6 +257,60 @@ impl InstallProvenance {
             _ => None,
         }
     }
+
+    /// Render the bounded, secret-free protocol consumed by `install.sh`.
+    ///
+    /// Values are tab-separated and never shell-evaluated.  Paths containing
+    /// a line break or tab are replaced with `-`, which makes the report safe
+    /// to consume even for unusual filesystem names.
+    pub fn shell_report(&self) -> String {
+        let mut fields = vec![format!("kind\t{}", self.kind_name())];
+        if let Some(executable) = self.exposed_executable() {
+            fields.push(format!(
+                "executable\t{}",
+                safe_field(&executable.display().to_string())
+            ));
+        }
+        if let Some(python) = self.python() {
+            fields.push(format!(
+                "python\t{}",
+                safe_field(&python.display().to_string())
+            ));
+        }
+        if let Some(metadata) = self.package_metadata() {
+            fields.push(format!("version\t{}", safe_field(&metadata.version)));
+        } else if matches!(self, Self::StandaloneRust { .. }) {
+            fields.push(format!("version\t{}", crate::version::PACKAGE_VERSION));
+        }
+        fields.push(format!(
+            "native\t{}",
+            self.exposed_executable()
+                .is_some_and(looks_like_native_executable)
+        ));
+        if let Some(manager) = self.manager() {
+            fields.push(format!(
+                "manager\t{}",
+                safe_field(&manager.display().to_string())
+            ));
+        }
+        if let Self::Ambiguous { evidence } = self {
+            for item in evidence {
+                fields.push(format!("evidence\t{}", safe_field(item)));
+            }
+        }
+        fields.join("\n")
+    }
+
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Self::UvTool { .. } => "uv-tool",
+            Self::Pipx { .. } => "pipx",
+            Self::PipEnvironment { .. } => "pip",
+            Self::StandaloneRust { .. } => "standalone-rust",
+            Self::SourceCheckout { .. } => "source-checkout",
+            Self::Ambiguous { .. } => "ambiguous",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -528,6 +582,14 @@ fn bound_evidence(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn safe_field(value: &str) -> String {
+    if value.contains(['\n', '\r', '\t']) {
+        "-".to_owned()
+    } else {
+        value.chars().take(MAX_EVIDENCE_BYTES).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, os::unix::fs::symlink};
@@ -664,5 +726,17 @@ mod tests {
             InstallProvenance::detect(&executable),
             InstallProvenance::PipEnvironment { .. }
         ));
+    }
+
+    #[test]
+    fn shell_report_is_bounded_and_secret_free() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("eggpool-real");
+        fs::write(&real, b"\x7fELF native").unwrap();
+        let report = InstallProvenance::StandaloneRust { executable: real }.shell_report();
+        assert!(report.contains("kind\tstandalone-rust"));
+        assert!(report.contains("native\ttrue"));
+        assert!(report.contains("version\t"));
+        assert!(!report.contains("HOME="));
     }
 }

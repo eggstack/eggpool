@@ -64,6 +64,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Croncheck) => croncheck(),
         Some(Command::EnsureRunning) => ensure_running(&config_path).await?,
         Some(Command::Update(args)) => update(&config_path, args).await?,
+        Some(Command::InstallProvenance { shell }) => install_provenance(shell)?,
         Some(Command::Connect(args)) => connect(&config_path, args).await?,
         Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
         Some(Command::Edit) => edit(&config_path)?,
@@ -2290,6 +2291,36 @@ async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), Bootstr
         };
     }
     Err(update_error(UpdateError::ManagerMetadataMalformed))
+}
+
+fn install_provenance(shell: bool) -> Result<(), BootstrapError> {
+    let executable = std::env::current_exe().map_err(|error| {
+        command_error(
+            EXIT_VALIDATION,
+            format!("cannot resolve eggpool executable: {error}"),
+        )
+    })?;
+    let provenance = InstallProvenance::detect(&executable);
+    if shell {
+        println!("{}", provenance.shell_report());
+    } else {
+        println!("Install provenance: {}", provenance_kind(&provenance));
+        if let Some(metadata) = provenance.package_metadata() {
+            println!("Version: {}", metadata.version);
+        }
+    }
+    Ok(())
+}
+
+fn provenance_kind(provenance: &InstallProvenance) -> &'static str {
+    match provenance {
+        InstallProvenance::UvTool { .. } => "uv-tool",
+        InstallProvenance::Pipx { .. } => "pipx",
+        InstallProvenance::PipEnvironment { .. } => "pip",
+        InstallProvenance::StandaloneRust { .. } => "standalone-rust",
+        InstallProvenance::SourceCheckout { .. } => "source-checkout",
+        InstallProvenance::Ambiguous { .. } => "ambiguous",
+    }
 }
 
 async fn server_is_running(path: &Path, paths: &RuntimePaths) -> bool {

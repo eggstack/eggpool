@@ -1,319 +1,498 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# EggPool quick install script
-# Usage: curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
-# Or:    ./scripts/install.sh [--force|--upgrade]  (from a cloned repo)
-
-REPO_URL="https://github.com/eggstack/eggpool.git"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/eggpool}"
+# EggPool quick install: install the native Rust wheel through one package
+# manager. This script is intentionally usable as a curl pipeline and does
+# not clone, build, or execute the repository's Python application.
 
 FORCE_REINSTALL=0
 UPGRADE_ONLY=0
-for arg in "$@"; do
-    case "$arg" in
-        --force)
-            FORCE_REINSTALL=1
-            ;;
-        --upgrade)
-            UPGRADE_ONLY=1
-            ;;
-        --help|-h)
-            cat <<'EOF'
+ADOPT_STANDALONE=0
+TARGET_VERSION=""
+VERSION_REQUESTED=0
+RUST_CUTOVER_VERSION="0.8.0"
+
+usage() {
+    cat <<'EOF'
 EggPool quick install
 
 Usage:
     curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
-    ./scripts/install.sh [--force|--upgrade]
+    ./scripts/install.sh [options]
 
 Options:
-    --force     Reinstall even if an existing `eggpool` binary is on PATH
-    --upgrade   Upgrade the existing install; do not reinstall from scratch
-    --help      Show this help
+    --version X.Y.Z     Install that exact catalogued release (leading v is accepted)
+    --upgrade           Install the latest stable release explicitly
+    --force             Reinstall or repair using the selected manager
+    --adopt-standalone  Explicitly migrate a standalone Rust binary to a wheel
+    --help              Show this help
+
+Without --version, --upgrade selects the latest stable package-channel
+release. --upgrade may be combined with --version; the exact version wins.
+Source-checkout invocation installs the local checkout candidate and never
+resolves the public package by accident.
 EOF
+}
+
+fail() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+normalize_version() {
+    local value="$1"
+    value="${value#v}"
+    if [[ ! "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        fail "invalid version '$1'; use X.Y.Z or vX.Y.Z"
+    fi
+    printf '%s' "$value"
+}
+
+while (($#)); do
+    case "$1" in
+        --version)
+            (($# >= 2)) || fail "--version requires X.Y.Z"
+            TARGET_VERSION="$(normalize_version "$2")"
+            VERSION_REQUESTED=1
+            shift 2
+            ;;
+        --version=*)
+            TARGET_VERSION="$(normalize_version "${1#*=}")"
+            VERSION_REQUESTED=1
+            shift
+            ;;
+        --upgrade)
+            UPGRADE_ONLY=1
+            shift
+            ;;
+        --force)
+            FORCE_REINSTALL=1
+            shift
+            ;;
+        --adopt-standalone)
+            ADOPT_STANDALONE=1
+            shift
+            ;;
+        --help|-h)
+            usage
             exit 0
             ;;
         *)
-            echo "Unknown argument: $arg" >&2
+            echo "Unknown argument: $1" >&2
             exit 2
             ;;
     esac
 done
 
-echo "EggPool quick install"
-echo ""
+if [[ "$(id -u)" == 0 ]]; then
+    fail "personal quick install refuses root; use the explicit system deployment command instead"
+fi
 
-# Detect whether we are running from inside a cloned repo (SCRIPT_DIR exists
-# on disk and points at the repo root). In a curl-piped run SCRIPT_DIR is a
-# /dev/fd/... path that does not exist on disk; fall through to cloning.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" 2>/dev/null && pwd || true)"
 SOURCE_CHECKOUT=0
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../pyproject.toml" ] && \
-   grep -q 'name = "eggpool"' "$SCRIPT_DIR/../pyproject.toml" 2>/dev/null; then
+PROJECT_DIR=""
+if [[ -n "$SCRIPT_DIR" ]] && [[ -f "$SCRIPT_DIR/../rust/Cargo.toml" ]] && \
+    [[ -f "$SCRIPT_DIR/../pyproject.toml" ]]; then
     SOURCE_CHECKOUT=1
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
 
-if [ "$SOURCE_CHECKOUT" -eq 1 ]; then
-    cd "$PROJECT_DIR"
-else
-    if [ -d "$INSTALL_DIR" ]; then
-        echo "Using existing installation at $INSTALL_DIR"
-        cd "$INSTALL_DIR"
-        git pull --ff-only >/dev/null 2>&1 || true
-    else
-        echo "Cloning repository to $INSTALL_DIR..."
-        git clone "$REPO_URL" "$INSTALL_DIR"
-        cd "$INSTALL_DIR"
+if ((SOURCE_CHECKOUT)); then
+    if ((VERSION_REQUESTED)); then
+        SOURCE_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$PROJECT_DIR/rust/Cargo.toml" | head -n 1)"
+        [[ "$SOURCE_VERSION" == "$TARGET_VERSION" ]] || \
+            fail "source checkout version is $SOURCE_VERSION, not requested $TARGET_VERSION"
     fi
+    echo "Using source checkout: $PROJECT_DIR"
 fi
 
-# Always reset PROJECT_DIR to the directory we are actually in. The earlier
-# SCRIPT_DIR-based PROJECT_DIR is bogus for curl-piped runs because SCRIPT_DIR
-# resolves to a /dev/fd path that does not exist on disk.
-PROJECT_DIR="$(pwd)"
-SCRIPTS_DIR="$PROJECT_DIR/scripts"
-
-# Find the best available Python >= 3.11 and <= 3.14
-# Probes version-suffixed binaries (python3.14, python3.13, ...) for systems
-# where the default `python3` is an older system version.
-# Max is 3.14 because Pyo3 (used by Granian) does not yet support 3.15.
-python_version_supported() {
-    local ver="$1"
-    local maj min
-    maj=$(echo "$ver" | cut -d. -f1)
-    min=$(echo "$ver" | cut -d. -f2)
-    [ "$maj" -eq 3 ] && [ "$min" -ge 11 ] && [ "$min" -le 14 ]
-}
-
-find_python() {
-    for minor in 14 13 12 11; do
-        local candidate="python3.${minor}"
-        if command -v "$candidate" &> /dev/null; then
-            local ver
-            ver=$(PYTHONPATH= PYTHONNOUSERSITE=1 "$candidate" -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
-            if python_version_supported "$ver"; then
-                PYTHON="$candidate"
-                PYTHON_VERSION="$ver"
-                return 0
-            fi
-        fi
-    done
-    # Fallback to bare python3
-    if command -v python3 &> /dev/null; then
-        local ver
-        ver=$(PYTHONPATH= PYTHONNOUSERSITE=1 python3 -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
-        if python_version_supported "$ver"; then
-            PYTHON="python3"
-            PYTHON_VERSION="$ver"
-            return 0
-        fi
-    fi
-    return 1
-}
-
-echo "Checking Python version..."
-if ! find_python; then
-    echo "Error: Python 3.11 through 3.14 required."
-    echo "Install Python from https://www.python.org/downloads/ or your package manager."
-    exit 1
-fi
-echo "  Python $PYTHON_VERSION found ($PYTHON)"
-
-# Decide whether to reinstall. Never silently overwrite an existing install.
 EXISTING_BIN=""
 if command -v eggpool >/dev/null 2>&1; then
     EXISTING_BIN="$(command -v eggpool)"
 fi
 
-if [ -n "$EXISTING_BIN" ] && [ "$FORCE_REINSTALL" -ne 1 ] && [ "$UPGRADE_ONLY" -ne 1 ]; then
-    echo ""
-    echo "Existing eggpool install detected: $EXISTING_BIN"
-    echo "Run 'eggpool update' to upgrade, or rerun with --force to reinstall."
-    echo ""
-    # Even with an existing install, make sure ~/.local/bin is on PATH so the
-    # subsequent commands are reachable, and still seed the config file if
-    # it is missing (XDG default or source-checkout copy).
-    export PATH="$HOME/.local/bin:$PATH"
-    eggpool version
-    _seed_install_config "$PROJECT_DIR"
-    _print_install_next_steps "$PROJECT_DIR" "$(_installed_config_path)"
-    _run_install_prompt
-    exit 0
-fi
+PROVENANCE_KIND=""
+PROVENANCE_PYTHON=""
+PROVENANCE_VERSION=""
+PROVENANCE_NATIVE=""
+PROVENANCE_MANAGER=""
+PROVENANCE_ENVIRONMENT=""
+PROVENANCE_EVIDENCE=""
 
-# At this point we either have no existing install, --upgrade, or --force.
-# Pick the install method.
-USE_PIPX=0
-USE_UV_TOOL=0
-echo "Checking for pipx..."
-if "$PYTHON" -m pipx --version >/dev/null 2>&1; then
-    USE_PIPX=1
-fi
+parse_provenance_report() {
+    local key value
+    PROVENANCE_KIND=""
+    PROVENANCE_PYTHON=""
+    PROVENANCE_VERSION=""
+    PROVENANCE_NATIVE=""
+    PROVENANCE_MANAGER=""
+    PROVENANCE_ENVIRONMENT=""
+    PROVENANCE_EVIDENCE=""
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            kind) PROVENANCE_KIND="$value" ;;
+            python) PROVENANCE_PYTHON="$value" ;;
+            version) PROVENANCE_VERSION="$value" ;;
+            native) PROVENANCE_NATIVE="$value" ;;
+            manager) PROVENANCE_MANAGER="$value" ;;
+            environment) PROVENANCE_ENVIRONMENT="$value" ;;
+            executable) : ;;
+            evidence)
+                if [[ -z "$PROVENANCE_EVIDENCE" ]]; then
+                    PROVENANCE_EVIDENCE="$value"
+                else
+                    PROVENANCE_EVIDENCE="$PROVENANCE_EVIDENCE; $value"
+                fi
+                ;;
+        esac
+    done <<< "$1"
+    [[ -n "$PROVENANCE_KIND" ]]
+}
 
-if [ "$USE_PIPX" -eq 1 ]; then
-    echo "Installing eggpool via pipx (Python $PYTHON_VERSION)..."
-    if [ "$SOURCE_CHECKOUT" -eq 1 ]; then
-        # From a source checkout, install the local code instead of PyPI
-        # so the operator is testing what they just cloned rather than
-        # silently swapping it for the latest released version.
-        if [ "$FORCE_REINSTALL" -eq 1 ]; then
-            "$PYTHON" -m pipx install --force "$PROJECT_DIR"
-        else
-            "$PYTHON" -m pipx install "$PROJECT_DIR"
-        fi
-    else
-        "$PYTHON" -m pipx install eggpool
+probe_python_provenance() {
+    local executable="$1"
+    local shebang python
+    shebang="$(head -n 1 "$executable" 2>/dev/null || true)"
+    [[ "$shebang" == '#!'* ]] || return 1
+    python="${shebang#\#!}"
+    python="${python%% *}"
+    if [[ "$python" == */env ]]; then
+        python="${shebang#*env }"
+        python="${python%% *}"
+        python="$(command -v "$python" 2>/dev/null || true)"
     fi
-    export PATH="$HOME/.local/bin:$PATH"
+    [[ -x "$python" ]] || return 1
+
+    local report
+    report="$(PYTHONPATH= PYTHONNOUSERSITE=1 "$python" -c '
+import importlib.metadata as metadata
+import json
+import pathlib
+import sys
+
+def safe(value):
+    value = str(value)
+    if any(char in value for char in "\\r\\n\\t"):
+        return "-"
+    return value[:160]
+
+try:
+    distribution = metadata.distribution("eggpool")
+    distribution_path = pathlib.Path(distribution._path)
+    environment = pathlib.Path(sys.prefix)
+    installer_path = distribution_path / "INSTALLER"
+    installer = installer_path.read_text(encoding="utf-8").strip().lower() if installer_path.is_file() else ""
+    parts = {part.lower() for part in environment.parts}
+    uv = "uv" in parts and "tools" in parts
+    pipx = "pipx" in parts and bool({"venvs", "shared"} & parts)
+    if uv and pipx or installer == "uv" and pipx or installer == "pipx" and uv:
+        kind = "ambiguous"
+    elif pipx:
+        kind = "pipx"
+    elif uv:
+        kind = "uv-tool"
+    elif (environment / "pyvenv.cfg").is_file():
+        kind = "pip"
+    else:
+        kind = "ambiguous"
+    direct_url = distribution_path / "direct_url.json"
+    if direct_url.is_file():
+        try:
+            url = json.loads(direct_url.read_text(encoding="utf-8")).get("url", "")
+            if isinstance(url, str) and url.startswith("file://"):
+                source = pathlib.Path(url[7:])
+                if any((ancestor / ".git").exists() for ancestor in source.parents):
+                    kind = "source-checkout"
+        except (OSError, ValueError, TypeError):
+            kind = "ambiguous"
+    print("kind\\t" + kind)
+    print("python\\t" + safe(sys.executable))
+    print("environment\\t" + safe(environment))
+    print("version\\t" + safe(distribution.version))
+    print("native\\tfalse")
+    print("executable\\t" + safe(sys.argv[0]))
+except Exception:
+    print("kind\\tambiguous")
+' 2>/dev/null)" || return 1
+    parse_provenance_report "$report"
+    [[ "$PROVENANCE_KIND" != ambiguous ]]
+}
+
+if [[ -n "$EXISTING_BIN" ]]; then
+    echo "Inspecting existing eggpool install: $EXISTING_BIN"
+    RUST_REPORT=""
+    if RUST_REPORT="$("$EXISTING_BIN" install-provenance --shell 2>/dev/null)" && \
+        parse_provenance_report "$RUST_REPORT"; then
+        :
+    elif probe_python_provenance "$EXISTING_BIN"; then
+        :
+    else
+        PROVENANCE_KIND="ambiguous"
+    fi
+
+    case "$PROVENANCE_KIND" in
+        uv-tool|pipx|pip)
+            echo "  Existing owner: $PROVENANCE_KIND"
+            ;;
+        standalone-rust)
+            if (( ! ADOPT_STANDALONE )); then
+                fail "standalone Rust install found; rerun with --adopt-standalone to migrate it safely"
+            fi
+            echo "  Explicit standalone-to-wheel adoption requested"
+            ;;
+        source-checkout)
+            fail "existing eggpool belongs to a source checkout; use that checkout's documented developer flow"
+            ;;
+        ambiguous|*)
+            if [[ -n "$PROVENANCE_EVIDENCE" ]]; then
+                fail "existing eggpool ownership is ambiguous ($PROVENANCE_EVIDENCE); remove the collision explicitly or use a known manager"
+            fi
+            fail "existing eggpool ownership is ambiguous; remove the collision explicitly or use a known manager"
+            ;;
+    esac
+fi
+
+find_uv() {
+    command -v uv 2>/dev/null || true
+}
+
+find_pipx() {
+    command -v pipx 2>/dev/null || true
+}
+
+UV=""
+PIPX=""
+MANAGER_KIND="$PROVENANCE_KIND"
+MANAGER=""
+MANAGER_BIN_DIR=""
+PACKAGE_SPEC="eggpool"
+MANAGER_FORCE=0
+
+if [[ -n "$EXISTING_BIN" ]] || ((FORCE_REINSTALL)) || ((UPGRADE_ONLY)); then
+    MANAGER_FORCE=1
+fi
+
+if ((SOURCE_CHECKOUT)); then
+    PACKAGE_SPEC="$PROJECT_DIR/packaging/pypi"
+fi
+if ((VERSION_REQUESTED)) && ((SOURCE_CHECKOUT == 0)); then
+    PACKAGE_SPEC="eggpool==$TARGET_VERSION"
+fi
+
+case "$MANAGER_KIND" in
+    uv-tool)
+        UV="${PROVENANCE_MANAGER:-$(find_uv)}"
+        [[ -x "$UV" ]] || fail "the existing uv tool owner is unavailable; restore uv and rerun"
+        MANAGER="uv"
+        MANAGER_BIN_DIR="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
+        ;;
+    pipx)
+        PIPX="${PROVENANCE_MANAGER:-$(find_pipx)}"
+        [[ -x "$PIPX" ]] || fail "the existing pipx owner is unavailable; restore pipx and rerun"
+        MANAGER="pipx"
+        MANAGER_BIN_DIR="${PIPX_BIN_DIR:-$HOME/.local/bin}"
+        ;;
+    pip)
+        MANAGER="pip"
+        [[ -x "$PROVENANCE_PYTHON" ]] || fail "the owning Python interpreter is unavailable; repair the environment with its manager"
+        MANAGER_BIN_DIR="$(dirname "$EXISTING_BIN")"
+        ;;
+    standalone-rust)
+        UV="$(find_uv)"
+        if [[ -n "$UV" ]]; then
+            MANAGER_KIND="uv-tool"
+            MANAGER="uv"
+            MANAGER_BIN_DIR="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
+        else
+            PIPX="$(find_pipx)"
+            if [[ -n "$PIPX" ]]; then
+                MANAGER_KIND="pipx"
+                MANAGER="pipx"
+                MANAGER_BIN_DIR="${PIPX_BIN_DIR:-$HOME/.local/bin}"
+            else
+                fail "no package manager is available for standalone adoption; install uv or pipx and retry"
+            fi
+        fi
+        ;;
+    "")
+        UV="$(find_uv)"
+        if [[ -n "$UV" ]]; then
+            MANAGER_KIND="uv-tool"
+            MANAGER="uv"
+            MANAGER_BIN_DIR="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
+        else
+            PIPX="$(find_pipx)"
+            if [[ -n "$PIPX" ]]; then
+                MANAGER_KIND="pipx"
+                MANAGER="pipx"
+                MANAGER_BIN_DIR="${PIPX_BIN_DIR:-$HOME/.local/bin}"
+            fi
+        fi
+        ;;
+esac
+
+if [[ -z "$MANAGER" ]]; then
+    echo "uv and pipx were not found; bootstrapping uv from its documented HTTPS installer..."
+    curl -fsSL https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    UV="$(find_uv)"
+    [[ -n "$UV" ]] || fail "uv bootstrap failed; install uv manually and rerun"
+    MANAGER_KIND="uv-tool"
+    MANAGER="uv"
+    MANAGER_BIN_DIR="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
+fi
+
+same_path() {
+    local left="$1" right="$2"
+    [[ "$left" == "$right" ]] && return 0
+    [[ -e "$left" && -e "$right" ]] || return 1
+    [[ "$(realpath "$left")" == "$(realpath "$right")" ]]
+}
+
+EXPECTED_BIN="$MANAGER_BIN_DIR/eggpool"
+if [[ "$MANAGER_KIND" == pip ]]; then
+    EXPECTED_BIN="$EXISTING_BIN"
 else
-    echo "Checking uv package manager..."
-    if ! command -v uv &> /dev/null; then
-        echo "Installing uv..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
-        if ! command -v uv &> /dev/null; then
-            echo "Error: uv installation failed. Install manually:"
-            echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
-            exit 1
+    if [[ -e "$EXPECTED_BIN" ]]; then
+        collision=1
+        if [[ -n "$EXISTING_BIN" ]] && same_path "$EXPECTED_BIN" "$EXISTING_BIN"; then
+            collision=0
         fi
-    fi
-    echo "  uv found"
-
-    # Install eggpool as a uv-managed tool. Mirrors `pipx install eggpool`
-    # end-to-end: an isolated venv is created under
-    # ~/.local/share/uv/tools/eggpool/ and `eggpool` is symlinked into
-    # ~/.local/bin/ so it works as a bare command from any directory.
-    echo ""
-    if [ "$SOURCE_CHECKOUT" -eq 1 ]; then
-        echo "Installing eggpool from local checkout ($PROJECT_DIR)..."
-        if [ "$FORCE_REINSTALL" -eq 1 ]; then
-            uv tool install --force "$PROJECT_DIR"
-        else
-            uv tool install "$PROJECT_DIR"
+        if ((collision)); then
+            fail "manager bin collision at $EXPECTED_BIN; refusing to change which eggpool command wins on PATH"
         fi
-    else
-        echo "Installing eggpool from PyPI..."
-        uv tool install eggpool
-    fi
-
-    uv tool update-shell >/dev/null 2>&1 || true
-    export PATH="$HOME/.local/bin:$PATH"
-    if command -v eggpool >/dev/null 2>&1; then
-        echo "  eggpool installed at: $(command -v eggpool)"
-    else
-        echo "  Warning: eggpool binary not on PATH yet."
-        echo "  Restart your shell or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 fi
 
-# Configure paths and print next steps. Both pipx and uv-tool paths now
-# print the resolved config path so the operator always knows where to look.
-_seed_install_config "$PROJECT_DIR"
-CONFIG_PATH="$(_installed_config_path)"
+OLD_STANDALONE=""
+STANDALONE_BACKUP=""
+WAS_RUNNING=0
+restore_standalone() {
+    local old_dir
+    if [[ -n "$STANDALONE_BACKUP" && -e "$STANDALONE_BACKUP" && ! -e "$OLD_STANDALONE" ]]; then
+        mv "$STANDALONE_BACKUP" "$OLD_STANDALONE"
+    fi
+    if ((WAS_RUNNING)) && [[ -n "$OLD_STANDALONE" && -x "$OLD_STANDALONE" ]]; then
+        old_dir="$(dirname "$OLD_STANDALONE")"
+        PATH="$old_dir:$PATH" "$OLD_STANDALONE" restart >/dev/null 2>&1 || true
+    fi
+}
+
+if [[ "$PROVENANCE_KIND" == standalone-rust ]]; then
+    OLD_STANDALONE="$EXISTING_BIN"
+    if "$EXISTING_BIN" runtime-status --json >/dev/null 2>&1; then
+        WAS_RUNNING=1
+        "$EXISTING_BIN" stop >/dev/null 2>&1 || fail "could not stop the running standalone service; no files were changed"
+    fi
+    STANDALONE_VERSION="${PROVENANCE_VERSION:-unknown}"
+    STANDALONE_BACKUP="${OLD_STANDALONE}.eggpool-standalone-${STANDALONE_VERSION}.rollback"
+    [[ ! -e "$STANDALONE_BACKUP" ]] || fail "standalone rollback name already exists: $STANDALONE_BACKUP"
+    mv "$OLD_STANDALONE" "$STANDALONE_BACKUP" || fail "could not stage the standalone binary for rollback"
+fi
+
+echo "Installing EggPool through $MANAGER_KIND..."
+install_ok=1
+case "$MANAGER_KIND" in
+    uv-tool)
+        if ((MANAGER_FORCE)); then
+            if ! "$UV" tool install --force "$PACKAGE_SPEC"; then install_ok=0; fi
+        elif ! "$UV" tool install "$PACKAGE_SPEC"; then
+            install_ok=0
+        fi
+        ;;
+    pipx)
+        if ((MANAGER_FORCE)); then
+            if ! "$PIPX" install --force "$PACKAGE_SPEC"; then install_ok=0; fi
+        elif ! "$PIPX" install "$PACKAGE_SPEC"; then
+            install_ok=0
+        fi
+        ;;
+    pip)
+        if ! "$PROVENANCE_PYTHON" -m pip install --upgrade --force-reinstall "$PACKAGE_SPEC"; then install_ok=0; fi
+        ;;
+esac
+if (( ! install_ok )); then
+    restore_standalone
+    fail "package-manager installation failed; previous standalone command was restored when applicable"
+fi
+
+if [[ "$MANAGER_KIND" != pip ]]; then
+    export PATH="$MANAGER_BIN_DIR:$PATH"
+fi
+ACTIVE_BIN="$(command -v eggpool 2>/dev/null || true)"
+if [[ "$MANAGER_KIND" != pip ]] && ! same_path "$ACTIVE_BIN" "$EXPECTED_BIN"; then
+    restore_standalone
+    fail "manager installed eggpool at an unexpected PATH location; refusing a silent command collision"
+fi
+[[ -n "$ACTIVE_BIN" && -x "$ACTIVE_BIN" ]] || {
+    restore_standalone
+    fail "installed eggpool command is not executable; previous standalone command was restored when applicable"
+}
+
+REPORT=""
+NATIVE_REQUIRED=1
+if ((VERSION_REQUESTED)) && [[ "$TARGET_VERSION" != "$RUST_CUTOVER_VERSION" ]]; then
+    NATIVE_REQUIRED=0
+fi
+if REPORT="$("$ACTIVE_BIN" install-provenance --shell 2>/dev/null)" && parse_provenance_report "$REPORT"; then
+    :
+elif ! probe_python_provenance "$ACTIVE_BIN"; then
+    restore_standalone
+    fail "installed command did not provide verifiable package provenance"
+fi
+[[ "$PROVENANCE_KIND" == "$MANAGER_KIND" ]] || {
+    restore_standalone
+    fail "installed command is owned by $PROVENANCE_KIND, expected $MANAGER_KIND"
+}
+if ((NATIVE_REQUIRED)) && [[ "$PROVENANCE_NATIVE" != true ]]; then
+    restore_standalone
+    fail "installed command is not the native Rust cutover wheel owned by $MANAGER_KIND"
+fi
+if ((VERSION_REQUESTED)) && [[ "$PROVENANCE_VERSION" != "$TARGET_VERSION" ]]; then
+    restore_standalone
+    fail "installed version is ${PROVENANCE_VERSION:-unknown}, expected $TARGET_VERSION"
+fi
+CLI_VERSION="$("$ACTIVE_BIN" version 2>/dev/null | head -n 1 | tr -d '\r')" || {
+    restore_standalone
+    fail "installed eggpool version check failed"
+}
+[[ -n "$CLI_VERSION" ]] || {
+    restore_standalone
+    fail "installed eggpool returned an empty version"
+}
+
+CONFIG_PATH="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
+if [[ ! -f "$CONFIG_PATH" ]]; then
+    "$ACTIVE_BIN" init-config "$CONFIG_PATH" || {
+        restore_standalone
+        fail "could not seed the missing config at $CONFIG_PATH"
+    }
+    echo "Created $CONFIG_PATH from the installed package's canonical template."
+else
+    echo "Preserved existing config: $CONFIG_PATH"
+fi
+
+if ((WAS_RUNNING)); then
+    PATH="$MANAGER_BIN_DIR:$PATH" "$ACTIVE_BIN" restart >/dev/null 2>&1 || {
+        restore_standalone
+        fail "new install could not restart the service; previous standalone command was restored when applicable"
+    }
+fi
 
 echo ""
 echo "Installation complete."
+echo "  Version: $CLI_VERSION"
+echo "  Manager: $MANAGER_KIND"
+echo "  Command: $ACTIVE_BIN"
+echo "  Config:  $CONFIG_PATH"
+if [[ -n "$STANDALONE_BACKUP" && -e "$STANDALONE_BACKUP" ]]; then
+    echo "  Standalone rollback retained at: $STANDALONE_BACKUP"
+fi
 echo ""
-echo "Your config is at: $CONFIG_PATH"
-echo ""
-_print_install_next_steps "$PROJECT_DIR" "$CONFIG_PATH"
-
-_run_install_prompt
-
-# ---------------------------------------------------------------------------
-# Helper functions (defined last so the main flow stays at the top).
-# ---------------------------------------------------------------------------
-
-# Seed ~/.config/eggpool/config.toml and ~/.config/eggpool/.env if they are
-# missing, without overwriting anything the operator already wrote. Used by
-# both the pipx and the uv-tool code paths so behavior is symmetric.
-_seed_install_config() {
-    local project_dir="$1"
-    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/eggpool"
-    mkdir -p "$config_dir"
-
-    if [ ! -f "$config_dir/config.toml" ]; then
-        if [ -f "$project_dir/config.example.toml" ]; then
-            cp "$project_dir/config.example.toml" "$config_dir/config.toml"
-            echo "  Created $config_dir/config.toml from example template."
-        else
-            # Minimal fallback that satisfies `eggpool check-config`.
-            cat > "$config_dir/config.toml" <<'TOML'
-[server]
-host = "0.0.0.0"
-port = 11300
-log_level = "INFO"
-
-[database]
-path = "~/.local/share/eggpool/usage.sqlite3"
-
-[models]
-refresh_interval_s = 300
-TOML
-            echo "  Created minimal $config_dir/config.toml."
-        fi
-    else
-        echo "  config.toml already exists at $config_dir, skipping."
-    fi
-}
-
-# Resolve the canonical installed config path the operator should use.
-# Reads $EGGPOOL_CONFIG if set, then falls back to the XDG default.
-_installed_config_path() {
-    if [ -n "${EGGPOOL_CONFIG:-}" ]; then
-        echo "$EGGPOOL_CONFIG"
-    else
-        echo "${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml"
-    fi
-}
-
-# Print the post-install next-step guide. Mirrors the documented primary
-# private-deployment path; the cron fallback is offered when systemd is
-# unavailable.
-_print_install_next_steps() {
-    local project_dir="$1"
-    local config_path="$2"
-
-    echo "Next steps:"
-    echo "  eggpool onboard                                    — interactive provider setup"
-    echo "  eggpool --config $config_path check-config        — validate configuration"
-    echo ""
-    if [ -d /run/systemd/system ] || command -v systemctl >/dev/null 2>&1; then
-        echo "Run the systemd installer (preferred when systemd is available):"
-        echo "  sudo env \"PATH=\$PATH\" \$(command -v eggpool) deploy systemd --install"
-        echo ""
-    fi
-    echo "Or, on systems without systemd, install the watchdog cron entry:"
-    echo "  eggpool deploy cron --install"
-    echo ""
-    echo "Tip: drop the --config flag by exporting in your shell rc:"
-    echo "  export EGGPOOL_CONFIG=\"$config_path\""
-    echo ""
-    echo "Other useful commands (work from any directory):"
-    echo "  eggpool accounts status"
-    echo "  eggpool serve"
-    echo "  eggpool rehash"
-    echo "  eggpool update"
-    echo ""
-    echo "For production deployment, see docs/deployment.md"
-}
-
-# Run the install_prompt helper with the same stdin-detachment logic the
-# original script used. Factored out so the helpers above stay close to the
-# main flow.
-_run_install_prompt() {
-    # A curl-piped installer leaves stdin attached to the exhausted curl pipe.
-    # Prefer stdin when it is already interactive; otherwise reconnect the
-    # prompt to the controlling terminal. Keep the existing EOF/skip behavior
-    # when no controlling terminal is available (for example, in unattended
-    # installs).
-    if [ -t 0 ]; then
-        "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py"
-    elif { exec 3</dev/tty; } 2>/dev/null; then
-        "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py" <&3
-        exec 3<&-
-    else
-        "$PYTHON" -S "${SCRIPTS_DIR}/install_prompt.py"
-    fi
-}
+echo "Next steps:"
+echo "  eggpool onboard"
+echo "  eggpool --config $CONFIG_PATH check-config"
+echo "  sudo env \"PATH=\$PATH\" \"\$(command -v eggpool)\" deploy systemd --install"
+echo "  eggpool deploy cron --install        # when systemd is unavailable"
+echo "  eggpool update"

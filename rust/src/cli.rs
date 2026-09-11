@@ -65,6 +65,12 @@ pub enum Command {
     },
     Uninstall(UninstallArgs),
     Update(UpdateArgs),
+    #[command(name = "install-provenance", hide = true)]
+    InstallProvenance {
+        /// Emit bounded tab-separated fields for installer automation.
+        #[arg(long)]
+        shell: bool,
+    },
     Set {
         key: String,
         value: String,
@@ -392,6 +398,7 @@ impl Command {
             Self::Recover { .. } => "recover",
             Self::Uninstall(_) => "uninstall",
             Self::Update(_) => "update",
+            Self::InstallProvenance { .. } => "install-provenance",
             Self::Set { .. } => "set",
             Self::Rehash { .. } => "rehash",
             Self::RuntimeStatus { .. } => "runtime-status",
