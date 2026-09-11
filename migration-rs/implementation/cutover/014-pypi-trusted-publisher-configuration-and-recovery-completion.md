@@ -24,7 +24,8 @@ emitted by `.github/workflows/release.yml`:
 - owner: `eggstack`;
 - repository: `eggpool`;
 - workflow: `.github/workflows/release.yml`;
-- environment: `pypi`;
+- production environment: `pypi`;
+- TestPyPI environment: `testpypi`;
 - production ref: `main`.
 
 The configuration must be completed by an authorized PyPI project maintainer;

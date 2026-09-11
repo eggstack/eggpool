@@ -17,6 +17,11 @@ GitHub Actions claims emitted by the release workflow:
 | Environment | `pypi` |
 | Production ref | `main` |
 
+A distinct TestPyPI Trusted Publisher was also configured for the same owner,
+repository, and workflow with environment `testpypi`. The recovery below used
+the production `pypi` environment; no TestPyPI rerun was required to complete
+the already-failed production bundle.
+
 No PyPI API token or repository secret was added.
 
 ## Exact-bundle recovery
