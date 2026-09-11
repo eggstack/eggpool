@@ -1,6 +1,7 @@
 # K008: build the exact K003 artifact set once, validate it, then publish the
-# downloaded bytes through separately privileged channels.  The production
-# branches are intentionally tag-only; workflow_dispatch is rehearsal-only.
+# downloaded bytes through separately privileged channels. Normal production
+# publication is tag-only; workflow_dispatch is rehearsal-only except for the
+# narrowly gated recovery path for a failed PyPI upload.
 
 name: Rust release supply chain
 
@@ -11,13 +12,18 @@ on:
   workflow_dispatch:
     inputs:
       destination:
-        description: Non-production destination for a manual rehearsal
+        description: Rehearsal or exact-bundle PyPI recovery mode
         required: true
         type: choice
         options:
           - validate
           - testpypi
+          - pypi-resume
         default: validate
+      source_run_id:
+        description: Failed tag-run ID whose exact validated bundle should be resumed
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -256,7 +262,7 @@ jobs:
           name: k008-release-bundle
           path: dist/publish
       - name: publish exact validated wheels to TestPyPI
-        uses: pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
         with:
           packages-dir: dist/publish/wheels
           repository-url: https://test.pypi.org/legacy/
@@ -264,7 +270,7 @@ jobs:
 
   publish-pypi:
     name: publish exact validated wheels to PyPI
-    if: ${{ github.event_name == 'push' && github.repository == 'eggstack/eggpool' && github.ref == format('refs/tags/v{0}', needs.validate-release.outputs.version) }}
+    if: ${{ github.repository == 'eggstack/eggpool' && ((github.event_name == 'push' && github.ref == format('refs/tags/v{0}', needs.validate-release.outputs.version)) || (github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' && inputs.source_run_id != '')) }}
     needs:
       - validate-release
       - aggregate-release-manifest
@@ -274,14 +280,80 @@ jobs:
       name: pypi
       url: https://pypi.org/p/eggpool
     permissions:
+      actions: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - name: download exact failed-run bundle for recovery
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: k008-release-bundle
           path: dist/publish
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+      - name: download exact current-run bundle
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: k008-release-bundle
+          path: dist/publish
+      - name: checkout immutable release tag for recovery validation
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          clean: false
+      - name: validate exact failed-run bundle provenance
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          EXPECTED_VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          set -eu
+          case "$SOURCE_RUN_ID" in
+            ''|*[!0-9]*) echo 'source-run-id must be numeric' >&2; exit 1 ;;
+          esac
+          source_run_json="$(curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          SOURCE_RUN_JSON="$source_run_json" EXPECTED_VERSION="$EXPECTED_VERSION" python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          run = json.loads(os.environ["SOURCE_RUN_JSON"])
+          expected_version = os.environ["EXPECTED_VERSION"]
+          tag = f"v{expected_version}"
+          tag_sha = subprocess.check_output(
+              ["git", "rev-parse", f"{tag}^{{commit}}"], text=True
+          ).strip()
+          if run.get("event") != "push" or run.get("head_branch") != tag:
+              raise SystemExit("resume source is not the matching tag push")
+          if run.get("head_sha") != tag_sha or run.get("conclusion") != "failure":
+              raise SystemExit("resume source is not the failed immutable tag run")
+          manifest = json.loads(
+              Path(f"dist/publish/eggpool-{expected_version}-release-manifest.json")
+              .read_text(encoding="utf-8")
+          )
+          if manifest.get("release_version") != expected_version:
+              raise SystemExit("resume manifest version mismatch")
+          if manifest.get("source_commit") != tag_sha:
+              raise SystemExit("resume manifest source mismatch")
+          wheels = sorted(Path("dist/publish/wheels").glob("*.whl"))
+          universal_marker = "py3-none-" + "any"
+          if len(wheels) != 3 or any(universal_marker in path.name for path in wheels):
+              raise SystemExit("resume bundle does not contain exactly three Rust wheels")
+          subprocess.run(
+              ["sha256sum", "--check", "SHA256SUMS"],
+              cwd="dist/publish",
+              check=True,
+          )
+          PY
       - name: publish exact validated wheels to PyPI
-        uses: pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
         with:
           packages-dir: dist/publish/wheels
           attestations: true

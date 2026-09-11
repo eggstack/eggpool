@@ -95,6 +95,10 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     _require(text, r"^      destination:\s*$", "manual destination input is missing")
     _require(text, r"^          - validate\s*$", "manual validate mode is missing")
     _require(text, r"^          - testpypi\s*$", "manual TestPyPI mode is missing")
+    _require(text, r"^          - pypi-resume\s*$", "PyPI recovery mode is missing")
+    _require(
+        text, r"^      source_run_id:\s*$", "PyPI recovery source input is missing"
+    )
 
     _require(text, r"^permissions:\s*$", "read-only default permissions are missing")
     _require(
@@ -275,7 +279,7 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     _require(
         pypi,
         r"github\.event_name\s*==\s*'push'",
-        "production PyPI must be tag-push-only",
+        "production PyPI must retain the tag-push path",
     )
     _require(
         pypi,
@@ -289,6 +293,36 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         "production version/tag gate is missing",
     )
     _require(pypi, r"id-token:\s+write", "production PyPI job lacks OIDC permission")
+    _require(
+        pypi,
+        r"actions:\s+read",
+        "PyPI recovery lacks scoped artifact-read permission",
+    )
+    _require(
+        pypi,
+        r"inputs\.destination\s*==\s*'pypi-resume'",
+        "PyPI recovery destination gate is missing",
+    )
+    _require(
+        pypi,
+        r"inputs\.source_run_id\s*!=\s*''",
+        "PyPI recovery source-run gate is missing",
+    )
+    _require(
+        pypi,
+        r"run-id:\s+\$\{\{ inputs\.source_run_id \}\}",
+        "PyPI recovery must select an explicit prior run",
+    )
+    _require(
+        pypi,
+        r"github\.token",
+        "PyPI recovery artifact download must use the workflow token",
+    )
+    _require(
+        pypi,
+        r"validate exact failed-run bundle provenance",
+        "PyPI recovery provenance check is missing",
+    )
     _require(
         pypi,
         r"environment:\s*\n\s+name:\s+pypi",

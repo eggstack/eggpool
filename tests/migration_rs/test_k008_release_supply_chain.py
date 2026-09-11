@@ -68,6 +68,15 @@ def test_workflow_has_immutable_jobs_and_separate_publish_authority() -> None:
     assert len(summary["jobs"]) == 9
 
 
+def test_workflow_has_fail_closed_exact_bundle_pypi_recovery() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "pypi-resume" in text
+    assert "source_run_id" in text
+    assert '["sha256sum", "--check", "SHA256SUMS"]' in text
+    assert "run-id: ${{ inputs.source_run_id }}" in text
+    assert 'run.get("conclusion") != "failure"' in text
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

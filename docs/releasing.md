@@ -67,6 +67,14 @@ Do not call a candidate released until all required targets are public and
 the post-publication verifier passes. A partial immutable upload is stopped,
 recorded, and recovered by a new reviewed release; filenames are never reused.
 
+If a tag run builds and attaches the exact GitHub assets but the PyPI publisher
+fails before uploading any wheel, a maintainer may use the manual
+`pypi-resume` destination with that failed run ID. The recovery job downloads
+that run's immutable bundle, verifies the matching tag, source commit, release
+manifest, and sidecar hashes, and publishes only those wheels through the
+protected PyPI environment. This is a recovery path for the same release, not
+a normal release trigger or a substitute for the post-publication verifier.
+
 ## Python reference packaging
 
 The root Hatchling project and src/eggpool remain available through M11 for
