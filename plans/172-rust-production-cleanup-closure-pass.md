@@ -170,6 +170,10 @@ uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ```
 
+The strict `qualification_release_rehearsal.py` also passed against a complete
+disposable three-target artifact set and freshly generated manifest; no public
+publication or package index was mutated.
+
 The closure implementation was committed as
 `341c31b726dcac019a2fcac0a571d430f2b32d21` and pushed to `main`. Hosted CI
 passed for that head in [run 34657132426](https://github.com/eggstack/eggpool/actions/runs/34657132426).
