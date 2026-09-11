@@ -1,7 +1,7 @@
 # Plan 172 — Rust Production Cleanup Closure Pass
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-11)
 Parent roadmap: `plans/168-rust-production-cleanup-roadmap.md`
 Priority: P2 closure / documentation consistency
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -142,3 +142,36 @@ Do not create another follow-up plan unless verification discovers a real defect
 ## Handoff note
 
 Treat this as the final administrative closure of Plans 168–171. Keep the patch focused on status/evidence consistency and verification. If all checks are green, close the line of work rather than searching for additional cleanup merely to justify another pass.
+
+## Closure evidence
+
+The closure pass required no functional change. Plans 168–171 now read as
+complete, `migration-rs/` remains absent, retired migration-specific tooling
+names have no active-tree references, and the neutral release/package
+authorities remain present.
+
+Local verification passed:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo build --manifest-path rust/Cargo.toml --locked --release
+uv sync --frozen
+uv run ruff format --check scripts/ tests/tooling/
+uv run ruff check scripts/ tests/tooling/
+uv run pyright scripts/
+uv run pytest tests/tooling/ -q --tb=short --maxfail=1
+uv run python scripts/check_release_catalog.py
+uv run python scripts/validate_release_identity.py
+uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
+uv run python scripts/validate_release_docs.py
+uv run python scripts/validate_runtime_package_boundary.py
+git diff --check
+```
+
+The closure implementation was committed as `<final-closure-commit>` and
+pushed to `main`; hosted CI is expected to run because the README CI guidance
+was corrected alongside the closure metadata. The hosted result and final
+commit SHA will be filled in after that run completes. No residual maintenance
+item remains within this cleanup line.

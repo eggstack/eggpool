@@ -1,7 +1,7 @@
 # Plan 168 — Rust Production Cleanup Roadmap
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-11)
 Priority: P1 maintenance / post-migration consolidation
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
 
@@ -9,7 +9,9 @@ Execution target: GPT-5.6 Luna/Sol or comparable implementation model
 
 EggPool has completed the Python-to-Rust production migration through M12/P007. The current application, runtime assets, provider transport, database ownership, CLI, packaging payload, and deployment behavior are Rust-owned. The repository now needs a bounded post-migration cleanup pass so the active tree reflects that reality instead of continuing to carry migration-era lint debt, unnecessarily broad dependency features, and migration planning/release scaffolding as first-class current architecture.
 
-This roadmap is **not M13** and must not reopen parity work. It is ordinary product-maintenance work on the accepted Rust production tree.
+This roadmap is **not M13** and must not reopen parity work. It records ordinary
+product-maintenance work on the accepted Rust production tree; the cleanup line
+is now closed.
 
 The cleanup has three implementation plans:
 
@@ -17,17 +19,22 @@ The cleanup has three implementation plans:
 2. Plan 170 — audit and minimize the Rust dependency/feature graph without reducing supported production behavior.
 3. Plan 171 — extract still-live release/rollback contracts from migration-era paths, then retire the active migration scaffold and stale migration navigation.
 
-## Current findings
+## Historical findings at roadmap opening
+
+The following observations are retained as historical planning context. They
+describe the state that motivated Plans 169–171, not outstanding work in the
+current tree.
 
 ### Rust quality gate
 
-Accepted migration closure still records 66 Clippy errors and one warning under:
+Accepted migration closure recorded 66 Clippy errors and one warning under:
 
 ```bash
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 ```
 
-Ordinary CI runs `cargo fmt` and `cargo test` but does not run Clippy. Now that Rust is the only production runtime, this should be resolved rather than preserved as migration-era accepted debt.
+At roadmap opening, ordinary CI ran `cargo fmt` and `cargo test` but did not run
+Clippy. Plan 169 resolved that migration-era accepted debt.
 
 ### Dependency/feature graph
 
@@ -37,9 +44,17 @@ This cannot be reduced by assumption. `rust/src/providers/transport.rs` directly
 
 ### Migration scaffold
 
-The migration registry reports M4–M12 closed and no dependency-ready migration plan. Nevertheless, `migration-rs/` remains a large historical system and root tooling metadata still calls itself `migration-tooling-only`.
+At roadmap opening, the migration registry reported M4–M12 closed and no
+dependency-ready migration plan. Nevertheless, `migration-rs/` remained a
+large historical system and root tooling metadata still called itself
+`migration-tooling-only`.
 
-The directory cannot simply be deleted yet. Current release documentation still invokes `migration-rs/closure/cutover/` artifacts for release rehearsal and publication verification, while retained scripts use `cutover`/`m12` names for durable release, exact-version rollback, package authority, and artifact contracts.
+At roadmap opening, the directory could not simply be deleted: current release
+documentation still invoked `migration-rs/closure/cutover/` artifacts for
+release rehearsal and publication verification, while retained scripts used
+`cutover`/`m12` names for durable release, exact-version rollback, package
+authority, and artifact contracts. Plan 171 extracted those contracts and
+retired the scaffold.
 
 The target state is: durable compatibility/release contracts live under neutral current paths; Git history is the migration archive; no current runtime/release path depends on `migration-rs/`.
 
@@ -101,3 +116,21 @@ No new provider protocols, Windows support, package channel, HTTP/2, TLS stack, 
 ## Completion definition
 
 The repository should read and behave like a mature Rust application: strict Rust linting is green and enforced, dependencies/features are justified by current behavior, release/rollback tooling has neutral ownership, historical migration machinery is no longer active navigation, and supported install/update/provider/state contracts remain intact.
+
+## Closure evidence
+
+Plans 169–171 completed the cleanup sequence without changing runtime,
+provider, database, updater, package, or release behavior:
+
+1. Plan 169 — `ec7e19968a07e0064a76a302db756a9acdd890ad` — strict Clippy is
+   enforced in CI with `-D warnings` across all targets.
+2. Plan 170 — `34c635e28c40fa2c9f9597f2cc59902606594961` — the Rust dependency
+   and feature graph was minimized without reducing supported behavior.
+3. Plan 171 — `acbb495dcde4723cf04ed7ddb21c0d4f1411f4ba` — migration scaffolding
+   was retired and durable release tooling was moved to neutral paths.
+4. Release-workflow syntax correction —
+   `c96ab4a512de1f622edf9a909ac8418a36570127` — hosted CI run
+   `34652706163` passed for the corrected release workflow.
+
+This is ordinary maintenance and is closed. No M13 milestone, replacement
+cleanup framework, or follow-up migration registry is required.

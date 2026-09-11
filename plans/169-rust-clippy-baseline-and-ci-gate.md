@@ -1,7 +1,7 @@
 # Plan 169 — Rust Clippy Baseline Elimination and CI Gate
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-11)
 Parent roadmap: `plans/168-rust-production-cleanup-roadmap.md`
 Priority: P1 correctness / maintenance
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -10,7 +10,10 @@ Execution target: GPT-5.6 Luna/Sol or comparable implementation model
 
 Remove the migration-era strict-Clippy exception now that Rust is the sole production runtime, and make static Rust quality an ordinary repository invariant.
 
-Current closure evidence records 66 Clippy errors and one warning under `--all-targets -- -D warnings`. Ordinary CI does not run Clippy, so new findings can accumulate without being distinguished from the historical baseline.
+At plan opening, closure evidence recorded 66 Clippy errors and one warning
+under `--all-targets -- -D warnings`. Ordinary CI did not run Clippy, so new
+findings could accumulate without being distinguished from the historical
+baseline.
 
 This plan makes Clippy green without broad suppression, semantic redesign, or test weakening, then adds the exact strict gate to CI and contributor guidance.
 
@@ -102,3 +105,12 @@ Run focused Rust targets for any sensitive subsystem changed by the fixes.
 ## Handoff note
 
 Do not combine this with broad architectural refactoring. The objective is to convert an accepted migration exception into a normal production invariant with the minimum safe code changes.
+
+## Closure evidence
+
+Implemented in `ec7e19968a07e0064a76a302db756a9acdd890ad`. Strict Clippy now
+runs in `.github/workflows/ci.yml` with `-D warnings` across all targets, and
+the local Rust/tooling verification suite passed on the completed cleanup
+tree. Hosted CI subsequently passed for head
+`c96ab4a512de1f622edf9a909ac8418a36570127` in run `34652706163` after the
+release-workflow indentation correction.

@@ -348,7 +348,9 @@ cargo build --manifest-path rust/Cargo.toml --locked --release
 
 ### CI
 
-One GitHub Actions job on every PR:
+One GitHub Actions job runs on code-changing pull requests and pushes to
+`main`; documentation-only changes under `plans/`, `docs/`, `architecture/`,
+`.opencode/skills/`, `AGENTS.md`, and `CHANGELOG.md` are intentionally ignored:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
