@@ -1,6 +1,6 @@
 # M12 Python Retirement Roadmap
 
-Status: M12 closed 2026-09-11 after accepted P006; P001-P006 accepted/closed
+Status: corrective requalification open after post-P006 hosted-CI failure; P001-P006 remain accepted historical evidence; P007 dependency-ready
 
 Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77` (M11 closed; provisional M12 boundary planning)
 
@@ -68,6 +68,7 @@ Python may survive only where it is clearly a repository tool: release/catalog v
 14. Source deletion occurs only after P001/P002 prove the replacement authority.
 15. Live oracle/test deletion occurs only after P001/P004 prove fixture/Rust replacement coverage.
 16. Failed destructive or closure gates create new corrective P-plans.
+17. Final closure evidence must include a green hosted CI result when hosted CI exposes a qualification failure not represented by local P006 evidence.
 
 ## Ordered implementation sequence
 
@@ -80,12 +81,11 @@ P001 final Python reference/fixture/disposition freeze
  -> P003 Python application source + runtime-asset retirement
  -> P004 oracle/differential/test + Python tooling retirement
  -> P005 repository/installer/release/docs consolidation
- -> P006 Rust-only qualification + M12 closure
+ -> P006 Rust-only qualification + historical M12 closure
+ -> P007 provider-transport fixture determinism + hosted-CI requalification
 ```
 
-Only `../registry.md` authorizes implementation. P006 was the sole
-dependency-ready plan after accepted P001-P005 closures and is now accepted;
-M12 is closed.
+Only `../registry.md` authorizes implementation. P001-P006 remain accepted and append-only. A hosted-CI failure discovered after P006 invalidated P006 as the current final closure authority without erasing what its local qualification proved. P007 is the sole dependency-ready corrective plan.
 
 ## P001 — Reference boundary and fixture freeze
 
@@ -115,19 +115,25 @@ Exit: no CI/test path needs the historical application source or a live Python E
 
 Remove stale Python-current assumptions from the installer, updater, release validators/workflow, repository metadata and documentation. Preserve explicit compatible historical exact-version selection and existing-install adoption.
 
-Exit: the repository and public docs have one coherent current Rust authority.
+Exit: the repository and public docs have one coherent current Rust authority. **Accepted/closed by P005.**
 
 ## P006 — Rust-only aggregate qualification
 
 Build/install the supported production artifacts from the post-retirement tree; qualify state/recovery/security/release behavior and a package-managed historical Python -> post-retirement Rust -> Python -> Rust cycle; close M12 only if no high/medium finding remains.
 
-Exit: production repository/release/runtime are pure Rust with auditable history and preserved compatible exact-version behavior. **Satisfied by accepted P006 closure.**
+P006 is **accepted historical closure evidence**. Its local qualification remains valid for the surfaces it actually exercised. It is no longer the current final closure authority because hosted GitHub CI subsequently failed the provider-transport account-isolation test on the P005/P006 closing trees.
+
+## P007 — Provider transport fixture determinism and M12 requalification
+
+Root-cause the hosted-CI `ReadTimeout` in the identical-proxy account-isolation regression, correct the fixture or smallest production defect without loosening production timeout policy, repeatedly qualify both account-isolation paths, rerun the complete Rust/retirement gates, and require a successful hosted GitHub Actions CI run before re-closing M12.
+
+Exit: provider/account isolation is deterministic locally and in hosted CI, all broad qualification gates are green, and no unresolved high/medium finding remains. P007 then supersedes P006 only as the **current M12 closure authority**; P006 remains append-only historical evidence.
 
 ## Qualification posture
 
-M12 should reuse accepted M10/M11 evidence when source-freshness is valid, but any gate whose owner/path changes during P002-P005 must be rerun. The final closure must include fresh current-wheel construction from the post-retirement tree and fresh cross-era package-manager transition evidence.
+M12 should reuse accepted M10/M11/P006 evidence when source-freshness is valid, but any gate whose owner/path changes during P002-P007 must be rerun. P007 specifically owns fresh provider-transport and hosted-CI evidence because that is the surface that invalidated the final P006 closure claim.
 
-No broad new target matrix or live-provider campaign is required unless a retirement change touches those surfaces. Linux x86_64 is the minimum manager-transition closure host; artifact builds still cover all three M11 targets.
+No broad new target matrix or live-provider campaign is required unless the corrective change touches those surfaces. Linux x86_64 remains the minimum manager-transition closure host; artifact builds still inherit the three M11 targets when packaging evidence must be rerun.
 
 ## Non-goals
 
@@ -138,18 +144,13 @@ No broad new target matrix or live-provider campaign is required unless a retire
 - no requirement to remove Python as a developer tooling language;
 - no deletion/yank/rebuild of historical public packages;
 - no replacement package name;
-- no M13 migration milestone.
+- no M13 migration milestone;
+- no broad timeout inflation or flaky-test retries to manufacture green CI.
 
 ## M12 closure
 
-Only accepted P006 may close M12. The accepted closure record
-[`closure/retirement/006-status.md`](../closure/retirement/006-status.md)
-proves the active production/release tree is Rust-only, retained evidence is
-sufficient to audit prior parity decisions, compatible historical exact-version
-transitions still work without repository-local Python source, and no unresolved
-high/medium packaging/compatibility/security/lifecycle/evidence-loss/data-loss
-finding remains.
+P006 remains an accepted historical record. Current final closure is reopened by the post-P006 hosted-CI failure and may be restored only by accepted P007.
 
-After M12 closure, further EggPool work returns to normal product/maintenance
-roadmaps rather than continuing the migration milestone series. No M13 plan is
-auto-created.
+The P007 closure record must be written to `closure/retirement/007-status.md` and must record the root-cause classification plus a successful hosted CI run for the corrected tree. Until then, M12 is in corrective requalification and the migration program has one dependency-ready plan: P007.
+
+After accepted P007 re-closure, further EggPool work returns to normal product/maintenance roadmaps rather than continuing the migration milestone series. No M13 plan is auto-created.

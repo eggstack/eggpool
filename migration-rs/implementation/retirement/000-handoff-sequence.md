@@ -1,6 +1,6 @@
 # M12 Python Retirement Handoff Sequence
 
-Status: M12 closed; P001-P006 accepted/closed
+Status: corrective requalification open; P001-P006 accepted historical evidence; P007 dependency-ready
 
 Execute and accept in this order:
 
@@ -9,7 +9,8 @@ Execute and accept in this order:
 3. P003 — remove the historical Python application source after migrations/assets are independently owned.
 4. P004 — retire live Python-oracle/differential machinery and reduce Python to bounded tooling/fixtures.
 5. P005 — consolidate installer, updater, release workflow, repository metadata and documentation around the Rust-only current tree.
-6. P006 — run Rust-only artifact/state/cross-era qualification and close M12 if all gates pass.
+6. P006 — run Rust-only artifact/state/cross-era qualification. **Accepted as historical local closure evidence.**
+7. P007 — root-cause the hosted-CI provider-transport account-isolation failure, correct it without weakening transport semantics, rerun bounded aggregate qualification, and restore M12 closure only after a successful hosted CI run.
 
 ## Rules for every handoff
 
@@ -22,7 +23,7 @@ Execute and accept in this order:
 - Do not change schema 54 or reset user state for retirement.
 - Retained Python tooling cannot be required by the installed Rust service.
 - A failed destructive or closure gate gets a new corrective P-plan; do not rewrite an earlier closure.
+- Hosted CI failures that invalidate closure evidence must be resolved by fresh corrective evidence, not reclassified away because local runs passed.
+- Do not fix P007 by only increasing production timeouts, adding arbitrary sleeps/retries, ignoring tests, or weakening account-isolation assertions.
 
-P006 was the sole dependency-ready handoff after P005 closure and is now
-accepted/closed. No future migration plan is promoted; subsequent work returns
-to ordinary product and maintenance roadmaps.
+P007 is the sole dependency-ready handoff. P006 remains append-only historical evidence for the local qualification it performed, but accepted P007 is required before M12 can again be considered closed. No M13 plan is promoted by this correction.
