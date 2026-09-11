@@ -245,8 +245,8 @@ K001 cutover/package/version-catalog contract freeze
 
 Only `registry.md` authorizes handoff. K001-K014 are accepted/closed, and no
 future M11 implementation plan is dependency-ready. M12 planning review is
-complete; P004 is now the sole dependency-ready M12 plan after accepted
-P001-P003 closures and production/runtime retirement remains separately gated.
+complete; P005 is now the sole dependency-ready M12 plan after accepted
+P001-P004 closures and production/runtime retirement remains separately gated.
 
 M11 preserves the PyPI user experience. Existing `pip install eggpool`, `pipx install eggpool`, and `uv tool install eggpool` workflows remain viable; the installed payload becomes the native Rust binary on qualified targets. The Rust wheel retains `Requires-Python >=3.11` during M11 as a package-manager rollback compatibility floor even though normal EggPool runtime does not invoke Python. M12 may reconsider that metadata after Python retirement.
 
@@ -264,7 +264,7 @@ After stabilization, remove Python production/runtime packaging and migration-on
 
 M12 planning review is recorded in
 [`subsystems/python-retirement-roadmap.md`](subsystems/python-retirement-roadmap.md).
-P004 is now the sole dependency-ready plan after accepted P001-P003 closures.
+P005 is now the sole dependency-ready plan after accepted P001-P004 closures.
 M11 does not auto-promote Python removal; the remaining M12 plans continue to
 be gated by their direct predecessors under ADR-0005.
 

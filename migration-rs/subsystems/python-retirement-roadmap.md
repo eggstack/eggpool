@@ -1,6 +1,6 @@
 # M12 Python Retirement Roadmap
 
-Status: implementation planning complete 2026-09-11; P001-P003 accepted/closed; P004 dependency-ready; P005-P006 serially gated
+Status: implementation planning complete 2026-09-11; P001-P004 accepted/closed; P005 dependency-ready; P006 queued
 
 Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77` (M11 closed; provisional M12 boundary planning)
 
@@ -83,7 +83,7 @@ P001 final Python reference/fixture/disposition freeze
  -> P006 Rust-only qualification + M12 closure
 ```
 
-Only `../registry.md` authorizes implementation. P004 is now the sole dependency-ready plan after accepted P001-P003 closures.
+Only `../registry.md` authorizes implementation. P005 is now the sole dependency-ready plan after accepted P001-P004 closures.
 
 ## P001 — Reference boundary and fixture freeze
 
@@ -107,7 +107,7 @@ Exit: Rust builds/packages/runs with `src/eggpool` absent and runtime assets int
 
 Replace live Python/Rust comparisons with retained fixtures or Rust-native contract tests, remove migration-only server launchers/application tests, and shrink Python to clearly development-only tooling.
 
-Exit: no CI/test path needs the historical application source or a live Python EggPool server.
+Exit: no CI/test path needs the historical application source or a live Python EggPool server. **Accepted/closed by P004.**
 
 ## P005 — Repository/release/installer/docs consolidation
 
