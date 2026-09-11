@@ -16,3 +16,20 @@ codec IDs and does not probe in the background.
 Provider failures are typed before reaching health/retry effects. Per-model
 failures quarantine only the affected pair; genuine transport failures may
 advance account-wide health.
+
+## Native dependency boundaries
+
+The provider transport keeps direct ownership of its protocol boundary. The
+Eggress component crates named by `rust/src/providers/transport.rs` provide
+core target types, pproxy parsing/translation, TOML compilation, chain
+execution, URI hop specifications, and SSH session caching. The selected
+Eggress features retain pproxy-compatible outbound URIs, extended protocols,
+legacy Shadowsocks methods/plugins, and SSH chains. These are compatibility
+contracts, not redundant declarations.
+
+The surrounding HTTP client intentionally remains a separate Hyper/Rustls
+stack: HTTP/1.1 only, Rustls with `ring` and TLS 1.2, deterministic webpki
+roots, bounded pooling, and explicit timeout/error classification. SQLite's
+bundled and backup features likewise belong to the database and lifecycle
+contracts. Review the resolved graph with `cargo tree -e features` before
+changing any of these boundaries.

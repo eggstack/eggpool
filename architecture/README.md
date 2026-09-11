@@ -84,10 +84,18 @@ available only for explicit catalogued exact-version compatibility transitions.
 Run current runtime checks from the repository root:
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
+```
+
+Native dependency and feature changes are reviewed from Cargo's resolved
+authority, not from a hand-maintained inventory:
+
+```bash
+cargo tree --manifest-path rust/Cargo.toml -e features
+cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
 Use the Python tooling environment only for release validators and tooling

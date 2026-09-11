@@ -21,6 +21,9 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Use the shared SQLite transaction/recovery contract; fail closed on commit or
   ownership ambiguity.
 - Preserve the canonical wire intent and never chain translated payloads.
+- Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
+  authority. Keep direct crates and non-default features tied to a live source,
+  build, test, packaging, or documented compatibility owner.
 
 ## Verification pointers
 

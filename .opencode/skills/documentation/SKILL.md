@@ -25,6 +25,9 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   an active source package.
 - Verify every command, path, route, environment variable, and relative link
   against the current tree before documenting it.
+- Treat `rust/Cargo.toml` as the authority for native dependency and feature
+  claims. Do not document proxy, TLS, SQLite, or archive capabilities that are
+  not present in the resolved Cargo feature graph.
 - Keep migration plans and closure records append-only. Only the registry
   authorizes implementation, and only accepted P006 closes M12.
 

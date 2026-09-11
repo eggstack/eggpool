@@ -1,7 +1,7 @@
 # Plan 170 — Rust Dependency and Feature-Set Minimization
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-11)
 Parent roadmap: `plans/168-rust-production-cleanup-roadmap.md`
 Priority: P1/P2 maintenance, binary/build/attack-surface reduction
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -128,3 +128,57 @@ For each removed Eggress feature/protocol dependency, run the specific proxy URI
 ## Handoff note
 
 A valid outcome may retain most current Eggress features if each maps to a supported compatibility contract. Success means the graph is justified and minimal, not that a predetermined crate count is reached.
+
+## Closure evidence
+
+Plan 170 was implemented without changing provider behavior or introducing a
+replacement dependency. The audit removed:
+
+- the unused direct `tower-http` dependency and its orphaned lockfile package;
+- the no-op `eggress-embed` `common` feature declaration, which only activated
+  Eggress's empty `common` feature path.
+
+The remaining direct crates and explicit features were retained with these
+owners:
+
+- `eggress-core`, `eggress-config`, `eggress-pproxy-compat`, `eggress-uri`,
+  `eggress-server`, and `eggress-transport-ssh` are named by the provider
+  transport's direct target, parser/translator, chain executor, and SSH
+  session-cache paths;
+- `eggress-embed` retains `pproxy-compat`, `extended`, `pproxy-legacy`,
+  `legacy-crypto`, and `ssh` for pproxy-compatible HTTP/SOCKS,
+  Shadowsocks/Trojan/extended protocols, legacy methods/plugins, and SSH
+  chains. The deterministic Shadowsocks, Trojan, and SSH fixtures remain
+  available under `test-support`;
+- Hyper/Rustls retains HTTP/1.1, `ring`, TLS 1.2, and webpki roots for provider
+  transport and updater verification. `hyper-util` retains its legacy client,
+  HTTP/1.1, and Tokio adapters;
+- Tokio, `nix`, bundled/backup SQLite, `serde_json` ordering, archive support,
+  and the remaining build/dev dependencies each have live runtime, packaging,
+  or deterministic regression owners.
+
+Informational measurements were 381 Cargo.lock packages and a 29,960,240-byte
+release binary before the change; the resulting graph has 380 packages and a
+29,960,184-byte release binary.
+
+Verification on the final implementation tree:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check       pass
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings  pass
+cargo test --manifest-path rust/Cargo.toml --test provider_transport -- --test-threads=1  30 passed
+cargo test --manifest-path rust/Cargo.toml --features test-support --test provider_transport -- --test-threads=1  35 passed
+cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1  469 passed, 52 suites
+cargo build --manifest-path rust/Cargo.toml --locked --release       pass
+uv sync --frozen                                                   pass
+uv run ruff format --check scripts/ tests/tooling/                  42 files formatted
+uv run ruff check scripts/ tests/tooling/                            pass
+uv run pyright scripts/                                             0 errors
+uv run pytest tests/tooling/ -q --tb=short --maxfail=1              76 passed
+uv run python scripts/validate_cutover_docs.py                      pass
+uv run python scripts/validate_m12_retirement.py                    pass
+```
+
+The resolved `cargo tree --manifest-path rust/Cargo.toml -e features` contains
+no `tower-http` package or `eggress-embed` `common` feature after the change;
+the duplicate graph and `git diff --check` also pass.

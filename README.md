@@ -323,7 +323,7 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 ## Development
 
 ```bash
-cargo fmt --manifest-path rust/Cargo.toml -- --check
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
@@ -335,6 +335,15 @@ uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
+```
+
+When changing native dependencies or Cargo features, inspect the resolved
+authority and qualify the release graph as well:
+
+```bash
+cargo tree --manifest-path rust/Cargo.toml -e features
+cargo tree --manifest-path rust/Cargo.toml --duplicates
+cargo build --manifest-path rust/Cargo.toml --locked --release
 ```
 
 ### CI
