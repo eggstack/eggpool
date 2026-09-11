@@ -1,0 +1,275 @@
+{
+  "candidate": {
+    "python": "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl",
+    "rust": "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+  },
+  "commands": [
+    {
+      "argv": [
+        "useradd",
+        "-r",
+        "-d",
+        "/var/lib/eggpool",
+        "-s",
+        "/usr/sbin/nologin",
+        "eggpool"
+      ],
+      "duration_ms": 631,
+      "id": "user-create",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "pipx",
+        "install",
+        "--force",
+        "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl"
+      ],
+      "duration_ms": 23526,
+      "id": "production-python",
+      "output": "creating virtual environment... creating shared libraries... upgrading shared libraries... determining package name from '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl'... creating virtual environment... installing eggpool from spec '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl'... \u26a0\ufe0f Note: eggpool was already on your PATH at /home/sugarwookie/projects/eggpool/.venv/bin/eggpool done! \u2728 \ud83c\udf1f \u2728",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "daemon-reload"
+      ],
+      "duration_ms": 1531,
+      "id": "daemon-reload",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "enable",
+        "eggpool"
+      ],
+      "duration_ms": 1538,
+      "id": "enable",
+      "output": "Created symlink /etc/systemd/system/multi-user.target.wants/eggpool.service \u2192 /etc/systemd/system/eggpool.service.",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "start",
+        "eggpool"
+      ],
+      "duration_ms": 23,
+      "id": "start",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "stop",
+        "eggpool"
+      ],
+      "duration_ms": 3555,
+      "id": "stop-1",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "pipx",
+        "install",
+        "--force",
+        "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+      ],
+      "duration_ms": 4097,
+      "id": "package-leg",
+      "output": "creating virtual environment... determining package name from '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl'... creating virtual environment... installing eggpool from spec '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl'... \u26a0\ufe0f Note: eggpool was already on your PATH at /home/sugarwookie/projects/eggpool/.venv/bin/eggpool done! \u2728 \ud83c\udf1f \u2728",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "start",
+        "eggpool"
+      ],
+      "duration_ms": 17,
+      "id": "start-1",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "stop",
+        "eggpool"
+      ],
+      "duration_ms": 14,
+      "id": "stop-2",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "pipx",
+        "install",
+        "--force",
+        "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl"
+      ],
+      "duration_ms": 14896,
+      "id": "package-leg",
+      "output": "creating virtual environment... determining package name from '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl'... creating virtual environment... installing eggpool from spec '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.7.4-py3-none-any.whl'... \u26a0\ufe0f Note: eggpool was already on your PATH at /home/sugarwookie/projects/eggpool/.venv/bin/eggpool done! \u2728 \ud83c\udf1f \u2728",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "start",
+        "eggpool"
+      ],
+      "duration_ms": 20,
+      "id": "start-2",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "stop",
+        "eggpool"
+      ],
+      "duration_ms": 246,
+      "id": "stop-3",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "pipx",
+        "install",
+        "--force",
+        "/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+      ],
+      "duration_ms": 3437,
+      "id": "package-leg",
+      "output": "creating virtual environment... determining package name from '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl'... creating virtual environment... installing eggpool from spec '/tmp/eggpool-k007-wheels.vL6Vzx/eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl'... \u26a0\ufe0f Note: eggpool was already on your PATH at /home/sugarwookie/projects/eggpool/.venv/bin/eggpool done! \u2728 \ud83c\udf1f \u2728",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "start",
+        "eggpool"
+      ],
+      "duration_ms": 20,
+      "id": "start-3",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "disable",
+        "--now",
+        "eggpool"
+      ],
+      "duration_ms": 1573,
+      "id": "cleanup-stop",
+      "output": "Removed \"/etc/systemd/system/multi-user.target.wants/eggpool.service\".",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "systemctl",
+        "daemon-reload"
+      ],
+      "duration_ms": 1534,
+      "id": "cleanup-reload",
+      "output": "",
+      "returncode": 0
+    },
+    {
+      "argv": [
+        "userdel",
+        "-r",
+        "eggpool"
+      ],
+      "duration_ms": 2306,
+      "id": "user-delete",
+      "output": "userdel: eggpool mail spool (/var/mail/eggpool) not found userdel: eggpool home directory (/var/lib/eggpool) not found",
+      "returncode": 0
+    }
+  ],
+  "mode": "production",
+  "observations": [
+    {
+      "active": true,
+      "config_sha256": "16f393884c83d32f5dcab906cb1f216de82ea40eb7b04234df81c17f7cedd885",
+      "database": {
+        "exists": true,
+        "gid": 988,
+        "mode": 420,
+        "path": "/var/lib/eggpool/usage.sqlite3",
+        "sha256": "e3ba06536f7dbba337dee3c1c5f01b43660ce276abb54c5cee2d5defc5b970aa",
+        "uid": 999
+      },
+      "era": "python",
+      "leg": 0,
+      "unit_sha256": "d7833377369e06a304ba90f38e56ebe0dc2a537ff79df14f35a35c701162fe1a"
+    },
+    {
+      "active": true,
+      "config_sha256": "16f393884c83d32f5dcab906cb1f216de82ea40eb7b04234df81c17f7cedd885",
+      "database": {
+        "exists": true,
+        "gid": 988,
+        "mode": 420,
+        "path": "/var/lib/eggpool/usage.sqlite3",
+        "sha256": "303b03d7a3b0c23e04ef407c61d7cd97b34665199b557c5adadf78bdfa5b431e",
+        "uid": 999
+      },
+      "era": "rust",
+      "leg": 1,
+      "unit_sha256": "d7833377369e06a304ba90f38e56ebe0dc2a537ff79df14f35a35c701162fe1a"
+    },
+    {
+      "active": true,
+      "config_sha256": "16f393884c83d32f5dcab906cb1f216de82ea40eb7b04234df81c17f7cedd885",
+      "database": {
+        "exists": true,
+        "gid": 988,
+        "mode": 420,
+        "path": "/var/lib/eggpool/usage.sqlite3",
+        "sha256": "3ac11c50fd088c2a41d5ddd7adcd10c34533905cfae6c8242131f6159c547b33",
+        "uid": 999
+      },
+      "era": "python",
+      "leg": 2,
+      "unit_sha256": "d7833377369e06a304ba90f38e56ebe0dc2a537ff79df14f35a35c701162fe1a"
+    },
+    {
+      "active": true,
+      "config_sha256": "16f393884c83d32f5dcab906cb1f216de82ea40eb7b04234df81c17f7cedd885",
+      "database": {
+        "exists": true,
+        "gid": 988,
+        "mode": 420,
+        "path": "/var/lib/eggpool/usage.sqlite3",
+        "sha256": "3ac11c50fd088c2a41d5ddd7adcd10c34533905cfae6c8242131f6159c547b33",
+        "uid": 999
+      },
+      "era": "rust",
+      "leg": 3,
+      "unit_sha256": "d7833377369e06a304ba90f38e56ebe0dc2a537ff79df14f35a35c701162fe1a"
+    }
+  ],
+  "schema": "m11-k007.v1",
+  "status": "pass",
+  "unit": {
+    "exists": true,
+    "gid": 0,
+    "mode": 420,
+    "path": "/etc/systemd/system/eggpool.service",
+    "sha256": "d7833377369e06a304ba90f38e56ebe0dc2a537ff79df14f35a35c701162fe1a",
+    "uid": 0
+  }
+}

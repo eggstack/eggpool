@@ -1,6 +1,6 @@
 # K008 — Trusted Publishing, Attestations, and Release Supply Chain
 
-Status: queued; blocked on accepted K007
+Status: queued; dependency-ready after accepted K007
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

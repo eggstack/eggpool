@@ -1,6 +1,6 @@
 # K007 — Deployed-Service Cross-Era Transition and Recovery
 
-Status: conditionally closed; see [closure record](../../closure/cutover/007-status.md)
+Status: accepted/closed; see [closure record](../../closure/cutover/007-status.md)
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
