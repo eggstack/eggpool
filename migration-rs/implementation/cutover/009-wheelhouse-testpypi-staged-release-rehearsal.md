@@ -1,6 +1,6 @@
 # K009 — Local Wheelhouse and TestPyPI Staged Release Rehearsal
 
-Status: dependency-ready after accepted K008
+Status: accepted; closed 2026-09-11 (see [closure record](../../closure/cutover/009-status.md))
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

@@ -10,6 +10,7 @@ from scripts.create_cutover_manifest import create_manifest
 from scripts.qualification_cutover_rehearsal import (
     MANIFEST_SCHEMA,
     _failure_injection_evidence,
+    _installer_evidence,
     render_markdown,
 )
 
@@ -67,6 +68,14 @@ def test_k009_installer_supports_explicit_nonproduction_source_only() -> None:
     assert "EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_INDEX" in text
     assert "EGGPOOL_INSTALL_FIND_LINKS" in text
     assert "EGGPOOL_INSTALL_INDEX_URL" in text
+
+
+def test_k009_skips_installer_without_a_runnable_host_target(tmp_path: Path) -> None:
+    result = _installer_evidence(tmp_path, "0.8.0", None)
+    assert result == {
+        "status": "skipped",
+        "reason": "target does not match this host",
+    }
 
 
 def test_k009_runner_schema_is_machine_readable(tmp_path: Path) -> None:

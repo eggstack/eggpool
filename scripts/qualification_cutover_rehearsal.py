@@ -88,6 +88,25 @@ def _run(
         raise RehearsalError((result.stderr or result.stdout).strip()[:MAX_OUTPUT])
 
 
+def _pip_argv() -> list[str]:
+    """Return a pip command even when the uv-managed interpreter omits pip."""
+    probe = subprocess.run(
+        [sys.executable, "-m", "pip", "--version"],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return [sys.executable, "-m", "pip"]
+    uvx = shutil.which("uvx")
+    if uvx is not None:
+        return [uvx, "--from", "pip", "pip"]
+    raise RehearsalError("pip is unavailable and uvx is not installed")
+
+
 def _version_from_manifest(manifest_path: Path) -> tuple[str, str]:
     value = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -244,9 +263,7 @@ def _unsupported_target(wheelhouse: Path, version: str) -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eggpool-k009-unsupported-") as value:
         destination = Path(value)
         command = [
-            sys.executable,
-            "-m",
-            "pip",
+            *_pip_argv(),
             "download",
             "--disable-pip-version-check",
             "--no-deps",
@@ -296,9 +313,7 @@ def _public_style_index(
         destination = Path(value)
         result = subprocess.run(
             [
-                sys.executable,
-                "-m",
-                "pip",
+                *_pip_argv(),
                 "download",
                 "--disable-pip-version-check",
                 "--no-deps",
@@ -413,7 +428,7 @@ def _failure_injection_evidence(
 def _installer_evidence(
     wheelhouse: Path, version: str, target_class: str | None
 ) -> dict[str, Any]:
-    if target_class != _host_target():
+    if target_class is None or target_class != _host_target():
         return {"status": "skipped", "reason": "target does not match this host"}
     manager = shutil.which("uv") or shutil.which("pipx")
     if manager is None:
@@ -548,6 +563,7 @@ def run_qualification(
     target_class: str | None = None,
     python_wheel: Path | None = None,
     managers: list[str] | None = None,
+    skip_target_smoke: bool = False,
     skip_installer: bool = False,
     skip_transitions: bool = False,
 ) -> dict[str, Any]:
@@ -578,12 +594,23 @@ def run_qualification(
         raw_inspection = inspect_raw(
             raw, expected_version=version, target_class=selected_target
         )
-        wheel_smoke = _wheel_smoke(wheel, selected_target, version)
-        raw_smoke = _raw_smoke(raw, version)
+        wheel_smoke = (
+            {"status": "skipped", "reason": "target smoke disabled"}
+            if skip_target_smoke
+            else _wheel_smoke(wheel, selected_target, version)
+        )
+        raw_smoke = (
+            {"status": "skipped", "reason": "target smoke disabled"}
+            if skip_target_smoke
+            else _raw_smoke(raw, version)
+        )
         target_evidence = {
-            "status": "pass"
-            if wheel_smoke["status"] == raw_smoke["status"] == "pass"
-            else "fail",
+            "status": (
+                "pass"
+                if skip_target_smoke
+                or wheel_smoke["status"] == raw_smoke["status"] == "pass"
+                else "fail"
+            ),
             "target": selected_target,
             "wheel": {
                 "filename": wheel.name,
@@ -607,16 +634,20 @@ def run_qualification(
                 "reason": "Python rollback wheel not supplied",
             }
         else:
-            transitions = _transition_evidence(
-                python_wheel=python_wheel.resolve(),
-                rust_wheel=_wheel_for_target(
-                    manifest_path, artifact_dir, selected_target
+            if selected_target not in TARGET_CLASSES:
+                transitions = {
+                    "status": "skipped",
+                    "reason": "no runnable target is selected on this host",
+                }
+            else:
+                transitions = _transition_evidence(
+                    python_wheel=python_wheel.resolve(),
+                    rust_wheel=_wheel_for_target(
+                        manifest_path, artifact_dir, selected_target
+                    ),
+                    target_class=selected_target,
+                    managers=managers,
                 )
-                if selected_target in TARGET_CLASSES
-                else artifact_dir / "missing-wheel",
-                target_class=selected_target,
-                managers=managers,
-            )
     failures = _failure_injection_evidence(artifact_dir, manifest_path)
     workflow = _workflow_evidence()
     statuses = [
@@ -714,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-class", choices=TARGET_CLASSES)
     parser.add_argument("--python-wheel", type=Path)
     parser.add_argument("--manager", action="append")
+    parser.add_argument("--skip-target-smoke", action="store_true")
     parser.add_argument("--skip-installer", action="store_true")
     parser.add_argument("--skip-transitions", action="store_true")
     parser.add_argument("--output", type=Path, default=DEFAULT_JSON)
@@ -726,6 +758,7 @@ def main(argv: list[str] | None = None) -> int:
         target_class=args.target_class,
         python_wheel=args.python_wheel,
         managers=args.manager,
+        skip_target_smoke=args.skip_target_smoke,
         skip_installer=args.skip_installer,
         skip_transitions=args.skip_transitions,
     )

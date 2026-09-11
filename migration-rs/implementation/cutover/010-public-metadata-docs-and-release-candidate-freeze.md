@@ -1,6 +1,6 @@
 # K010 — Public Metadata, Documentation, and Release-Candidate Freeze
 
-Status: queued; blocked on accepted K009
+Status: dependency-ready after accepted K009
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
