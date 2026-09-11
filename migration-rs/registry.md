@@ -35,9 +35,9 @@ Planning baseline: `0bb5aaf419e60eadebaf3cce341a2ae4e3852e6c`
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| K008 | [Trusted publishing, attestations, and release supply chain](implementation/cutover/008-trusted-publishing-attestations-and-release-supply-chain.md) | infrastructure/invariant | accepted K007 | **dependency-ready** |
+| K009 | [Local wheelhouse and TestPyPI staged release rehearsal](implementation/cutover/009-wheelhouse-testpypi-staged-release-rehearsal.md) | invariant/polish | accepted K008 | **dependency-ready** |
 
-Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is accepted and closes the deployed-service cross-era transition after real Linux evidence. K008 is now dependency-ready. Historical Q004/Q010/Q011 closure records remain append-only.
+Q012 is accepted and re-closes M10. K001 is accepted and closes the cutover/package/version-catalog freeze; K002 is accepted and closes the binary-wheel packaging substrate; K003 is accepted and closes the supported wheel/raw artifact matrix; K004 is accepted and closes the install-provenance/package-manager transition boundary; K005 is accepted and closes cross-era exact transitions and rollback; K006 is accepted and closes the quick installer and existing-install adoption cutover; K007 is accepted and closes the deployed-service cross-era transition after real Linux evidence; K008 is accepted and closes the Trusted Publishing/release supply-chain boundary. K009 is now dependency-ready. Historical Q004/Q010/Q011 closure records remain append-only.
 
 ## Completed implementation plans
 

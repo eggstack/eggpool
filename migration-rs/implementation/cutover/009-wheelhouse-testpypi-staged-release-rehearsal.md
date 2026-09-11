@@ -1,6 +1,6 @@
 # K009 — Local Wheelhouse and TestPyPI Staged Release Rehearsal
 
-Status: queued; blocked on accepted K008
+Status: dependency-ready after accepted K008
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

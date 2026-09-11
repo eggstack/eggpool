@@ -1,6 +1,6 @@
 # K008 — Trusted Publishing, Attestations, and Release Supply Chain
 
-Status: queued; dependency-ready after accepted K007
+Status: accepted; closed 2026-09-11
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

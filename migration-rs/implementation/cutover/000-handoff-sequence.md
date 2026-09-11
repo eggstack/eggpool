@@ -1,6 +1,6 @@
 # M11 Rust Cutover Handoff Sequence
 
-Status: active; K006 ready
+Status: active; K009 ready
 
 Execute and accept in this order:
 
@@ -9,9 +9,9 @@ Execute and accept in this order:
 3. K003 — produce/qualify the Linux x86_64, Linux aarch64, and macOS arm64 wheel/raw artifact matrix and release manifest (**accepted/closed**).
 4. K004 — implement trusted install-provenance detection and package-manager-aware exact transition authority (**accepted/closed**).
 5. K005 — qualify Python -> Rust -> Python -> Rust exact transitions, failure rollback, concurrency, and data preservation (**accepted/closed**).
-6. K006 — cut the public quick installer over to package-channel Rust wheels and safely adopt existing installs (**ready**).
-7. K007 — qualify real deployed-service cross-era transition/recovery under disposable Linux/systemd.
-8. K008 — establish pinned, least-privilege Trusted Publishing and GitHub release workflow with artifact provenance.
+6. K006 — cut the public quick installer over to package-channel Rust wheels and safely adopt existing installs (**accepted/closed**).
+7. K007 — qualify real deployed-service cross-era transition/recovery under disposable Linux/systemd (**accepted/closed**).
+8. K008 — establish pinned, least-privilege Trusted Publishing and GitHub release workflow with artifact provenance (**accepted/closed**).
 9. K009 — rehearse full release/install/update/rollback flow through local wheelhouse and TestPyPI/staging.
 10. K010 — freeze public metadata/docs/default installer/update channel and final release candidate.
 11. K011 — publish the first real Rust-backed PyPI/GitHub release and run immediate public rollback/re-upgrade drill.
@@ -35,4 +35,4 @@ Execute and accept in this order:
 - Production release is prohibited until K011.
 - Python deletion/packaging retirement is prohibited until M12.
 
-K006 is the sole dependency-ready handoff. K007-K012 remain queued serially. K012 alone may close M11 and make M12 eligible for separate planning.
+K009 is the sole dependency-ready handoff. K010-K012 remain queued serially. K012 alone may close M11 and make M12 eligible for separate planning.
