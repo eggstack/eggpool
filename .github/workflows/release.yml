@@ -283,6 +283,12 @@ jobs:
       actions: read
       id-token: write
     steps:
+      - name: checkout immutable release tag for recovery validation
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          clean: false
       - name: download exact failed-run bundle for recovery
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -297,12 +303,6 @@ jobs:
         with:
           name: k008-release-bundle
           path: dist/publish
-      - name: checkout immutable release tag for recovery validation
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          fetch-depth: 0
-          clean: false
       - name: normalize exact failed-run bundle layout
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
         run: |
