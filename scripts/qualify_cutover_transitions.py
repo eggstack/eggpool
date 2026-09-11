@@ -113,10 +113,18 @@ def _artifact(path: Path, expected: str) -> dict[str, Any]:
 class Manager:
     """One real package-manager environment inside a temporary root."""
 
-    def __init__(self, name: str, root: Path, python: Path | None) -> None:
+    def __init__(
+        self,
+        name: str,
+        root: Path,
+        python: Path | None,
+        *,
+        public_index: bool = False,
+    ) -> None:
         self.name = name
         self.root = root
         self.python = python
+        self.public_index = public_index
         self.wheelhouse = root / "wheelhouse"
         self.wheelhouse.mkdir(parents=True)
         self.base_env = self._environment()
@@ -222,7 +230,7 @@ class Manager:
     def install(self, wheel: Path, version: str) -> None:
         _run(
             self._install_command(wheel, version),
-            env=self.environment(local_wheelhouse=True),
+            env=self.environment(local_wheelhouse=not self.public_index),
             cwd=self.root,
         )
         self._locate_runtime(version)
@@ -231,6 +239,30 @@ class Manager:
         self._locate_runtime(version)
 
     def install_initial_python(self, wheel: Path, version: str) -> None:
+        if self.public_index:
+            if self.name == "pip":
+                assert self.python is not None
+                environment = self.root / "venv"
+                _run(
+                    [str(self.python), "-m", "venv", str(environment)],
+                    env=self.base_env,
+                    cwd=self.root,
+                )
+                self.metadata_python = _python_executable(environment)
+            public_environment = dict(self.base_env)
+            public_environment.update(
+                {
+                    "PIP_INDEX_URL": "https://pypi.org/simple",
+                    "UV_INDEX_URL": "https://pypi.org/simple",
+                }
+            )
+            _run(
+                self._install_command(wheel, version),
+                env=public_environment,
+                cwd=self.root,
+            )
+            self._locate_runtime(version)
+            return
         if self.name == "pip":
             assert self.python is not None
             environment = self.root / "venv"
@@ -306,6 +338,13 @@ class Manager:
                 {
                     "PIP_FIND_LINKS": str(self.wheelhouse),
                     "UV_FIND_LINKS": str(self.wheelhouse),
+                    "PIP_INDEX_URL": "https://pypi.org/simple",
+                    "UV_INDEX_URL": "https://pypi.org/simple",
+                }
+            )
+        elif self.public_index:
+            result.update(
+                {
                     "PIP_INDEX_URL": "https://pypi.org/simple",
                     "UV_INDEX_URL": "https://pypi.org/simple",
                 }
@@ -418,6 +457,8 @@ def qualify_manager(
     python: Path | None,
     python_wheel: Path,
     rust_wheel: Path,
+    *,
+    public_index: bool = False,
 ) -> list[dict[str, Any]]:
     started = time.monotonic()
     temporary = tempfile.mkdtemp(prefix=f"eggpool-k005-{name}-")
@@ -425,7 +466,7 @@ def qualify_manager(
     try:
         config = _config(root)
         database = root / "usage.sqlite3"
-        manager = Manager(name, root, python)
+        manager = Manager(name, root, python, public_index=public_index)
         shutil.copy2(python_wheel, manager.wheelhouse / python_wheel.name)
         shutil.copy2(rust_wheel, manager.wheelhouse / rust_wheel.name)
         try:
@@ -436,7 +477,7 @@ def qualify_manager(
             manager.run(["version"])
             manager.run(
                 ["--config", str(config), "update", PYTHON_VERSION],
-                local_wheelhouse=True,
+                local_wheelhouse=not public_index,
             )
             manager.refresh_runtime(PYTHON_VERSION)
             manager.run(["--config", str(config), "check-config"])
@@ -446,7 +487,7 @@ def qualify_manager(
             final_state = _state(config, database)
             manager.run(
                 ["--config", str(config), "update", RUST_VERSION],
-                local_wheelhouse=True,
+                local_wheelhouse=not public_index,
             )
             final_cli = manager.metadata_version()
             if final_cli != RUST_VERSION:
@@ -500,6 +541,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rust-wheel", type=Path, required=True)
     parser.add_argument("--python", type=Path)
     parser.add_argument("--manager", choices=MANAGERS, action="append")
+    parser.add_argument(
+        "--public-index",
+        action="store_true",
+        help="install every version through the public PyPI index",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args(argv)
@@ -515,7 +561,11 @@ def main(argv: list[str] | None = None) -> int:
         for name in managers:
             try:
                 manager_rows = qualify_manager(
-                    name, args.python, python_wheel, rust_wheel
+                    name,
+                    args.python,
+                    python_wheel,
+                    rust_wheel,
+                    public_index=args.public_index,
                 )
                 for row in manager_rows:
                     if (
