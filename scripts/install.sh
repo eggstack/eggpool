@@ -11,6 +11,8 @@ ADOPT_STANDALONE=0
 TARGET_VERSION=""
 VERSION_REQUESTED=0
 RUST_CUTOVER_VERSION="0.8.0"
+INSTALL_INDEX_URL="${EGGPOOL_INSTALL_INDEX_URL:-}"
+INSTALL_FIND_LINKS="${EGGPOOL_INSTALL_FIND_LINKS:-}"
 
 version_at_or_after_cutover() {
     local version="$1"
@@ -48,6 +50,45 @@ EOF
 fail() {
     echo "Error: $*" >&2
     exit 1
+}
+
+if [[ -n "$INSTALL_INDEX_URL" || -n "$INSTALL_FIND_LINKS" ]]; then
+    [[ "${EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_INDEX:-}" == "1" ]] ||
+        fail "non-production package indexes require EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_INDEX=1"
+    [[ "$INSTALL_INDEX_URL" != *$'\n'* && "$INSTALL_INDEX_URL" != *$'\r'* ]] ||
+        fail "package index URL contains a newline"
+    [[ "$INSTALL_FIND_LINKS" != *$'\n'* && "$INSTALL_FIND_LINKS" != *$'\r'* ]] ||
+        fail "package find-links path contains a newline"
+fi
+
+package_source_args() {
+    local manager="$1"
+    PACKAGE_SOURCE_ARGS=()
+    if [[ -n "$INSTALL_FIND_LINKS" ]]; then
+        case "$manager" in
+            uv)
+                PACKAGE_SOURCE_ARGS+=(--no-index --find-links "$INSTALL_FIND_LINKS")
+                ;;
+            pipx)
+                PACKAGE_SOURCE_ARGS+=(--pip-args "--no-index --find-links $INSTALL_FIND_LINKS")
+                ;;
+            pip)
+                PACKAGE_SOURCE_ARGS+=(--no-index --find-links "$INSTALL_FIND_LINKS")
+                ;;
+        esac
+    elif [[ -n "$INSTALL_INDEX_URL" ]]; then
+        case "$manager" in
+            uv)
+                PACKAGE_SOURCE_ARGS+=(--index "$INSTALL_INDEX_URL")
+                ;;
+            pipx)
+                PACKAGE_SOURCE_ARGS+=(--index-url "$INSTALL_INDEX_URL")
+                ;;
+            pip)
+                PACKAGE_SOURCE_ARGS+=(--index-url "$INSTALL_INDEX_URL")
+                ;;
+        esac
+    fi
 }
 
 normalize_version() {
@@ -404,23 +445,42 @@ fi
 
 echo "Installing EggPool through $MANAGER_KIND..."
 install_ok=1
+PACKAGE_SOURCE_ARGS=()
+case "$MANAGER_KIND" in
+    uv-tool) package_source_args uv ;;
+    pipx) package_source_args pipx ;;
+    pip) package_source_args pip ;;
+esac
 case "$MANAGER_KIND" in
     uv-tool)
+        PACKAGE_COMMAND=("$UV" tool install)
         if ((MANAGER_FORCE)); then
-            if ! "$UV" tool install --force "$PACKAGE_SPEC"; then install_ok=0; fi
-        elif ! "$UV" tool install "$PACKAGE_SPEC"; then
-            install_ok=0
+            PACKAGE_COMMAND+=(--force)
         fi
+        if ((${#PACKAGE_SOURCE_ARGS[@]})); then
+            PACKAGE_COMMAND+=("${PACKAGE_SOURCE_ARGS[@]}")
+        fi
+        PACKAGE_COMMAND+=("$PACKAGE_SPEC")
+        if ! "${PACKAGE_COMMAND[@]}"; then install_ok=0; fi
         ;;
     pipx)
+        PACKAGE_COMMAND=("$PIPX" install)
         if ((MANAGER_FORCE)); then
-            if ! "$PIPX" install --force "$PACKAGE_SPEC"; then install_ok=0; fi
-        elif ! "$PIPX" install "$PACKAGE_SPEC"; then
-            install_ok=0
+            PACKAGE_COMMAND+=(--force)
         fi
+        if ((${#PACKAGE_SOURCE_ARGS[@]})); then
+            PACKAGE_COMMAND+=("${PACKAGE_SOURCE_ARGS[@]}")
+        fi
+        PACKAGE_COMMAND+=("$PACKAGE_SPEC")
+        if ! "${PACKAGE_COMMAND[@]}"; then install_ok=0; fi
         ;;
     pip)
-        if ! "$PROVENANCE_PYTHON" -m pip install --upgrade --force-reinstall "$PACKAGE_SPEC"; then install_ok=0; fi
+        PACKAGE_COMMAND=("$PROVENANCE_PYTHON" -m pip install --upgrade --force-reinstall)
+        if ((${#PACKAGE_SOURCE_ARGS[@]})); then
+            PACKAGE_COMMAND+=("${PACKAGE_SOURCE_ARGS[@]}")
+        fi
+        PACKAGE_COMMAND+=("$PACKAGE_SPEC")
+        if ! "${PACKAGE_COMMAND[@]}"; then install_ok=0; fi
         ;;
 esac
 if (( ! install_ok )); then
