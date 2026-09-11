@@ -198,7 +198,7 @@ class Manager:
     def _install_command(self, wheel: Path, version: str) -> list[str]:
         if self.name == "pip":
             assert self.metadata_python is not None
-            return [
+            command = [
                 str(self.metadata_python),
                 "-m",
                 "pip",
@@ -206,9 +206,11 @@ class Manager:
                 "--disable-pip-version-check",
                 "--upgrade",
                 "--force-reinstall",
-                "--no-deps",
-                f"eggpool=={version}",
             ]
+            if not self.public_index:
+                command.append("--no-deps")
+            command.append(f"eggpool=={version}")
+            return command
         manager = self._manager_path("uv" if self.name == "uv-tool" else "pipx")
         if self.name == "uv-tool":
             return [manager, "tool", "install", "--force", f"eggpool=={version}"]
