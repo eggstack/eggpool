@@ -291,6 +291,20 @@ jobs:
           path: dist/publish
           run-id: ${{ inputs.source_run_id }}
           github-token: ${{ github.token }}
+      - name: normalize exact failed-run bundle layout
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.destination == 'pypi-resume' }}
+        run: |
+          set -eu
+          manifest_path="$(find dist/publish -type f -name 'eggpool-*-release-manifest.json' -print -quit)"
+          test -n "$manifest_path"
+          bundle_root="${manifest_path%/*}"
+          if [ "$bundle_root" != "dist/publish" ]; then
+            mkdir -p dist/normalized-publish
+            cp -a "$bundle_root"/. dist/normalized-publish/
+            rm -rf dist/publish
+            mv dist/normalized-publish dist/publish
+          fi
+          test -f dist/publish/SHA256SUMS
       - name: download exact current-run bundle
         if: ${{ github.event_name == 'push' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
