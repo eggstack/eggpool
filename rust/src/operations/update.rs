@@ -2004,7 +2004,11 @@ mod tests {
     async fn manager_output_is_bounded() {
         let root = tempfile::tempdir().expect("root");
         let manager = root.path().join("manager");
-        std::fs::write(&manager, "#!/bin/sh\nhead -c 70000 /dev/zero\n").expect("manager");
+        std::fs::write(
+            &manager,
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 6553 ]; do printf '%s' 0123456789; i=$((i + 1)); done\nprintf '%s' 0123456\n",
+        )
+        .expect("manager");
         std::fs::set_permissions(&manager, std::fs::Permissions::from_mode(0o755)).expect("mode");
         let result = run_manager(ManagerCommand {
             program: manager,
