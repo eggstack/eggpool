@@ -1,6 +1,6 @@
 # K006 — Quick Installer and Existing-Install Adoption Cutover
 
-Status: queued; blocked on accepted K005
+Status: ready for handoff
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 

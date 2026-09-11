@@ -1,6 +1,10 @@
 # K005 — Cross-Era Exact Version Transitions and Rollback
 
-Status: ready for handoff
+Status: accepted; closed 2026-09-11
+
+Implementation commit: `393745ba5c8afe46024923922f360672ee92aa6e`
+
+Closure record: [accepted closure](../../closure/cutover/005-status.md)
 
 Source roadmap: `migration-rs/subsystems/cutover-roadmap.md`
 
