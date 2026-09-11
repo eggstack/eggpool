@@ -120,6 +120,13 @@ def test_root_python_oracle_packaging_is_unchanged() -> None:
     assert root_project["version"] == "0.7.4"
     assert root_project["scripts"]["eggpool"] == "eggpool.cli:main"
     assert root_project["dependencies"]
+    assert root_manifest["tool"]["eggpool"] == {
+        "project_role": "historical-development-only",
+        "current_runtime": "rust",
+        "publication_manifest": "packaging/pypi/pyproject.toml",
+        "historical_artifacts": "immutable-external-pypi",
+        "requires_python_semantics": "package-manager-compatibility-only",
+    }
     assert cargo_project["version"] == "0.8.0"
 
 

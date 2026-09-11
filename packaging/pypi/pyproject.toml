@@ -43,3 +43,9 @@ manifest-path = "../../rust/Cargo.toml"
 locked = true
 compatibility = "pypi"
 strip = false
+
+[tool.eggpool]
+publication_role = "current-rust-production"
+version_authority = "../../rust/Cargo.toml"
+historical_python_releases = "immutable-external-artifacts"
+requires_python_semantics = "package-manager-compatibility-only"

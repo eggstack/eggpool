@@ -42,6 +42,7 @@ use crate::version::PACKAGE_VERSION;
 
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/eggstack/eggpool/releases";
 const DEFAULT_USER_AGENT: &str = "eggpool-rust-update";
+const RUST_CUTOVER_VERSION: &str = "0.8.0";
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;
@@ -468,6 +469,12 @@ impl ReleaseClient {
             return Err(UpdateError::UnsupportedRelease);
         }
         let version = ReleaseVersion::parse(&response.tag_name)?;
+        if matches!(target, ReleaseTarget::Latest)
+            && !version.is_newer_than(&ReleaseVersion::parse(RUST_CUTOVER_VERSION)?)
+            && version.as_str() != RUST_CUTOVER_VERSION
+        {
+            return Err(UpdateError::UnsupportedRelease);
+        }
         if let ReleaseTarget::Exact(requested) = target
             && version.cmp_key() != requested.cmp_key()
         {

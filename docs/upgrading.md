@@ -118,8 +118,10 @@ installation or self-check fails.
 A source checkout is a developer/reference workflow, not a normal install.
 Use the repository's uv commands deliberately and do not use it to simulate a
 public package upgrade. The root Hatchling package and `src/eggpool` remain
-the Python reference for differential and rollback tests through M11; they are
-not the Rust release authority.
+temporarily available for P003/P004 evidence; they are historical development
+tooling, not the Rust release authority. The Rust wheel's
+`Requires-Python >=3.11` is a package-manager compatibility floor for explicit
+historical transitions, not a runtime interpreter dependency.
 
 On Windows or another unsupported target, no Rust wheel is selected and no
 source-build fallback is allowed. Existing installations are not mutated by a

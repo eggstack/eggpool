@@ -173,6 +173,12 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         r"validate_cutover_docs\.py",
         "public metadata/docs guard is missing",
     )
+    _require_in_block(
+        blocks,
+        "validate-release",
+        r"validate_m12_package_boundary\.py",
+        "M12 current-package boundary guard is missing",
+    )
     for job, target in zip(
         (
             "build-wheel-linux-x86-64",

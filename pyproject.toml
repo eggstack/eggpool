@@ -1,6 +1,7 @@
-# Historical Python/oracle packaging definition through M11. Rust-era
-# production publication uses packaging/pypi/pyproject.toml; this project must
-# not be published under the cutover version.
+# Historical Python application and migration-tooling project. Rust-era
+# production publication uses packaging/pypi/pyproject.toml exclusively. This
+# project remains executable while P003/P004 retire the reference boundary,
+# but it is never a current-release authority.
 [project]
 name = "eggpool"
 version = "0.7.4"
@@ -76,6 +77,13 @@ proxy = ["pproxy>=2.7.9,<3"]
 
 [project.scripts]
 eggpool = "eggpool.cli:main"
+
+[tool.eggpool]
+project_role = "historical-development-only"
+current_runtime = "rust"
+publication_manifest = "packaging/pypi/pyproject.toml"
+historical_artifacts = "immutable-external-pypi"
+requires_python_semantics = "package-manager-compatibility-only"
 
 [build-system]
 requires = ["hatchling>=1.21,<1.24"]

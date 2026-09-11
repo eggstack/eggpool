@@ -5,8 +5,9 @@ use std::{fs, sync::Arc};
 use eggpool::{
     Config,
     operations::update::{
-        Platform, ReleaseClient, ReleaseTarget, ReleaseVersion, UpdateCheckerState, UpdateError,
-        UpdateService,
+        InstallProvenance, PackageMetadata, PackageTransitionService, Platform, ReleaseCatalog,
+        ReleaseClient, ReleaseTarget, ReleaseVersion, TransitionContext, TransitionRequest,
+        UpdateCheckerState, UpdateError, UpdateService,
     },
     task_supervisor::{
         RuntimeTaskSupervisor, TaskCallbackRegistry, TaskOwnership, runtime_task_specs_for_config,
@@ -61,7 +62,7 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
     let artifact = b"reviewed rust executable".to_vec();
     let digest = hex_digest(&artifact);
     let metadata = format!(
-        r#"{{"tag_name":"v0.7.5","prerelease":false,"draft":false,"assets":[{{"name":"eggpool-0.7.5-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{digest}","size":{}}}]}}"#,
+        r#"{{"tag_name":"v0.8.1","prerelease":false,"draft":false,"assets":[{{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{digest}","size":{}}}]}}"#,
         artifact.len()
     );
     let (api, stop) = fake_release_server(metadata, artifact.clone()).await;
@@ -76,7 +77,7 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
         .await
         .expect("release resolves");
     let selected = resolved.artifact.expect("matching artifact");
-    assert_eq!(selected.name, "eggpool-0.7.5-linux-aarch64");
+    assert_eq!(selected.name, "eggpool-0.8.1-linux-aarch64");
     assert_eq!(
         client.download(&selected).await.expect("download"),
         artifact
@@ -85,11 +86,118 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
 }
 
 #[tokio::test]
+async fn latest_raw_resolution_rejects_historical_python_era() {
+    let (api, stop) = fake_release_server(
+        r#"{"tag_name":"v0.7.4","prerelease":false,"draft":false,"assets":[]}"#.to_owned(),
+        b"unused".to_vec(),
+    )
+    .await;
+    let client = ReleaseClient::with_release_api(&api).expect("client");
+    assert!(matches!(
+        client.resolve(&ReleaseTarget::Latest).await,
+        Err(UpdateError::UnsupportedRelease)
+    ));
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn incompatible_historical_target_fails_before_package_manager_mutation() {
+    let root = tempfile::tempdir().expect("temp root");
+    let executable = root.path().join("eggpool");
+    fs::write(&executable, b"native rust executable").expect("executable");
+    let provenance = InstallProvenance::PipEnvironment {
+        python: root.path().join("python").to_owned(),
+        environment: root.path().to_owned(),
+        exposed_executable: executable.clone(),
+        package_metadata: PackageMetadata {
+            distribution: root.path().join("eggpool.dist-info"),
+            version: "0.8.0".to_owned(),
+            installer: Some("pip".to_owned()),
+            direct_url: None,
+        },
+    };
+    let service = PackageTransitionService::with_catalog(
+        UpdateService::new().expect("raw service"),
+        ReleaseCatalog::embedded().expect("catalog"),
+        Platform {
+            os: "linux".into(),
+            architecture: "x86_64".into(),
+        },
+    );
+    let result = service
+        .transition(
+            TransitionRequest {
+                provenance: &provenance,
+                target: &ReleaseTarget::Exact(ReleaseVersion::parse("0.7.4").unwrap()),
+                current: &ReleaseVersion::parse("0.8.0").unwrap(),
+                executable: &executable,
+                context: TransitionContext {
+                    python_version: Some((3, 11)),
+                    db_config_compatible: false,
+                    ..TransitionContext::SAFE_DEFAULT
+                },
+                was_running: false,
+                guard: None,
+            },
+            None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(UpdateError::IncompatibleDatabaseConfig)
+    ));
+    assert_eq!(
+        fs::read(&executable).expect("executable bytes"),
+        b"native rust executable"
+    );
+}
+
+#[tokio::test]
+async fn standalone_rust_rejects_historical_python_target() {
+    let root = tempfile::tempdir().expect("temp root");
+    let executable = root.path().join("eggpool");
+    fs::write(&executable, b"native rust executable").expect("executable");
+    let provenance = InstallProvenance::StandaloneRust {
+        executable: executable.clone(),
+    };
+    let service = PackageTransitionService::with_catalog(
+        UpdateService::new().expect("raw service"),
+        ReleaseCatalog::embedded().expect("catalog"),
+        Platform {
+            os: "linux".into(),
+            architecture: "x86_64".into(),
+        },
+    );
+    let result = service
+        .transition(
+            TransitionRequest {
+                provenance: &provenance,
+                target: &ReleaseTarget::Exact(ReleaseVersion::parse("0.7.4").unwrap()),
+                current: &ReleaseVersion::parse("0.8.0").unwrap(),
+                executable: &executable,
+                context: TransitionContext::SAFE_DEFAULT,
+                was_running: false,
+                guard: None,
+            },
+            None::<fn() -> std::future::Ready<Result<(), UpdateError>>>,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(UpdateError::StandaloneTargetUnsupported)
+    ));
+    assert_eq!(
+        fs::read(&executable).expect("executable bytes"),
+        b"native rust executable"
+    );
+}
+
+#[tokio::test]
 async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
     let artifact = b"artifact".to_vec();
     let wrong_digest = "0000000000000000000000000000000000000000000000000000000000000000";
     let metadata = format!(
-        r#"{{"tag_name":"v0.7.5","assets":[{{"name":"eggpool-0.7.5-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{wrong_digest}","size":{}}}]}}"#,
+        r#"{{"tag_name":"v0.8.1","assets":[{{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{wrong_digest}","size":{}}}]}}"#,
         artifact.len()
     );
     let (api, stop) = fake_release_server(metadata, artifact).await;
@@ -111,7 +219,7 @@ async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
     let _ = stop.send(());
 
     let (api, stop) = fake_release_server(
-        r#"{"tag_name":"v0.7.5","assets":[{"name":"eggpool-0.7.5-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact"}]}"#.to_owned(),
+        r#"{"tag_name":"v0.8.1","assets":[{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact"}]}"#.to_owned(),
         b"artifact".to_vec(),
     )
     .await;

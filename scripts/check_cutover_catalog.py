@@ -127,7 +127,7 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
     """Validate K001's machine-readable contract and return stable counts."""
 
     _walk_for_secrets(catalog)
-    if catalog.get("catalog_version") != "k001.v1":
+    if catalog.get("catalog_version") != "k001.v2":
         raise CatalogError("unsupported K001 catalog version")
     if catalog.get("package_name") != "eggpool":
         raise CatalogError("catalog package name must be eggpool")
@@ -161,6 +161,26 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
             raise CatalogError(f"unsupported target {name} cannot have wheel tags")
 
     authority = _as_mapping(catalog.get("version_authority"), "version_authority")
+    if (
+        authority.get("current_release_era") != "rust"
+        or authority.get("historical_release_era") != "python"
+    ):
+        raise CatalogError(
+            "catalog must distinguish current Rust and historical Python eras"
+        )
+    if authority.get("latest_resolution") != "rust-only":
+        raise CatalogError("latest resolution must be Rust-only")
+    if authority.get("historical_exact_resolution") != "explicit-package-manager-only":
+        raise CatalogError("historical exact resolution must be package-manager-owned")
+    if authority.get("pypi_artifacts") != "immutable-external-history":
+        raise CatalogError(
+            "historical PyPI artifacts must be immutable external history"
+        )
+    if (
+        authority.get("requires_python_semantics")
+        != "package-manager-compatibility-only"
+    ):
+        raise CatalogError("Requires-Python semantics must be explicit")
     cutover = normalize_version(
         _require_string(authority.get("cutover_version"), "cutover_version")
     )
@@ -216,6 +236,12 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
             raise CatalogError(f"cutover is not newer than release {version}")
         if release.get("implementation_era") not in {"python", "rust"}:
             raise CatalogError(f"invalid implementation era for {version}")
+        expected_era = "rust" if version == cutover else "python"
+        if release["implementation_era"] != expected_era:
+            raise CatalogError(
+                f"release {version} has era {release['implementation_era']!r}; "
+                f"expected {expected_era!r}"
+            )
         if release.get("source_tag") != f"v{version}":
             raise CatalogError(f"source tag does not match {version}")
         commit = _require_string(
@@ -325,8 +351,17 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         normalized = normalize_version(_require_string(version, "rollback version"))
         if normalized not in seen:
             raise CatalogError(f"rollback version is absent from catalog: {normalized}")
+    gap_policy = _as_mapping(
+        catalog.get("historical_gap_policy"), "historical_gap_policy"
+    )
+    if gap_policy.get("historical_files_are_immutable") is not True:
+        raise CatalogError("historical PyPI immutability must be explicit")
+    _require_string(
+        gap_policy.get("historical_file_mutation_policy"),
+        "historical_file_mutation_policy",
+    )
     return {
-        "catalog_version": "k001.v1",
+        "catalog_version": "k001.v2",
         "cutover_version": cutover,
         "release_count": len(releases),
         "rollback_count": len(compatible_version_values),
@@ -345,6 +380,12 @@ def check_version_authorities(repo_root: Path, catalog: Mapping[str, Any]) -> No
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise CatalogError("version authority source could not be read") from exc
     python_version = python_project.get("project", {}).get("version")
+    root_tools = _as_mapping(python_project.get("tool", {}), "tool")
+    root_eggpool = _as_mapping(root_tools.get("eggpool", {}), "tool.eggpool")
+    if root_eggpool.get("project_role") != "historical-development-only":
+        raise CatalogError(
+            "root Python project is not marked historical development-only"
+        )
     rust_version = rust_project.get("package", {}).get("version")
     if python_version != authority["historical_python_project_version"]:
         raise CatalogError("root Python oracle version disagrees with K001")

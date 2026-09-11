@@ -11,6 +11,11 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+from validate_m12_package_boundary import (
+    PackageBoundaryError,
+    validate_package_boundary,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "migration-rs/fixtures/cutover/k001-installable-releases.json"
 PACKAGING = ROOT / "packaging/pypi/pyproject.toml"
@@ -61,6 +66,12 @@ def _check_local_links(path: Path, text: str) -> None:
 
 
 def validate_cutover_docs() -> dict[str, object]:
+    try:
+        validate_package_boundary()
+    except PackageBoundaryError as error:
+        raise CutoverDocsError(
+            f"current package boundary is invalid: {error}"
+        ) from error
     catalog = _read_json(CATALOG)
     authority = cast("dict[str, Any]", catalog["version_authority"])
     version = str(authority["cutover_version"])
@@ -208,7 +219,7 @@ def validate_cutover_docs() -> dict[str, object]:
         "production_release": (
             f"published {version}" if phase == "published" else "guarded until K011"
         ),
-        "python_reference": "preserved through M11",
+        "python_reference": "historical external artifacts",
     }
 
 

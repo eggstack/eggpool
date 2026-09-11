@@ -12,6 +12,11 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+from validate_m12_package_boundary import (
+    PackageBoundaryError,
+    validate_package_boundary,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "migration-rs/fixtures/cutover/k001-installable-releases.json"
 CARGO = ROOT / "rust/Cargo.toml"
@@ -49,6 +54,12 @@ def _git(*args: str) -> str:
 def validate_candidate(
     *, tag: str | None = None, source_commit: str | None = None
 ) -> dict[str, str]:
+    try:
+        validate_package_boundary()
+    except PackageBoundaryError as error:
+        raise ReleaseValidationError(
+            f"current package boundary is invalid: {error}"
+        ) from error
     catalog = _read(CATALOG)
     authority = cast("dict[str, Any]", catalog.get("version_authority"))
     version = authority.get("cutover_version")

@@ -14,6 +14,10 @@ from pathlib import Path
 from create_cutover_manifest import candidate_version
 from inspect_cutover_raw import TARGETS, raw_filename
 from inspect_cutover_wheel import WheelInspectionError, inspect_wheel
+from validate_m12_package_boundary import (
+    PackageBoundaryError,
+    validate_package_boundary,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING_DIR = ROOT / "packaging/pypi"
@@ -59,6 +63,10 @@ def build_pair(
     target_class: str, output_dir: Path, maturin: str = "maturin"
 ) -> tuple[Path, Path]:
     """Build one wheel and mechanically derive its raw executable."""
+    try:
+        validate_package_boundary()
+    except PackageBoundaryError as error:
+        raise BuildError(f"current package boundary is invalid: {error}") from error
     target = TARGETS.get(target_class)
     if target is None:
         raise BuildError(f"unsupported target class: {target_class}")

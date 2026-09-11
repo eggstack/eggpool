@@ -1,5 +1,5 @@
 {
-  "catalog_version": "k001.v1",
+  "catalog_version": "k001.v2",
   "status": "published Rust cutover; public PyPI and GitHub release verified",
   "captured_at_utc": "2026-09-11T12:15:00Z",
   "package_name": "eggpool",
@@ -28,7 +28,13 @@
     "cutover_source_commit": "431cad4f46a2d4bbcbc8839c18b71f392c0616ca",
     "historical_python_project_version": "0.7.4",
     "rust_cargo_version": "0.8.0",
-    "source_of_truth": "Cargo.toml owns the Rust release version after K002; the root pyproject.toml remains the historical Python oracle through M11."
+    "source_of_truth": "Cargo.toml owns the current Rust release version; the root pyproject.toml is historical development tooling only.",
+    "current_release_era": "rust",
+    "historical_release_era": "python",
+    "latest_resolution": "rust-only",
+    "historical_exact_resolution": "explicit-package-manager-only",
+    "pypi_artifacts": "immutable-external-history",
+    "requires_python_semantics": "package-manager-compatibility-only"
   },
   "release_entry_contract": {
     "inherited_from": "release_defaults",
@@ -183,7 +189,9 @@
     "newest_pypi_version_at_capture": "0.8.0",
     "official_stable_github_versions_newer_than_newest_pypi": [],
     "disposition": "The Rust cutover release is now public on PyPI with the exact supported wheel set; no PyPI backfill or immutable fallback is required.",
-    "future_backfill_publication": "Not scheduled; any later gap requires a reviewed K001 corrective catalog update before exact-switch claims."
+    "future_backfill_publication": "Not scheduled; any later gap requires a reviewed K001 corrective catalog update before exact-switch claims.",
+    "historical_files_are_immutable": true,
+    "historical_file_mutation_policy": "Never backfill, delete, yank, replace, or re-upload files in an existing release; PyPI's current file-addition window is 14 days."
   },
   "official_inventory": {
     "github_stable_release_count": 57,

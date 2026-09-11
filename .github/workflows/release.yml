@@ -61,6 +61,8 @@ jobs:
         run: |
           python scripts/validate_release_workflow.py .github/workflows/release.yml
           python scripts/validate_cutover_docs.py
+          python scripts/validate_m12_package_boundary.py --workflow .github/workflows/release.yml
+          # build_cutover_artifacts.py is rooted at packaging/pypi/pyproject.toml.
           if [ -n "$RELEASE_TAG" ]; then
             result="$(python scripts/validate_cutover_release.py --tag "$RELEASE_TAG" --source-commit "$GITHUB_SHA")"
           else

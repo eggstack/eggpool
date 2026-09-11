@@ -19,8 +19,8 @@ def test_k010_public_metadata_and_docs_are_consistent() -> None:
         "version": "0.8.0",
         "targets": ["linux-aarch64", "linux-x86_64", "macos-arm64"],
         "docs_checked": 7,
-        "production_release": "guarded until K011",
-        "python_reference": "preserved through M11",
+        "production_release": "published 0.8.0",
+        "python_reference": "historical external artifacts",
     }
 
 
@@ -36,7 +36,7 @@ def test_k010_guard_is_machine_readable_and_rejects_root_release_builds() -> Non
     assert completed.returncode == 0, completed.stderr
     report = json.loads(completed.stdout)
     assert report["status"] == "pass"
-    assert report["production_release"] == "guarded until K011"
+    assert report["production_release"] == "published 0.8.0"
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert "uv build" not in workflow
     assert "uv publish" not in workflow

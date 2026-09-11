@@ -76,33 +76,47 @@ impl ReleaseCatalog {
     }
 
     fn from_document(document: CatalogDocument) -> Result<Self, UpdateError> {
-        if document.catalog_version != "k001.v1" {
+        if document.catalog_version != "k001.v2" {
             return Err(UpdateError::CatalogMalformed);
         }
         let authority = document.version_authority;
+        if authority.current_release_era != "rust"
+            || authority.historical_release_era != "python"
+            || authority.latest_resolution != "rust-only"
+            || authority.historical_exact_resolution != "explicit-package-manager-only"
+            || authority.pypi_artifacts != "immutable-external-history"
+            || authority.requires_python_semantics != "package-manager-compatibility-only"
+        {
+            return Err(UpdateError::CatalogMalformed);
+        }
         let cutover = ReleaseVersion::parse(&authority.cutover_version)
             .map_err(|_| UpdateError::CatalogMalformed)?;
-        let package_template = document
-            .release_defaults
-            .package_manager_requirement
-            .clone();
-        let python_requirement = document.release_defaults.python_requirement.clone();
+        let defaults = document.release_defaults;
+        if defaults.implementation_era != "python" {
+            return Err(UpdateError::CatalogMalformed);
+        }
+        let package_template = defaults.package_manager_requirement.clone();
+        let python_requirement = defaults.python_requirement.clone();
         let mut releases = BTreeMap::new();
         for entry in document.releases {
             let version =
                 ReleaseVersion::parse(&entry.version).map_err(|_| UpdateError::CatalogMalformed)?;
+            let era = match entry.implementation_era.as_deref().unwrap_or("python") {
+                "python" => ReleaseEra::Python,
+                "rust" => ReleaseEra::Rust,
+                _ => return Err(UpdateError::CatalogMalformed),
+            };
             let package_requirement = package_template.replace("{version}", version.as_str());
             if package_requirement != format!("eggpool=={}", version.as_str()) {
                 return Err(UpdateError::CatalogMalformed);
             }
             let release = CatalogRelease {
                 version: version.clone(),
-                era: ReleaseEra::Python,
+                era,
                 package_requirement,
                 python_requirement: Some(python_requirement.clone()),
-                yanked: document.release_defaults.yanked,
-                unavailable: document.release_defaults.unavailable
-                    || !document.release_defaults.pypi_presence,
+                yanked: defaults.yanked,
+                unavailable: defaults.unavailable || !defaults.pypi_presence,
                 supported_target_classes: Vec::new(),
                 rollback_compatible: entry
                     .rollback_suitability
@@ -117,28 +131,28 @@ impl ReleaseCatalog {
             }
         }
         let cutover_key = cutover.as_str().to_owned();
-        releases.insert(
-            cutover_key.clone(),
-            CatalogRelease {
-                version: cutover,
-                era: ReleaseEra::Rust,
-                package_requirement: format!("eggpool=={cutover_key}"),
-                python_requirement: Some(">=3.11".to_owned()),
-                yanked: false,
-                unavailable: false,
-                supported_target_classes: document.release_defaults.supported_target_classes,
-                rollback_compatible: true,
-            },
-        );
+        let cutover_release = releases
+            .get_mut(&cutover_key)
+            .ok_or(UpdateError::CatalogMalformed)?;
+        if cutover_release.era != ReleaseEra::Rust {
+            return Err(UpdateError::CatalogMalformed);
+        }
+        cutover_release.supported_target_classes = defaults.supported_target_classes;
+        cutover_release.rollback_compatible = true;
         let latest_stable = releases
             .values()
-            .filter(|release| !release.yanked && !release.unavailable)
+            .filter(|release| {
+                release.era == ReleaseEra::Rust && !release.yanked && !release.unavailable
+            })
             .max_by(|left, right| {
                 left.version
                     .ordering_key()
                     .cmp(&right.version.ordering_key())
             })
             .map(|release| release.version.as_str().to_owned());
+        if latest_stable.as_deref() != Some(cutover_key.as_str()) {
+            return Err(UpdateError::CatalogMalformed);
+        }
         Ok(Self {
             releases,
             latest_stable,
@@ -173,10 +187,17 @@ struct CatalogDocument {
 #[derive(Debug, Deserialize)]
 struct VersionAuthority {
     cutover_version: String,
+    current_release_era: String,
+    historical_release_era: String,
+    latest_resolution: String,
+    historical_exact_resolution: String,
+    pypi_artifacts: String,
+    requires_python_semantics: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct ReleaseDefaults {
+    implementation_era: String,
     supported_target_classes: Vec<String>,
     python_requirement: String,
     package_manager_requirement: String,
@@ -188,6 +209,7 @@ struct ReleaseDefaults {
 #[derive(Debug, Deserialize)]
 struct CatalogEntry {
     version: String,
+    implementation_era: Option<String>,
     rollback_suitability: Option<String>,
 }
 
