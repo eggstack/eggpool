@@ -1274,11 +1274,18 @@ async fn run_manager(command: ManagerCommand) -> Result<(), UpdateError> {
                 }
                 status = &mut child_wait => {
                     let status = status.map_err(|_| UpdateError::ManagerFailed)?;
-                    if !stdout_done {
-                        let _ = (&mut stdout_task).await;
-                    }
-                    if !stderr_done {
-                        let _ = (&mut stderr_task).await;
+                    let stdout_error = if !stdout_done {
+                        manager_output_task_error((&mut stdout_task).await)
+                    } else {
+                        None
+                    };
+                    let stderr_error = if !stderr_done {
+                        manager_output_task_error((&mut stderr_task).await)
+                    } else {
+                        None
+                    };
+                    if let Some(error) = stdout_error.or(stderr_error) {
+                        return Err(error);
                     }
                     return if status.success() {
                         Ok(())
@@ -1317,6 +1324,16 @@ async fn read_manager_output<R: AsyncRead + Unpin>(reader: R) -> Result<Vec<u8>,
         return Err(UpdateError::ManagerOutputTooLarge);
     }
     Ok(output)
+}
+
+fn manager_output_task_error(
+    result: Result<Result<Vec<u8>, UpdateError>, tokio::task::JoinError>,
+) -> Option<UpdateError> {
+    match result {
+        Ok(Ok(_)) => None,
+        Ok(Err(error)) => Some(error),
+        Err(_) => Some(UpdateError::ManagerFailed),
+    }
 }
 
 async fn verify_package_install(
