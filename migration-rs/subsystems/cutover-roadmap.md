@@ -1,6 +1,6 @@
 # M11 Rust Cutover, Packaging, Release, and Cross-Era Versioning Roadmap
 
-Status: M11 closed 2026-09-11; K001-K014 accepted/closed; M12 eligible for separate planning review
+Status: M11 closed 2026-09-11; K001-K014 accepted/closed; M12 planning review complete
 
 Repository baseline for planning: `aec794a060f6a9e71853a515fe50992446c41ebd` (accepted Q012 / M10 closure).
 
@@ -22,8 +22,9 @@ The first `v0.8.0` GitHub release and the exact three-wheel PyPI release are
 public. K013 corrected the recovery workflow, K014 completed the
 `eggstack/eggpool` Trusted Publisher configuration, and K011/K012 recorded
 accepted public release, install, rollback, and aggregate closure evidence.
-M11 is closed; M12 is eligible for separate planning review and remains
-explicitly out of scope for this roadmap closure.
+M11 is closed. M12 planning review is recorded in the separate
+[Python retirement roadmap](python-retirement-roadmap.md); production/runtime
+removal remains out of scope for this cutover roadmap.
 
 ## Packaging decision
 
@@ -97,8 +98,8 @@ M12 planning eligibility only after accepted K012 closure
 ```
 
 Only `../registry.md` authorizes implementation. K011-K014 are closed, and
-M12 is eligible for a separate planning review after accepted K012; no M12
-implementation is authorized by this closure.
+M12 planning review is complete in its separate roadmap. No M12
+production/runtime implementation is authorized by this cutover roadmap.
 
 ## K001 — Cutover/package/version-catalog contract freeze
 

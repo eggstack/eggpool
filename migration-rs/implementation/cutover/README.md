@@ -25,7 +25,7 @@ These plans make the qualified Rust implementation the canonical public runtime 
 13. [K014 — PyPI Trusted Publisher configuration and recovery completion](014-pypi-trusted-publisher-configuration-and-recovery-completion.md) — **accepted/closed**.
 14. [K012 — Aggregate M11 cutover qualification and closure](012-aggregate-m11-cutover-qualification-and-closure.md) — **accepted/closed**.
 
-Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008-K010 are accepted/closed, and K011-K014 are accepted/closed with append-only recovery evidence. M11 is closed; M12 is eligible for a separate planning review but is not automatically authorized or implemented by this closure.
+Only `migration-rs/registry.md` authorizes implementation. K007 is accepted/closed after real Linux evidence, K008-K010 are accepted/closed, and K011-K014 are accepted/closed with append-only recovery evidence. M11 is closed; M12 planning is now governed by the separate Python-retirement roadmap, and no Python removal is authorized by this cutover closure.
 
 ## Hard boundaries
 
