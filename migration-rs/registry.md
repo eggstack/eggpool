@@ -51,7 +51,7 @@ dependency-ready M12 plan and final M12 closure authority.
 | M12-P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | infrastructure/invariant | `36605a8d890855fa255b9cf96b1ba29f914a9826` | [accepted/closed](closure/retirement/002-status.md) |
 | M12-P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | invariant/polish | see closure record | [accepted/closed](closure/retirement/003-status.md) |
 | M12-P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | invariant/polish | `8980616cda2b92ef0a449369806688536e2b8e10` | [accepted/closed](closure/retirement/004-status.md) |
-| M12-P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | capability/polish/invariant | implementation commit and closure record | [accepted/closed](closure/retirement/005-status.md) |
+| M12-P005 | [Repository, installer, release, and documentation consolidation](implementation/retirement/005-repository-installer-release-and-documentation-consolidation.md) | capability/polish/invariant | `c2f8fdd` | [accepted/closed](closure/retirement/005-status.md) |
 
 ## Recently closed corrective plans
 
