@@ -1,6 +1,6 @@
 # P004 — Oracle, Differential, Test, and Python Tooling Retirement
 
-Status: queued behind accepted P003
+Status: dependency-ready after accepted P003 closure
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

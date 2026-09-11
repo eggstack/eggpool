@@ -1,6 +1,6 @@
 # P003 — Python Application Source and Runtime-Asset Retirement
 
-Status: dependency-ready after accepted P001/P002 closure
+Status: accepted/closed 2026-09-11; see [closure record](../../closure/retirement/003-status.md)
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 

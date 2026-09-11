@@ -32,15 +32,15 @@ Planning baseline: `385cc2355e84db6071ab35e81b14f55e344afd77`
 | M9 operational CLI/lifecycle/update/deploy | [operational-cli-lifecycle-roadmap](subsystems/operational-cli-lifecycle-roadmap.md) | closed after O010 | M9 closed |
 | M10 full qualification/portability/SBC | [qualification-roadmap](subsystems/qualification-roadmap.md) | closed after accepted Q012 corrective pass | Q012 closed |
 | M11 Rust cutover/package/versioning | [cutover-roadmap](subsystems/cutover-roadmap.md) | closed after accepted K012/K014 recovery chain | M11 closed |
-| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **implementation planning complete; P001/P002 accepted/closed; P003 dependency-ready** | **P003 dependency-ready** |
+| M12 Python application retirement | [python-retirement-roadmap](subsystems/python-retirement-roadmap.md) | **implementation planning complete; P001-P003 accepted/closed; P004 dependency-ready** | **P004 dependency-ready** |
 
 ## Dependency-ready implementation plans
 
 | ID | Plan | Class | Dependencies | Status |
 |---|---|---|---|---|
-| M12-P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | invariant/infrastructure | accepted P001/P002; ADR-0005 | **dependency-ready** |
+| M12-P004 | [Oracle, differential, test, and Python tooling retirement](implementation/retirement/004-oracle-differential-test-and-python-tooling-retirement.md) | invariant/polish | accepted P001-P003; ADR-0005 | **dependency-ready** |
 
-P004-P006 are registered but serially blocked by their direct predecessors. P003 is now authorized as the first destructive Python application removal plan; no P004 work is authorized until P003 closes.
+P005-P006 remain registered but serially blocked by their direct predecessors. P003 was authorized as the first destructive Python application removal plan; its accepted closure now authorizes P004.
 
 ## M12 implementation closure handoffs
 
@@ -48,6 +48,7 @@ P004-P006 are registered but serially blocked by their direct predecessors. P003
 |---|---|---|---|---|
 | M12-P001 | [Final Python reference boundary and fixture freeze](implementation/retirement/001-final-python-reference-boundary-and-fixture-freeze.md) | invariant/infrastructure | reference manifest and handoff evidence | [accepted/closed](closure/retirement/001-status.md) |
 | M12-P002 | [Rust production package, catalog, and cross-era authority](implementation/retirement/002-rust-production-package-catalog-and-cross-era-authority.md) | infrastructure/invariant | `36605a8d890855fa255b9cf96b1ba29f914a9826` | [accepted/closed](closure/retirement/002-status.md) |
+| M12-P003 | [Python application source and runtime-asset retirement](implementation/retirement/003-python-application-source-and-runtime-asset-retirement.md) | invariant/polish | see closure record | [accepted/closed](closure/retirement/003-status.md) |
 
 ## Recently closed corrective plans
 

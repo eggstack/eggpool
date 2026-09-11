@@ -1,6 +1,6 @@
 # M12 Python Retirement Implementation Plans
 
-Status: implementation planning complete; P001/P002 accepted/closed; P003 dependency-ready; P004-P006 serially gated
+Status: implementation planning complete; P001-P003 accepted/closed; P004 dependency-ready; P005-P006 serially gated
 
 Source roadmap: `migration-rs/subsystems/python-retirement-roadmap.md`
 
@@ -14,12 +14,12 @@ These plans retire the historical Python application from the **current** produc
 
 1. [P001 — Final Python reference boundary and fixture freeze](001-final-python-reference-boundary-and-fixture-freeze.md) — **accepted/closed**.
 2. [P002 — Rust production package, catalog, and cross-era authority](002-rust-production-package-catalog-and-cross-era-authority.md) — **accepted/closed**.
-3. [P003 — Python application source and runtime-asset retirement](003-python-application-source-and-runtime-asset-retirement.md) — **dependency-ready**.
-4. [P004 — Oracle, differential, test, and Python tooling retirement](004-oracle-differential-test-and-python-tooling-retirement.md) — queued behind P003.
+3. [P003 — Python application source and runtime-asset retirement](003-python-application-source-and-runtime-asset-retirement.md) — **accepted/closed**.
+4. [P004 — Oracle, differential, test, and Python tooling retirement](004-oracle-differential-test-and-python-tooling-retirement.md) — **dependency-ready**.
 5. [P005 — Repository, installer, release, and documentation consolidation](005-repository-installer-release-and-documentation-consolidation.md) — queued behind P004.
 6. [P006 — Rust-only qualification and M12 closure](006-rust-only-qualification-and-m12-closure.md) — queued behind P005.
 
-Only `migration-rs/registry.md` authorizes implementation. P003 is now the sole dependency-ready M12 plan.
+Only `migration-rs/registry.md` authorizes implementation. P004 is now the sole dependency-ready M12 plan.
 
 ## Hard boundaries
 
