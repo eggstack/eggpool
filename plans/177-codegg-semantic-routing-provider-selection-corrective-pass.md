@@ -373,9 +373,14 @@ EggPool's provider/account routing and shared-crate boundaries remain unchanged.
 
 ## Execution record
 
+Status: complete (verified 2026-09-12).
+
 The Codegg corrective implementation landed in
 `8d4082bba3906fc0eb9b1dd8e1dda03dbbfa8dfa` (`fix: preserve provider ownership
-during semantic routing`) and was pushed to `dbowm91/codegg` `main`.
+during semantic routing`). The follow-up test-stability and fixture corrections
+landed in `1be409f70863afe63d06bed99aa7595891724da2` and
+`733c07edde8f764de1e6a8f9833da8818ab1c5a9`, and were pushed to
+`dbowm91/codegg` `main`.
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --all-targets --locked`: passed in the clean
@@ -385,6 +390,12 @@ during semantic routing`) and was pushed to `dbowm91/codegg` `main`.
 - focused `semantic_router`: 11 passed with `LZMA_API_STATIC=1` on this
   macOS host.
 - focused `request_preparation`: 3 passed with `LZMA_API_STATIC=1`.
+- focused TUI/plugin regressions: all 5 initially exposed tests passed after
+  making dialog focus setup, prompt-route epochs, workspace-relative cwd, and
+  MCP fixture request IDs deterministic.
+- `scripts/verify.sh full` passed locally with `LZMA_API_STATIC=1`, including
+  4,495 workspace unit tests, the complete workspace integration suite, and
+  4,539 feature-complete Codegg unit tests plus integration/doc tests.
 - the shared EggPool model-routing crate standalone check and tests passed;
   its Rust 1.81 metadata and direct `sha2` dependency are unchanged.
 - Codegg's `sticky` and `affinity_ttl_s` settings are documented as policy and
@@ -392,5 +403,6 @@ during semantic routing`) and was pushed to `dbowm91/codegg` `main`.
   process-owned asynchronous affinity cache.
 - the shared crate pin, EggPool provider/account router, and EggPool runtime
   were not broadened or changed.
-- Codegg CI run `34695979013` is still in progress; the local full suite is
-  also still running after reaching the workspace test phase.
+- [Codegg CI run `34708720912`](https://github.com/dbowm91/codegg/actions/runs/34708720912)
+  passed for `733c07ed`. The preceding run `34700690887` reached 4,500
+  passing tests and failed only on the now-fixed MCP fixture.
