@@ -222,8 +222,9 @@ async fn generation() -> Generation {
         EligibilityPolicy::default(),
     )
     .with_quarantine(quarantine.clone());
-    let model_routers =
-        ModelRouterRegistry::from_config(&config.model_routers).expect("model routers compile");
+    let model_routers = config
+        .compile_model_router_registry()
+        .expect("model routers compile");
     Generation {
         database,
         directory,

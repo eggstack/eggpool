@@ -1,0 +1,10 @@
+[package]
+name = "eggpool-model-routing"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+publish = false
+description = "Neutral deterministic semantic model-routing policy primitives"
+
+[dependencies]
+sha2 = "0.10"

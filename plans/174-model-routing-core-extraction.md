@@ -188,3 +188,16 @@ The shared crate does not need crates.io publication in this phase.
 ## Definition of done
 
 The extraction is done when EggPool is itself a consumer of the neutral crate, no duplicate semantic-policy implementation remains in the application, the new crate is independently testable at Rust 1.81 with a small dependency graph, and EggPool's model-routing/request/provider behavior and package/update surface are unchanged.
+
+## Execution record
+
+Completed on 2026-09-12. The neutral policy compiler, registry, route-ID
+validation, deterministic policy/fingerprint generation, and explicit/automatic
+identity primitives now live in `rust/crates/eggpool-model-routing`; EggPool
+adapts TOML config into those types and retains its process-owned async affinity
+cache and all provider/account routing.
+
+Verification included Rust 1.81 standalone compilation/tests, strict workspace
+format/Clippy/tests (469 Rust tests), locked release build, Maturin wheel
+inspection, release/package validators, Ruff, Pyright, and tooling tests (75
+passed, 1 skipped).

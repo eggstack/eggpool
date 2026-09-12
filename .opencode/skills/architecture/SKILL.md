@@ -11,7 +11,8 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 
 ## Core principles
 
-- `rust/src/` owns current production behavior and `rust/assets/` owns embedded
+- `rust/src/` owns current production behavior, `rust/crates/` owns explicitly
+  reusable Rust boundaries, and `rust/assets/` owns embedded
   runtime data.
 - Keep endpoint handling, coordinator, routing, persistence, provider
   transport, wire adaptation, and operations as explicit boundaries.
@@ -29,6 +30,8 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 
 - CLI/config/errors: `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs`
 - Request path: `rust/src/request/`, `rust/src/coordinator/`
+- Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
+  and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Providers/wire: `rust/src/providers/`, `rust/src/wire/`
 - Runtime/reload: `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`
 - Operations: `rust/src/operations/`

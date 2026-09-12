@@ -822,13 +822,13 @@ mod tests {
 
     #[test]
     fn parse_route_id_requires_exact_single_choice() {
-        use crate::config::{ModelRouteConfig, ModelRouterConfig};
-        let config = ModelRouterConfig {
+        use crate::model_router::{ModelRoutePolicy, ModelRouterPolicy};
+        let policy = ModelRouterPolicy {
             selector_model: "selector".into(),
             default_model: "model-a".into(),
             routes: [(
                 "a".into(),
-                ModelRouteConfig {
+                ModelRoutePolicy {
                     model: "model-a".into(),
                     description: "route a".into(),
                 },
@@ -837,7 +837,8 @@ mod tests {
             .collect(),
             ..Default::default()
         };
-        let router = crate::model_router::compile_model_router("virtual", &config).expect("router");
+        let router =
+            eggpool_model_routing::compile_model_router("virtual", &policy).expect("router");
         let body = br#"{"choices":[{"message":{"content":"0"}}]}"#;
         assert_eq!(
             parse_route_id(Some(body), &router, SELECTOR_MAX_RESPONSE_BYTES),

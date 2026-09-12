@@ -495,8 +495,9 @@ async fn build_fixture(
         supervisor,
         retry_policy,
     );
-    let model_registry =
-        ModelRouterRegistry::from_config(&config.model_routers).expect("router registry");
+    let model_registry = config
+        .compile_model_router_registry()
+        .expect("router registry");
     let known_providers: BTreeSet<String> = config.providers.keys().cloned().collect();
     let state = InferenceState::from_parts(
         finite,

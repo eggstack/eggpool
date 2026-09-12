@@ -263,6 +263,12 @@ when the router's semantic fingerprint is unchanged; policy changes naturally
 invalidate old decisions. Virtual aliases are exact and cannot contain `/`,
 and router targets remain concrete model references.
 
+The deterministic semantic policy compiler and hashed identity primitives are
+also available as the small Rust crate at
+`rust/crates/eggpool-model-routing/`. EggPool's TOML adapter feeds that crate;
+selector execution, provider/account routing, and the process-local async
+affinity cache remain EggPool-owned.
+
 See the copyable [Model routing guide](docs/model-routing.md) for the complete
 schema, fallback behavior, and troubleshooting guidance.
 
@@ -324,8 +330,8 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 
 # Install the Python tooling environment when working on scripts/tests

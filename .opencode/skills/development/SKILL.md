@@ -11,10 +11,14 @@ Run from the repository root:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 cargo build --manifest-path rust/Cargo.toml --locked --release
+
+# Shared semantic model-routing crate (Rust 1.81-compatible boundary)
+cargo check --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
+cargo test --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
 ```
 
 Strict Clippy is a repository invariant across all Rust targets. Do not add a

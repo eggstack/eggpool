@@ -6,6 +6,9 @@ rust-version = "1.88"
 publish = false
 description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 
+[workspace]
+members = ["crates/eggpool-model-routing"]
+
 [features]
 default = []
 # Test-only constructor for deterministic local TLS proxy peers.  The normal
@@ -36,6 +39,7 @@ eggress-server = { version = "=1.0.2", default-features = false, features = [
 eggress-uri = { version = "=1.0.2" }
 eggress-transport-ssh = { version = "=1.0.2" }
 getrandom = "0.3.4"
+eggpool-model-routing = { path = "crates/eggpool-model-routing" }
 http = "1"
 http-body-util = "0.1"
 hyper = "1"

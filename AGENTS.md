@@ -25,8 +25,8 @@ Fast focused iteration:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 uv run ruff format <changed tooling paths>
 uv run ruff check <changed tooling paths>
 uv run pytest <affected tooling test paths> -q --tb=short --maxfail=1
@@ -38,8 +38,8 @@ Run the same checks as the CI job:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
@@ -71,13 +71,13 @@ CI ignores paths-only changes to `docs/`, `architecture/`, `plans/`, `.opencode/
 cargo test --manifest-path rust/Cargo.toml --test operations_o008 -v
 
 # Single test by name
-cargo test --manifest-path rust/Cargo.toml --all-targets -v
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -v
 
 # Integration tests only
 uv run pytest tests/tooling/ -v
 
 # Network-dependent tests
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --nocapture
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --nocapture
 
 # Opt-in live provider verification (requires test-only credentials)
 uv run pytest tests/live/ -m live_opencode_go -v
@@ -149,12 +149,12 @@ Non-obvious wiring:
 
 - **Request lifecycle**: `RequestCoordinator` in `rust/src/coordinator/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP layer is in `rust/src/server.rs`
 - **Runtime generations**: the Rust runtime lifecycle module owns active/retiring generations and leases; server state mirrors are not authority
-- **Model-router registry/selector**: `ModelRouterRegistry` in `rust/src/model_router.rs` is immutable generation-owned configuration and dispatches concrete child requests through the coordinator
+- **Model-router registry/selector**: neutral policy compilation, deterministic registry semantics, and session identities are owned by `rust/crates/eggpool-model-routing`; `rust/src/model_router.rs` retains the process-owned async affinity cache. The immutable registry is generation-owned and dispatches concrete child requests through the coordinator
 - **Model-router request path**: exact virtual aliases resolve before concrete parsing and target-specific checks; the resolved target then follows the unchanged coordinator path. `/v1/models` exposes only compact capability-free virtual metadata, and `/api/stats/runtime` carries bounded semantic-routing counters
 - **Protocol transcoding**: `rust/src/wire/` converts OpenAI ↔ Anthropic and other supported surfaces; operator guide `docs/transcoding.md`
 - **Wire surfaces**: `/v1/responses` is stateless but may adapt through the canonical wire boundary to OpenAI Chat, Anthropic Messages, or native Gemini surfaces. Surface selection is the `request_surface` field (`"chat_completions"` | `"responses"`), while concrete upstream selection is `WireProfile.surface` → `architecture/deep-dive-request-lifecycle.md`
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `rust/src/operations/control.rs` and `rust/src/reload.rs`
-- **Routing**: load-based, never cost-based; tier-based via `routing_priority`; pieces split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`
+- **Routing**: load-based, never cost-based; tier-based via `routing_priority`; provider/account routing is split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`, while semantic virtual-model policy is compiled by `rust/crates/eggpool-model-routing`
 - **Wire surfaces**: the closed registry in `rust/src/wire/` owns concrete surfaces; provider profiles are embedded from `rust/assets/providers/_wire_profiles.toml`
 - **Process model**: the native Rust executable owns the server process and its bounded worker/runtime configuration; no Python application process is required
 

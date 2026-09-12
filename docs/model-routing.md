@@ -10,6 +10,11 @@ The feature is optional and disabled by default. With no
 `[model_routers.*]` tables, requests, catalog output, database work, background
 tasks, and concrete-model behavior are unchanged.
 
+The policy compiler and hashed identity primitives live in the neutral
+`eggpool-model-routing` crate. EggPool adapts its TOML structures into that
+crate, while selector execution, provider/account routing, and the bounded
+Tokio affinity cache remain application-owned.
+
 ## Configuration
 
 The smallest useful router has a virtual client-facing alias, a concrete

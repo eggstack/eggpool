@@ -21,6 +21,12 @@ generation it acquired. The model-router registry is generation-owned, while
 bounded affinity is process-owned and never stores raw request or credential
 data.
 
+The shared `eggpool-model-routing` crate is a Rust 1.81-compatible neutral
+boundary for policy validation/compilation, deterministic route IDs and
+fingerprints, and hashed conversation identities. EggPool adapts TOML config
+into its policy types and keeps selector execution, provider/account routing,
+and the Tokio affinity cache in the application.
+
 ## Request lifecycle
 
 `rust/src/coordinator/` owns endpoint detection, bounded request preparation,
@@ -37,7 +43,8 @@ terminal evidence and never synthesize a terminal event from transport EOF.
 |---|---|
 | CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
 | Request and coordinator | `rust/src/request/`, `rust/src/coordinator/` |
-| Routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
+| Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
+| Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
 | Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs` |
@@ -86,8 +93,8 @@ Run current runtime checks from the repository root:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 ```
 

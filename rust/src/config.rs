@@ -1105,6 +1105,42 @@ impl Default for ModelRouterConfig {
     }
 }
 
+pub(crate) fn model_router_policy(
+    router: &ModelRouterConfig,
+) -> eggpool_model_routing::ModelRouterPolicy {
+    eggpool_model_routing::ModelRouterPolicy {
+        selector_model: router.selector_model.clone(),
+        default_model: router.default_model.clone(),
+        routes: router
+            .routes
+            .iter()
+            .map(|(label, route)| {
+                (
+                    label.clone(),
+                    eggpool_model_routing::ModelRoutePolicy {
+                        model: route.model.clone(),
+                        description: route.description.clone(),
+                    },
+                )
+            })
+            .collect(),
+        sticky: router.sticky,
+        affinity_ttl_s: router.affinity_ttl_s,
+        selector_timeout_s: router.selector_timeout_s,
+        max_input_bytes: router.max_input_bytes,
+        repair_attempts: router.repair_attempts,
+    }
+}
+
+fn model_router_policies(
+    routers: &BTreeMap<String, ModelRouterConfig>,
+) -> BTreeMap<String, eggpool_model_routing::ModelRouterPolicy> {
+    routers
+        .iter()
+        .map(|(virtual_model, router)| (virtual_model.clone(), model_router_policy(router)))
+        .collect()
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
@@ -1142,7 +1178,9 @@ impl Config {
     pub fn compile_model_router_registry(
         &self,
     ) -> Result<crate::model_router::ModelRouterRegistry, ConfigError> {
-        crate::model_router::ModelRouterRegistry::from_config(&self.model_routers)
+        let policies = model_router_policies(&self.model_routers);
+        eggpool_model_routing::ModelRouterRegistry::from_policies(&policies)
+            .map_err(|error| ConfigError::validation(error.to_string()))
     }
 
     /// Resolve an account's explicit outbound proxy using the Python
@@ -1883,7 +1921,9 @@ fn validate_path(value: &str) -> Result<(), ConfigError> {
 fn validate_model_routers(
     routers: &BTreeMap<String, ModelRouterConfig>,
 ) -> Result<(), ConfigError> {
-    crate::model_router::validate_model_router_mapping(routers)
+    let policies = model_router_policies(routers);
+    eggpool_model_routing::validate_model_router_mapping(&policies)
+        .map_err(|error| ConfigError::validation(error.to_string()))
 }
 
 pub fn resolve_config_path(cli_value: Option<&Path>) -> PathBuf {

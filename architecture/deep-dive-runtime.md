@@ -33,9 +33,10 @@ Runtime generation ownership:
 - **`ProcessRuntime`**: holds process-owned containers (DB connections and bounded learned/affinity state) that outlive generations
 - **Generation builder**: constructs candidate generations for live reload
 
-`ModelRouterRegistry` is generation-owned and compiled by
-`RuntimeGenerationFactory` before the rest of the candidate graph is built.
-It is an immutable lookup of exact virtual aliases to compiled route policies.
+`ModelRouterRegistry` is generation-owned and compiled by the neutral
+`eggpool-model-routing` crate through EggPool's config adapter before the rest
+of the candidate graph is built. It is an immutable lookup of exact virtual
+aliases to compiled route policies.
 The empty configuration uses a shared empty registry and adds no model-router-
 specific catalog, health, quota, database, network, or background-task work.
 

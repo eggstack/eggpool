@@ -1,17 +1,13 @@
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use eggpool::{
-    config::{Config, ModelRouteConfig, ModelRouterConfig},
+    config::{ModelRouteConfig, ModelRouterConfig},
     model_router::{
-        AffinityDecisionSource, AffinityError, AffinitySelection, ConversationPrefix,
-        ConversationTextFragment, ModelRouterAffinity, ModelRouterRegistry, SessionSource,
-        automatic_session_identity, compile_model_router, session_identity_from_header,
+        AffinityDecisionSource, AffinityError, AffinitySelection, ModelRouterAffinity,
+        compile_model_router, session_identity_from_header,
     },
 };
 use tokio::sync::Notify;
@@ -53,148 +49,6 @@ fn selection(
         concrete_model: route.model.clone(),
         source: AffinityDecisionSource::Default,
     }
-}
-
-#[test]
-fn compiled_router_matches_d001_golden_policy_and_fingerprint() {
-    let config = router_config(
-        [
-            ("z-fast", "model-fast", " Fast\tpath "),
-            ("a-default", "model-default", "Default\npath"),
-        ],
-        "model-default",
-    );
-    let router = compile_model_router("virtual-route", &config).expect("router compiles");
-
-    assert_eq!(
-        router
-            .routes
-            .iter()
-            .map(|route| (&route.route_id, &route.label, &route.description))
-            .collect::<Vec<_>>(),
-        vec![
-            (
-                &"0".to_owned(),
-                &"a-default".to_owned(),
-                &"Default path".to_owned()
-            ),
-            (
-                &"1".to_owned(),
-                &"z-fast".to_owned(),
-                &"Fast path".to_owned()
-            ),
-        ]
-    );
-    assert_eq!(
-        router.static_policy.as_ref(),
-        b"model-router/v1|choose id;reply id only|0=Default path|1=Fast path"
-    );
-    assert_eq!(
-        router.config_fingerprint,
-        "70c26421aa06f8d476e158e3a9f477526d5dc80eccb8634bd5a16e12329c0f8a"
-    );
-}
-
-#[test]
-fn registry_is_exact_and_empty_registry_is_shared() {
-    let empty_a = ModelRouterRegistry::from_config(&BTreeMap::new()).expect("empty");
-    let empty_b = ModelRouterRegistry::empty();
-    assert!(empty_a.is_empty());
-    assert_eq!(empty_a.len(), 0);
-    assert_eq!(
-        empty_a.virtual_model_ids().collect::<Vec<_>>(),
-        Vec::<&str>::new()
-    );
-
-    let mut config = Config::default();
-    config.model_routers.insert(
-        "gpt-4".into(),
-        router_config([("default", "gpt-4-real", "route")], "gpt-4-real"),
-    );
-    config.validate().expect("structurally valid");
-    let registry = ModelRouterRegistry::from_config(&config.model_routers).expect("registry");
-    assert!(registry.is_virtual("gpt-4"));
-    assert!(registry.get("gpt-4").is_some());
-    assert!(registry.get("gpt-4/provider-a").is_none());
-    assert!(!empty_b.is_virtual("gpt-4"));
-}
-
-#[test]
-fn validation_is_structural_and_uses_utf8_byte_bounds() {
-    let mut config = Config::default();
-    config.model_routers.insert(
-        "future".into(),
-        router_config([("default", "missing-yet", "route")], "missing-yet"),
-    );
-    config
-        .validate()
-        .expect("catalog availability is not config validation");
-
-    let mut invalid = config.clone();
-    invalid.model_routers.insert(
-        "second".into(),
-        router_config([("default", "future", "virtual target")], "future"),
-    );
-    assert!(invalid.validate().is_err());
-
-    let mut byte_bound = Config::default();
-    let mut byte_bound_router = router_config([("default", "model", "route")], "model");
-    byte_bound_router
-        .routes
-        .get_mut("default")
-        .expect("route")
-        .description = "é".repeat(257);
-    byte_bound
-        .model_routers
-        .insert("virtual".into(), byte_bound_router);
-    assert!(byte_bound.validate().is_err());
-}
-
-#[test]
-fn explicit_and_automatic_identities_are_hashed_and_surface_scoped() {
-    let identity = session_identity_from_header(Some("fixture-session")).expect("identity");
-    assert_eq!(identity.source, SessionSource::ExplicitSession);
-    assert_eq!(
-        identity.digest,
-        [
-            0xd6, 0x44, 0x09, 0x83, 0xc4, 0x54, 0xc2, 0xe5, 0x99, 0x9f, 0xdb, 0x66, 0xbb, 0xe9,
-            0xcf, 0x5f, 0x89, 0xa8, 0xf5, 0x84, 0x7d, 0x6c, 0x95, 0x78, 0xef, 0x14, 0xaf, 0xd2,
-            0x6e, 0xee, 0x12, 0x2c,
-        ]
-    );
-    assert!(session_identity_from_header(None).is_none());
-    assert!(session_identity_from_header(Some("bad\nvalue")).is_none());
-    assert!(session_identity_from_header(Some(&"x".repeat(513))).is_none());
-    assert!(!format!("{identity:?}").contains("fixture-session"));
-
-    let prefix = ConversationPrefix::new(
-        vec![ConversationTextFragment::new(
-            "system",
-            "stable instruction",
-        )],
-        Some("first question".into()),
-    );
-    let automatic = automatic_session_identity(&prefix, "chat_completions").expect("automatic");
-    assert_eq!(automatic.source, SessionSource::AutomaticSession);
-    assert!(automatic_session_identity(&prefix, "responses").is_none());
-    assert!(!format!("{automatic:?}").contains("first question"));
-
-    let long_system = "shared system prefix ".repeat(2_000);
-    let first = automatic_session_identity(
-        &ConversationPrefix::new(
-            vec![ConversationTextFragment::new("system", long_system.clone())],
-            Some("first request".into()),
-        ),
-        "chat_completions",
-    );
-    let second = automatic_session_identity(
-        &ConversationPrefix::new(
-            vec![ConversationTextFragment::new("system", long_system)],
-            Some("second request".into()),
-        ),
-        "chat_completions",
-    );
-    assert_ne!(first, second);
 }
 
 #[tokio::test]

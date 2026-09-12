@@ -13,7 +13,8 @@ metadata/assets only.
 |---|---|
 | CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
 | Request lifecycle and wire adaptation | `rust/src/request/`, `rust/src/coordinator/`, `rust/src/wire/` |
-| Routing, quota, providers, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/providers/`, `rust/src/health/` |
+| Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
+| Provider/account routing, quota, providers, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/providers/`, `rust/src/health/` |
 | Database and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime generations and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/server.rs` |
 | Dashboard, operations, update | `rust/src/server.rs`, `rust/src/operations/` |
@@ -45,8 +46,8 @@ Run Rust commands from the repository root with an explicit manifest:
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --all-targets -- --test-threads=1
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 rust/target/debug/eggpool --help
 ```
