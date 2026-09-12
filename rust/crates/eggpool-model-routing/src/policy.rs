@@ -495,6 +495,30 @@ mod tests {
     }
 
     #[test]
+    fn invalid_default_and_nested_virtual_targets_are_rejected() {
+        let mut invalid_default = BTreeMap::new();
+        invalid_default.insert(
+            "virtual".into(),
+            router_policy([("default", "model-default", "Default")], "not-a-route"),
+        );
+        let error =
+            validate_model_router_mapping(&invalid_default).expect_err("default must match");
+        assert!(error.detail().contains("default_model"));
+
+        let mut nested = BTreeMap::new();
+        nested.insert(
+            "outer".into(),
+            router_policy([("default", "inner", "Nested")], "inner"),
+        );
+        nested.insert(
+            "inner".into(),
+            router_policy([("default", "model-default", "Default")], "model-default"),
+        );
+        let error = validate_model_router_mapping(&nested).expect_err("nested target must fail");
+        assert!(error.detail().contains("cannot target virtual model"));
+    }
+
+    #[test]
     fn validation_is_structural_and_uses_utf8_byte_bounds() {
         let mut policies = BTreeMap::new();
         policies.insert(
@@ -524,5 +548,24 @@ mod tests {
         policies.clear();
         policies.insert("virtual".into(), byte_bound);
         assert!(validate_model_router_mapping(&policies).is_err());
+
+        let exact_limit = ModelRouterPolicy {
+            selector_model: "selector-model".into(),
+            default_model: "model".into(),
+            affinity_ttl_s: 60.0,
+            max_input_bytes: 256,
+            ..Default::default()
+        };
+        let mut exact_limit = exact_limit;
+        exact_limit.routes.insert(
+            "default".into(),
+            ModelRoutePolicy {
+                model: "model".into(),
+                description: "é".repeat(256),
+            },
+        );
+        let mut exact_limit_mapping = BTreeMap::new();
+        exact_limit_mapping.insert("virtual".into(), exact_limit);
+        validate_model_router_mapping(&exact_limit_mapping).expect("512 UTF-8 bytes fit");
     }
 }

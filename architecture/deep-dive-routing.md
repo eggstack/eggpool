@@ -17,3 +17,13 @@ account, bypass health/quota, or reselect after submission.
 Claims and reservations are released on every terminal path. Quarantine,
 backoff, and capability gates are evaluated before selection and remain scoped
 to the provider/model facts that produced them.
+
+## Shared crate contract
+
+EggPool owns `eggpool-model-routing`; Codegg is a pinned downstream consumer.
+The crate's `model-router/v1` static-policy format is a semantic protocol
+contract separate from the crate's Rust semver. Public Rust API breaks require
+review and updates in Codegg before the pin moves. Changes to policy bytes or
+fingerprint semantics require explicit compatibility review and may require a
+selector protocol-version decision. Provider/account routing, quota, health,
+retry, and transport remain outside the shared crate.

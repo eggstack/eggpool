@@ -280,5 +280,27 @@ mod tests {
             "chat_completions",
         );
         assert_ne!(first, second);
+
+        let long_first = automatic_session_identity(
+            &ConversationPrefix::new(
+                Vec::new(),
+                Some(format!(
+                    "first {}",
+                    "a".repeat(AUTOMATIC_PREFIX_MAX_BYTES * 2)
+                )),
+            ),
+            "chat_completions",
+        );
+        let other_long_first = automatic_session_identity(
+            &ConversationPrefix::new(
+                Vec::new(),
+                Some(format!(
+                    "second {}",
+                    "a".repeat(AUTOMATIC_PREFIX_MAX_BYTES * 2)
+                )),
+            ),
+            "chat_completions",
+        );
+        assert_ne!(long_first, other_long_first);
     }
 }
