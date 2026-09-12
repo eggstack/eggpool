@@ -1,7 +1,7 @@
 # Plan 177 — Codegg Semantic Routing Provider-Selection Corrective Pass
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: verification in progress
 Parent roadmap: `plans/173-shared-model-routing-crate-roadmap.md`
 Follows: Plans 174–176
 EggPool baseline: `eca8c4e33672ffc3c783274a8218c6eac6832fee`
@@ -370,3 +370,27 @@ replacing the execution provider, selector execution remains side-effect free
 with respect to session/provider ownership, Codegg's affinity semantics are
 unambiguous, all existing shared deterministic parity vectors still pass, and
 EggPool's provider/account routing and shared-crate boundaries remain unchanged.
+
+## Execution record
+
+The Codegg corrective implementation landed in
+`8d4082bba3906fc0eb9b1dd8e1dda03dbbfa8dfa` (`fix: preserve provider ownership
+during semantic routing`) and was pushed to `dbowm91/codegg` `main`.
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --all-targets --locked`: passed in the clean
+  committed checkout.
+- `scripts/verify.sh quick`: passed.
+- strict Clippy: passed.
+- focused `semantic_router`: 11 passed with `LZMA_API_STATIC=1` on this
+  macOS host.
+- focused `request_preparation`: 3 passed with `LZMA_API_STATIC=1`.
+- the shared EggPool model-routing crate standalone check and tests passed;
+  its Rust 1.81 metadata and direct `sha2` dependency are unchanged.
+- Codegg's `sticky` and `affinity_ttl_s` settings are documented as policy and
+  fingerprint compatibility inputs only; Codegg does not implement EggPool's
+  process-owned asynchronous affinity cache.
+- the shared crate pin, EggPool provider/account router, and EggPool runtime
+  were not broadened or changed.
+- Codegg CI run `34695979013` is still in progress; the local full suite is
+  also still running after reaching the workspace test phase.
