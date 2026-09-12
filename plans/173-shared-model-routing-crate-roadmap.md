@@ -1,7 +1,7 @@
 # Plan 173 — Shared Semantic Model-Routing Crate Roadmap
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-12)
 Planning baseline: `504c0f7d531e4956a0d4f4cadc39a3623042809c`
 Priority: P1 architecture / cross-repository reuse
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -183,3 +183,18 @@ Execute 174 -> 175 -> 176. Plan 175 may be implemented in the Codegg repository,
 ## Definition of done
 
 This roadmap is complete when EggPool consumes a small neutral semantic-routing crate without behavior change, Codegg consumes that same crate for the semantic policy layer without inheriting EggPool infrastructure routing, the shared crate is verified at the downstream-compatible MSRV, deterministic policy/fingerprint vectors match across both consumers, and package/update/release behavior remains unchanged.
+
+## Closure evidence
+
+The roadmap is closed. Plan 174 landed the neutral crate and EggPool adapter in
+`d70b5963daa373bd16e193637dc2210723418d9c`; Plan 175 integrated Codegg with an
+immutable dependency pin at that revision in
+`02400b130bf46ab53039355fdd16e5f250028c43`; and the exact shared
+policy/fingerprint/identity vector is mirrored downstream in
+`881c61720f9a80162094b85c6beeaa68da6af6d0`. Plan 176 added the final parity
+coverage and ownership contract in `af58de5e9315ea1d8faee9c05f0021f370cdd534`.
+
+EggPool remains authoritative for provider/account routing, quota, health,
+retry, claims, and transport. Codegg owns its sessions and provider
+connections. No permanent cross-repository CI workflow or public crate
+publication was introduced.

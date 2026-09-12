@@ -1,7 +1,7 @@
 # Plan 176 — Shared Model-Routing Parity, Release, and Closure
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-12)
 Parent roadmap: `plans/173-shared-model-routing-crate-roadmap.md`
 Depends on: Plans 174–175
 Priority: P1 compatibility / closure
@@ -176,3 +176,34 @@ If Codegg integration reveals that only compilation/validation is worth sharing 
 ## Definition of done
 
 This line is closed when the shared semantic-routing crate has one clear owner, two verified consumers, a stable bounded protocol/API boundary, compatible MSRV, unchanged EggPool package/update behavior, and no duplication or leakage of infrastructure routing across repository boundaries.
+
+## Closure evidence
+
+Implementation and final closure coverage are complete in
+`af58de5e9315ea1d8faee9c05f0021f370cdd534`. EggPool's extracted crate and
+adapter originated in `d70b5963daa373bd16e193637dc2210723418d9c`; Codegg's
+integration uses the immutable pin at that revision, and its exact parity
+assertions were pushed in `881c61720f9a80162094b85c6beeaa68da6af6d0`.
+
+The shared crate has one direct dependency (`sha2`) and passes six tests under
+Rust 1.81 from a source-isolated standalone checkout; the EggPool workspace
+continues to require Rust 1.88/edition 2024. The Codegg package remains
+edition 2021 with `rust-version = "1.81"`; its quick verification, focused
+adapter tests, and locked modern-Cargo check pass. A whole Codegg Cargo 1.81
+workspace check is outside this crate closure because the pre-existing lock
+resolves edition-2024-era transitive packages (`hashbrown 0.17.1`); the new
+shared crate introduces no such dependency and its own Rust 1.81 qualification
+passes.
+
+EggPool closure verification passed: strict format and Clippy, 470 serial
+workspace tests, locked release build, Rust 1.81 shared-crate tests, Ruff,
+Pyright, 75 tooling tests with one expected skip, release catalog/identity/
+workflow/docs/package-boundary validators, and `git diff --check`. The
+non-publishing Maturin rehearsal produced and inspected
+`eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl` with the expected `eggpool`
+binary payload, package name/version authority, and no Python dependencies.
+
+No provider/account routing moved into the shared crate; no permanent
+cross-repository CI coupling or public publication was added. A review found
+no plans after 176 and no future plan explicitly blocked by Plans 173–176, so
+no additional plan status required unblocking.

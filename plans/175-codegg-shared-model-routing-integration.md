@@ -1,7 +1,7 @@
 # Plan 175 — Codegg Consumption of Shared Semantic Model Routing
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-12)
 Parent roadmap: `plans/173-shared-model-routing-crate-roadmap.md`
 Depends on: `plans/174-model-routing-core-extraction.md`
 Priority: P1 cross-repository integration / routing ownership
@@ -206,3 +206,15 @@ Do not tell users that Codegg and EggPool must both configure semantic routing s
 ## Definition of done
 
 The integration is complete when Codegg can use the same deterministic semantic routing policy implementation as EggPool while remaining the authority for its sessions/provider connections, EggPool remains the authority for account/provider routing behind an EggPool endpoint, and neither repository contains a second copy of the shared semantic compiler/validator.
+
+## Execution record
+
+Codegg integrated the shared crate through `codegg-core` in
+`02400b130bf46ab53039355fdd16e5f250028c43` and pins EggPool revision
+`d70b5963daa373bd16e193637dc2210723418d9c`.
+The downstream adapter retains exact virtual-model routing, selector execution,
+cancellation/default behavior, and durable provider-connection ownership. The
+mirrored canonical policy, fingerprint, route-ID, and explicit identity
+vectors landed in Codegg as `881c61720f9a80162094b85c6beeaa68da6af6d0` and
+were pushed to `main`. Codegg quick verification and focused model-routing
+tests pass; no provider/account routing was duplicated or moved.

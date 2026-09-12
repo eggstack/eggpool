@@ -1,7 +1,7 @@
 # Plan 174 — Extract the Shared Model-Routing Core
 
 Date: 2026-09-11
-Status: ready for handoff
+Status: complete (verified 2026-09-12)
 Parent roadmap: `plans/173-shared-model-routing-crate-roadmap.md`
 Planning baseline: `c2154cdbb0767ff0daf128da675cbd030719d616`
 Priority: P1 architecture / behavior-preserving extraction
@@ -198,6 +198,12 @@ adapts TOML config into those types and retains its process-owned async affinity
 cache and all provider/account routing.
 
 Verification included Rust 1.81 standalone compilation/tests, strict workspace
-format/Clippy/tests (469 Rust tests), locked release build, Maturin wheel
+format/Clippy/tests (470 Rust tests), locked release build, Maturin wheel
 inspection, release/package validators, Ruff, Pyright, and tooling tests (75
 passed, 1 skipped).
+
+Closure revalidation added the canonical invalid-default, nested-target, exact
+UTF-8 boundary, long-first-user identity, and downstream-mirrored policy/
+fingerprint/identity vectors. The implementation and closure-test commits are
+`d70b5963daa373bd16e193637dc2210723418d9c` and
+`af58de5e9315ea1d8faee9c05f0021f370cdd534`.
