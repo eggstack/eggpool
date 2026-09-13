@@ -1,6 +1,6 @@
 # Plan 190: Eggress optional-feature corrective closure
 
-> **Status:** Ready
+> **Status:** complete (verified 2026-09-13; implementation 25f0043)
 >
 > **Parent:** Corrective follow-on to completed Plans 186–189
 >
@@ -401,23 +401,88 @@ This order keeps failures attributable: first fix source cfg correctness, then i
 
 ## Approval checklist
 
-- [ ] Current `--no-default-features` failure reproduced before implementation.
-- [ ] `proxy_uses_ssh` or equivalent classification compiles independent of the fallback feature.
-- [ ] Default SSH continues to use the native 1.0.6 compatibility fallback.
-- [ ] No-default SSH configuration fails as `ProxyConfiguration` before dialing.
-- [ ] No SSH failure can fall back to direct egress.
-- [ ] Direct and non-SSH proxy construction remain available with no default features.
-- [ ] Optional native Eggress dependencies remain feature-gated.
-- [ ] `eggress-embed/ssh` is feature-gated with Eggpool SSH support when safely possible, or the reason it remains unconditional is documented.
-- [ ] `test-support` remains functional and verified without weakening certificate checks.
-- [ ] CI checks no-default compile and Clippy without adding a broad feature matrix.
-- [ ] No-default test qualification passes with capability-specific tests gated accurately.
-- [ ] Default provider transport qualification passes.
-- [ ] All-features Clippy and tests pass.
-- [ ] `cargo deny` passes.
-- [ ] Plans 186–189 remain closed.
-- [ ] Closure evidence is appended to this plan with exact commit and command results.
+- [x] Current `--no-default-features` failure reproduced before implementation.
+- [x] `proxy_uses_ssh` or equivalent classification compiles independent of the fallback feature.
+- [x] Default SSH continues to use the native 1.0.6 compatibility fallback.
+- [x] No-default SSH configuration fails as `ProxyConfiguration` before dialing.
+- [x] No SSH failure can fall back to direct egress.
+- [x] Direct and non-SSH proxy construction remain available with no default features.
+- [x] Optional native Eggress dependencies remain feature-gated.
+- [x] `eggress-embed/ssh` is feature-gated with Eggpool SSH support when safely possible, or the reason it remains unconditional is documented.
+- [x] `test-support` remains functional and verified without weakening certificate checks.
+- [x] CI checks no-default compile and Clippy without adding a broad feature matrix.
+- [x] No-default test qualification passes with capability-specific tests gated accurately.
+- [x] Default provider transport qualification passes.
+- [x] All-features Clippy and tests pass.
+- [x] `cargo deny` passes.
+- [x] Plans 186–189 remain closed.
+- [x] Closure evidence is appended to this plan with exact commit and command results.
 
 ## Completion criterion
 
 Plan 190 is complete when the manifest truthfully describes `eggress-ssh-fallback` as optional: Eggpool builds cleanly without defaults, non-SSH transport remains usable, SSH is rejected explicitly and fail-closed when its required compatibility implementation is absent, default builds retain fully qualified SSH support, and CI permanently exercises the reduced feature boundary.
+
+## Closure evidence
+
+Verified 2026-09-13 from implementation commit `25f0043` (`Make Eggress SSH
+fallback optional`). The follow-up documentation commit contains this evidence.
+
+The final feature wiring is:
+
+```toml
+default = ["eggress-ssh-fallback"]
+test-support = ["eggress-ssh-fallback"]
+eggress-ssh-fallback = [
+    "eggress-embed/ssh",
+    "dep:eggress-core",
+    "dep:eggress-config",
+    "dep:eggress-pproxy-compat",
+    "dep:eggress-server",
+    "dep:eggress-uri",
+    "dep:eggress-transport-ssh",
+]
+```
+
+`eggress-embed` retains `pproxy-compat`, `pproxy-legacy`, and `legacy-crypto`
+with default features disabled; its `ssh` feature is now activated only by
+`eggress-ssh-fallback`. All six native implementation dependencies remain
+optional. The no-default feature tree contains no `ssh` feature activation or
+root fallback edge for those implementation dependencies; the default tree
+activates the SSH feature and native SSH dependencies. Ordinary Eggress
+transitive dependencies remain present where required by the embed crate.
+
+Qualification results:
+
+| Command | Result |
+|---|---|
+| Baseline no-default `cargo check` before implementation | Reproduced unresolved `proxy_uses_ssh` and `build_chain_egress_dialer` errors |
+| `cargo fmt --manifest-path rust/Cargo.toml --all -- --check` | pass |
+| `cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features` | pass |
+| `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings` | pass |
+| `cargo test --manifest-path rust/Cargo.toml --no-default-features` | 472 passed, 53 suites |
+| `cargo check --manifest-path rust/Cargo.toml --workspace --all-targets` | pass |
+| `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings` | pass |
+| `cargo test --manifest-path rust/Cargo.toml --features test-support --test provider_transport -- --test-threads=1` | 35 passed |
+| `cargo check --manifest-path rust/Cargo.toml --all-targets --all-features` | pass |
+| `cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings` | pass |
+| `cargo test --manifest-path rust/Cargo.toml --all-features -- --test-threads=1` | 477 passed, 53 suites |
+| `cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1` | 477 passed, 53 suites |
+| `cargo build --manifest-path rust/Cargo.toml --locked --release` | pass |
+| `cargo deny --manifest-path rust/Cargo.toml check` | pass; existing duplicate-version warnings only |
+| `uv run ruff format --check scripts/ tests/tooling/` | pass |
+| `uv run ruff check scripts/ tests/tooling/` | pass |
+| `uv run pyright scripts/` | pass, 0 errors/warnings |
+| `uv run pytest tests/tooling/ -q --tb=short --maxfail=1` | 75 passed, 1 skipped |
+| `uv run python scripts/validate_release_docs.py` | pass |
+| `uv run python scripts/validate_runtime_package_boundary.py` | pass |
+| `git diff --check` | pass |
+
+The no-default regression constructs an SSH proxy through the public
+`ProviderHttpClient::new_with_proxy` API and receives
+`TransportError::ProxyConfiguration` before any dialer can run. The same
+no-default suite passes direct behavior and the HTTP CONNECT, SOCKS4, SOCKS5,
+Shadowsocks, Trojan, and non-SSH chain construction corpus. Default/test-support
+SSH interoperability remains covered by the existing traversal,
+authentication-failure, cancellation, and no-direct-bypass tests. CI now runs
+the no-default check and strict Clippy commands in the existing qualification
+job; no feature matrix or additional job was added.
