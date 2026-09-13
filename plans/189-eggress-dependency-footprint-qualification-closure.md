@@ -304,18 +304,18 @@ Do not in this phase:
 
 ## Approval checklist
 
-- [ ] Every direct Eggress dependency classified as production, optional test-support, dev fixture, or removed.
-- [ ] Ordinary provider source imports only `eggress-embed` for Eggress functionality.
-- [ ] Test-support internals remain isolated and documented.
-- [ ] All explicit Eggress crates use one release line.
-- [ ] Feature graph audited and redundant explicit activation removed where safe.
-- [ ] No unrelated Eggress full/default features accidentally enabled.
-- [ ] Full proxy interoperability/failure suite passes.
-- [ ] Full Rust fmt/check/clippy/test qualification passes.
-- [ ] Same-profile release footprint comparison recorded.
-- [ ] Any size regression explained or corrected.
-- [ ] Closure evidence appended.
-- [ ] Plan 186 can be marked complete.
+- [x] Every direct Eggress dependency classified as production, optional test-support, dev fixture, or removed.
+- [x] Ordinary provider source imports only `eggress-embed` for Eggress functionality, with the documented 1.0.6 SSH facade fallback exception.
+- [x] Test-support internals remain isolated and documented.
+- [x] All explicit Eggress crates use one release line.
+- [x] Feature graph audited and redundant explicit activation removed where safe.
+- [x] No unrelated Eggress full/default features accidentally enabled.
+- [x] Full proxy interoperability/failure suite passes.
+- [x] Full Rust fmt/check/clippy/test qualification passes.
+- [x] Same-profile release footprint comparison recorded.
+- [x] Any size regression explained or corrected; the measured result is a 525,184-byte reduction.
+- [x] Closure evidence appended.
+- [x] Plan 186 is marked complete.
 
 ## Closure evidence
 
@@ -341,3 +341,12 @@ Plan 189; the only follow-up opportunity is an upstream Eggress release that
 lets `OutboundConnector` accept/install an SSH session cache, at which point
 the fallback and its direct implementation dependencies can be removed in a
 separate corrective change.
+
+Formal closure revalidated on 2026-09-13 at pre-closure head `18fa4dfe`:
+default, `test-support`, and all-features checks passed; strict all-features
+Clippy passed; the provider transport suite passed all 35 tests; the full
+all-features Rust suite passed; the locked release build produced
+`29,570,824` bytes; `cargo-bloat --release --crates` reported `17.9 MiB` of
+`.text`; and `cargo deny` passed advisory, license, source, and duplicate
+policy checks. No plans exist after 189, so there is no downstream plan to
+unblock or update.

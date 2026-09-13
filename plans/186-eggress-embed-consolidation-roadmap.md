@@ -194,13 +194,13 @@ This roadmap is complete when Plans 187-189 are closed and the repository demons
 
 ## Approval checklist
 
-- [ ] Plan 187 is implemented and qualified.
-- [ ] Plan 188 is implemented and qualified.
-- [ ] Plan 189 is implemented and qualified.
-- [ ] Production source names only the intended stable Eggress boundary.
-- [ ] Test-only internal coupling is explicit and justified.
-- [ ] No proxy fallback, TLS, timeout, or retry invariant changed accidentally.
-- [ ] Final dependency/footprint evidence is recorded.
+- [x] Plan 187 is implemented and qualified.
+- [x] Plan 188 is implemented and qualified.
+- [x] Plan 189 is implemented and qualified.
+- [x] Production source names only the intended stable Eggress boundary, with the documented 1.0.6 SSH facade fallback exception.
+- [x] Test-only internal coupling is explicit and justified.
+- [x] No proxy fallback, TLS, timeout, or retry invariant changed accidentally.
+- [x] Final dependency/footprint evidence is recorded.
 
 ## Closure evidence
 
