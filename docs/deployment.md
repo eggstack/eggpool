@@ -582,17 +582,17 @@ success message pointing at the log file.
 The parent only validates the config and refuses to start a second
 instance. The detached child runs the native Rust foreground process. No
 daemon flag is forwarded to the child; detachment is purely a parent-side
-concern. The child owns its own PID file
-lifecycle via `runtime.write_pid_file()` /
-`runtime.clear_pid_file()`.
+concern. The child owns its own PID file lifecycle through the process
+primitives in `rust/src/operations/process.rs`, with path resolution owned by
+`rust/src/operations/paths.rs`.
 
 ### Detach mechanics
 
 - `start_new_session=True` so the child survives shell exit and signals to the parent CLI do not propagate
-- `stdin=subprocess.DEVNULL` to detach from the calling terminal
+- stdin is detached from the calling terminal
 - `stdout`/`stderr` redirected to a log file (or `/dev/null` when `--quiet` is set without `--log-file`)
 - Default log file: `~/.local/state/eggpool/eggpool.log` (resolved by the native runtime); override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
-- The `subprocess.Popen` handle is intentionally not awaited by the CLI parent; the parent returns as soon as the child has been spawned
+- The detached child handle is intentionally not awaited by the CLI parent; the parent returns as soon as the child has been spawned
 
 ### PID file resolution
 
@@ -603,8 +603,8 @@ PID file path resolution lives in `rust/src/operations/paths.rs` and is the sing
 3. `~/.local/state/eggpool/eggpool.pid` (state dir auto-created)
 4. `/tmp/eggpool-<UID>.pid` (UID-scoped fallback)
 
-The native runtime owns the PID-file path; there is no Python compatibility
-constant to import.
+The native runtime owns the PID-file path; there is no retired application
+module or compatibility constant to import.
 
 ### Root-user guard
 
@@ -621,8 +621,8 @@ set) and must not use daemon mode.
 under the canonical name `eggpool`; there is no Python worker or framework
 runtime hidden behind the package command.
 
-The native process owns the PID file via
-`runtime.write_pid_file()` / `runtime.clear_pid_file()`. `eggpool serve`
+The native process owns the PID file through the process primitives in
+`rust/src/operations/process.rs`. `eggpool serve`
 refuses to start a second instance: it checks the PID file and, if
 no live PID is recorded, probes `GET /v1/healthz` over `127.0.0.1`
 (the bind address `0.0.0.0` / `::` is rewritten to a loopback
@@ -630,8 +630,9 @@ address for the probe). Either a live PID or a 200 from the probe
 causes the new `serve` to exit non-zero so a stale PID file is
 never silently overwritten.
 
-`[server].threads` is retained as a compatibility setting for the Rust
-runtime's I/O worker count. The default is recommended for constrained
+`[server].threads` is retained for configuration compatibility and runtime
+diagnostics. EggPool uses Tokio's `current_thread` runtime, so this value does
+not select an I/O worker pool; keep the compatibility default on constrained
 systems:
 
 ```toml
@@ -639,11 +640,11 @@ systems:
 threads = 1
 ```
 
-`eggpool restart` delegates to `runtime.restart_server`, which calls
-`runtime.send_sigterm` against the supervisor recorded in the PID
-file and then `runtime.start_server` (a `subprocess.Popen` of a new
-supervisor). There is no inline subprocess logic in the CLI command
-itself.
+`eggpool restart` delegates to the lifecycle service in
+`rust/src/operations/lifecycle.rs`, which proves the recorded process identity,
+signals it through `rust/src/operations/process.rs`, waits for a safe stop, and
+starts the native executable. The CLI adapter retains only command parsing,
+presentation, and exit-code mapping.
 
 ---
 
@@ -680,9 +681,8 @@ eggpool runtime-status                 # compact terminal summary
 eggpool runtime-status --json          # machine-readable JSON
 ```
 
-`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint
-(via `urllib.request`, no heavy imports) and prints a one-page overview
-of the running process.  It is intended for operators debugging
+`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
+prints a one-page overview of the running process. It is intended for operators debugging
 systemd, cron, or daemon deployments.
 
 When the server is not running the command exits non-zero with a clear
@@ -733,14 +733,10 @@ payload as `probe_errors`, capped at 16 entries with each message
 truncated, so repeated host or permissions failures cannot produce an
 unbounded response.
 
-At startup, `_log_operational_profile()` emits a single structured log
-line (INFO level) containing workers, runtime_threads,
-database_worker_threads, stats_db_separate, WAL/synchronous/busy_timeout,
-routing_trace_mode/sample_rate, metrics_write_mode/flush_interval_s,
-transcoder/cache enabled flags, and background task counts
-split by process ownership vs generation-leased. This line appears in
-`~/.local/state/eggpool/eggpool.log` (or `journalctl -u eggpool`) and
-is useful for confirming the effective configuration at a glance.
+At startup, the native server logs a warning when `server.threads` differs
+from `1`; the value is retained for compatibility and does not change Tokio's
+single-thread runtime. Use `runtime-status --json` and the health/status
+endpoints to inspect the effective runtime and background-task state.
 
 ### Checking from cron
 

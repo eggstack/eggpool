@@ -1,7 +1,7 @@
 # Plan 184 — Dependency Security and Drift Automation
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: complete (verified 2026-09-13)
 Parent roadmap: `plans/178-rust-maintenance-consolidation-roadmap.md`
 Planning baseline: `78a4da64de3c94a9f5fe29e05e6bdf40402bc16b`
 Priority: P1/P2 supply-chain security / low-noise maintenance

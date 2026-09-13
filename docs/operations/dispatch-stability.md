@@ -8,7 +8,8 @@ JSON evidence format.
 
 ```bash
 eggpool runtime-status --json | python3 -m json.tool
-uv run pytest tests/smoke/ -q --tb=short --maxfail=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
 ```
 
 Compare `local_pre_upstream` with upstream connect/TTFT to separate EggPool

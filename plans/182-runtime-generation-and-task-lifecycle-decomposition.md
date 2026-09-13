@@ -1,7 +1,7 @@
 # Plan 182 — Runtime Generation and Task-Lifecycle Decomposition
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: complete (verified 2026-09-13)
 Parent roadmap: `plans/178-rust-maintenance-consolidation-roadmap.md`
 Planning baseline: `78a4da64de3c94a9f5fe29e05e6bdf40402bc16b`
 Priority: P1/P2 maintainability / lifecycle correctness

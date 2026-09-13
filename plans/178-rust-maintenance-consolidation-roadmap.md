@@ -1,7 +1,7 @@
 # Plan 178 — Rust Maintenance Consolidation Roadmap
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: complete (verified 2026-09-13)
 Planning baseline: `78a4da64de3c94a9f5fe29e05e6bdf40402bc16b`
 Priority: P1/P2 maintenance / ownership consolidation / dependency drift control
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -131,3 +131,11 @@ Run packaging/release/update validators only when a phase touches their inputs o
 This roadmap is complete when active documentation/source describe the actual Rust runtime, canonical config examples have one authority, CLI/HTTP/lifecycle/streaming code is divided along existing ownership seams, configuration changes use one typed transition policy, the dependency graph is continuously checked for relevant security/license/source drift, all existing behavior remains qualified, and no unnecessary framework or product feature has been introduced.
 
 The final repository should be easier to maintain because ownership is clearer, not because functionality has been redistributed into more abstractions.
+
+## Closure evidence
+
+Plans 179–184 are complete. Plan 185 re-audited the resulting ownership
+boundaries, corrected the remaining stale deployment/runbook wording, and
+qualified the full local Rust/tooling baseline before the roadmap was closed.
+No product feature, maintenance framework, or dependency-minimization
+initiative was added during closure.

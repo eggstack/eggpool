@@ -116,8 +116,9 @@ include_score_components = false
 
 EggPool's native Rust runtime is one `eggpool serve` process. The installed
 wheel does not launch a Python interpreter or a separate web-framework worker.
-Keep the default `threads = 1` on constrained SBC hardware; it controls the
-Rust runtime's I/O worker count:
+Keep the default `threads = 1` on constrained SBC hardware. It is retained for
+configuration compatibility and diagnostics; Tokio's current-thread runtime
+does not use it to select an I/O worker count:
 
 ```toml
 [server]

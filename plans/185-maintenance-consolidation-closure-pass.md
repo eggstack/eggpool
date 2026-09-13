@@ -1,7 +1,7 @@
 # Plan 185 — Maintenance Consolidation Closure Pass
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: complete (verified 2026-09-13)
 Parent roadmap: `plans/178-rust-maintenance-consolidation-roadmap.md`
 Planning baseline: `78a4da64de3c94a9f5fe29e05e6bdf40402bc16b`
 Priority: P1 closure / regression qualification / ownership audit
@@ -219,3 +219,69 @@ These remain separate product/performance decisions and may be planned later fro
 ## Handoff note
 
 Closure should be evidence-driven. If the code is merely split into more files but authority is still duplicated, the roadmap is not complete. Conversely, do not continue refactoring already-cohesive modules simply because additional large files remain elsewhere in the repository.
+
+## Closure evidence
+
+Verified 2026-09-13 on `main` after the implementation heads for Plans 179–184:
+
+- **Ownership:** `runtime.rs` remains a CLI adapter; reusable lifecycle and
+  process identity work is under `operations/`. `server/` contains startup,
+  middleware, health/status, inference, and dashboard adapters. Reload
+  reclassifies through `config_reload_policy::classify_transition` before
+  candidate construction/publication. `runtime_lifecycle/` owns process,
+  generation, lease, publication/retirement, recovery, and diagnostics
+  concerns; `task_supervisor.rs` owns supervised handles. Streaming lifecycle
+  is split before and after handoff, while `wire::WireStream` remains the
+  incremental protocol/terminal-evidence authority. Provider transport stays
+  limited to transport concerns.
+- **Current-state truth:** the scoped stale-authority scan is clean. The
+  follow-up audit also removed retired `runtime.*`, `subprocess`, nonexistent
+  smoke-suite, and false `server.threads` worker-count guidance from active
+  deployment/runbook docs. Python references that remain are tooling or
+  explicit historical package compatibility.
+- **Configuration assets:** repository-root `config.example.toml` and
+  `config.sbc.example.toml` are the sole human-edited sources; `rust/build.rs`
+  tracks them and embeds the default through `OUT_DIR`. The Rust-local copies
+  are absent. A disposable `init-config` output matched the canonical default
+  byte-for-byte, and native `check-config` accepted it.
+- **Transition safety:** the code contains one field-disposition table and
+  typed classifier. Mutation paths validate/classify before atomic replacement;
+  server-side rehash checks the exact digest, revalidates, rejects mixed
+  changes wholly, and publishes only after candidate/task/persistence
+  preparation. Diagnostics remain redacted. R011–R013 passed.
+- **Dependency policy:** `cargo-deny 0.20.2` passed advisories, bans,
+  licenses, and sources. The only advisory exception is the documented,
+  review-dated transitive RSA exception for the pinned Eggress SSH stack;
+  duplicate versions remain warnings for expected networking/crypto/platform
+  families. The dependency workflow is limited to dependency/policy changes,
+  weekly schedule, and manual dispatch.
+- **Informational measurements:** `runtime.rs` is 99,791 bytes; the former
+  monolithic `server.rs`, `runtime_lifecycle.rs`, and `coordinator/streaming.rs`
+  paths are gone in favor of module trees. The resolved normal dependency tree
+  contains 409 unique entries and the lockfile contains 381 package entries;
+  these are recorded as diagnostics only, not thresholds.
+
+Local closure verification passed:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1 (476 passed, 53 suites)
+cargo build --manifest-path rust/Cargo.toml --locked --release
+cargo check/test --manifest-path rust/crates/eggpool-model-routing/Cargo.toml (6 passed)
+cargo deny --manifest-path rust/Cargo.toml check
+uv sync --frozen
+uv run ruff format --check scripts/ tests/tooling/
+uv run ruff check scripts/ tests/tooling/
+uv run pyright scripts/
+uv run pytest tests/tooling/ -q --tb=short --maxfail=1 (75 passed, 1 skipped)
+focused Plans 180–183 suites, including R011–R013 and C008/C009/C010/C011/C013: passed
+release docs/package-boundary/catalog/workflow validators: passed
+git diff --check
+```
+
+The deferred feature audit found no maintenance work smuggled in: stateful
+Responses persistence, embeddings/images/audio, Prometheus/OpenTelemetry,
+persistent semantic affinity, HA/distributed coordination, RBAC,
+more-aggressive Eggress removal, and multithread Tokio behavior remain
+separate future decisions.

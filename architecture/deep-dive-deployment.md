@@ -92,7 +92,7 @@ WantedBy=multi-user.target
 ### `config.toml`
 
 Runtime configuration. Key sections:
-- `[server]` — host, port, runtime threads
+- `[server]` — host, port, and compatibility/diagnostic settings
 - `[upstream]` — default upstream settings
 - `[database]` — SQLite path, WAL mode
 - `[routing]` — fairness mode/epsilon/scope

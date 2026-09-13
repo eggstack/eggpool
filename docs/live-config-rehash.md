@@ -346,19 +346,12 @@ live replacement path.
 The default for any field not listed is `RESTART_REQUIRED` so a new
 field can never silently slip through unclassified.
 
-### Generating the live/restart table
+### Inspecting the live/restart table
 
-The policy map is the single reviewable inventory.  To print a
-live/restart summary from a checkout:
-
-```python
-from the Rust reload policy (`rust/src/config_reload_policy.rs`)
-for path, disp in sorted(_FIELD_DISPOSITION.items()):
-    print(f"{disp.value:18s} {path}")
-```
-
-To regenerate this section in the future, re-run the snippet above
-and replace the table.
+The policy map is the single reviewable inventory in
+`rust/src/config_reload_policy.rs`. Review `FIELD_DISPOSITIONS` and the
+dynamic collection rules there when changing reload behavior; this document
+is explanatory guidance, not a generated copy of the table.
 
 ## Transaction safety
 
@@ -373,10 +366,9 @@ and replace the table.
 
 ## Connect and logout fallback policy
 
-`eggpool connect` and `eggpool logout` route through the same
-validate-and-reload helper (`cli_rehash_helper.validate_and_rehash`)
-that `eggpool rehash` uses. The safe-fallback decision tree in
-the reload outcome resolver (`rust/src/operations/config_mutation.rs`) is:
+`eggpool connect` and `eggpool logout` use the bounded mutation service in
+`rust/src/operations/config_mutation.rs`, which shares the typed transition
+classifier with `eggpool rehash`. Its safe-fallback decision tree is:
 
 1. **Validate locally** — invalid config → return immediately, no
    restart attempted.
@@ -387,20 +379,18 @@ the reload outcome resolver (`rust/src/operations/config_mutation.rs`) is:
    restarting**. The operator must intervene explicitly (check file
    permissions, restart the service, or investigate why the control
    socket disappeared).
-4. **Server not running** — fall through to `restart_server()` so the
-   change still applies on the next startup.
-
-The old `apply_or_restart()` is now a thin wrapper that delegates
-to `resolve_apply_outcome()` when `prefer_live=True` (the default).
+4. **Server not running** — return `ServerNotRunning` without starting a
+   stopped service. Start or restart the service explicitly to apply the
+   already-written configuration.
 
 ## Operator-safe fallback cases
 
 | Scenario | Behavior | Operator action |
 |----------|----------|-----------------|
-| Stale PID file, server dead | `restart_server()` fires | None — automatic |
+| Stale PID file, server dead | `ServerNotRunning` | Start or restart the service explicitly |
 | Server healthy, control socket missing | No restart; `(False, "control unavailable (server healthy)")` | Check socket permissions, restart the service |
 | Server healthy, control socket reachable | Live rehash applied | None — automatic |
-| Server dead, socket missing | `restart_server()` fires | None — automatic |
+| Server dead, socket missing | `ServerNotRunning` | Start or restart the service explicitly |
 | Permission denied on socket | Control client error; exit 3 | Run as the same user as the server |
 
 ## Old generation retirement
