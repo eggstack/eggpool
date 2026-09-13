@@ -588,7 +588,7 @@ primitives in `rust/src/operations/process.rs`, with path resolution owned by
 
 ### Detach mechanics
 
-- `start_new_session=True` so the child survives shell exit and signals to the parent CLI do not propagate
+- The native lifecycle service starts a new process group so the child survives shell exit and signals to the parent CLI do not propagate
 - stdin is detached from the calling terminal
 - `stdout`/`stderr` redirected to a log file (or `/dev/null` when `--quiet` is set without `--log-file`)
 - Default log file: `~/.local/state/eggpool/eggpool.log` (resolved by the native runtime); override with `--log-file PATH` or `$EGGPOOL_LOG_FILE`. A log file beats `/dev/null` by default because a silent background failure is hard to diagnose
