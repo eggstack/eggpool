@@ -2,7 +2,11 @@
 
 use std::{fs, thread};
 
-use eggpool::operations::config_mutation::{self, ApplyMode, ApplyOutcome};
+use eggpool::{
+    Config,
+    config_reload_policy::{ReloadDisposition, disposition_for},
+    operations::config_mutation::{self, ApplyMode, ApplyOutcome},
+};
 use tempfile::tempdir;
 
 fn base_config() -> &'static str {
@@ -105,6 +109,26 @@ fn bundled_and_custom_templates_are_structurally_loaded() {
     let custom = config_mutation::load_provider_templates(Some(&path)).expect("custom template");
     assert!(custom.contains_key("example"));
     assert!(custom.contains_key("opencode-go"));
+}
+
+#[test]
+fn init_config_uses_the_repository_canonical_example() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+
+    assert!(config_mutation::init_config(&path, false).expect("initialize config"));
+    let generated = fs::read_to_string(&path).expect("generated config");
+    assert_eq!(generated, include_str!("../../config.example.toml"));
+    Config::from_toml_bytes(&path, generated.as_bytes()).expect("canonical config parses");
+}
+
+#[test]
+fn server_threads_is_a_restart_required_compatibility_field() {
+    assert_eq!(Config::default().server.threads, 1);
+    assert_eq!(
+        disposition_for("server.threads"),
+        ReloadDisposition::RestartRequired
+    );
 }
 
 #[test]

@@ -1,8 +1,7 @@
-//! SQLite compatibility boundary for the Rust migration candidate.
+//! SQLite persistence boundary for the native EggPool runtime.
 //!
-//! The Rust-owned asset tree contains the exact historical migrations and
-//! Python-era SHA-256 manifest so Rust cannot silently grow a second schema
-//! source.
+//! The Rust-owned asset tree contains the exact migration chain and SHA-256
+//! manifest so the runtime cannot silently grow a second schema source.
 
 mod connection;
 pub mod migrations;

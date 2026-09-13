@@ -25,14 +25,14 @@
     {
       "path": "config/config.example.toml",
       "category": "configuration-template",
-      "source": "rust/assets/config/config.example.toml",
-      "sha256": "f7b2b82aeba817b1d79eea158532c42969fa4d63611908fbc27c50839aba16b4",
+      "source": "config.example.toml",
+      "sha256": "22ae1cf5fbbf5cf7f5debb1dffb372cac9733be2ddf8dcd41d9bb6f6ba16ba57",
       "identity": "exact"
     },
     {
       "path": "config/config.sbc.example.toml",
       "category": "configuration-template",
-      "source": "rust/assets/config/config.sbc.example.toml",
+      "source": "config.sbc.example.toml",
       "sha256": "d7cce7ae31e7dcdd3146840017cbc080e1fe1fbaeafb4407117952fc68325931",
       "identity": "exact"
     },
@@ -53,6 +53,6 @@
   ],
   "schema_migration_count": 54,
   "schema_change": false,
-  "ownership": "Rust build/runtime owns these copies; the source and catalog paths are provenance only",
+  "ownership": "Rust build/runtime embeds these assets; source paths are canonical repository inputs",
   "rollback": "restore the source tree from Git history"
 }

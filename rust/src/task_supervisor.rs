@@ -1,4 +1,4 @@
-//! Process-owned recurring task supervision for the M8 runtime.
+//! Process-owned recurring task supervision for the native runtime.
 //!
 //! The supervisor deliberately owns only scheduling and lifecycle state.  A
 //! callback receives either a process marker or a fresh generation lease for

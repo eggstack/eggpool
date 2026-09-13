@@ -51,7 +51,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         .try_init();
     tracing::debug!(
         version = PACKAGE_VERSION,
-        "Rust migration candidate initialized"
+        "EggPool native runtime initialized"
     );
 
     let config_path = cli.resolved_config_path();
@@ -1966,9 +1966,9 @@ async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError
         .map(|_| ())
 }
 
-/// Restart a running standalone server for an O004 mutation.  A missing or
-/// stopped server is a successful observation (`Ok(false)`), matching the
-/// Python mutation helpers which do not start a service as a side effect.
+/// Restart a running standalone server for a configuration mutation. A missing
+/// or stopped server is a successful observation (`Ok(false)`); this helper
+/// never starts a service as a side effect.
 pub(crate) async fn restart_for_mutation(path: &Path) -> Result<bool, BootstrapError> {
     restart_server_inner(path, Duration::from_secs(10), false, false).await
 }

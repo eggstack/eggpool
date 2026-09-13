@@ -1,8 +1,8 @@
-//! M7 coordinator boundaries.
+//! Request coordinator boundaries.
 //!
-//! C002 owns only the durable publication boundary after M5 has selected an
-//! account. Provider dispatch, wire negotiation, retries, and terminal
-//! finalization are deliberately left to later coordinator slices.
+//! Durable publication follows local account selection. Provider dispatch,
+//! wire negotiation, retries, and terminal finalization remain explicit
+//! coordinator responsibilities with separate ownership boundaries.
 
 mod attempt;
 mod endpoints;

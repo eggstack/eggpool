@@ -1,4 +1,4 @@
-//! M5 deterministic routing, fairness, and local selection-claim boundary.
+//! Deterministic provider/account routing, fairness, and selection claims.
 
 mod claim;
 mod eligibility;

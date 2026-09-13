@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-/// Errors that can terminate the Rust migration candidate.
+/// Errors that can terminate the native EggPool process.
 #[derive(Debug, Error)]
 pub enum AppError {
     /// Clap owns user-facing parser/help/version rendering.
@@ -32,9 +32,9 @@ pub enum BootstrapError {
     #[error("Rust bootstrap output failed: {source}")]
     Output { source: io::Error },
 
-    /// A command is represented by the migration parser but belongs to a later
-    /// Rust milestone. This is deliberately distinct from a successful no-op.
-    #[error("{command}: not implemented in Rust candidate")]
+    /// A recognized command is unavailable in this build. This is deliberately
+    /// distinct from a successful no-op.
+    #[error("{command}: not implemented")]
     NotImplemented { command: String },
 
     /// Configuration could not be loaded or validated.
@@ -45,8 +45,7 @@ pub enum BootstrapError {
     #[error("Rust server failed: {detail}")]
     Server { detail: String },
 
-    /// A parsed serve option belongs to a migration-stage runtime that is not
-    /// implemented by the Rust candidate yet.
+    /// A parsed serve option is unavailable in the current runtime.
     #[error("{detail}")]
     ServeUnsupported { detail: &'static str },
 

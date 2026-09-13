@@ -18,7 +18,7 @@ static facts.
 
 ## Toolchain policy
 
-The package uses Rust edition 2024 and declares Rust 1.85 as its MSRV, the
+The package uses Rust edition 2024 and declares Rust 1.88 as its MSRV, the
 first stable toolchain with edition-2024 support. The current development
 toolchain may be newer, but code should remain compatible with the declared
 MSRV and intended deployment targets.

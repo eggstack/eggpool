@@ -1,4 +1,4 @@
-//! Process/generation ownership and publication for the M8 runtime boundary.
+//! Process/generation ownership and publication for the native runtime.
 //!
 //! The process owns the active-generation manager and the manager publishes
 //! immutable generation slots.  Request work receives an explicit lease from

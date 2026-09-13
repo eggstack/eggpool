@@ -1,4 +1,4 @@
-//! M5 quota state and fair-share scoring.
+//! Quota state and deterministic fair-share scoring.
 
 mod estimator;
 mod scorer;

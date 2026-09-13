@@ -1,10 +1,10 @@
-//! C008 streaming-handoff coordinator.
+//! Streaming-handoff coordinator.
 //!
-//! This module owns the M7 streaming lifecycle around M4 transport and the M6
+//! This module owns the streaming lifecycle around provider transport and the
 //! incremental stream runtime: response-header/first-byte/idle timeout policy,
 //! downstream handoff, chunk forwarding/adaptation, cancellation, terminal
 //! evidence, incomplete/malformed EOF, provider midstream errors, usage
-//! completion, and retained C006 finalization.
+//! completion, and retained terminal finalization.
 //!
 //! ## Phase model
 //!

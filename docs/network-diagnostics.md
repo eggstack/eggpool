@@ -1,8 +1,8 @@
 # Network diagnostics
 
-EggPool uses HTTPX connection pooling for upstream requests. Ordinary host
-name resolution is delegated to the operating system and reused through the
-connection pool; EggPool no longer maintains a process-local DNS cache.
+EggPool uses its native Hyper provider clients for upstream requests. Ordinary
+host name resolution is delegated to the operating system and reused through
+the connection pool; EggPool does not maintain a process-local DNS cache.
 
 `GET /api/network/diagnostics` reports bounded outbound-client and provider
 client-pool counters. It does not expose resolver caches, host entries, or

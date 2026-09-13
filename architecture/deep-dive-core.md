@@ -19,6 +19,11 @@ user path, then `./config.toml`. Secrets come from the environment or adjacent
 
 `rust/src/config_reload_policy.rs` classifies live and restart-required changes.
 `rust/src/reload.rs` builds and publishes a complete candidate atomically.
+The repository-root configuration examples are the canonical build inputs;
+`rust/build.rs` embeds the default example for `eggpool init-config`.
+`[server].threads` remains accepted for compatibility and diagnostics, but the
+executable uses Tokio's `current_thread` runtime and does not use that field to
+select worker threads.
 
 ## CLI and errors
 

@@ -4,7 +4,7 @@ use clap::{ArgAction, CommandFactory, Parser, Subcommand, error::ErrorKind};
 
 use crate::version::PACKAGE_VERSION;
 
-/// The complete migration-stage EggPool command parser.
+/// The complete EggPool command parser.
 #[derive(Debug, Parser)]
 #[command(name = "eggpool", version = PACKAGE_VERSION, about = "EggPool - aggregate OpenCode Go subscriptions.", disable_help_subcommand = true)]
 pub struct Cli {

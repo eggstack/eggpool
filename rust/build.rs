@@ -4,6 +4,21 @@ mod build_support;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let repository_dir = manifest_dir
+        .parent()
+        .unwrap_or_else(|| panic!("Cargo manifest is not inside the repository"));
+    let config_paths = ["config.example.toml", "config.sbc.example.toml"];
+    for relative_path in config_paths {
+        let path = repository_dir.join(relative_path);
+        println!("cargo:rerun-if-changed={}", path.display());
+        fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "cannot read canonical configuration example {}: {error}",
+                path.display()
+            )
+        });
+    }
+
     let schema_dir = manifest_dir.join("assets/db/migrations");
     let checksum_path = schema_dir.join("checksums.json");
     println!("cargo:rerun-if-changed={}", checksum_path.display());
@@ -58,6 +73,16 @@ fn main() {
     generated.push_str("];");
     fs::write(generated_path, generated).unwrap_or_else(|error| {
         eprintln!("cannot write generated migration inventory: {error}");
+        process::exit(1);
+    });
+
+    let default_config_path = repository_dir.join("config.example.toml");
+    let config_generated = format!(
+        "pub(crate) const DEFAULT_CONFIG: &str = include_str!({:?});\n",
+        default_config_path.to_string_lossy()
+    );
+    fs::write(out_dir.join("eggpool_config_assets.rs"), config_generated).unwrap_or_else(|error| {
+        eprintln!("cannot write generated configuration asset: {error}");
         process::exit(1);
     });
 }

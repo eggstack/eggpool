@@ -1,9 +1,8 @@
-//! Typed TOML configuration compatibility for the side-by-side candidate.
+//! Typed TOML configuration for the native EggPool runtime.
 //!
-//! The Python implementation remains authoritative.  This module deliberately
-//! models the supported configuration contract rather than mirroring Pydantic's
-//! class hierarchy: Serde handles shape/defaults and `Config::validate` handles
-//! cross-field rules that cannot be expressed locally on a field.
+//! This module owns the supported configuration contract rather than mirroring
+//! a class hierarchy: Serde handles shape/defaults and `Config::validate`
+//! handles cross-field rules that cannot be expressed locally on a field.
 
 use std::{
     collections::{BTreeMap, BTreeSet},

@@ -44,7 +44,7 @@ The 10 s shielded finalizer hit the SQLite lock. Two usual causes:
 
 ### "OpenCode streams drop mid-edit (status_code=502, error_class=PoolTimeout)"
 
-The HTTPX pool exhausted. Open the relevant provider in
+The native provider connection pool is exhausted. Open the relevant provider in
 `config.toml` and raise `max_connections` and `max_keepalive`. See
 `docs/providers.md` for the high-concurrency profile. Do not raise
 `server.threads` — the native runtime owns request scheduling.
@@ -62,7 +62,7 @@ idle_timeout_s = 300
 max_lifetime_s = 0
 ```
 
-`read_timeout_s` remains the legacy HTTPX guardrail. Explicit stream values
+`read_timeout_s` remains the legacy provider-client guardrail. Explicit stream values
 raise that guardrail only for this provider. A first-byte timeout can retry
 before downstream output; an idle timeout after output is a midstream failure.
 If the upstream closes cleanly without its required terminal marker, inspect
@@ -115,9 +115,9 @@ For OpenCode-style workloads, budget these limits:
 - `database.worker_threads`: 2 is sufficient for dashboards; raise
   to 4 if the dashboard itself lags.
 
-Keep `server.threads = 1` and leave `workers=1`. The single event loop
+Keep `server.threads = 1`; there is one Tokio current-thread runtime. The event loop
 multiplexes dashboard work and active streams; connection-pool sizing is
-controlled by the provider HTTPX settings. Adding workers multiplies the
+controlled by the provider connection-pool settings. Adding workers multiplies the
 connection budget per upstream IP and is not supported.
 
 ## Closure validation
@@ -142,7 +142,7 @@ A clean run should produce:
 - `quota_reserved_cost_delta == 0`
 - DB lock p95/max present when contention was observed (concurrency > 1)
 - Stream diagnostics `stream_completed` delta matches the number of non-cancelled streams
-- HTTPX first-class outcome labels (`upstream_read_timeout`, etc.) are zero for the happy path
+- provider-client first-class outcome labels (`upstream_read_timeout`, etc.) are zero for the happy path
 
 ### Runtime diagnostics sections
 

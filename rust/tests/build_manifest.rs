@@ -16,9 +16,9 @@ struct RuntimeManifest {
 
 #[derive(Debug, Deserialize)]
 struct RuntimeAsset {
-    path: String,
     category: String,
     sha256: String,
+    source: String,
 }
 
 #[test]
@@ -62,14 +62,21 @@ fn rust_owned_runtime_assets_are_complete_and_hash_locked() {
     let mut categories = BTreeSet::new();
     for asset in manifest.assets {
         categories.insert(asset.category);
-        let path = root.join("assets").join(&asset.path);
+        let repository_root = root
+            .parent()
+            .expect("Cargo manifest has a repository parent");
+        let path = repository_root.join(&asset.source);
         let bytes = fs::read(&path).expect("Rust-owned runtime asset exists");
         let digest = Sha256::digest(&bytes);
         let actual = digest
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        assert_eq!(actual, asset.sha256, "runtime asset drift: {}", asset.path);
+        assert_eq!(
+            actual, asset.sha256,
+            "runtime asset drift: {}",
+            asset.source
+        );
     }
     assert_eq!(
         categories,

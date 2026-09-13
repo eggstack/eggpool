@@ -1,8 +1,8 @@
-//! Narrow, atomic configuration and provider mutations for the M9 CLI.
+//! Narrow, atomic configuration and provider mutations for the CLI.
 //!
 //! This module intentionally edits only the small set of TOML surfaces owned
-//! by O004.  It does not deserialize and reserialize the whole document: the
-//! line editor keeps unrelated comments and sections intact while the typed
+//! by this service. It does not deserialize and reserialize the whole document:
+//! the line editor keeps unrelated comments and sections intact while the typed
 //! config parser remains the final validation authority.
 
 use std::{
@@ -23,8 +23,9 @@ use crate::{
 };
 
 const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
-const DEFAULT_CONFIG: &str = include_str!("../../assets/config/config.example.toml");
 const BUNDLED_PROVIDERS: &str = include_str!("../../assets/providers/_templates.toml");
+
+include!(concat!(env!("OUT_DIR"), "/eggpool_config_assets.rs"));
 
 static MUTATION_PATHS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
 

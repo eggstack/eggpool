@@ -1,4 +1,4 @@
-//! C010 crash/restart reconciliation and deterministic fault injection.
+//! Crash/restart reconciliation and deterministic fault injection.
 //!
 //! A process restart is a hard boundary: every M5 active count, quota
 //! reservation mirror, health probe, wire-negotiation flight, and retained

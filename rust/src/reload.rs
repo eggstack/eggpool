@@ -1,6 +1,6 @@
 //! Transactional live rehash for the process-owned Rust runtime (R007).
 //!
-//! This module deliberately stops at the typed server-side API. M9 owns the
+//! This module deliberately stops at the typed server-side API. The operations
 //! control socket and CLI adapter. Candidate construction, durable
 //! config-derived reconciliation, task-spec preflight, and the short
 //! stage/acceptance window are kept together here so no caller can accidentally

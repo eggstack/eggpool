@@ -4,9 +4,10 @@ port = 11300
 # api_key = "ep_..." # Auto-generated on first `configsetup`; use `eggpool newkey` to regenerate
 log_level = "INFO"
 access_log = false
-# Granian runtime threads inside the single worker process. Exactly one
-# event-loop thread is required; high concurrency is handled by asyncio tasks,
-# HTTP connection-pool sizing, and bounded writers.
+# Retained for configuration compatibility and runtime diagnostics. EggPool
+# currently runs on Tokio's current-thread runtime; this value does not select
+# Tokio worker threads. Use connection-pool and bounded-writer settings for
+# capacity tuning.
 threads = 1
 # Whole JSON request ceiling. Provider-specific document/media limits are
 # additional constraints and can never raise this ingestion limit.
@@ -25,7 +26,7 @@ keepalive_timeout_s = 30
 # "compatible", or "permissive_observe". The setting is provider-bound;
 # strict requires [DONE] for OpenAI or message_stop for Anthropic.
 # Optional provider stream timers live under each provider's
-# [providers.<id>.stream_timeouts] table. Omitting them preserves the HTTPX
+# [providers.<id>.stream_timeouts] table. Omitting them preserves the native
 # read_timeout_s guardrail; explicit timers are provider-bound and the client
 # read guardrail is raised to the largest configured interval.
 
@@ -34,10 +35,10 @@ path = "usage.sqlite3"
 busy_timeout_ms = 5000
 wal = true
 synchronous = "NORMAL"
-# aiosqlite uses one worker thread per connection. The lean default keeps one
-# primary read/write connection; set worker_threads = 2 to opt into a separate
-# read-only stats/dashboard connection for file-backed SQLite when dashboard
-# isolation is worth the extra connection and thread.
+# The lean default keeps one primary read/write connection; set worker_threads
+# = 2 to opt into a separate read-only stats/dashboard connection for
+# file-backed SQLite when dashboard isolation is worth the extra connection
+# and thread.
 worker_threads = 1
 # Optional: bound WAL file size after checkpoints (bytes).  ``None``/omitted
 # uses the SQLite default (unbounded).  A sensible SBC value is 67108864
@@ -341,7 +342,8 @@ ttl_seconds = 86400
 # "canonical-id" = ["alias-1", "alias-2"]
 
 # ─── Network ─────────────────────────────────────────────────────────
-# Outbound client transport tuning. HTTPX uses the operating-system
+# Outbound client transport tuning. The native provider client uses the
+# operating-system
 # resolver and its long-lived connection pool.
 # [network]
 # connect_timeout_s = 5

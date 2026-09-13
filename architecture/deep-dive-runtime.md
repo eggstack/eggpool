@@ -1,227 +1,122 @@
-# Deep Dive: Runtime & Process Management
+# Deep Dive: Runtime and Process Management
 
-Back to [Overview](overview.md)
+Back to [Overview](README.md)
 
 ## Purpose
 
-Manages the EggPool process lifecycle and runtime generations. Designed for
-reliability on resource-constrained devices (Raspberry Pi).
+The native runtime owns the EggPool process lifecycle, immutable runtime
+generations, live configuration publication, bounded background work, and
+graceful shutdown. The design keeps one process and one Tokio
+`current_thread` runtime, which is suitable for the supported Raspberry Pi and
+LAN deployments.
 
-## Process Model
+## Current ownership graph
 
-The native executable owns PID management, health probes, restart management,
-the daemon/foreground mode, and the active/retiring runtime generations.
+```text
+CLI/runtime adapter -> operations services
+Axum server         -> request coordinator -> routing/provider transport
+                                      -> canonical wire codecs/stream
+runtime manager     -> generation factory -> supervised background tasks
+config parser       -> reload policy -> transactional reload/publication
+SQLite repositories <- accounting/catalog/health/maintenance
+```
 
-## Key Modules
+`rust/src/runtime.rs` adapts CLI commands to the existing operation services.
+`rust/src/server.rs` owns the Axum adapter, admission middleware, health and
+dashboard routes, and process lifespan. Request routing, provider transport,
+wire adaptation, persistence, and finalization remain in their respective
+modules.
 
-### `runtime_lifecycle.rs` — Process Lifecycle
+## Process model
 
-- PID management (start/stop/restart)
-- Daemon mode (default for `eggpool serve`)
-- `--verbose` for foreground mode
-- Health probes for supervisor
-- configured runtime threads are owned by the native process
-- Runtime database integrity/indeterminate-state failures close admission and
-  exit the worker; systemd restart runs startup integrity and crash repair.
+`eggpool serve` runs the native executable. The process owns PID management,
+health probes, foreground/daemon startup, restart behavior, and the active and
+retiring runtime generations. `rust/src/operations/paths.rs` is the shared
+authority for PID, log, state, and control-socket paths.
 
-### `runtime_lifecycle.rs` — runtime lifecycle
+The executable is started with Tokio's `current_thread` runtime in
+`rust/src/main.rs`. `[server].threads` remains a validated compatibility key
+and is included in runtime diagnostics, but it does not select Tokio worker
+threads. Its existing reload classification remains restart-required. A future
+removal or multithread implementation requires a separate compatibility and
+performance decision.
 
-Runtime generation ownership:
-- **`RuntimeManager`**: owns active/retiring generation slots
-- **`RuntimeGeneration`**: immutable frozen-dataclass snapshot
-- **`GenerationLease`**: request-path access to a generation
-- **`ProcessRuntime`**: holds process-owned containers (DB connections and bounded learned/affinity state) that outlive generations
-- **Generation builder**: constructs candidate generations for live reload
+## Runtime generations
 
-`ModelRouterRegistry` is generation-owned and compiled by the neutral
-`eggpool-model-routing` crate through EggPool's config adapter before the rest
-of the candidate graph is built. It is an immutable lookup of exact virtual
-aliases to compiled route policies.
-The empty configuration uses a shared empty registry and adds no model-router-
-specific catalog, health, quota, database, network, or background-task work.
+`rust/src/runtime_lifecycle.rs` owns the generation state machine:
 
-`ProcessRuntime.wire_profile_resolver` is a process-owned, bounded in-memory
-state container. It survives safe generation swaps, while each generation
-passes immutable resolved provider profiles to its coordinator. Candidate
-fingerprints include structural surface/path/auth-shape/header facts but never
-credential values, so a rehash with changed wire definitions cannot reuse the
-old learned preference. Its validated `routing.wire_negotiation` policy is
-installed before startup request admission and prepared with live rehash
-acceptance. During reload, the durable config transaction commits before the
-shared policy is published, and admission stays closed until the matching
-generation/task state is accepted; rejected reloads cannot change the resolver.
-Learned/rejected observations retain their timestamps so accepted TTL/cooldown
-changes take effect without discarding compatible state, and one shared
-per-provider limit
-converges across existing in-flight negotiations.
+- `RuntimeManager` owns the active and retiring generation slots.
+- `RuntimeGeneration` is the immutable snapshot used by request handling.
+- `GenerationLease` keeps a generation alive for an in-flight request.
+- `ProcessRuntime` owns state that survives generation swaps, including the
+  database and bounded learned routing state.
+- `RuntimeGenerationFactory` prepares a complete candidate before publication.
 
-`ProcessRuntime.metrics_coalescer` is another process-owned bounded container.
-It aggregates terminal request usage into canonical `usage_rollups` rows with
-additive upserts, uses separate short state/flush locks, re-buffers failed
-writes only within the configured capacity, and is flushed once more under the
-server shutdown deadline. Its recurring callback is the M8 supervisor's
-singleton `metrics_flush` task, so reloads change task scheduling through the
-existing task-spec boundary rather than creating a second timer loop.
+A generation contains the provider client pool, catalog, account registry,
+router, coordinator, health state, statistics, and generation-scoped
+background tasks. Requests acquire a lease through the server/runtime
+boundary. Publishing a replacement does not interrupt requests already using
+the retiring generation.
 
-Reload diagnostics are owned by the retained reload worker rather than the
-caller future. An operation token is the only authority allowed to clear
-`reload_in_progress`; a concurrent busy caller cannot overwrite the active
-phase, and worker abort/drop cleanup records a bounded terminal result.
+The semantic model-router registry is generation-owned and compiled through
+the shared `eggpool-model-routing` crate. The process-owned sticky affinity
+cache survives safe swaps only when the new registry has the same semantic
+fingerprint. Wire-surface learning is likewise bounded, process-owned, and
+credential-free; changed surface definitions cannot reuse incompatible
+observations.
 
-`ProcessRuntime.model_router_affinity` is a separate process-owned bounded
-TTL/LRU cache for sticky virtual-model decisions. It stores only a route ID,
-route label, concrete model, router fingerprint, hashed session identity, and
-monotonic expiry. The 4096-entry default and keyed single-flight map are
-event-loop-local; no sweeper, database table, external cache, or cross-process
-lock exists. A generation swap keeps an entry reachable only when the new
-compiled router has the same semantic fingerprint. An invalid candidate never
-publishes a new registry, so the active generation and affinity behavior stay
-unchanged.
+## Reload and publication
 
-Request-path code obtains `GenerationLease` via `wrap_stream_with_lease` or `leased_runtime`. A generation swap never interrupts in-flight requests.
+`rust/src/config.rs` owns TOML shape, defaults, and validation.
+`rust/src/config_reload_policy.rs` classifies live, restart-required, and
+ignored changes. `rust/src/reload.rs` builds the candidate generation,
+reconciles durable state, publishes it atomically, and retires the old
+generation.
 
-Each generation also precomputes immutable request lookup sets, including
-provider identifiers and exact trusted-proxy peer addresses. Requests use the
-sets through their lease, so a rehash changes only new requests while existing
-leases retain a consistent provider/parser and client-attribution view.
+`eggpool rehash` is serialized. Invalid candidates do not replace the active
+generation. A restart-required change is reported before publication, and a
+failed candidate leaves the current generation and its process-owned state
+unchanged. Reload diagnostics are owned by the reload operation rather than a
+caller that may finish early.
 
-### `runtime_dispatch.py` — Dispatch Timing
+## Background work and shutdown
 
-Bounded rolling-window timing recorders:
-- **`DispatchOverheadRecorder`**: coordinator-internal slice (context_build → httpx send)
-- **`LocalPreUpstreamRecorder`**: full EggPool-side window (ASGI entry → upstream dispatch)
-- **`DispatchSpanRecorder`**: 200-sample dispatch span telemetry with request-coherent sampling (5% default; configurable via `[metrics.dispatch_spans].sample_rate`)
+`rust/src/task_supervisor.rs` registers bounded tasks for startup and
+generation construction. Generation-scoped supervisors own catalog refresh,
+health, maintenance, statistics, and retained finalization work according to
+the active task specification. Process-scoped containers such as the metrics
+coalescer and wire resolver are flushed or stopped through their existing
+shutdown contracts.
 
-Both use monotonic/performance clocks. Metrics additive: `local_pre_upstream` includes context_build, body parsing, validation, segmentation, and coordinator overhead; `dispatch_overhead` covers only coordinator-internal selection/persistence/dispatch.
+Shutdown first closes control-plane admission, then retires the active
+generation and joins its supervised work. Readiness, routing-trace writers,
+and retained finalization work stop before the process-owned database
+connections disconnect. PID cleanup and child-process joins remain bounded;
+systemd or the watchdog may restart a worker that exits after an indeterminate
+database state.
 
-### `runtime_metrics.py` — Runtime/Ops Metrics
+Crash reconciliation is a one-shot durable repair at startup. It repairs
+unfinished request, attempt, and reservation rows without resurrecting
+process-local routing, quota, health, wire, or supervisor state.
 
-`RuntimeMetricsService` gathers:
-- Process topology
-- Memory usage
-- Background task state
-- Database health
-- OS load average (`os.getloadavg` + normalized per-core)
-- Bounded rolling-window dispatch-overhead distribution
-- Selection claim diagnostics
-- Model info health snapshot
-- `finalization_supervisor`: the active generation's bounded retained-terminal
-  job snapshot, including active/retry-pending/failed counts, saturation and
-  registration counters, and retry capacity/age limits. It is `null` during
-  lightweight or partial startup when no supervisor is available.
-- `finalization_ownership`: bounded ownership facts from `RuntimeManager`,
-  including the active generation ID and supervisor counts, retiring
-  generation count, total terminal references, oldest retiring age, blocked
-  status, and redacted last failure class/stage.
+## Diagnostics
 
-### `runtime_paths.py` — Path Resolution (stdlib-only)
+`eggpool runtime-status --json` and `/api/stats/runtime` expose bounded,
+redacted process topology, generation, task, database, routing, and
+finalization information. These diagnostics are observations, not a second
+runtime authority. Use host process/socket tools for operating-system details
+such as file descriptors and outbound sockets.
 
-PID file and log path resolution. Must stay stdlib-only for the Raspberry Pi watchdog contract.
+## Key invariants
 
-### `runtime_tasks.py` — Task Registration
-
-Unified task registration for startup and candidate generation construction.
-
-### `runtime_task_inventory.py` — Task Inventory
-
-`RUNTIME_TASK_INVENTORY` — reviewable inventory of all background tasks.
-
-### Measuring a deployment profile
-
-Use `eggpool runtime-status --json` after a fixed short stabilization window
-to inspect RSS context, thread count, known background tasks, local dispatch
-timings, SQLite/WAL facts, and generation-retirement ownership. Pair it with
-the host's process and socket tools when file-descriptor or outbound-socket
-counts are needed. Compare baseline and final runs only on the same host,
-config shape, database state, and measurement window; upstream latency
-must remain separate from `local_pre_upstream` and `dispatch_overhead`. These
-observations are descriptive and non-gating. A workstation cannot stand in for
-an ARM64 SBC result. When provider accounts are available, a short
-provider-backed characterization may add one native request, one supported
-cross-protocol request, and a bounded 2–4 stream set using synthetic content.
-It must remain a manual observation with no benchmark/soak harness or numeric
-threshold. If accounts or a request dimension are unavailable, record it as
-`not measured`; deterministic lifecycle tests remain the authority for
-ownership and cleanup behavior.
-
-### `fastcli.py` — Fast-Path CLI (stdlib-only)
-
-Handles `croncheck` and `ensure-running` without importing Click:
-- `croncheck`: checks if process is running, restarts if not
-- `ensure-running`: ensures process is running
-
-Both are cheap operations for Raspberry Pi watchdog cron jobs.
-
-### `event_loop_lag.py` — EventLoopLagMonitor
-
-Bounded event-loop lag telemetry. Monitors async event loop responsiveness.
-
-## Runtime Generations
-
-Generations are immutable snapshots of application state:
-- **Active generation**: serves requests
-- **Retiring generation**: drains in-flight requests
-- **Candidate generation**: built during live reload
-
-Live reload (`eggpool rehash`) builds a candidate generation, validates it, and atomically publishes it. In-flight requests and accepted retained finalization jobs on the retiring generation complete using the old dependencies; publication does not wait for the old generation to close.
-
-Publication records the retiring slot and its single tracked retirement task
-under the runtime-manager state lock. Retirement-task failures are consumed
-at the task boundary; a close failure leaves the slot in an explicit
-`failed_close` state with bounded diagnostic detail, and reload results keep
-retirement pending until that retained slot is resolved.
-
-`RequestFinalizationSupervisor` is generation-owned. Its first accepted
-selected-finalization job or terminal command acquires one synchronous
-terminal reference on the generation slot; duplicate registration and retries
-reuse that reference. The slot closes only after
-both request leases and terminal references are zero. A live retirement
-deadline with an unresolved terminal reference invokes the existing fatal
-worker handler and leaves the slot resident rather than closing its router,
-quota, health, or client dependencies. When the final reference releases,
-normal close resumes. Process shutdown may abandon references because startup
-repair owns unresolved durable work after process death.
-
-### Shutdown order
-
-The application lifespan stops control-plane admission, prepares reload
-ownership, and retires the active generation before closing process-owned
-database users. Generation supervisors and retained finalization work are
-joined within their existing bounded shutdown contracts. Readiness probes and
-routing-trace writers stop before the statistics and primary `Database`
-connections disconnect; the event loop closes only after those awaits return.
-Direct-runtime test fixtures follow the same ownership boundary and always
-disconnect their database in `finally` blocks.
-
-Quarantine hydration is part of candidate preparation, before publication.
-`RuntimeGenerationFactory.prepare()` never catches a quarantine read or row
-conversion failure to start with an empty state. Startup consequently remains
-closed until complete durable quarantine state is known, while a failed rehash
-candidate is aborted and the active generation retains its existing quarantine.
-Authoritative catalog reappearance uses durable-first, exact-key recovery; a
-failed durable clear leaves the current in-memory suppression intact.
-
-## Process-Owned vs Generation-Leased
-
-| Component | Ownership | Survives Generation Swap |
-|-----------|-----------|-------------------------|
-| Database connections | `ProcessRuntime` | Yes |
-| Account registry | `RuntimeGeneration` | No (rebuilt) |
-| Model catalog | `RuntimeGeneration` | No (rebuilt) |
-| Health manager | `RuntimeGeneration` | No (rebuilt) |
-| Quota estimator | `RuntimeGeneration` | No (rebuilt) |
-| Model-router registry | `RuntimeGeneration` | No (rebuilt) |
-| Model-router affinity | `ProcessRuntime` | Yes, fingerprint-partitioned |
-| Finalization supervisor and accepted terminal jobs | `RuntimeGeneration` | No (retained until convergence) |
-
-## Key Invariants
-
-- The native process is the lifecycle authority; generation mirrors are not
-  independent owners
-- Runtime and database state transitions are explicit and fail closed
-- Operational probes and diagnostic output remain bounded and redacted
-- PID file owned by supervisor
-- Generation swap never interrupts in-flight requests or accepted retained terminal jobs
-- Process-owned containers outlive any generation
-- Wire preference learning is process-owned, bounded, and never persisted in
-  SQLite; generation changes replace the candidate definitions supplied to it.
+- The native process is the lifecycle authority; server mirrors are not
+  independent owners.
+- A complete, validated generation is built before atomic publication.
+- Generation swaps never interrupt in-flight requests or accepted retained
+  terminal work.
+- Process-owned state is bounded, in memory, and never stores credentials or
+  raw request/provider bodies.
+- Runtime and database transitions fail closed on validation, commit, or
+  ownership ambiguity.
+- Shutdown closes supervisors and database users in ownership order, with
+  bounded joins and startup repair as the process-death safety net.

@@ -544,18 +544,18 @@ These require adapter support that EggPool does not currently implement.
 
 ## High-Concurrency HTTP Client Profiles
 
-The ordinary provider HTTPX limits (`max_connections=16`,
+The ordinary provider connection limits (`max_connections=16`,
 `max_keepalive=4`, `read_timeout_s=300`, `pool_timeout_s=30`) are
 calibrated for low-power SBC/Raspberry Pi deployments. The runtime
 settings split into three independent axes that are easy to confuse:
 
 | Setting | Scope | Effect |
 |---------|-------|--------|
-| `server.threads` | Native runtime I/O threads | Tunable within the validated range |
+| `server.threads` | Compatibility/diagnostic value | Accepted within the validated range; does not select Tokio workers |
 | `database.worker_threads` | Read-only stats DB connections | Dashboard / metrics concurrency |
-| `<provider>.max_connections` | HTTPX connection pool per provider | Outbound HTTP connection parallelism |
+| `<provider>.max_connections` | Native connection pool per provider | Outbound HTTP connection parallelism |
 
-Increasing `server.threads` does **not** raise HTTPX connection limits,
+Increasing `server.threads` does **not** raise provider connection limits,
 and increasing `max_connections` does not raise SQLite worker threads.
 Each axis must be tuned for its bottleneck.
 
@@ -584,7 +584,7 @@ pool_timeout_s = 30
 ### High-concurrency coding-agent streaming
 
 For OpenCode / Claude Code / Aider-style agents that keep many long
-SSE streams open at once. Doubles the HTTPX pool size, raises the
+SSE streams open at once. Doubles the provider pool size, raises the
 keepalive window so upstreams reuse TLS sessions, and lengthens the
 read timeout to absorb slow model first-token latencies:
 
@@ -605,9 +605,9 @@ write_timeout_s = 30
 pool_timeout_s = 60
 ```
 
-Keep `server.threads` bounded — it helps the single worker multiplex
-dashboard work alongside active streams, but it does not raise HTTPX
-pool capacity. The real upstream-concurrency lever is
+Keep `server.threads` at its compatibility default. Tokio's current-thread
+runtime multiplexes dashboard work alongside active streams, but this key does
+not raise provider-pool capacity. The real upstream-concurrency lever is
 `max_connections`.
 
 ### Diagnostic low-noise mode
@@ -639,5 +639,5 @@ stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
 - **Runtime ownership:** the native executable owns one lifecycle and generation
   model by design. Adding
   workers creates multiple EggPool processes that each open their own
-  HTTPX pool, which multiplies the connection budget and can push you
+  provider connection pool, which multiplies the connection budget and can push you
   past upstream per-IP rate limits.

@@ -1,7 +1,7 @@
-//! Side-by-side Rust implementation boundary for EggPool.
+//! Native Rust application boundary for EggPool.
 //!
-//! The migration candidate grows in bounded slices. Python remains the
-//! production implementation until the migration is explicitly cut over.
+//! The executable and reusable Rust crates own production behavior. Python is
+//! retained only for repository, release, and validation tooling.
 
 #![forbid(unsafe_code)]
 
@@ -32,7 +32,7 @@ pub use cli::{Cli, Command};
 pub use config::{AppConfig, Config, ConfigError};
 pub use error::{AppError, BootstrapError};
 
-/// Run the migration candidate with an explicit argument iterator.
+/// Run EggPool with an explicit argument iterator.
 pub async fn run<I, T>(args: I) -> Result<(), AppError>
 where
     I: IntoIterator<Item = T>,

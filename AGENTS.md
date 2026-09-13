@@ -201,8 +201,8 @@ original cause when wrapping an error.
 
 The native `eggpool` executable is implemented in `rust/src/main.rs` and
 `rust/src/cli.rs`. Operational commands, installer/update provenance, and
-control-plane behavior are Rust-owned; Python remains a release and validation
-tool only.
+control-plane behavior are Rust-owned; Python is limited to release and
+validation tooling.
 
 ## Git Workflow
 

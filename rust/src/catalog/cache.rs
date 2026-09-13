@@ -1271,7 +1271,7 @@ fn parse_timestamp(value: &str) -> Result<i64, CatalogCacheError> {
 }
 
 // Howard Hinnant's proleptic-Gregorian conversion, kept local to avoid a new
-// date dependency in the migration candidate.
+// date dependency in the native runtime.
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;

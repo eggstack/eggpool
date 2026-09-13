@@ -1,8 +1,8 @@
 //! Bounded local Unix-domain control protocol.
 //!
 //! The protocol is intentionally one request, one response, and one
-//! connection.  It is an adapter only: a reload handler is supplied by the
-//! M8 runtime and owns all config diff, staging, publication, and diagnostics.
+//! connection. It is an adapter only: a reload handler is supplied by the
+//! runtime and owns config diff, staging, publication, and diagnostics.
 
 use std::{
     collections::BTreeMap,

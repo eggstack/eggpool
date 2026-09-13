@@ -3,7 +3,7 @@
 //! The profile table is intentionally data-only.  TOML may select one of the
 //! codec identifiers owned by Rust, but it cannot name a Rust type, import a
 //! module, or carry credentials.  Mutable preference and retry state belong
-//! to the later M7 runtime boundary.
+//! to the request runtime boundary.
 
 use std::collections::BTreeMap;
 

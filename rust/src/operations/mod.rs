@@ -1,9 +1,9 @@
 //! Small process-local services used by operational commands.
 //!
 //! These modules deliberately contain no CLI presentation and no second
-//! runtime/reload authority.  `control` adapts local frames to M8's
+//! runtime/reload authority. `control` adapts local frames to the runtime's
 //! `ReloadService`; `paths` and `process` provide reusable, secret-free
-//! lifecycle observations for later commands.
+//! lifecycle observations for operational commands.
 
 pub mod backup;
 pub mod catalog;

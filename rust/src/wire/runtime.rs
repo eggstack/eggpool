@@ -1,6 +1,6 @@
 //! Caller-selected canonical wire runtime facade.
 //!
-//! This is the M6/M7 handoff.  The registry is immutable and shareable; all
+//! This is the registry/runtime handoff. The registry is immutable and shareable; all
 //! request and stream state is owned by the value returned for that operation.
 //! No method in this module selects a profile, sends a request, retries, or
 //! owns response handoff/finalization.

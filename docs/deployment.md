@@ -886,7 +886,9 @@ keeping up:
    to 10000ms on Raspberry Pi).
 3. Run `PRAGMA wal_checkpoint(TRUNCATE)` manually to reclaim space.
 4. If WAL growth is persistent, consider increasing
-   `server.threads` to reduce write contention.
+   `database.worker_threads` only when the configured database mode supports
+   the additional read capacity; `server.threads` does not control SQLite
+   contention.
 
 ### Upstream read timeout
 

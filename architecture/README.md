@@ -82,6 +82,13 @@ come from the environment or the adjacent `.env`. Live reload policy is owned
 by `rust/src/config_reload_policy.rs`; unsupported or disruptive changes fail
 closed and require restart.
 
+The repository-root `config.example.toml` and `config.sbc.example.toml` are
+the canonical human-edited examples. `rust/build.rs` tracks them as inputs and
+embeds the default example used by `eggpool init-config`; there is no second
+Rust-local copy to keep synchronized. The `[server].threads` key remains a
+restart-required compatibility/diagnostic field and does not select Tokio
+workers.
+
 The current release is a native Rust wheel with embedded runtime assets. The
 supported release target classes are Linux x86_64, Linux aarch64, and macOS
 arm64. Historical Python wheels remain immutable external artifacts and are

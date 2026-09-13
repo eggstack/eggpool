@@ -1,7 +1,6 @@
-//! C009 semantic model-router selector dispatch.
+//! Semantic model-router selector dispatch.
 //!
-//! This module ports the D007 deferred semantic selector integration that
-//! intentionally waited for M7. It compiles one deterministic bounded prompt
+//! This module compiles one deterministic bounded prompt
 //! from the admitted canonical request, dispatches it as a typed internal
 //! concrete-model request through the same [`FiniteCoordinator`] lifecycle,
 //! and falls back deterministically without leaking prompts or bodies.

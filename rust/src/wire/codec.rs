@@ -1,4 +1,4 @@
-//! Closed codec contract for the M6 canonical wire boundary.
+//! Closed codec contract for the canonical wire boundary.
 //!
 //! This file freezes the interface used by later codec slices.  It deliberately
 //! contains no HTTP client, credential, retry, or runtime-preference state.

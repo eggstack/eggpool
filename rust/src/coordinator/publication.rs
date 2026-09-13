@@ -1,4 +1,4 @@
-//! Durable request/attempt/reservation publication after an M5 local claim.
+//! Durable request/attempt/reservation publication after a local claim.
 
 use std::sync::{
     Arc, Barrier, Mutex,

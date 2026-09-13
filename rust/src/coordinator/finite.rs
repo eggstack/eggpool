@@ -1,10 +1,8 @@
-//! C007 finite-response coordinator.
+//! Finite-response coordinator.
 //!
-//! This module is the narrow M7 bridge between the already-qualified M5/M6
-//! boundaries and C006 terminal ownership.  It deliberately owns the finite
-//! retry loop because response classification, response-start monotonicity,
-//! and failed-attempt cleanup must be decided together.  Streaming remains a
-//! later C008 boundary.
+//! This module owns the finite retry loop because response classification,
+//! response-start monotonicity, and failed-attempt cleanup must be decided
+//! together. Streaming has a separate coordinator boundary.
 
 use std::{
     collections::{BTreeMap, BTreeSet},

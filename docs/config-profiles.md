@@ -12,9 +12,11 @@ retaining durable request/accounting writes and SQLite WAL.
 ## General guidance
 
 `[server].threads` is accepted for compatibility and reported in runtime
-diagnostics; the current Rust candidate remains single-threaded at the server
-execution boundary. Request concurrency is controlled by the native runtime,
-connection-pool limits, provider backpressure, and bounded database work.
+diagnostics. EggPool currently runs on Tokio's `current_thread` runtime, so
+this value does not select a Tokio worker pool and remains restart-required
+under the existing reload policy. Request concurrency is controlled by the
+native runtime, connection-pool limits, provider backpressure, and bounded
+database work.
 
 `[database].worker_threads` controls database worker capacity. Increase it only
 after measuring contention on the target host. Metrics and trace settings trade

@@ -1,8 +1,8 @@
-//! Axum server for the side-by-side migration candidate.
+//! Axum HTTP server for the native EggPool runtime.
 //!
 //! Health/readiness, dashboard reads, authentication, static resources, and
-//! the C009 public inference endpoints (Chat Completions, Responses,
-//! Messages) through the thin M7 coordinator boundary. Handlers invoke one
+//! the public inference endpoints (Chat Completions, Responses, Messages)
+//! through the thin coordinator boundary. Handlers invoke one
 //! coordinator entry point; routing/retry/finalization live in the
 //! coordinator, not here.
 
@@ -723,7 +723,7 @@ pub async fn run_with_digest(
     if config.server.threads != 1 {
         tracing::warn!(
             configured_threads = config.server.threads,
-            "server.threads is accepted for config compatibility; the Rust candidate remains single-threaded until the runtime milestone"
+            "server.threads is accepted for config compatibility; Tokio remains current-thread and the value does not select a worker pool"
         );
     }
     let address = format!("{}:{}", config.server.host, config.server.port);

@@ -1,15 +1,15 @@
-//! C009 public inference endpoint adapter.
+//! Public inference endpoint adapter.
 //!
-//! Thin boundary between Axum handlers and the qualified M7 coordinators.
-//! Handlers must not contain routing, retry, or finalization loops: they
-//! build/admit through M6, derive M5 facts, invoke exactly one coordinator
-//! entry point, and hand back the finite/stream response object.
+//! Thin boundary between Axum handlers and the request coordinators. Handlers
+//! must not contain routing, retry, or finalization loops: they build/admit
+//! the request, derive routing facts, invoke one coordinator entry point, and
+//! hand back the finite/stream response object.
 //!
 //! This module owns:
 //!
 //! - client-surface mapping for the three production inference routes;
 //! - protocol-shaped error envelopes (OpenAI vs Anthropic);
-//! - Responses stateless validation (Python parity);
+//! - Responses stateless validation (compatibility parity);
 //! - provider-qualified model parsing (`model/provider`);
 //! - exact virtual-alias resolution before concrete parsing;
 //! - semantic-selector dispatch with recursion guard, bounded budgets,

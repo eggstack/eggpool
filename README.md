@@ -208,6 +208,10 @@ Use `eggpool connect` for interactive provider setup. See [docs/providers.md](do
 | `[model_info]` | Multi-source model metadata enrichment |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
+`[server].threads` is retained for configuration compatibility and runtime
+diagnostics. EggPool currently uses Tokio's `current_thread` runtime, so the
+key does not select a Tokio worker pool; changing it remains restart-required.
+
 Provider surfaces can be declared under `[providers.<id>.wire_surfaces.<surface>]`
 when one provider exposes different endpoint paths or auth headers. A declared
 surface may differ from the public client endpoint; EggPool adapts through its

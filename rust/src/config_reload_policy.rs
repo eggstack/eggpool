@@ -1,9 +1,8 @@
 //! Pure, fail-closed configuration reload policy.
 //!
-//! The Python policy in `eggpool.config_reload_policy` is the compatibility
-//! oracle.  This module owns only semantic config comparison and redacted
-//! diagnostics; it does not read files, build generations, touch the
-//! database, or publish runtime state.
+//! This module owns semantic config comparison and redacted diagnostics; it
+//! does not read files, build generations, touch the database, or publish
+//! runtime state.
 
 use std::{collections::BTreeSet, fmt, string::String, vec::Vec};
 
@@ -451,7 +450,8 @@ const DYNAMIC_RULES: &[(&str, ReloadDisposition)] = &[
     ("models.<field>", ReloadDisposition::Live),
 ];
 
-// R001's exported Python policy is copied as a reviewable, sorted Rust table.
+// R001's established compatibility policy is copied as a reviewable, sorted
+// Rust table.
 const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
     ("accounts", ReloadDisposition::Live),
     ("backup.directory", ReloadDisposition::RestartRequired),
@@ -859,7 +859,7 @@ pub fn dynamic_rules() -> &'static [(&'static str, ReloadDisposition)] {
     DYNAMIC_RULES
 }
 
-/// Exact policy lookup, with only the Python-approved blanket dynamic rules.
+/// Exact policy lookup, with only the established blanket dynamic rules.
 /// Everything else is restart-required.
 pub fn disposition_for(path: &str) -> ReloadDisposition {
     if let Some((_, disposition)) = FIELD_DISPOSITIONS.iter().find(|(known, _)| *known == path) {
