@@ -245,5 +245,7 @@ scoped current-state search: no stale active-authority matches
 git diff --check
 ```
 
-The final pushed head passed hosted CI in
-[run 34727731963](https://github.com/eggstack/eggpool/actions/runs/34727731963).
+The implementation head passed hosted CI in
+[run 34727731963](https://github.com/eggstack/eggpool/actions/runs/34727731963);
+the follow-up plan-only closure metadata commit was ignored by the workflow's
+document-only path filter.
