@@ -1,0 +1,72 @@
+# EggPool's dependency policy is intentionally small and explicit.  The
+# Cargo.lock graph retains compatibility-sensitive Eggress, SSH/crypto,
+# Rustls/Hyper, bundled SQLite, archive, and test-support paths; this file
+# detects drift without treating every legitimate duplicate version as a
+# failure.
+
+[graph]
+# Audit every declared feature, including test-support, and the complete
+# contributor graph below rather than silently checking only default runtime
+# features.
+all-features = true
+
+[advisories]
+# Direct workspace dependencies with unmaintained advisories remain visible;
+# transitive maintenance debt does not fail the gate. Yanked crates warn.
+unmaintained = "workspace"
+yanked = "warn"
+unused-ignored-advisory = "deny"
+
+ignore = [
+    # RustSec reports no safe upgrade for rsa 0.10.0-rc.18. It is reachable
+    # only through the exact Eggress 1.0.2 SSH/russh stack that supplies the
+    # supported SSH proxy path. Re-review on any Eggress/russh/ssh-key change
+    # and no later than 2026-12-31; remove this exception when a safe upgrade
+    # or supported Eggress release is available.
+    { id = "RUSTSEC-2023-0071", reason = "No safe rsa upgrade is available; the affected rsa 0.10.0-rc.18 is transitive through the pinned Eggress 1.0.2 SSH transport. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
+]
+
+[licenses]
+# This is the complete resolved contributor/build graph, not only shipped
+# runtime dependencies. Licenses not listed here are rejected by default.
+include-dev = true
+include-build = true
+confidence-threshold = 0.8
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+unused-allowed-license = "warn"
+unused-license-exception = "warn"
+
+# The workspace packages are unpublished native application crates. Their
+# distribution license is the repository MIT LICENSE, while this gate is
+# concerned with third-party dependency obligations.
+[licenses.private]
+ignore = true
+
+# webpki-roots carries CDLA-Permissive-2.0, which is accepted for this exact
+# dependency but intentionally not added to the global allowlist.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
+[bans]
+# The graph contains legitimate networking, crypto, platform, and test
+# families at multiple versions. Keep this as review signal, not a failure.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+# Production and test dependencies must come from crates.io or the local
+# workspace path member. Git dependencies and alternate registries are not
+# silently accepted into the lockfile.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

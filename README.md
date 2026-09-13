@@ -371,20 +371,32 @@ When changing native dependencies or Cargo features, inspect the resolved
 authority and qualify the release graph as well:
 
 ```bash
+cargo deny --manifest-path rust/Cargo.toml check
 cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 cargo build --manifest-path rust/Cargo.toml --locked --release
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 ```
+
+`cargo deny` uses the repository-root `deny.toml` to check RustSec advisories,
+the reviewed third-party license allowlist, registry/git sources, and
+duplicate-version warnings. It covers the declared feature and
+contributor/build graph; it complements rather than replaces Clippy, tests,
+and transport-owner qualification. The separate dependency audit workflow
+runs on dependency-policy changes, weekly, and by manual dispatch, so ordinary
+source-only CI does not add a network advisory lookup.
 
 ### CI
 
-One GitHub Actions job runs on code-changing pull requests and pushes to
-`main`; documentation-only changes under `plans/`, `docs/`, `architecture/`,
-`.opencode/skills/`, `AGENTS.md`, and `CHANGELOG.md` are intentionally ignored:
+The ordinary CI workflow has one job on code-changing pull requests and pushes
+to `main`; documentation-only changes under `plans/`, `docs/`, `architecture/`,
+`.opencode/skills/`, `AGENTS.md`, and `CHANGELOG.md` are intentionally ignored.
+The separate dependency workflow has the triggers described below:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
 | `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests plus ruff, pyright, and `pytest tests/tooling/` |
+| `Dependency audit` | Rust dependency policy | cargo-deny advisories, bans, licenses, and sources on dependency/policy changes, weekly, or manual dispatch |
 
 See `AGENTS.md` for focused test subset commands.
 

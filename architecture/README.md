@@ -134,9 +134,18 @@ Native dependency and feature changes are reviewed from Cargo's resolved
 authority, not from a hand-maintained inventory:
 
 ```bash
+cargo deny --manifest-path rust/Cargo.toml check
 cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
+
+The root `deny.toml` checks RustSec advisories, the reviewed third-party
+license allowlist, registry/git sources, and duplicate-version warnings across
+the declared feature and contributor/build graph. It is a low-noise policy
+gate, not a substitute for strict Clippy, serial tests, release builds, or
+owner-specific Eggress/Hyper/Rustls/SQLite qualification. The dedicated
+dependency workflow runs on Cargo/policy changes, weekly, and by manual
+dispatch; ordinary source-only CI remains network-light.
 
 Use the Python tooling environment only for release validators and tooling
 tests. Do not import, run, or recreate the retired application source tree.

@@ -17,6 +17,7 @@ Project-specific skills are in `.opencode/skills/`:
 - Config resolution: `--config` flag > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. API keys come from environment/`.env`
 - Optional extras: none for the native runtime; Python dependencies are tooling-only
 - Cargo is the authority for native runtime dependencies and features. Use `cargo tree --manifest-path rust/Cargo.toml -e features` when reviewing dependency changes; keep direct crates only when Rust source, build scripts, tests, packaging, or a documented compatibility contract names them.
+- `deny.toml` is the dependency security/license/source policy. Run `cargo deny --manifest-path rust/Cargo.toml check` for the full advisory, license, source, and duplicate-version review; it checks the declared feature and contributor/build graph.
 - **Do not** add Python runtime fallbacks — retained Python is tooling-only
 
 ## Configuration transitions
@@ -67,17 +68,23 @@ For dependency or feature changes, also run the locked release build and
 inspect the resolved graph:
 
 ```bash
+cargo deny --manifest-path rust/Cargo.toml check
 cargo build --manifest-path rust/Cargo.toml --locked --release
 cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 ```
 
 ## CI
 
-One GitHub Actions job (`check`, Rust plus Python tooling): Cargo formatting,
-strict Clippy, serial Rust tests, plus ruff, pyright, and
-`pytest tests/tooling/`. Reproduce locally for deterministic results. New
-Clippy warnings are not an accepted baseline; fix them before merging.
+The ordinary GitHub Actions job (`check`, Rust plus Python tooling) runs Cargo
+formatting, strict Clippy, serial Rust tests, plus ruff, pyright, and
+`pytest tests/tooling/`. A separate `Dependency audit` workflow runs
+cargo-deny for Rust dependency/policy changes, weekly, and by manual dispatch.
+It checks `rust/Cargo.toml`, `rust/Cargo.lock`, `deny.toml`, and its own
+workflow path; it is intentionally not part of unrelated source-only CI.
+Reproduce local checks before pushing. New Clippy warnings are not an accepted
+baseline; fix them before merging.
 
 CI ignores paths-only changes to `docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`, and `AGENTS.md` — docs-only PRs will show no CI run.
 
@@ -101,6 +108,12 @@ uv run pytest tests/live/ -m live_opencode_go -v
 
 # Lint auto-fix
 uv run ruff check --fix scripts/ tests/tooling/
+
+# Dependency policy and qualification
+cargo deny --manifest-path rust/Cargo.toml check
+cargo build --manifest-path rust/Cargo.toml --locked --release
+cargo tree --manifest-path rust/Cargo.toml -e features
+cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
 Markers registered in `pyproject.toml`: `unit`, `integration`, `network`, `live`,

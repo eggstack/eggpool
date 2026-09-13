@@ -32,4 +32,14 @@ stack: HTTP/1.1 only, Rustls with `ring` and TLS 1.2, deterministic webpki
 roots, bounded pooling, and explicit timeout/error classification. SQLite's
 bundled and backup features likewise belong to the database and lifecycle
 contracts. Review the resolved graph with `cargo tree -e features` before
-changing any of these boundaries.
+changing any of these boundaries. Run the repository policy gate as part of
+dependency changes:
+
+```bash
+cargo deny --manifest-path rust/Cargo.toml check
+cargo tree --manifest-path rust/Cargo.toml -e features
+cargo tree --manifest-path rust/Cargo.toml --duplicates
+```
+
+The policy deliberately reports duplicate versions instead of rejecting the
+legitimate Eggress/SSH/crypto and platform families in the current lockfile.

@@ -1,0 +1,42 @@
+# Dependency policy is intentionally separate from ordinary source CI so
+# advisory-database/network work does not slow unrelated changes.
+
+name: Dependency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/dependency-audit.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/dependency-audit.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          command: check advisories bans licenses sources
+          arguments: --all-features
+          manifest-path: rust/Cargo.toml

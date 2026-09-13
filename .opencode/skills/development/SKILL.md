@@ -60,12 +60,27 @@ the source/build/test owners and the resolved graph before removing a direct
 crate or feature:
 
 ```bash
+cargo deny --manifest-path rust/Cargo.toml check
 cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
+`cargo deny` checks RustSec advisories, the reviewed license allowlist, allowed
+registry/git sources, and duplicate-version warnings from `deny.toml`. It does
+not replace strict Clippy/tests or owner-specific qualification. When
+`rust/Cargo.toml` or `rust/Cargo.lock` changes, also run the locked release
+build and serial workspace suite:
+
+```bash
+cargo build --manifest-path rust/Cargo.toml --locked --release
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
+```
+
 Keep supported Eggress proxy URI/chaining, TLS verification, and bundled
-SQLite/backup behavior qualified when changing their feature sets.
+SQLite/backup behavior qualified when changing their feature sets. The
+dependency audit workflow runs on dependency-policy changes, weekly, and by
+manual dispatch; ordinary source-only CI does not wait on its network advisory
+database.
 
 ## Tooling
 
