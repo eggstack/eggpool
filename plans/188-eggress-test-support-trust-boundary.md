@@ -253,16 +253,22 @@ Do not in this phase:
 
 ## Approval checklist
 
-- [ ] Custom-root code isolated under `test-support`.
-- [ ] Production source no longer imports Eggress implementation crates.
-- [ ] Optional dependency list matches actual gated source use.
-- [ ] Dev dependencies remain dev-only where appropriate.
-- [ ] All Eggress pins remain on one release line.
-- [ ] Test CA succeeds through real TLS verification.
-- [ ] Missing test CA still fails verification.
-- [ ] No insecure verifier/bypass added.
-- [ ] Default, test-support, and all-features compile matrices pass.
-- [ ] Provider transport qualification passes.
+- [x] Custom-root code isolated under `test-support`.
+- [x] Production source no longer imports Eggress implementation crates.
+- [x] Optional dependency list matches actual gated source use.
+- [x] Dev dependencies remain dev-only where appropriate.
+- [x] All Eggress pins remain on one release line.
+- [x] Test CA succeeds through real TLS verification.
+- [x] Missing test CA still fails verification.
+- [x] No insecure verifier/bypass added.
+- [x] Default, test-support, and all-features compile matrices pass.
+- [x] Provider transport qualification passes.
+
+Formal closure revalidated on 2026-09-13: default, `test-support`, and
+all-features checks passed; strict all-features Clippy passed; the provider
+transport suite passed all 35 tests; and the full all-features Rust suite
+passed all 476 tests across 53 suites. Plan 189 is already complete, and no
+later plan depends on Plan 188, so no downstream status transition is needed.
 
 ## Closure evidence
 
