@@ -21,6 +21,13 @@ Production deployment, systemd integration, operational scripts, and the tools n
 Rust-owned systemd/logrotate/cron snippets for CLI output. Deployment
 rendering and process commands are implemented in `rust/src/operations/`.
 
+### `rust/src/operations/lifecycle.rs`
+
+Detached startup, safe stop/restart, independent EggPool identity proof, and
+the watchdog start workflow are composed here from `process.rs`, `paths.rs`,
+and `control.rs`. The CLI adapter in `rust/src/runtime.rs` retains prompts,
+human output, and exit-code mapping.
+
 ## Installation
 
 ### `scripts/install.sh`

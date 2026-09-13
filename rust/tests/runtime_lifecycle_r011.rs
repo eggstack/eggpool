@@ -680,8 +680,16 @@ async fn diagnostics_and_debug_remain_bounded_and_secret_free_after_cycles() {
 
 #[test]
 fn authority_source_audit_has_no_long_lived_generation_service_escape() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/server.rs"))
-        .expect("server source");
+    let source = ["mod.rs", "inference.rs", "middleware.rs"]
+        .into_iter()
+        .map(|module| {
+            std::fs::read_to_string(format!(
+                "{}/src/server/{module}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("server source")
+        })
+        .collect::<String>();
     assert!(source.contains("pub runtime: Arc<RuntimeManager>"));
     assert!(!source.contains("pub inference: Arc<InferenceState>"));
     assert!(!source.contains("pub client_pool: ProviderClientPool"));

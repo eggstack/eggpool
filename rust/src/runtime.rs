@@ -1,9 +1,8 @@
 use std::{
-    env,
-    fs::{self, File, OpenOptions},
+    env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command as OsCommand, Stdio},
+    process::Command as OsCommand,
     time::Duration,
 };
 
@@ -22,6 +21,7 @@ use crate::{
     operations::{
         backup::{self, BackupService},
         config_mutation::{self, ApplyMode, ApplyOutcome},
+        lifecycle,
         paths::RuntimePaths,
         process,
         update::{
@@ -41,7 +41,6 @@ const EXIT_PREPARATION_FAILED: u8 = 5;
 const EXIT_DIGEST_MISMATCH: u8 = 6;
 const MAX_STATUS_BODY_BYTES: usize = 1_048_576;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
-const WATCHDOG_START_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Initialize process-local diagnostics and dispatch the operational CLI.
 pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
@@ -1454,6 +1453,10 @@ fn command_error(code: u8, detail: impl Into<String>) -> BootstrapError {
     }
 }
 
+fn lifecycle_error(error: lifecycle::LifecycleError) -> BootstrapError {
+    command_error(EXIT_VALIDATION, error.to_string())
+}
+
 fn check_config(path: &Path) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
     config.validate_account_credentials()?;
@@ -1766,8 +1769,11 @@ async fn serve(path: &Path, args: &ServeArgs) -> Result<(), BootstrapError> {
             .await
             .map_err(server_error)
     } else {
-        ensure_start_safe(path, &config).await?;
-        let child = spawn_detached(path, args.log_file.as_deref(), args.quiet)?;
+        lifecycle::ensure_start_safe_with_listener(&config)
+            .await
+            .map_err(lifecycle_error)?;
+        let child = lifecycle::spawn_detached(path, args.log_file.as_deref(), args.quiet)
+            .map_err(lifecycle_error)?;
         let paths = RuntimePaths::resolve();
         let log = if args.quiet && args.log_file.is_none() {
             "/dev/null".to_owned()
@@ -1812,165 +1818,52 @@ fn warn_without_accounts(config: &config::Config) {
     }
 }
 
-async fn ensure_start_safe(_path: &Path, config: &config::Config) -> Result<(), BootstrapError> {
-    let paths = RuntimePaths::prepare().map_err(path_error)?;
-    let pid = process::read_pid(&paths.pid_file).map_err(process_error)?;
-    if let Some(pid) = pid {
-        if process::process_exists(pid) {
-            return Err(command_error(
-                EXIT_VALIDATION,
-                format!("server is already running (PID {pid})"),
-            ));
-        }
-        process::clear_stale_pid(&paths.pid_file, Some(pid)).map_err(process_error)?;
-    }
-    if process::probe_health(&config.server.host, config.server.port).await
-        == process::HealthProbe::Healthy
-    {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            format!(
-                "another process is already serving {}:{}",
-                config.server.host, config.server.port
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn process_error(error: process::ProcessError) -> BootstrapError {
-    command_error(EXIT_VALIDATION, error.to_string())
-}
-
-fn path_error(error: crate::operations::paths::PathError) -> BootstrapError {
-    process_error(process::ProcessError::Path(error))
-}
-
-fn open_log(path: &Path) -> Result<File, BootstrapError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            command_error(
-                EXIT_VALIDATION,
-                format!("cannot prepare log directory: {error}"),
-            )
-        })?;
-    }
-    let mut options = OpenOptions::new();
-    options.create(true).append(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|error| command_error(EXIT_VALIDATION, format!("cannot open log file: {error}")))
-}
-
-fn spawn_detached(
-    config_path: &Path,
-    log_path: Option<&Path>,
-    quiet: bool,
-) -> Result<std::process::Child, BootstrapError> {
-    let executable = std::env::current_exe().map_err(|error| {
-        command_error(
-            EXIT_VALIDATION,
-            format!("cannot resolve eggpool executable: {error}"),
-        )
-    })?;
-    let resolved_config = fs::canonicalize(config_path).map_err(|error| {
-        command_error(
-            EXIT_VALIDATION,
-            format!("cannot resolve config path: {error}"),
-        )
-    })?;
-    let paths = RuntimePaths::prepare().map_err(path_error)?;
-    let explicit_log = log_path.map(PathBuf::from);
-    let log_target = if quiet && explicit_log.is_none() {
-        None
-    } else {
-        if explicit_log.is_none() {
-            paths
-                .ensure_state_dir()
-                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-        }
-        Some(explicit_log.unwrap_or(paths.log_file))
-    };
-    let (stdout, stderr) = if let Some(log_path) = log_target.as_deref() {
-        let file = open_log(log_path)?;
-        let duplicate = file.try_clone().map_err(|error| {
-            command_error(
-                EXIT_VALIDATION,
-                format!("cannot duplicate log handle: {error}"),
-            )
-        })?;
-        (Stdio::from(file), Stdio::from(duplicate))
-    } else {
-        (Stdio::null(), Stdio::null())
-    };
-    let mut command = OsCommand::new(executable);
-    command
-        .arg("--config")
-        .arg(resolved_config)
-        .arg("serve")
-        .arg("--verbose")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    command
-        .spawn()
-        .map_err(|error| command_error(EXIT_VALIDATION, format!("failed to spawn server: {error}")))
-}
-
 async fn stop(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError> {
     let timeout = lifecycle_timeout(timeout_seconds)?;
-    let paths = RuntimePaths::resolve();
-    let Some(pid) = process::read_pid(&paths.pid_file).map_err(process_error)? else {
-        println!("Server is not running (no PID file found).");
-        return Ok(());
-    };
-    if !process::process_exists(pid) {
-        process::clear_stale_pid(&paths.pid_file, Some(pid)).map_err(process_error)?;
-        println!("Server is not running (stale PID file).");
-        return Ok(());
+    match lifecycle::stop(path, timeout, |pid| {
+        println!("Stopping server (PID {pid})...")
+    })
+    .await
+    .map_err(lifecycle_error)?
+    {
+        lifecycle::StopOutcome::NoPid => println!("Server is not running (no PID file found)."),
+        lifecycle::StopOutcome::StalePid => println!("Server is not running (stale PID file)."),
+        lifecycle::StopOutcome::Stopped { .. } => println!("Server stopped."),
     }
-    let proof = identity_proof(path, &paths, pid).await;
-    if !proof.proves_eggpool() {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            "refusing to signal PID without independent EggPool identity evidence",
-        ));
-    }
-    println!("Stopping server (PID {pid})...");
-    process::signal_term(pid, proof).map_err(process_error)?;
-    if !process::wait_for_exit_or_pid_clear(pid, &paths.pid_file, timeout).await {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            format!("server did not stop within {timeout_seconds}s"),
-        ));
-    }
-    process::clear_pid_if_matches(&paths.pid_file, pid).map_err(process_error)?;
-    println!("Server stopped.");
     Ok(())
 }
 
 async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError> {
     let timeout = lifecycle_timeout(timeout_seconds)?;
-    restart_server_inner(path, timeout, true, true)
-        .await
-        .map(|_| ())
+    let config = config::Config::from_toml(path)?;
+    config.validate_account_credentials()?;
+    let outcome = lifecycle::restart(path, &config, timeout, true, |pid| {
+        println!("Stopping server (PID {pid})...");
+    })
+    .await
+    .map_err(lifecycle_error)?;
+    match outcome {
+        lifecycle::RestartOutcome::Started { pid }
+        | lifecycle::RestartOutcome::Restarted { pid } => {
+            println!("Server started (PID {pid}).");
+        }
+        lifecycle::RestartOutcome::AlreadyStopped => {}
+    }
+    Ok(())
 }
 
 /// Restart a running standalone server for a configuration mutation. A missing
 /// or stopped server is a successful observation (`Ok(false)`); this helper
 /// never starts a service as a side effect.
 pub(crate) async fn restart_for_mutation(path: &Path) -> Result<bool, BootstrapError> {
-    restart_server_inner(path, Duration::from_secs(10), false, false).await
+    let config = config::Config::from_toml(path)?;
+    config.validate_account_credentials()?;
+    Ok(!matches!(
+        lifecycle::restart(path, &config, Duration::from_secs(10), false, |_| {})
+            .await
+            .map_err(lifecycle_error)?,
+        lifecycle::RestartOutcome::AlreadyStopped
+    ))
 }
 
 async fn restart_server_inner(
@@ -1981,85 +1874,26 @@ async fn restart_server_inner(
 ) -> Result<bool, BootstrapError> {
     let config = config::Config::from_toml(path)?;
     config.validate_account_credentials()?;
-    let paths = RuntimePaths::resolve();
-    let Some(pid) = process::read_pid(&paths.pid_file).map_err(process_error)? else {
-        if !start_if_missing {
-            return Ok(false);
-        }
-        if process::probe_health(&config.server.host, config.server.port).await
-            == process::HealthProbe::Healthy
-        {
-            return Err(command_error(
-                EXIT_VALIDATION,
-                "replacement was not started because the configured listener is still healthy",
-            ));
-        }
-        let child = spawn_detached(path, None, false)?;
+    let outcome = lifecycle::restart(path, &config, timeout, start_if_missing, move |pid| {
         if announce {
-            println!("Server started (PID {}).", child.id());
+            println!("Stopping server (PID {pid})...");
         }
-        return Ok(true);
-    };
-    {
-        if process::process_exists(pid) {
-            let proof = identity_proof(path, &paths, pid).await;
-            if !proof.proves_eggpool() {
-                return Err(command_error(
-                    EXIT_VALIDATION,
-                    "refusing to restart an unproven process associated with the PID file",
-                ));
-            }
-            if announce {
-                println!("Stopping server (PID {pid})...");
-            }
-            process::signal_term(pid, proof).map_err(process_error)?;
-            if !process::wait_for_exit_or_pid_clear(pid, &paths.pid_file, timeout).await {
-                return Err(command_error(
-                    EXIT_VALIDATION,
-                    format!(
-                        "server did not stop within {}s; replacement was not started",
-                        timeout.as_secs_f64()
-                    ),
-                ));
-            }
-            process::clear_pid_if_matches(&paths.pid_file, pid).map_err(process_error)?;
-        } else {
-            process::clear_stale_pid(&paths.pid_file, Some(pid)).map_err(process_error)?;
-            if !start_if_missing {
-                return Ok(false);
-            }
-        }
-    }
-    if process::probe_health(&config.server.host, config.server.port).await
-        == process::HealthProbe::Healthy
-    {
-        return Err(command_error(
-            EXIT_VALIDATION,
-            "replacement was not started because the configured listener is still healthy",
-        ));
-    }
-    let child = spawn_detached(path, None, false)?;
+    })
+    .await
+    .map_err(lifecycle_error)?;
     if announce {
-        println!("Server started (PID {}).", child.id());
+        match outcome {
+            lifecycle::RestartOutcome::Started { pid }
+            | lifecycle::RestartOutcome::Restarted { pid } => {
+                println!("Server started (PID {pid}).")
+            }
+            lifecycle::RestartOutcome::AlreadyStopped => {}
+        }
     }
-    Ok(true)
-}
-
-async fn identity_proof(
-    path: &Path,
-    paths: &RuntimePaths,
-    pid: i32,
-) -> process::ProcessIdentityProof {
-    let health = match config::Config::from_toml(path) {
-        Ok(config) => process::probe_health(&config.server.host, config.server.port).await,
-        Err(_) => process::HealthProbe::Unreachable,
-    };
-    let control = process::probe_control(&paths.control_socket).await;
-    process::ProcessIdentityProof {
-        pid_file_matches: process::read_pid(&paths.pid_file).ok().flatten() == Some(pid),
-        health,
-        control_socket_reachable: control == process::ControlProbe::Reachable,
-    }
+    Ok(!matches!(
+        outcome,
+        lifecycle::RestartOutcome::AlreadyStopped
+    ))
 }
 
 fn lifecycle_timeout(seconds: f64) -> Result<Duration, BootstrapError> {
@@ -2176,52 +2010,11 @@ fn croncheck() {
 }
 
 async fn ensure_running(path: &Path) -> Result<(), BootstrapError> {
-    let paths = RuntimePaths::prepare().map_err(path_error)?;
-    if process::read_pid(&paths.pid_file)
-        .map_err(process_error)?
-        .is_some_and(process::process_exists)
-    {
-        return Ok(());
-    }
-    let _ = process::clear_stale_pid(&paths.pid_file, None).map_err(process_error)?;
-    let guard = process::acquire_start_guard(&paths).map_err(process_error)?;
-    if process::read_pid(&paths.pid_file)
-        .map_err(process_error)?
-        .is_some_and(process::process_exists)
-    {
-        drop(guard);
-        return Ok(());
-    }
     let config = config::Config::from_toml(path)?;
-    if process::probe_health(&config.server.host, config.server.port).await
-        == process::HealthProbe::Healthy
-    {
-        drop(guard);
-        return Ok(());
-    }
-    let child = spawn_detached(path, None, false)?;
-    let deadline = Instant::now() + WATCHDOG_START_TIMEOUT;
-    loop {
-        if process::read_pid(&paths.pid_file)
-            .map_err(process_error)?
-            .is_some_and(process::process_exists)
-            || process::probe_health(&config.server.host, config.server.port).await
-                == process::HealthProbe::Healthy
-        {
-            drop(guard);
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(command_error(
-                EXIT_VALIDATION,
-                format!(
-                    "server did not confirm startup within 2s (child PID {})",
-                    child.id()
-                ),
-            ));
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
+    lifecycle::ensure_running(path, &config)
+        .await
+        .map(|_| ())
+        .map_err(lifecycle_error)
 }
 
 async fn update(path: &Path, args: crate::cli::UpdateArgs) -> Result<(), BootstrapError> {
@@ -2579,10 +2372,7 @@ async fn start_systemd_service(state: SystemdServiceState, path: &Path) -> Resul
 }
 
 async fn server_is_running(path: &Path, paths: &RuntimePaths) -> bool {
-    let Some(pid) = process::read_pid(&paths.pid_file).ok().flatten() else {
-        return false;
-    };
-    process::process_exists(pid) && identity_proof(path, paths, pid).await.proves_eggpool()
+    lifecycle::server_is_running(path, paths).await
 }
 
 fn update_error(error: UpdateError) -> BootstrapError {

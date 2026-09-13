@@ -27,10 +27,13 @@ select worker threads.
 
 ## CLI and errors
 
-`rust/src/cli.rs` owns the command tree, stable exit codes, human output, and
-JSON output. The operations modules implement `serve`, `rehash`, `connect`,
+`rust/src/cli.rs` owns the command tree. `rust/src/runtime.rs` owns command
+dispatch, stable exit-code adaptation, human output, and JSON output. The
+operations modules implement `serve`, `rehash`, `connect`,
 `logout`, `update`, `deploy`, `backup`, `recover`, `uninstall`, and the
 diagnostic commands.
+The reusable local process workflow is `rust/src/operations/lifecycle.rs`;
+CLI-only prompts remain in the runtime adapter.
 
 `rust/src/error.rs` defines the typed error hierarchy and HTTP/status mapping.
 Errors retain structured context without credential values or raw request

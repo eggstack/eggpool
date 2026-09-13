@@ -22,16 +22,22 @@ SQLite repositories <- accounting/catalog/health/maintenance
 ```
 
 `rust/src/runtime.rs` adapts CLI commands to the existing operation services.
-`rust/src/server.rs` owns the Axum adapter, admission middleware, health and
-dashboard routes, and process lifespan. Request routing, provider transport,
-wire adaptation, persistence, and finalization remain in their respective
-modules.
+`rust/src/operations/lifecycle.rs` composes safe detached start, stop, restart,
+identity-proof, and watchdog workflows over `process.rs`, `paths.rs`, and
+`control.rs`; the CLI keeps prompts, presentation, and exit-code mapping.
+`rust/src/server/mod.rs` owns Axum startup, route assembly, shared state, and
+process lifespan. Its `middleware.rs`, `health.rs`, `dashboard.rs`, and
+`inference.rs` siblings own the corresponding HTTP adapters. Request routing,
+provider transport, wire adaptation, persistence, and finalization remain in
+their respective modules.
 
 ## Process model
 
 `eggpool serve` runs the native executable. The process owns PID management,
 health probes, foreground/daemon startup, restart behavior, and the active and
-retiring runtime generations. `rust/src/operations/paths.rs` is the shared
+retiring runtime generations. `rust/src/operations/lifecycle.rs` owns the
+workflow composition while `process.rs` remains the authority for PID files,
+independent health/control evidence, and signaling. `paths.rs` is the shared
 authority for PID, log, state, and control-socket paths.
 
 The executable is started with Tokio's `current_thread` runtime in

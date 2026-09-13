@@ -11,13 +11,14 @@ metadata/assets only.
 
 | Area | Rust authority |
 |---|---|
-| CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
+| CLI adapter, configuration, errors | `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
 | Request lifecycle and wire adaptation | `rust/src/request/`, `rust/src/coordinator/`, `rust/src/wire/` |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
 | Provider/account routing, quota, providers, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/providers/`, `rust/src/health/` |
 | Database and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
-| Runtime generations and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/server.rs` |
-| Dashboard, operations, update | `rust/src/server.rs`, `rust/src/operations/` |
+| Runtime generations and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/server/mod.rs` |
+| HTTP surfaces | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
+| Operations, lifecycle, update | `rust/src/operations/` |
 | Compatibility fixtures and qualification output | `tests/fixtures/`, `artifacts/qualification/` |
 
 The repository-root `pyproject.toml` is tooling-only. Python utilities under

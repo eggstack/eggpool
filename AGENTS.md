@@ -147,7 +147,8 @@ Start subsystem work at `architecture/README.md`, then the matching deep dive:
 
 Non-obvious wiring:
 
-- **Request lifecycle**: `RequestCoordinator` in `rust/src/coordinator/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP layer is in `rust/src/server.rs`
+- **Request lifecycle**: `RequestCoordinator` in `rust/src/coordinator/` orchestrates endpoint → routing → persistence → dispatch → finalization; HTTP adapters are in `rust/src/server/inference.rs` and `rust/src/server/mod.rs`
+- **HTTP control-plane ownership**: startup/lifespan assembly is in `rust/src/server/mod.rs`; dashboard, health/status, middleware, and inference adapters are split into sibling modules. They remain thin adapters and do not own coordinator retries or finalization.
 - **Runtime generations**: the Rust runtime lifecycle module owns active/retiring generations and leases; server state mirrors are not authority
 - **Model-router registry/selector**: neutral policy compilation, deterministic registry semantics, and session identities are owned by `rust/crates/eggpool-model-routing`; `rust/src/model_router.rs` retains the process-owned async affinity cache. The immutable registry is generation-owned and dispatches concrete child requests through the coordinator
 - **Model-router request path**: exact virtual aliases resolve before concrete parsing and target-specific checks; the resolved target then follows the unchanged coordinator path. `/v1/models` exposes only compact capability-free virtual metadata, and `/api/stats/runtime` carries bounded semantic-routing counters
@@ -156,7 +157,7 @@ Non-obvious wiring:
 - **Control plane**: live config reload (rehash) over a Unix-domain socket, `rust/src/operations/control.rs` and `rust/src/reload.rs`
 - **Routing**: load-based, never cost-based; tier-based via `routing_priority`; provider/account routing is split across `routing/`, `quota/`, `retry/`, `catalog/`, `health/`, while semantic virtual-model policy is compiled by `rust/crates/eggpool-model-routing`
 - **Wire surfaces**: the closed registry in `rust/src/wire/` owns concrete surfaces; provider profiles are embedded from `rust/assets/providers/_wire_profiles.toml`
-- **Process model**: the native Rust executable owns the server process and its bounded worker/runtime configuration; no Python application process is required
+- **Process model**: the native Rust executable owns the server process and its bounded worker/runtime configuration; `rust/src/operations/lifecycle.rs` composes safe start/stop/restart/watchdog workflows over `process.rs`, `paths.rs`, and `control.rs`; no Python application process is required
 
 ## Gotchas
 
@@ -200,8 +201,10 @@ original cause when wrapping an error.
 ## CLI
 
 The native `eggpool` executable is implemented in `rust/src/main.rs` and
-`rust/src/cli.rs`. Operational commands, installer/update provenance, and
-control-plane behavior are Rust-owned; Python is limited to release and
+`rust/src/cli.rs`. `rust/src/runtime.rs` is the CLI adapter: it dispatches
+commands, presents prompts/output, and maps operation failures to stable exit
+codes. Reusable process lifecycle mechanisms live in
+`rust/src/operations/lifecycle.rs`; Python is limited to release and
 validation tooling.
 
 ## Git Workflow

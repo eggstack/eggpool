@@ -26,6 +26,12 @@ baseline allowlist or broad suppression; resolve new warnings locally and use
 narrow, justified allowances only when the intentional API or test shape is
 clearer and safer.
 
+For adapter changes, run the CLI contract, operations O002–O010, health, and
+coordinator publication/boundary targets before the full workspace suite. Keep
+the server modules thin: HTTP handlers must delegate inference lifecycle work
+to the coordinator, and lifecycle workflows must compose the existing process
+safety primitives.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:

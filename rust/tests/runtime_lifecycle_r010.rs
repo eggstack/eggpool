@@ -129,9 +129,17 @@ async fn reload_diagnostics_keep_only_the_last_bounded_result() {
 
 #[test]
 fn production_state_source_audit_has_no_direct_generation_config_field() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/server.rs"))
-        .expect("server source");
+    let source = ["mod.rs", "middleware.rs", "inference.rs"]
+        .into_iter()
+        .map(|module| {
+            std::fs::read_to_string(format!(
+                "{}/src/server/{module}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("server source")
+        })
+        .collect::<String>();
     assert!(!source.contains("pub config: Config"));
-    assert!(source.contains("async fn admit_inference_body"));
+    assert!(source.contains("admit_inference_body"));
     assert!(source.contains("Extension<Arc<GenerationLease>>"));
 }

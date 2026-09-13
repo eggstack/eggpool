@@ -564,7 +564,7 @@ Every request that involves thinking decisions stores a `thinking_trace_json` co
 
 The overview page shows a **Thinking/Reasoning** stat card when counters are non-zero. It displays total thinking requests with a breakdown: requested, transcoded, dropped, rejected, unknown-cap, unsupported-cap, and budget-clamped counts.
 
-Source: `rust/src/operations/metrics.rs`, `rust/src/server.rs`
+Source: `rust/src/operations/metrics.rs`, `rust/src/server/dashboard.rs`, `rust/src/server/health.rs`
 
 ## 11. Troubleshooting
 

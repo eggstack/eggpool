@@ -27,6 +27,11 @@ fingerprints, and hashed conversation identities. EggPool adapts TOML config
 into its policy types and keeps selector execution, provider/account routing,
 and the Tokio affinity cache in the application.
 
+The CLI adapter in `rust/src/runtime.rs` owns dispatch, prompts, presentation,
+and stable exit-code mapping. Reusable local process workflows are composed by
+`rust/src/operations/lifecycle.rs` over the primitive safety services in
+`process.rs`, `paths.rs`, and `control.rs`.
+
 ## Request lifecycle
 
 `rust/src/coordinator/` owns endpoint detection, bounded request preparation,
@@ -48,7 +53,8 @@ terminal evidence and never synthesize a terminal event from transport EOF.
 | Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs` |
-| Dashboard and operations | `rust/src/server.rs`, `rust/src/operations/` |
+| HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
+| Operations and local lifecycle | `rust/src/operations/`, especially `lifecycle.rs`, `process.rs`, `paths.rs`, and `control.rs` |
 
 See the corresponding deep dive for details:
 

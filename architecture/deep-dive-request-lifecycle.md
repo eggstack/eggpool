@@ -2,8 +2,9 @@
 
 Back to [Architecture](README.md)
 
-`rust/src/server.rs` accepts the public HTTP surfaces and hands requests to
-`rust/src/coordinator/`. The coordinator prepares bounded canonical input,
+`rust/src/server/inference.rs` accepts the public HTTP surfaces and hands
+requests to `rust/src/coordinator/`; startup and route assembly remain in
+`rust/src/server/mod.rs`. The coordinator prepares bounded canonical input,
 resolves exact virtual aliases, selects a provider/account, persists request
 and attempt identity, dispatches through the provider pool, adapts the response,
 and finalizes durable state.

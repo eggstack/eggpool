@@ -28,11 +28,12 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 
 ## Verification pointers
 
-- CLI/config/errors: `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs`
+- CLI/config/errors: `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs`
 - Request path: `rust/src/request/`, `rust/src/coordinator/`
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Providers/wire: `rust/src/providers/`, `rust/src/wire/`
-- Runtime/reload: `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`
+- Runtime/reload: `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/operations/lifecycle.rs`
+- HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
 - Operations: `rust/src/operations/`
 - Database/assets: `rust/src/db/`, `rust/assets/`

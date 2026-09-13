@@ -11,6 +11,7 @@ pub mod config_mutation;
 pub mod control;
 pub mod deploy;
 pub mod integrations;
+pub mod lifecycle;
 pub mod metrics;
 pub mod operator;
 pub mod paths;
