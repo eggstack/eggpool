@@ -302,7 +302,7 @@ Do not in this phase:
 
 ## Closure evidence
 
-Verified 2026-09-13 at exact closure head `3c39e70`. All Eggress pins were upgraded atomically from `1.0.2`
+Verified 2026-09-13 at exact implementation/closure head `d648df8`. All Eggress pins were upgraded atomically from `1.0.2`
 to `1.0.6`, and the provider transport suite passed before and after the
 change (35 tests in each run). `OutboundConnector::from_pproxy_uri` now owns
 normal single-hop and canonical multi-hop construction; the old TOML wrapper

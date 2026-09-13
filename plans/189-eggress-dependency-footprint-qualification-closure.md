@@ -319,7 +319,7 @@ Do not in this phase:
 
 ## Closure evidence
 
-Verified 2026-09-13 at exact closure head `3c39e70`. Direct Eggress declarations are all on `1.0.6`; the
+Verified 2026-09-13 at exact implementation/closure head `d648df8`. Direct Eggress declarations are all on `1.0.6`; the
 explicit `extended` facade feature was removed because it is implied by the
 retained legacy compatibility features. `cargo tree -e features`, inverse
 queries for the major Eggress crates, and duplicate-version inspection show a

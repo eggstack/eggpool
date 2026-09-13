@@ -204,7 +204,7 @@ This roadmap is complete when Plans 187-189 are closed and the repository demons
 
 ## Closure evidence
 
-Verified 2026-09-13 from implementation base `7b25cec748d8d012172f47c9f26155f967a8c795`; exact closure head `3c39e70`.
+Verified 2026-09-13 from implementation base `7b25cec748d8d012172f47c9f26155f967a8c795`; exact implementation/closure head `d648df8`.
 
 - Eggress declarations and the lockfile are atomically on `1.0.6`; no `1.0.2`
   Eggress package remains in the resolved graph.

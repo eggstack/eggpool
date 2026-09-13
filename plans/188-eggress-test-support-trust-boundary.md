@@ -266,7 +266,7 @@ Do not in this phase:
 
 ## Closure evidence
 
-Verified 2026-09-13 at exact closure head `3c39e70`. `new_with_proxy_test_root` remains available only under
+Verified 2026-09-13 at exact implementation/closure head `d648df8`. `new_with_proxy_test_root` remains available only under
 `test-support`; its deterministic root is used by the real Trojan fixture and
 the missing-root case still fails TLS verification. No insecure verifier or
 certificate bypass was introduced. Fixture protocol dependencies are in
