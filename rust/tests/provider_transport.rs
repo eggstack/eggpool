@@ -1614,7 +1614,7 @@ async fn failed_pool_build_after_bind_closes_database_and_releases_listener() {
 #[test]
 fn mandatory_proxy_corpus_uri_families_construct() {
     let port = 1;
-    let uris = [
+    let mut uris = vec![
         "direct://".to_owned(),
         format!("http://127.0.0.1:{port}"),
         format!("http://127.0.0.1:{port}#proxy-user:proxy-pass"),
@@ -1625,8 +1625,9 @@ fn mandatory_proxy_corpus_uri_families_construct() {
         format!("ss://aes-256-gcm:synthetic-key@127.0.0.1:{port}"),
         format!("ssr://aes-256-cfb:synthetic-key@127.0.0.1:{port}"),
         format!("trojan://aes-256-gcm:synthetic-key@127.0.0.1:{port}"),
-        format!("ssh://aes-256-cfb:synthetic-key@127.0.0.1:{port}"),
     ];
+    #[cfg(feature = "eggress-ssh-fallback")]
+    uris.push(format!("ssh://aes-256-cfb:synthetic-key@127.0.0.1:{port}"));
     for uri in uris {
         let result =
             ProviderHttpClient::new_with_proxy(proxy_test_config("http://127.0.0.1:1"), &uri);
@@ -2163,4 +2164,14 @@ fn malformed_proxy_fails_closed_without_secret_bearing_diagnostics() {
     assert_eq!(error, TransportError::ProxyConfiguration);
     assert!(!error.to_string().contains(marker));
     assert!(!format!("{error:?}").contains(marker));
+}
+
+#[cfg(not(feature = "eggress-ssh-fallback"))]
+#[test]
+fn ssh_proxy_is_rejected_when_the_compatibility_fallback_is_disabled() {
+    let result = ProviderHttpClient::new_with_proxy(
+        proxy_test_config("http://127.0.0.1:1"),
+        "ssh://user@127.0.0.1:22",
+    );
+    assert!(matches!(result, Err(TransportError::ProxyConfiguration)));
 }

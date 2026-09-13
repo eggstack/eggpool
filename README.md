@@ -22,6 +22,9 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Thinking/reasoning capability metadata with compositional toggle/effort/budget
   controls and explicit translation-policy budget mapping
 - Per-account outbound proxy support in the native runtime
+- Default builds retain Eggress 1.0.6 SSH proxy compatibility; deliberately
+  reduced `--no-default-features` builds reject configured SSH proxies while
+  retaining non-SSH proxy support
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).
@@ -358,6 +361,11 @@ cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D war
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
 
+# Verify the intentionally reduced native feature surface
+cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --no-default-features
+
 # Install the Python tooling environment when working on scripts/tests
 uv sync --dev
 
@@ -395,7 +403,7 @@ The separate dependency workflow has the triggers described below:
 
 | Job | Python | What it does |
 |-----|--------|-------------|
-| `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests plus ruff, pyright, and `pytest tests/tooling/` |
+| `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests, no-default compile/Clippy guard, plus ruff, pyright, and `pytest tests/tooling/` |
 | `Dependency audit` | Rust dependency policy | cargo-deny advisories, bans, licenses, and sources on dependency/policy changes, weekly, or manual dispatch |
 
 See `AGENTS.md` for focused test subset commands.

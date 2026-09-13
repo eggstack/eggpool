@@ -28,6 +28,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
 - Treat `rust/Cargo.toml` as the authority for native dependency and feature
   claims. Do not document proxy, TLS, SQLite, or archive capabilities that are
   not present in the resolved Cargo feature graph.
+- When documenting an optional native capability, describe both its enabled
+  behavior and its disabled-feature behavior. Eggress 1.0.6 SSH is the
+  compatibility exception: the default fallback supports it, while
+  no-default builds reject SSH configuration before dialing and retain
+  non-SSH proxy support.
 - Describe configuration transitions through the typed policy in
   `rust/src/config_reload_policy.rs`: mutation paths classify before atomic
   replacement, and server-side rehash reclassifies before generation

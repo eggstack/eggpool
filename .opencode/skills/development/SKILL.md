@@ -65,6 +65,18 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
+The Eggress SSH compatibility fallback is intentionally optional. Feature
+changes affecting provider transport must also qualify the reduced surface:
+
+```bash
+cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --no-default-features
+```
+
+No-default builds must preserve direct and non-SSH proxy construction while
+returning `TransportError::ProxyConfiguration` for SSH proxy configuration.
+
 `cargo deny` checks RustSec advisories, the reviewed license allowlist, allowed
 registry/git sources, and duplicate-version warnings from `deny.toml`. It does
 not replace strict Clippy/tests or owner-specific qualification. When

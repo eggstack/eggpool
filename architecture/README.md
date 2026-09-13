@@ -128,6 +128,11 @@ cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 cargo build --manifest-path rust/Cargo.toml --locked
+
+# Reduced feature-boundary qualification
+cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --no-default-features
 ```
 
 Native dependency and feature changes are reviewed from Cargo's resolved

@@ -31,6 +31,12 @@ Eggress 1.0.6 has one documented facade gap: its outbound constructor builds
 the SSH-capable executor without an SSH session cache. The explicitly named
 default `eggress-ssh-fallback` feature therefore retains the matching 1.0.6
 native chain executor and compatibility SSH session cache for SSH upstreams.
+Builds that deliberately disable this fallback still compile and retain direct
+and non-SSH proxy construction, but reject an SSH-containing proxy expression
+as `TransportError::ProxyConfiguration` before any connection attempt. They do
+not route the expression through the known-broken embed SSH path or fall back
+to direct egress. This is a temporary compatibility boundary pending an
+upstream Eggress facade fix.
 The deterministic custom-root constructor uses that same narrow seam only
 under `test-support`; it adds a test CA and never disables verification.
 Protocol fixture crates remain dev-only. These are intentional compatibility

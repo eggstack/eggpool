@@ -517,7 +517,7 @@ impl ProviderTcpConnector {
                 None
             }
             Some(proxy_url) if proxy_uses_ssh(proxy_url) => {
-                Some(Arc::new(build_chain_egress_dialer(proxy_url, None)?) as Arc<dyn ProxyDialer>)
+                Some(build_ssh_proxy_dialer(proxy_url)?)
             }
             Some(proxy_url) => Some(Arc::new(EgressProxyDialer {
                 connector: Arc::new(
@@ -553,12 +553,21 @@ impl ProviderTcpConnector {
     }
 }
 
-#[cfg(feature = "eggress-ssh-fallback")]
 fn proxy_uses_ssh(proxy_url: &str) -> bool {
     proxy_url.split("__").any(|hop| {
         hop.split_once("://")
             .is_some_and(|(scheme, _)| scheme.split('+').any(|protocol| protocol == "ssh"))
     })
+}
+
+#[cfg(feature = "eggress-ssh-fallback")]
+fn build_ssh_proxy_dialer(proxy_url: &str) -> Result<Arc<dyn ProxyDialer>, TransportError> {
+    Ok(Arc::new(build_chain_egress_dialer(proxy_url, None)?) as Arc<dyn ProxyDialer>)
+}
+
+#[cfg(not(feature = "eggress-ssh-fallback"))]
+fn build_ssh_proxy_dialer(_proxy_url: &str) -> Result<Arc<dyn ProxyDialer>, TransportError> {
+    Err(TransportError::ProxyConfiguration)
 }
 
 #[cfg(feature = "eggress-ssh-fallback")]
@@ -1181,7 +1190,9 @@ fn map_stage(stage: Stage) -> TransportError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderHttpConfig, TransportError, join_provider_target, parse_base_url};
+    use super::{
+        ProviderHttpConfig, TransportError, join_provider_target, parse_base_url, proxy_uses_ssh,
+    };
 
     #[test]
     fn joins_base_path_and_query_without_changing_authority() {
@@ -1217,5 +1228,24 @@ mod tests {
             super::validate_config(&config),
             Err(TransportError::Configuration)
         );
+    }
+
+    #[test]
+    fn detects_ssh_only_as_a_protocol_token_in_any_chain_hop() {
+        for proxy_url in [
+            "ssh://user@proxy.example:22",
+            "ssh+http://user@proxy.example:22",
+            "http://proxy.example:8080__ssh://user@proxy.example:22",
+            "http+ssh://proxy.example:8080",
+        ] {
+            assert!(proxy_uses_ssh(proxy_url), "expected SSH in {proxy_url}");
+        }
+        for proxy_url in [
+            "http://proxy.example:8080",
+            "https://ssh.example",
+            "socks5://proxy.example:1080__trojan://ssh.example",
+        ] {
+            assert!(!proxy_uses_ssh(proxy_url), "unexpected SSH in {proxy_url}");
+        }
     }
 }

@@ -17,6 +17,7 @@ test-support = ["eggress-ssh-fallback"]
 # Eggress 1.0.6's stable OutboundConnector does not install an SSH session
 # cache, so SSH upstreams temporarily retain the narrow native executor path.
 eggress-ssh-fallback = [
+    "eggress-embed/ssh",
     "dep:eggress-core",
     "dep:eggress-config",
     "dep:eggress-pproxy-compat",
@@ -34,7 +35,6 @@ eggress-embed = { version = "=1.0.6", default-features = false, features = [
     "pproxy-compat",
     "pproxy-legacy",
     "legacy-crypto",
-    "ssh",
 ] }
 # The native executor is used only for the documented Eggress 1.0.6 SSH
 # facade gap and the test-root trust seam; all other proxy construction uses

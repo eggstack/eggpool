@@ -17,6 +17,7 @@ Project-specific skills are in `.opencode/skills/`:
 - Config resolution: `--config` flag > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. API keys come from environment/`.env`
 - Optional extras: none for the native runtime; Python dependencies are tooling-only
 - Cargo is the authority for native runtime dependencies and features. Use `cargo tree --manifest-path rust/Cargo.toml -e features` when reviewing dependency changes; keep direct crates only when Rust source, build scripts, tests, packaging, or a documented compatibility contract names them.
+- `eggress-ssh-fallback` is the default-only native compatibility path for Eggress 1.0.6 SSH session caching. `--no-default-features` must continue to compile, retain direct/non-SSH proxy construction, and reject SSH proxy configuration as `TransportError::ProxyConfiguration` before dialing.
 - `deny.toml` is the dependency security/license/source policy. Run `cargo deny --manifest-path rust/Cargo.toml check` for the full advisory, license, source, and duplicate-version review; it checks the declared feature and contributor/build graph.
 - **Do not** add Python runtime fallbacks — retained Python is tooling-only
 
@@ -45,6 +46,9 @@ Fast focused iteration:
 cargo fmt --manifest-path rust/Cargo.toml --all
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
+cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --no-default-features
 uv run ruff format <changed tooling paths>
 uv run ruff check <changed tooling paths>
 uv run pytest <affected tooling test paths> -q --tb=short --maxfail=1
@@ -202,6 +206,7 @@ Non-obvious wiring:
 - **`static_models` is source of truth for provider-specific protocol**: providers serving non-default protocols must ship `[[providers.<id>.static_models]]` rows
 - **No pre-commit hooks configured**: CI runs ruff, pyright, and pytest via GitHub Actions
 - **Cargo dependency authority**: direct runtime crates and non-default features must have a current owner in `rust/src/`, `rust/build.rs`, `rust/tests/`, packaging, or a documented compatibility contract. Do not remove Eggress proxy features or TLS/SQLite features from a text search alone; qualify the reduced graph and the affected provider-transport paths.
+- **Eggress SSH feature boundary**: ordinary proxy construction is provided by `eggress-embed`; the default `eggress-ssh-fallback` preserves the 1.0.6 native SSH compatibility path, while no-default builds fail closed for SSH and keep direct/non-SSH proxy paths available. Keep the no-default check, Clippy, test, and feature-graph qualification in sync with `.github/workflows/ci.yml`.
 - **Model-info enrichment lifecycle**: startup performs one bounded external pass
   when enabled; recurring due work runs from the generation-leased
   `catalog_refresh` tick. There is no standalone `model_info_refresh` task.
