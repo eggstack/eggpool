@@ -289,16 +289,16 @@ Do not in this phase:
 
 ## Approval checklist
 
-- [ ] Eggress dependency family upgraded atomically to 1.0.6.
-- [ ] Baseline provider proxy suite passed before refactor.
-- [ ] Production multi-hop and SSH construction moved behind `eggress-embed`.
-- [ ] Duplicate production chain compiler/executor path removed.
-- [ ] Explicit-direct behavior preserved.
-- [ ] Proxy failures still cannot bypass to direct.
-- [ ] Destination and proxy TLS verification remain enabled.
-- [ ] Existing timeout/admission/retry invariants remain intact.
-- [ ] Provider transport and full Rust qualification pass.
-- [ ] Remaining implementation-crate usage is limited to the documented test-support seam.
+- [x] Eggress dependency family upgraded atomically to 1.0.6.
+- [x] Baseline provider proxy suite passed before refactor.
+- [x] Production single-hop and multi-hop construction moved behind `eggress-embed`; supported SSH uses the documented 1.0.6 facade fallback because the published facade does not install an SSH session cache.
+- [x] The duplicate non-SSH production chain compiler/executor path was removed; the narrow SSH fallback is explicit and feature-gated.
+- [x] Explicit-direct behavior preserved.
+- [x] Proxy failures still cannot bypass to direct.
+- [x] Destination and proxy TLS verification remain enabled.
+- [x] Existing timeout/admission/retry invariants remain intact.
+- [x] Provider transport and full Rust qualification pass.
+- [x] Remaining implementation-crate usage is limited to the documented 1.0.6 SSH fallback and the `test-support` custom-root seam.
 
 ## Closure evidence
 
@@ -317,3 +317,10 @@ in a narrowly named, matching-1.0.6 `eggress-ssh-fallback` feature with
 `SshSessionCache::new_compatibility()`. This is an intentional, documented
 facade exception rather than a silent loss of SSH support; all other normal
 proxy construction crosses the embed boundary.
+
+The implementation was revalidated on 2026-09-13 from `fd27582a`: the
+provider transport suite passed, strict all-features Clippy passed, the full
+all-features Rust suite passed, and the provider architecture documentation
+was corrected to describe the shipped boundary and its explicit SSH
+exception. No later plan depends on Plan 187; Plans 188 and 189 are already
+closed, and no future-plan status transition is required.
