@@ -6,8 +6,8 @@ use eggpool::{
     Config,
     config::{AccountConfig, ProviderConfig},
     config_reload_policy::{
-        ConfigDiff, ReloadDisposition, compute_diff, disposition_for, dynamic_rules,
-        field_dispositions, sanitize_text_for_audit, schema_paths, semantic_digest,
+        ConfigDiff, ReloadDisposition, classify_transition, compute_diff, disposition_for,
+        dynamic_rules, field_dispositions, sanitize_text_for_audit, schema_paths, semantic_digest,
         verify_expected_digest,
     },
 };
@@ -164,6 +164,15 @@ fn live_restart_and_mixed_mutations_are_classified_without_partial_semantics() {
     assert_eq!(mixed.live().len(), 1);
     assert_eq!(mixed.restart_required().len(), 1);
     assert_eq!(mixed.changed_sections(), vec!["server"]);
+
+    let transition = classify_transition(&Config::default(), &mixed_new)
+        .expect("mixed transition classification");
+    assert!(transition.has_restart_required());
+    assert_eq!(transition.changed_sections(), vec!["server"]);
+    assert_eq!(
+        transition.restart_required_paths(),
+        vec!["server.port".to_owned()]
+    );
 }
 
 #[test]

@@ -46,7 +46,7 @@ terminal evidence and never synthesize a terminal event from transport EOF.
 
 | Subsystem | Current implementation |
 |---|---|
-| CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/error.rs` |
+| CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/error.rs` |
 | Request and coordinator | `rust/src/request/`, `rust/src/coordinator/` |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
 | Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
@@ -54,7 +54,7 @@ terminal evidence and never synthesize a terminal event from transport EOF.
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs` |
 | HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
-| Operations and local lifecycle | `rust/src/operations/`, especially `lifecycle.rs`, `process.rs`, `paths.rs`, and `control.rs` |
+| Operations and local lifecycle | `rust/src/operations/`, especially `config_mutation.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, and `control.rs` |
 
 See the corresponding deep dive for details:
 
@@ -85,8 +85,12 @@ See the corresponding deep dive for details:
 Configuration resolves in this order: explicit `--config`,
 `$EGGPOOL_CONFIG`, the XDG user config path, then `./config.toml`. API keys
 come from the environment or the adjacent `.env`. Live reload policy is owned
-by `rust/src/config_reload_policy.rs`; unsupported or disruptive changes fail
-closed and require restart.
+by `rust/src/config_reload_policy.rs`. Its pure `classify_transition` contract
+returns one redacted typed result for unchanged, live-reloadable, and
+restart-required candidates. Operator mutations carry that result into apply
+logic, while `rust/src/reload.rs` revalidates and reclassifies on the server
+before generation construction. Unsupported or disruptive changes fail closed
+and require restart.
 
 The repository-root `config.example.toml` and `config.sbc.example.toml` are
 the canonical human-edited examples. `rust/build.rs` tracks them as inputs and

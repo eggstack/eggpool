@@ -3,9 +3,10 @@
 Back to [Architecture](README.md)
 
 `rust/src/operations/control.rs` owns the Unix-domain control endpoint and
-client commands. `rust/src/reload.rs` coordinates validation, candidate
-construction, atomic publication, and retirement. `rust/src/config_reload_policy.rs`
-is the single source of truth for live versus restart-required settings.
+client commands. `rust/src/reload.rs` coordinates server-side validation,
+canonical transition classification, candidate construction, atomic
+publication, and retirement. `rust/src/config_reload_policy.rs` is the single
+source of truth for live versus restart-required settings.
 
 `eggpool rehash` serializes reloads. A candidate is complete before publication;
 failure leaves the active generation intact. In-flight leases continue using

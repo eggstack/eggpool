@@ -74,16 +74,22 @@ observations.
 ## Reload and publication
 
 `rust/src/config.rs` owns TOML shape, defaults, and validation.
-`rust/src/config_reload_policy.rs` classifies live, restart-required, and
-ignored changes. `rust/src/reload.rs` builds the candidate generation,
-reconciles durable state, publishes it atomically, and retires the old
-generation.
+`rust/src/config_reload_policy.rs` is the single typed transition authority;
+its pure `classify_transition` result is redacted and safe to carry through
+operator apply paths. `rust/src/reload.rs` revalidates and reclassifies the
+candidate, then builds the candidate generation, reconciles durable state,
+publishes it atomically, and retires the old generation.
 
 `eggpool rehash` is serialized. Invalid candidates do not replace the active
 generation. A restart-required change is reported before publication, and a
 failed candidate leaves the current generation and its process-owned state
 unchanged. Reload diagnostics are owned by the reload operation rather than a
 caller that may finish early.
+
+Configuration mutations keep text editing separate from application. The
+bounded editor validates and classifies the pre-edit to post-edit transition
+before atomic replacement. Restart-after-mutation is composed by
+`operations/lifecycle.rs`; the runtime adapter only presents the outcome.
 
 ## Background work and shutdown
 

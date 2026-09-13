@@ -19,6 +19,23 @@ Project-specific skills are in `.opencode/skills/`:
 - Cargo is the authority for native runtime dependencies and features. Use `cargo tree --manifest-path rust/Cargo.toml -e features` when reviewing dependency changes; keep direct crates only when Rust source, build scripts, tests, packaging, or a documented compatibility contract names them.
 - **Do not** add Python runtime fallbacks — retained Python is tooling-only
 
+## Configuration transitions
+
+- `rust/src/config_reload_policy.rs` is the single typed authority for
+  current-config to candidate-config classification. Use `classify_transition`
+  and carry its redacted `ConfigTransition` through operator apply paths;
+  do not add a second restart/reload key list.
+- Mutation text editing remains bounded and comment-preserving. Parse and
+  validate the candidate before atomic replacement, classify it against the
+  pre-edit config, and keep the server-side `rehash` classification as the
+  trust boundary because the file may change after the CLI mutation.
+- `rust/src/reload.rs` owns candidate generation publication and retirement;
+  `rust/src/operations/lifecycle.rs` owns restart-after-mutation. The runtime
+  adapter should not become a dependency of operations.
+- Transition results and diagnostics must remain secret-free. Mixed
+  reloadable/restart-required changes are wholly restart-required; never apply
+  only the reloadable subset.
+
 ## Local Development Loop
 
 Fast focused iteration:

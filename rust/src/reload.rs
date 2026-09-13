@@ -9,6 +9,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -20,7 +21,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     Config,
-    config_reload_policy::{ConfigDiff, compute_diff, verify_expected_digest},
+    config_reload_policy::{ConfigDiff, classify_transition, verify_expected_digest},
     db::{Account, AccountConfig, DatabaseError, DatabaseTransaction},
     runtime_lifecycle::{
         GenerationStageError, RuntimeGenerationFactory, RuntimeManager, RuntimeTaskSpec,
@@ -30,6 +31,7 @@ use crate::{
 };
 
 const MAX_REASON_BYTES: usize = 96;
+const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 
 /// Input accepted by the server-side reload API. Bytes retain a canonical
 /// path only for safe parse diagnostics; they are never retained in results.
@@ -401,8 +403,8 @@ impl ReloadService {
         };
         let active = self.manager.active_slot();
         let old_config = active.generation().config().clone();
-        let diff = match compute_diff(&old_config, &candidate_config) {
-            Ok(diff) => diff,
+        let transition = match classify_transition(&old_config, &candidate_config) {
+            Ok(transition) => transition,
             Err(_) => {
                 return ReloadResult::from_active(
                     &self.manager,
@@ -411,6 +413,7 @@ impl ReloadService {
                 );
             }
         };
+        let diff = transition.diff().clone();
         if diff.is_noop() {
             return self.result_with_diff(ReloadResultCategory::Noop, "no_changes", &diff, false);
         }
@@ -728,21 +731,32 @@ fn read_input(
     default_path: Option<&Path>,
 ) -> Result<(PathBuf, Vec<u8>), ReloadPreparationError> {
     match input {
-        ReloadInput::Path(path) => fs::read(path)
-            .map(|bytes| (path.clone(), bytes))
-            .map_err(|_| ReloadPreparationError::Read),
+        ReloadInput::Path(path) => read_bounded(path).map(|bytes| (path.clone(), bytes)),
         ReloadInput::Bytes {
             canonical_path,
             content,
-        } => Ok((canonical_path.clone(), content.clone())),
+        } if content.len() <= MAX_CONFIG_BYTES => Ok((canonical_path.clone(), content.clone())),
+        ReloadInput::Bytes { .. } => Err(ReloadPreparationError::Read),
     }
     .or_else(|_| {
         default_path
-            .map(|path| fs::read(path).map(|bytes| (path.to_owned(), bytes)))
+            .map(|path| read_bounded(path).map(|bytes| (path.to_owned(), bytes)))
             .transpose()
             .map_err(|_| ReloadPreparationError::Read)?
             .ok_or(ReloadPreparationError::Read)
     })
+}
+
+fn read_bounded(path: &Path) -> Result<Vec<u8>, ReloadPreparationError> {
+    let file = fs::File::open(path).map_err(|_| ReloadPreparationError::Read)?;
+    let mut bytes = Vec::new();
+    file.take((MAX_CONFIG_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ReloadPreparationError::Read)?;
+    if bytes.len() > MAX_CONFIG_BYTES {
+        return Err(ReloadPreparationError::Read);
+    }
+    Ok(bytes)
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {

@@ -17,8 +17,12 @@ Configuration resolution is explicit `--config`, `$EGGPOOL_CONFIG`, the XDG
 user path, then `./config.toml`. Secrets come from the environment or adjacent
 `.env` and are never included in metadata-only diagnostics.
 
-`rust/src/config_reload_policy.rs` classifies live and restart-required changes.
-`rust/src/reload.rs` builds and publishes a complete candidate atomically.
+`rust/src/config_reload_policy.rs` exposes the pure `classify_transition`
+authority and its redacted `ConfigTransition` result for live,
+restart-required, and unchanged candidates. Atomic text mutations carry that
+result into apply logic; `rust/src/reload.rs` independently revalidates and
+reclassifies the on-disk candidate before it builds and publishes a complete
+generation atomically. A mixed transition is wholly restart-required.
 The repository-root configuration examples are the canonical build inputs;
 `rust/build.rs` embeds the default example for `eggpool init-config`.
 `[server].threads` remains accepted for compatibility and diagnostics, but the

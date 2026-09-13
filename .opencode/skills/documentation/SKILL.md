@@ -28,6 +28,10 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
 - Treat `rust/Cargo.toml` as the authority for native dependency and feature
   claims. Do not document proxy, TLS, SQLite, or archive capabilities that are
   not present in the resolved Cargo feature graph.
+- Describe configuration transitions through the typed policy in
+  `rust/src/config_reload_policy.rs`: mutation paths classify before atomic
+  replacement, and server-side rehash reclassifies before generation
+  publication. Do not preserve stale caller-specific restart/reload lists.
 - Keep historical plans append-only. Git history is the archive for retired
   migration scaffolding; current docs must describe the shipped Rust runtime.
 

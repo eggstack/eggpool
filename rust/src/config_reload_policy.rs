@@ -139,10 +139,51 @@ pub fn verify_expected_digest(expected: Option<&str>, actual: &str) -> Result<()
     Ok(())
 }
 
-/// Compute a redacted semantic diff.  Validated `Config` values contain only
-/// string-keyed JSON-compatible values, so serialization failure is treated
-/// as an internal policy error rather than silently producing an empty diff.
-pub fn compute_diff(old: &Config, new: &Config) -> Result<ConfigDiff, ConfigPolicyError> {
+/// The single typed result for a validated configuration transition.
+///
+/// The result deliberately contains only the redacted diff.  Callers retain
+/// their already-validated candidate config separately for generation or
+/// process work, while diagnostics can safely display this value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigTransition {
+    diff: ConfigDiff,
+}
+
+impl ConfigTransition {
+    pub fn diff(&self) -> &ConfigDiff {
+        &self.diff
+    }
+
+    pub fn is_noop(&self) -> bool {
+        self.diff.is_noop()
+    }
+
+    pub fn has_restart_required(&self) -> bool {
+        self.diff.has_restart_required()
+    }
+
+    pub fn changed_sections(&self) -> Vec<String> {
+        self.diff.changed_sections()
+    }
+
+    pub fn restart_required_paths(&self) -> Vec<String> {
+        self.diff
+            .restart_required()
+            .into_iter()
+            .map(|change| change.path.clone())
+            .collect()
+    }
+}
+
+/// Classify a transition between two validated configs.
+///
+/// This is the canonical transition authority used by reload and operator
+/// mutation paths.  It is pure and deterministic; it does not read files,
+/// contact the server, build generations, or publish runtime state.
+pub fn classify_transition(
+    old: &Config,
+    new: &Config,
+) -> Result<ConfigTransition, ConfigPolicyError> {
     let old_value = serde_json::to_value(old).map_err(|_| ConfigPolicyError::Serialization)?;
     let new_value = serde_json::to_value(new).map_err(|_| ConfigPolicyError::Serialization)?;
     let mut changes = Vec::new();
@@ -178,7 +219,14 @@ pub fn compute_diff(old: &Config, new: &Config) -> Result<ConfigDiff, ConfigPoli
     }
 
     changes.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(ConfigDiff { changes })
+    Ok(ConfigTransition {
+        diff: ConfigDiff { changes },
+    })
+}
+
+/// Backwards-compatible name for callers that need the policy diff itself.
+pub fn compute_diff(old: &Config, new: &Config) -> Result<ConfigDiff, ConfigPolicyError> {
+    Ok(classify_transition(old, new)?.diff)
 }
 
 fn diff_dynamic_map(

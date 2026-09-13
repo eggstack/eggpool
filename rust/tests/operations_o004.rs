@@ -132,6 +132,42 @@ fn server_threads_is_a_restart_required_compatibility_field() {
 }
 
 #[test]
+fn mutation_carries_canonical_disposition_before_apply() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    fs::write(&path, base_config()).expect("config");
+
+    let restart = config_mutation::set_server_value_with_transition(&path, "host", "0.0.0.0")
+        .expect("host edit");
+    assert!(restart.value);
+    assert_eq!(
+        restart.transition.restart_required_paths(),
+        vec!["server.host".to_owned()]
+    );
+
+    let noop = config_mutation::set_server_value_with_transition(&path, "host", "0.0.0.0")
+        .expect("same host edit");
+    assert!(noop.transition.is_noop());
+}
+
+#[test]
+fn mutation_transition_debug_never_contains_secret_values() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    fs::write(&path, base_config()).expect("config");
+    let secret = "o004-transition-secret";
+
+    let mutation =
+        config_mutation::write_server_key_with_transition(&path, secret).expect("key edit");
+    let debug = format!("{:?}", mutation.transition);
+    assert!(!debug.contains(secret));
+    assert_eq!(
+        mutation.transition.restart_required_paths(),
+        vec!["server.api_key".to_owned()]
+    );
+}
+
+#[test]
 fn account_matching_is_secret_safe_and_apply_outcome_is_typed() {
     let directory = tempdir().expect("temporary directory");
     let path = directory.path().join("config.toml");

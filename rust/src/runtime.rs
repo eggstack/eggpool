@@ -18,6 +18,7 @@ use crate::{
     BootstrapError, Cli, Command,
     cli::ServeArgs,
     config,
+    config_reload_policy::classify_transition,
     operations::{
         backup::{self, BackupService},
         config_mutation::{self, ApplyMode, ApplyOutcome},
@@ -1285,6 +1286,8 @@ async fn configsetup(
 ) -> Result<(), BootstrapError> {
     use crate::operations::integrations::{self, SnippetOptions, Target};
 
+    let pre_mutation_config = config::Config::from_toml(path)?;
+
     let (target, args) = match command {
         crate::cli::ConfigsetupCommand::Opencode => (Target::Opencode, None),
         crate::cli::ConfigsetupCommand::ClaudeCode => (Target::ClaudeCode, None),
@@ -1350,7 +1353,7 @@ async fn configsetup(
             );
         }
         if context.config_mutated || context.transcoder_mutated {
-            restart_after_integration_mutation(path).await?;
+            restart_after_integration_mutation(path, &pre_mutation_config).await?;
         }
         eprintln!("Paste into ~/.config/opencode/opencode.json.");
         return Ok(());
@@ -1426,14 +1429,24 @@ async fn configsetup(
             eprintln!("{message}");
         }
         if context.config_mutated || context.transcoder_mutated {
-            restart_after_integration_mutation(path).await?;
+            restart_after_integration_mutation(path, &pre_mutation_config).await?;
         }
     }
     Ok(())
 }
 
-async fn restart_after_integration_mutation(path: &Path) -> Result<(), BootstrapError> {
-    match config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
+async fn restart_after_integration_mutation(
+    path: &Path,
+    old_config: &config::Config,
+) -> Result<(), BootstrapError> {
+    let new_config = config::Config::from_toml(path)?;
+    let transition = classify_transition(old_config, &new_config).map_err(|_| {
+        command_error(
+            EXIT_VALIDATION,
+            "configuration transition could not be classified",
+        )
+    })?;
+    match config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning, &transition)
         .await
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
     {
@@ -1528,20 +1541,25 @@ async fn connect(path: &Path, args: crate::cli::ConnectArgs) -> Result<(), Boots
         }
         return Ok(());
     }
-    let provider = config_mutation::connect(path, args.providers.as_deref())
+    let mutation = config_mutation::connect_with_transition(path, args.providers.as_deref())
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-    if provider.is_some() {
-        let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
-            .await
-            .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+    if mutation.value.is_some() {
+        let outcome = config_mutation::apply_after_mutation(
+            path,
+            ApplyMode::LiveOrReport,
+            &mutation.transition,
+        )
+        .await
+        .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
         render_apply(outcome);
     }
     Ok(())
 }
 
 async fn logout(path: &Path, target: Option<&str>) -> Result<(), BootstrapError> {
-    let account = config_mutation::logout(path, target)
+    let mutation = config_mutation::logout_with_transition(path, target)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let account = mutation.value.clone();
     let Some(account) = account else {
         if let Some(target) = target {
             println!("No configured provider or API key found for {target:?}.");
@@ -1556,9 +1574,10 @@ async fn logout(path: &Path, target: Option<&str>) -> Result<(), BootstrapError>
         account.name,
         path.display()
     );
-    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
-        .await
-        .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+    let outcome =
+        config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport, &mutation.transition)
+            .await
+            .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
     render_apply(outcome);
     Ok(())
 }
@@ -1624,8 +1643,9 @@ async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let key =
         config_mutation::generate_key().map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-    let written = config_mutation::write_server_key(path, &key)
+    let mutation = config_mutation::write_server_key_with_transition(path, &key)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let written = mutation.value;
     if let Some(old) = old {
         if show_old {
             println!("Old key (expired): {old}");
@@ -1642,9 +1662,13 @@ async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
             "Warning: [server] api_key_env owns the server key; rotate that environment variable instead."
         );
     }
-    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
-        .await
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let outcome = config_mutation::apply_after_mutation(
+        path,
+        ApplyMode::RestartIfRunning,
+        &mutation.transition,
+    )
+    .await
+    .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     render_apply(outcome);
     Ok(())
 }
@@ -1659,12 +1683,16 @@ fn init_config(target: Option<&Path>, resolved: &Path, force: bool) -> Result<()
 }
 
 async fn set_config(path: &Path, key: &str, value: &str) -> Result<(), BootstrapError> {
-    config_mutation::set_server_value(path, key, value)
+    let mutation = config_mutation::set_server_value_with_transition(path, key, value)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     println!("Set {key} = {value} in {}.", path.display());
-    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
-        .await
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let outcome = config_mutation::apply_after_mutation(
+        path,
+        ApplyMode::RestartIfRunning,
+        &mutation.transition,
+    )
+    .await
+    .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     render_apply(outcome);
     Ok(())
 }
@@ -1673,16 +1701,20 @@ async fn dashboard_public(path: &Path, setting: Option<bool>) -> Result<(), Boot
     let current = config_mutation::read_dashboard_public(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let new_value = setting.unwrap_or(!current);
-    config_mutation::set_dashboard_public(path, Some(new_value))
+    let mutation = config_mutation::set_dashboard_public_with_transition(path, Some(new_value))
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     if new_value {
         println!("Dashboard is now public (no API key required).");
     } else {
         println!("Dashboard now requires API key authentication.");
     }
-    let outcome = config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning)
-        .await
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    let outcome = config_mutation::apply_after_mutation(
+        path,
+        ApplyMode::RestartIfRunning,
+        &mutation.transition,
+    )
+    .await
+    .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     render_apply(outcome);
     Ok(())
 }
@@ -1710,14 +1742,17 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let mut connected = 0_u32;
     loop {
-        if config_mutation::connect(path, args.providers.as_deref())
-            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?
-            .is_some()
-        {
+        let mutation = config_mutation::connect_with_transition(path, args.providers.as_deref())
+            .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+        if mutation.value.is_some() {
             connected += 1;
-            let outcome = config_mutation::apply_after_mutation(path, ApplyMode::LiveOrReport)
-                .await
-                .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
+            let outcome = config_mutation::apply_after_mutation(
+                path,
+                ApplyMode::LiveOrReport,
+                &mutation.transition,
+            )
+            .await
+            .map_err(|error| mutation_error(error, EXIT_CONTROL_UNAVAILABLE))?;
             render_apply(outcome);
         }
         let Some(answer) = config_mutation::read_line_prompt("Add another provider? (y/n): ")
@@ -1850,20 +1885,6 @@ async fn restart(path: &Path, timeout_seconds: f64) -> Result<(), BootstrapError
         lifecycle::RestartOutcome::AlreadyStopped => {}
     }
     Ok(())
-}
-
-/// Restart a running standalone server for a configuration mutation. A missing
-/// or stopped server is a successful observation (`Ok(false)`); this helper
-/// never starts a service as a side effect.
-pub(crate) async fn restart_for_mutation(path: &Path) -> Result<bool, BootstrapError> {
-    let config = config::Config::from_toml(path)?;
-    config.validate_account_credentials()?;
-    Ok(!matches!(
-        lifecycle::restart(path, &config, Duration::from_secs(10), false, |_| {})
-            .await
-            .map_err(lifecycle_error)?,
-        lifecycle::RestartOutcome::AlreadyStopped
-    ))
 }
 
 async fn restart_server_inner(

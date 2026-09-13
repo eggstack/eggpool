@@ -119,10 +119,9 @@ deprecated and does not control a task. The existing `catalog_refresh` task
 provides recurring opportunities, and the model-info service selects due
 rows using per-row TTLs and source cooldowns.
 
-the runtime lifecycle state (``rust/src/runtime_lifecycle.rs``) now carries
-``process_supervisor``, ``task_spec_version``, and
-``last_task_transition`` fields.  Diagnostics are exposed under
-``/api/stats/runtime`` via ``_snapshot_runtime_manager``.
+The runtime lifecycle state in ``rust/src/runtime_lifecycle.rs`` carries
+bounded task and generation transition diagnostics. They are exposed under
+``/api/stats/runtime`` by the native Rust server.
 
 Process-bound storage/deployment fields remain ``RESTART_REQUIRED``
 (database path, backup destination paths that cross permission
@@ -153,15 +152,18 @@ returns exit code `2` so scripts can detect the situation.
 
 The reload follows a strict transactional pipeline:
 
-1. **Local validation** — CLI validates the config file via
-   `validate_config_file()`. Invalid configs are rejected immediately
-   (fail-closed); the running config is never touched.
+1. **Local validation** — The CLI parses and semantically validates the
+   config file. The server bounds the candidate bytes before parsing. Invalid
+   configs are rejected immediately (fail-closed); the running configuration
+   is never touched. Operator mutation commands also classify their pre-edit
+   to post-edit transition before atomically replacing the file.
 2. **Control socket** — CLI connects to the Unix-domain socket and
    sends the validated `content_digest` (SHA-256 of the config bytes).
 3. **Server-side re-validation** — The server independently re-validates
    the config to guard against TOCTOU drift.
-4. **Diff** — Server computes a `ConfigDiff` against the active
-   generation's config. Expanded per-key paths
+4. **Transition classification** — Server runs the canonical
+   `classify_transition` policy against the active generation's config. The
+   result contains a redacted `ConfigDiff`; expanded per-key paths
    (``providers.<id>``, ``accounts.<provider>/<name>``) inherit the
    LIVE disposition of their parent collection.
 5. **Restart-required check** — Any field with `RESTART_REQUIRED`
@@ -230,9 +232,9 @@ Response (one JSON object per line):
 
 The CLI performs these steps:
 
-1. **Preflight validation** — Runs `validate_config_file()` against
-   the config file. On failure, prints a clear error and exits
-   non-zero. The running configuration is never touched.
+1. **Preflight validation** — Parses and semantically validates the bounded
+   config bytes. On failure, prints a clear error and exits non-zero. The
+   running configuration is never touched.
 2. **Connect to control socket** — Sends the validated
    `content_digest` to the running server. If the server is not
    running, prints "Control socket unavailable. Is the server running?"

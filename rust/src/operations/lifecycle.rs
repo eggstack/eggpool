@@ -203,6 +203,18 @@ pub async fn restart(
     Ok(RestartOutcome::Restarted { pid: child.id() })
 }
 
+/// Restart a running server after an operator mutation without starting a
+/// stopped service as a side effect.
+pub async fn restart_for_mutation(
+    config_path: &Path,
+    config: &Config,
+) -> Result<bool, LifecycleError> {
+    Ok(!matches!(
+        restart(config_path, config, Duration::from_secs(10), false, |_| {},).await?,
+        RestartOutcome::AlreadyStopped
+    ))
+}
+
 pub async fn ensure_running(
     config_path: &Path,
     config: &Config,

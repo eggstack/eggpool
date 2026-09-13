@@ -186,6 +186,14 @@ api_key = "sk-your-opencode-go-key"
 
 Use `eggpool connect` for interactive provider setup. See [docs/providers.md](docs/providers.md) for the full provider catalog, configuration details, and troubleshooting.
 
+Configuration changes are parsed and semantically validated before the file is
+replaced. The native transition policy in
+`rust/src/config_reload_policy.rs` classifies each candidate as unchanged,
+live-reloadable, or restart-required. `set`, `connect`, `logout`, `newkey`,
+dashboard changes, and integration setup carry that classification into their
+apply step; mixed live/restart changes never partially publish. `eggpool rehash`
+revalidates and classifies again on the server before building a new generation.
+
 ### Key Config Sections
 
 | Section | Purpose |

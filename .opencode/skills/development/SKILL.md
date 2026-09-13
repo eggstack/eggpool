@@ -32,6 +32,12 @@ the server modules thin: HTTP handlers must delegate inference lifecycle work
 to the coordinator, and lifecycle workflows must compose the existing process
 safety primitives.
 
+Configuration changes must use `config_reload_policy::classify_transition`.
+Mutation paths should carry the redacted transition into apply logic, while
+`reload.rs` remains authoritative for server-side revalidation and generation
+publication. Add deterministic transition coverage for no-op, live,
+restart-required, mixed, invalid, and secret-redaction cases.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:

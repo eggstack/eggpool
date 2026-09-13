@@ -19,6 +19,7 @@ use toml::{Value, map::Map};
 
 use crate::{
     Config, ConfigError,
+    config_reload_policy::{ConfigTransition, classify_transition},
     operations::{control::ControlClient, paths::RuntimePaths, process},
 };
 
@@ -81,6 +82,14 @@ pub enum ApplyOutcome {
     ControlUnavailable,
     RehashFailed(String),
     Restarted,
+}
+
+/// The result of an atomic text mutation, including the canonical
+/// old-config to candidate-config classification performed before the write.
+#[derive(Debug, Clone)]
+pub struct MutationResult<T> {
+    pub value: T,
+    pub transition: ConfigTransition,
 }
 
 #[derive(Debug, Clone)]
@@ -156,10 +165,23 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, MutationError> {
     Ok(bytes)
 }
 
-fn validate_bytes(path: &Path, bytes: &[u8]) -> Result<(), MutationError> {
+fn validate_config_bytes(path: &Path, bytes: &[u8]) -> Result<Config, MutationError> {
     let config = Config::from_toml_bytes(path, bytes)?;
     config.validate_account_credentials()?;
-    Ok(())
+    Ok(config)
+}
+
+fn no_op_result<T>(path: &Path, value: T) -> Result<MutationResult<T>, MutationError> {
+    let bytes = if path.exists() {
+        read_bounded(path)?
+    } else {
+        Vec::new()
+    };
+    let config = Config::from_toml_bytes(path, &bytes)?;
+    let transition = classify_transition(&config, &config).map_err(|_| {
+        MutationError::Invalid("configuration transition could not be classified".into())
+    })?;
+    Ok(MutationResult { value, transition })
 }
 
 fn existing_mode(path: &Path) -> Result<Option<fs::Permissions>, MutationError> {
@@ -211,7 +233,11 @@ fn atomic_replace(
     result
 }
 
-fn mutate_text<F>(path: &Path, create: bool, edit: F) -> Result<bool, MutationError>
+fn mutate_text_with_transition<F>(
+    path: &Path,
+    create: bool,
+    edit: F,
+) -> Result<MutationResult<bool>, MutationError>
 where
     F: FnOnce(&str) -> Result<(String, bool), MutationError>,
 {
@@ -228,14 +254,28 @@ where
     };
     let original_text = String::from_utf8(original.clone())
         .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
+    let old_config = Config::from_toml_bytes(path, &original)?;
     let (updated, changed) = edit(&original_text)?;
+    let candidate_config = if changed {
+        validate_config_bytes(path, updated.as_bytes())?
+    } else {
+        old_config.clone()
+    };
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
+        MutationError::Invalid("configuration transition could not be classified".into())
+    })?;
     if !changed {
-        return Ok(false);
+        return Ok(MutationResult {
+            value: false,
+            transition,
+        });
     }
     let bytes = updated.as_bytes();
-    validate_bytes(path, bytes)?;
     atomic_replace(path, bytes, existing_mode(path)?)?;
-    Ok(true)
+    Ok(MutationResult {
+        value: true,
+        transition,
+    })
 }
 
 fn line_header(line: &str) -> Option<&str> {
@@ -337,6 +377,14 @@ fn valid_identifier(value: &str) -> bool {
 }
 
 pub fn set_server_value(path: &Path, key: &str, value: &str) -> Result<bool, MutationError> {
+    Ok(set_server_value_with_transition(path, key, value)?.value)
+}
+
+pub fn set_server_value_with_transition(
+    path: &Path,
+    key: &str,
+    value: &str,
+) -> Result<MutationResult<bool>, MutationError> {
     let rendered = match key {
         "host" => render_string(value),
         "port" => {
@@ -356,15 +404,22 @@ pub fn set_server_value(path: &Path, key: &str, value: &str) -> Result<bool, Mut
             )));
         }
     };
-    mutate_text(path, false, |text| {
+    mutate_text_with_transition(path, false, |text| {
         replace_or_insert_section_value(text, "server", key, &rendered, false, false)
     })
 }
 
 pub fn set_dashboard_public(path: &Path, public: Option<bool>) -> Result<bool, MutationError> {
+    Ok(set_dashboard_public_with_transition(path, public)?.value)
+}
+
+pub fn set_dashboard_public_with_transition(
+    path: &Path,
+    public: Option<bool>,
+) -> Result<MutationResult<bool>, MutationError> {
     let current = read_dashboard_public(path)?;
     let next = public.unwrap_or(!current);
-    mutate_text(path, false, |text| {
+    mutate_text_with_transition(path, false, |text| {
         replace_or_insert_section_value(text, "dashboard", "public", &next.to_string(), true, true)
     })
 }
@@ -384,6 +439,13 @@ pub fn read_dashboard_public(path: &Path) -> Result<bool, MutationError> {
 }
 
 pub fn init_config(path: &Path, force: bool) -> Result<bool, MutationError> {
+    Ok(init_config_with_transition(path, force)?.value)
+}
+
+pub fn init_config_with_transition(
+    path: &Path,
+    force: bool,
+) -> Result<MutationResult<bool>, MutationError> {
     let _guard = lock_mutation(path)?;
     if path.exists() && !force {
         return Err(MutationError::Invalid(format!(
@@ -391,10 +453,22 @@ pub fn init_config(path: &Path, force: bool) -> Result<bool, MutationError> {
             path.display()
         )));
     }
+    let original = if path.exists() {
+        read_bounded(path)?
+    } else {
+        Vec::new()
+    };
+    let old_config = Config::from_toml_bytes(path, &original)?;
     let bytes = DEFAULT_CONFIG.as_bytes();
-    validate_bytes(path, bytes)?;
+    let candidate_config = validate_config_bytes(path, bytes)?;
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
+        MutationError::Invalid("configuration transition could not be classified".into())
+    })?;
     atomic_replace(path, bytes, existing_mode(path)?)?;
-    Ok(true)
+    Ok(MutationResult {
+        value: true,
+        transition,
+    })
 }
 
 pub fn read_server_key(path: &Path) -> Result<Option<String>, MutationError> {
@@ -468,7 +542,14 @@ pub fn resolve_server_key(path: &Path) -> Result<(String, bool), MutationError> 
 /// Enable the compatibility transcoder when an enabled Anthropic-only
 /// provider is exposed to OpenAI-compatible integrations.
 pub fn set_transcoder_enabled(path: &Path, enabled: bool) -> Result<bool, MutationError> {
-    mutate_text(path, false, |text| {
+    Ok(set_transcoder_enabled_with_transition(path, enabled)?.value)
+}
+
+pub fn set_transcoder_enabled_with_transition(
+    path: &Path,
+    enabled: bool,
+) -> Result<MutationResult<bool>, MutationError> {
+    mutate_text_with_transition(path, false, |text| {
         replace_or_insert_section_value(
             text,
             "transcoder",
@@ -510,6 +591,13 @@ pub fn generate_key() -> Result<String, MutationError> {
 }
 
 pub fn write_server_key(path: &Path, key: &str) -> Result<bool, MutationError> {
+    Ok(write_server_key_with_transition(path, key)?.value)
+}
+
+pub fn write_server_key_with_transition(
+    path: &Path,
+    key: &str,
+) -> Result<MutationResult<bool>, MutationError> {
     if key.is_empty() || key.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) {
         return Err(MutationError::Invalid("generated key is invalid".into()));
     }
@@ -525,9 +613,9 @@ pub fn write_server_key(path: &Path, key: &str) -> Result<bool, MutationError> {
         .and_then(Value::as_str)
         .is_some_and(|name| !name.trim().is_empty());
     if env_owned {
-        return Ok(false);
+        return no_op_result(path, false);
     }
-    mutate_text(path, false, |text| {
+    mutate_text_with_transition(path, false, |text| {
         replace_or_insert_section_value(text, "server", "api_key", &render_string(key), true, true)
     })
 }
@@ -761,6 +849,13 @@ pub fn connect(
     path: &Path,
     providers_path: Option<&Path>,
 ) -> Result<Option<String>, MutationError> {
+    Ok(connect_with_transition(path, providers_path)?.value)
+}
+
+pub fn connect_with_transition(
+    path: &Path,
+    providers_path: Option<&Path>,
+) -> Result<MutationResult<Option<String>>, MutationError> {
     let templates = load_provider_templates(providers_path)?;
     let mut ids: Vec<&String> = templates.keys().collect();
     ids.sort();
@@ -790,7 +885,7 @@ pub fn connect(
         .map_err(MutationError::Read)?
         == 0
     {
-        return Ok(None);
+        return no_op_result(path, None);
     }
     let selection = selection.trim();
     if selection.is_empty()
@@ -799,7 +894,7 @@ pub fn connect(
             "q" | "quit" | "exit"
         )
     {
-        return Ok(None);
+        return no_op_result(path, None);
     }
     let selected_provider_id = selection
         .parse::<usize>()
@@ -843,11 +938,11 @@ pub fn connect(
             template.display
         ))?
         else {
-            return Ok(None);
+            return no_op_result(path, None);
         };
         if key.is_empty() {
             println!("No API key provided. Aborted.");
-            return Ok(None);
+            return no_op_result(path, None);
         }
         Some(key)
     };
@@ -874,7 +969,7 @@ pub fn connect(
     });
     if duplicate {
         println!("An account with this API key is already configured. Aborted.");
-        return Ok(None);
+        return no_op_result(path, None);
     }
     let updated = if provider_exists(&original_text, &provider_id) {
         append_account(
@@ -901,11 +996,18 @@ pub fn connect(
         );
         format!("{}\n", lines.join("\n"))
     };
-    validate_bytes(path, updated.as_bytes())?;
+    let old_config = Config::from_toml_bytes(path, original_text.as_bytes())?;
+    let candidate_config = validate_config_bytes(path, updated.as_bytes())?;
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
+        MutationError::Invalid("configuration transition could not be classified".into())
+    })?;
     atomic_replace(path, updated.as_bytes(), existing_mode(path)?)?;
     drop(guard);
     println!("Added {account_name} to {provider_id}.");
-    Ok(Some(provider_id))
+    Ok(MutationResult {
+        value: Some(provider_id),
+        transition,
+    })
 }
 
 pub fn list_accounts(path: &Path) -> Result<Vec<AccountMatch>, MutationError> {
@@ -1023,9 +1125,16 @@ fn remove_provider_block(text: &str, provider_id: &str) -> Result<String, Mutati
 }
 
 pub fn logout(path: &Path, target: Option<&str>) -> Result<Option<AccountMatch>, MutationError> {
+    Ok(logout_with_transition(path, target)?.value)
+}
+
+pub fn logout_with_transition(
+    path: &Path,
+    target: Option<&str>,
+) -> Result<MutationResult<Option<AccountMatch>>, MutationError> {
     let mut matches = matching_accounts(path, target)?;
     if matches.is_empty() {
-        return Ok(None);
+        return no_op_result(path, None);
     }
     let account = if matches.len() == 1 {
         matches.remove(0)
@@ -1046,10 +1155,10 @@ pub fn logout(path: &Path, target: Option<&str>) -> Result<Option<AccountMatch>,
             .read_line(&mut selection)
             .map_err(MutationError::Read)?;
         let Ok(index) = selection.trim().parse::<usize>() else {
-            return Ok(None);
+            return no_op_result(path, None);
         };
         let Some(account) = matches.get(index).cloned() else {
-            return Ok(None);
+            return no_op_result(path, None);
         };
         account
     };
@@ -1058,24 +1167,40 @@ pub fn logout(path: &Path, target: Option<&str>) -> Result<Option<AccountMatch>,
     let text = String::from_utf8(original)
         .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
     let updated = remove_account_block(&text, &account)?;
-    validate_bytes(path, updated.as_bytes())?;
+    let old_config = Config::from_toml_bytes(path, text.as_bytes())?;
+    let candidate_config = validate_config_bytes(path, updated.as_bytes())?;
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
+        MutationError::Invalid("configuration transition could not be classified".into())
+    })?;
     atomic_replace(path, updated.as_bytes(), existing_mode(path)?)?;
     drop(guard);
-    Ok(Some(account))
+    Ok(MutationResult {
+        value: Some(account),
+        transition,
+    })
 }
 
 pub async fn apply_after_mutation(
     path: &Path,
     mode: ApplyMode,
+    transition: &ConfigTransition,
 ) -> Result<ApplyOutcome, MutationError> {
+    if transition.is_noop() {
+        return Ok(ApplyOutcome::RehashNoop);
+    }
+    let config = validate_config_bytes(path, &read_bounded(path)?)?;
     if mode == ApplyMode::RestartIfRunning {
-        return match crate::runtime::restart_for_mutation(path).await {
+        return match super::lifecycle::restart_for_mutation(path, &config).await {
             Ok(true) => Ok(ApplyOutcome::Restarted),
             Ok(false) => Ok(ApplyOutcome::ServerNotRunning),
             Err(_) => Err(MutationError::Restart),
         };
     }
-    let config = Config::from_toml(path)?;
+    if transition.has_restart_required() {
+        return Ok(ApplyOutcome::RestartRequired(
+            transition.restart_required_paths(),
+        ));
+    }
     let digest = crate::config::content_digest(path)?;
     let client = ControlClient::new(RuntimePaths::resolve().control_socket);
     match client.reload(Some(digest)).await {
