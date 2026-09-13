@@ -1,6 +1,6 @@
 # Plan 190: Eggress optional-feature corrective closure
 
-> **Status:** complete (verified 2026-09-13; implementation 25f0043)
+> **Status:** complete (verified 2026-09-13; implementation 25f0043, 9644f46)
 >
 > **Parent:** Corrective follow-on to completed Plans 186–189
 >
@@ -424,8 +424,9 @@ Plan 190 is complete when the manifest truthfully describes `eggress-ssh-fallbac
 
 ## Closure evidence
 
-Verified 2026-09-13 from implementation commit `25f0043` (`Make Eggress SSH
-fallback optional`). The follow-up documentation commit contains this evidence.
+Verified 2026-09-13 from implementation commits `25f0043` (`Make Eggress SSH
+fallback optional`) and `9644f46` (`Fix reduced-feature test lint`). The
+follow-up documentation commit contains this evidence.
 
 The final feature wiring is:
 
