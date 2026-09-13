@@ -1,7 +1,7 @@
 # Plan 179 — Current-State Truth and Canonical Config Assets
 
 Date: 2026-09-12
-Status: ready for handoff
+Status: complete (verified 2026-09-13)
 Parent roadmap: `plans/178-rust-maintenance-consolidation-roadmap.md`
 Planning baseline: `78a4da64de3c94a9f5fe29e05e6bdf40402bc16b`
 Priority: P1 maintenance / documentation authority / configuration packaging
@@ -207,3 +207,43 @@ Repeat the scoped current-state search and manually inspect all remaining hits.
 ## Handoff note
 
 Treat this as authority repair, not terminology beautification. The important result is that a maintainer can read the current source/docs and identify the real Rust owner of each behavior, while historical material remains accurate history.
+
+## Closure evidence
+
+Implemented and committed on `main` as `2b525fe9` (`docs: align current
+runtime and canonical config assets`). The repository-root configuration
+examples are now the sole human-edited authority; `rust/build.rs` tracks both
+examples and generates the embedded default used by `eggpool init-config`.
+The Rust-local duplicates were removed, and the runtime manifest/test now
+validate canonical repository sources.
+
+Active Rust comments, contributor guidance, architecture navigation, README
+configuration guidance, and operator docs now describe the native Rust/Tokio
+runtime. Historical migration and Python compatibility evidence was retained.
+`server.threads` remains accepted and restart-required, is reported for
+diagnostics, and does not select Tokio worker threads.
+
+Local verification passed:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1 (472 passed)
+cargo build --manifest-path rust/Cargo.toml --locked
+cargo build --manifest-path rust/Cargo.toml --locked --release
+uv sync --frozen
+uv run ruff format --check scripts/ tests/tooling/
+uv run ruff check scripts/ tests/tooling/
+uv run pyright scripts/
+uv run pytest tests/tooling/ -q --tb=short --maxfail=1 (75 passed, 1 skipped)
+uv run python scripts/validate_release_docs.py
+uv run python scripts/validate_runtime_package_boundary.py
+uv run python scripts/check_release_catalog.py
+uv run python scripts/validate_release_workflow.py .github/workflows/release.yml
+Maturin wheel smoke: init-config byte match and check-config pass
+scoped current-state search: no stale active-authority matches
+git diff --check
+```
+
+The final pushed head passed hosted CI in
+[run 34727731963](https://github.com/eggstack/eggpool/actions/runs/34727731963).
