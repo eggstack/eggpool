@@ -14,7 +14,8 @@ use std::{
 };
 
 use bytes::Bytes;
-use eggress_core::{BoxStream, TargetAddr, TargetHost};
+#[cfg(feature = "eggress-ssh-fallback")]
+use eggress_core::{TargetAddr, TargetHost};
 use http::{
     Extensions, HeaderMap, Method, Request, StatusCode, Uri,
     uri::{Authority, PathAndQuery, Scheme},
@@ -446,7 +447,7 @@ impl Write for ProviderStream {
 /// Establishes the TCP leg either directly or through one account's Eggress
 /// connector.  It deliberately returns one stream type so the surrounding
 /// Rustls and Hyper stack is identical for both paths.
-type ProxyConnectFuture = Pin<Box<dyn Future<Output = Result<BoxStream, BoxError>> + Send>>;
+type ProxyConnectFuture = Pin<Box<dyn Future<Output = Result<ProviderStream, BoxError>> + Send>>;
 
 trait ProxyDialer: Send + Sync {
     fn connect(&self, host: String, port: u16) -> ProxyConnectFuture;
@@ -465,16 +466,20 @@ impl ProxyDialer for EgressProxyDialer {
                 .connect_tcp(&host, port)
                 .await
                 .map(|(stream, _)| stream)
+                .map(TokioIo::new)
+                .map(ProviderStream::new)
                 .map_err(|error| Box::new(error) as BoxError)
         })
     }
 }
 
+#[cfg(feature = "eggress-ssh-fallback")]
 struct ChainEgressProxyDialer {
     executor: Arc<eggress_core::chain::ChainExecutor>,
     chain: Arc<Vec<eggress_uri::ProxyHopSpec>>,
 }
 
+#[cfg(feature = "eggress-ssh-fallback")]
 impl ProxyDialer for ChainEgressProxyDialer {
     fn connect(&self, host: String, port: u16) -> ProxyConnectFuture {
         let executor = Arc::clone(&self.executor);
@@ -487,6 +492,8 @@ impl ProxyDialer for ChainEgressProxyDialer {
             executor
                 .execute(&chain, &TargetAddr { host, port })
                 .await
+                .map(TokioIo::new)
+                .map(ProviderStream::new)
                 .map_err(|error| Box::new(error) as BoxError)
         })
     }
@@ -546,6 +553,7 @@ impl ProviderTcpConnector {
     }
 }
 
+#[cfg(feature = "eggress-ssh-fallback")]
 fn proxy_uses_ssh(proxy_url: &str) -> bool {
     proxy_url.split("__").any(|hop| {
         hop.split_once("://")
@@ -553,6 +561,7 @@ fn proxy_uses_ssh(proxy_url: &str) -> bool {
     })
 }
 
+#[cfg(feature = "eggress-ssh-fallback")]
 fn build_chain_egress_dialer(
     proxy_url: &str,
     tls_config: Option<&Arc<ClientConfig>>,
@@ -575,7 +584,9 @@ fn build_chain_egress_dialer(
         .next()
         .map(|upstream| upstream.chain.hops)
         .ok_or(TransportError::ProxyConfiguration)?;
-    let ssh_sessions = Some(Arc::new(eggress_transport_ssh::SshSessionCache::new()));
+    let ssh_sessions = Some(Arc::new(
+        eggress_transport_ssh::SshSessionCache::new_compatibility(),
+    ));
     let executor = eggress_server::build_chain_executor(tls_config, None, ssh_sessions);
     Ok(ChainEgressProxyDialer {
         executor: Arc::new(executor),
@@ -586,25 +597,7 @@ fn build_chain_egress_dialer(
 fn build_egress_connector(
     proxy_url: &str,
 ) -> Result<eggress_embed::outbound::OutboundConnector, eggress_embed::EggressError> {
-    if !proxy_url.contains("__") {
-        return eggress_embed::outbound::OutboundConnector::from_pproxy_uri(proxy_url);
-    }
-
-    // The embed convenience constructor intentionally accepts one pproxy
-    // hop.  Full account chains are passed through the same Eggress parser by
-    // its native upstream TOML shape, without adding another proxy stack.
-    let mut upstream = toml::map::Map::new();
-    upstream.insert("id".into(), toml::Value::String("eggpool-account".into()));
-    upstream.insert("uri".into(), toml::Value::String(proxy_url.into()));
-    let mut root = toml::map::Map::new();
-    root.insert("version".into(), toml::Value::Integer(1));
-    root.insert(
-        "upstreams".into(),
-        toml::Value::Array(vec![toml::Value::Table(upstream)]),
-    );
-    let source = toml::to_string(&toml::Value::Table(root))
-        .map_err(|error| eggress_embed::EggressError::Config(error.to_string()))?;
-    eggress_embed::outbound::OutboundConnector::from_toml(&source)
+    eggress_embed::outbound::OutboundConnector::from_pproxy_uri(proxy_url)
 }
 
 impl Service<Uri> for ProviderTcpConnector {
@@ -647,27 +640,23 @@ impl Service<Uri> for ProviderTcpConnector {
         });
         let proxy = Arc::clone(proxy);
         Box::pin(async move {
-            proxy
-                .connect(host, port)
-                .await
-                .map(|stream| ProviderStream::new(TokioIo::new(stream)))
-                .map_err(|error| {
-                    let message = error.to_string().to_ascii_lowercase();
-                    let stage = if message.contains("timed out") || message.contains("timeout") {
-                        Stage::ProxyConnectTimeout
-                    } else if message.contains("auth")
-                        || message.contains("credential")
-                        || message.contains("password")
-                        || message.contains("407")
-                    {
-                        Stage::ProxyAuthentication
-                    } else if message.contains("target") || message.contains("destination") {
-                        Stage::ProxyTargetConnect
-                    } else {
-                        Stage::ProxyConnect
-                    };
-                    Box::new(TransportMarker::with_source(stage, error)) as BoxError
-                })
+            proxy.connect(host, port).await.map_err(|error| {
+                let message = error.to_string().to_ascii_lowercase();
+                let stage = if message.contains("timed out") || message.contains("timeout") {
+                    Stage::ProxyConnectTimeout
+                } else if message.contains("auth")
+                    || message.contains("credential")
+                    || message.contains("password")
+                    || message.contains("407")
+                {
+                    Stage::ProxyAuthentication
+                } else if message.contains("target") || message.contains("destination") {
+                    Stage::ProxyTargetConnect
+                } else {
+                    Stage::ProxyConnect
+                };
+                Box::new(TransportMarker::with_source(stage, error)) as BoxError
+            })
         })
     }
 }

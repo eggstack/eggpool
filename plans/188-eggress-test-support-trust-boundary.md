@@ -1,6 +1,6 @@
 # Plan 188: Eggress test-support trust boundary isolation
 
-> **Status:** Ready
+> **Status:** complete (verified 2026-09-13; SSH facade exception documented)
 >
 > **Parent:** Plan 186 — Eggress embed consolidation roadmap
 >
@@ -263,3 +263,23 @@ Do not in this phase:
 - [ ] No insecure verifier/bypass added.
 - [ ] Default, test-support, and all-features compile matrices pass.
 - [ ] Provider transport qualification passes.
+
+## Closure evidence
+
+Verified 2026-09-13 at exact closure head `3c39e70`. `new_with_proxy_test_root` remains available only under
+`test-support`; its deterministic root is used by the real Trojan fixture and
+the missing-root case still fails TLS verification. No insecure verifier or
+certificate bypass was introduced. Fixture protocol dependencies are in
+`[dev-dependencies]`, and the custom-root implementation dependencies are
+optional feature dependencies.
+
+The 1.0.6 facade audit found one separate production exception: its outbound
+constructor does not install the SSH session cache required for SSH upstreams.
+The supported SSH behavior is preserved through the explicitly named default
+`eggress-ssh-fallback` feature, while the custom-root constructor itself stays
+under `test-support`. This exact facade gap is carried forward as the only
+documented exception to the otherwise stable-embed production boundary.
+
+Default, `test-support`, and all-features checks passed; strict all-features
+Clippy passed; the provider transport qualification passed all 35 tests; and
+the full all-features Rust suite passed all 476 tests.

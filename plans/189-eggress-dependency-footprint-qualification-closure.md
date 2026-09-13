@@ -1,6 +1,6 @@
 # Plan 189: Eggress dependency and footprint qualification closure
 
-> **Status:** Ready
+> **Status:** complete (verified 2026-09-13; SSH facade exception documented)
 >
 > **Parent:** Plan 186 — Eggress embed consolidation roadmap
 >
@@ -316,3 +316,28 @@ Do not in this phase:
 - [ ] Any size regression explained or corrected.
 - [ ] Closure evidence appended.
 - [ ] Plan 186 can be marked complete.
+
+## Closure evidence
+
+Verified 2026-09-13 at exact closure head `3c39e70`. Direct Eggress declarations are all on `1.0.6`; the
+explicit `extended` facade feature was removed because it is implied by the
+retained legacy compatibility features. `cargo tree -e features`, inverse
+queries for the major Eggress crates, and duplicate-version inspection show a
+single 1.0.6 Eggress line. The resolved graph retains implementation crates
+transitively through `eggress-embed` and directly through the documented
+default `eggress-ssh-fallback`; this is intentional and not counted as a
+facade failure.
+
+Comparable release builds used the same host/toolchain/profile. The baseline
+from the pre-change implementation head was `30,096,008` bytes and the final
+binary was `29,570,824` bytes, a reduction of `525,184` bytes (`1.75%`).
+`cargo-bloat --release --crates` reported approximately `18.3 MiB` baseline
+versus `17.9 MiB` final `.text`. The normal dependency tree was 409 unique
+entries at baseline and 410 final, demonstrating why the binary result is
+recorded separately from manifest/source ownership.
+
+The full proxy matrix and all-features suite passed. No later plan depends on
+Plan 189; the only follow-up opportunity is an upstream Eggress release that
+lets `OutboundConnector` accept/install an SSH session cache, at which point
+the fallback and its direct implementation dependencies can be removed in a
+separate corrective change.

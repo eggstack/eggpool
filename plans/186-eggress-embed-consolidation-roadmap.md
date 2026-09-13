@@ -1,6 +1,6 @@
 # Plan 186: Eggress embed consolidation roadmap
 
-> **Status:** Ready
+> **Status:** complete (verified 2026-09-13; SSH facade exception documented)
 >
 > **Parent:** Follow-on to Plan 170 dependency minimization and the completed Plan 178 maintenance-consolidation line
 >
@@ -201,3 +201,59 @@ This roadmap is complete when Plans 187-189 are closed and the repository demons
 - [ ] Test-only internal coupling is explicit and justified.
 - [ ] No proxy fallback, TLS, timeout, or retry invariant changed accidentally.
 - [ ] Final dependency/footprint evidence is recorded.
+
+## Closure evidence
+
+Verified 2026-09-13 from implementation base `7b25cec748d8d012172f47c9f26155f967a8c795`; exact closure head `3c39e70`.
+
+- Eggress declarations and the lockfile are atomically on `1.0.6`; no `1.0.2`
+  Eggress package remains in the resolved graph.
+- Normal single-hop, multi-hop, Shadowsocks, SSR, Trojan, HTTP, SOCKS, and
+  direct transport construction now uses
+  `eggress_embed::outbound::OutboundConnector::from_pproxy_uri`. The direct
+  `direct://` special case remains unchanged.
+- The provider adapter converts the facade stream at the EggPool boundary;
+  provider HTTP/TLS, admission, timeout, retry, and error ownership remain
+  outside Eggress.
+- Eggress 1.0.6's published facade does not pass an SSH session cache when it
+  builds its outbound executor. Consequently SSH reports `no handler for
+  protocols: [Ssh]` through the facade. To preserve the supported SSH
+  contract, EggPool retains a narrowly named `eggress-ssh-fallback` feature
+  (enabled by default) using the matching 1.0.6 native executor and explicit
+  compatibility host-key policy. This is the documented facade gap permitted
+  by Plan 189; it is the only ordinary production implementation-crate
+  exception.
+- The deterministic custom-root path remains feature-gated by `test-support`,
+  adds a caller-provided root without disabling verification, and retains the
+  Trojan success/failure pair. Protocol fixture crates remain dev-only.
+- The only redundant facade feature, explicit `extended`, was removed;
+  `pproxy-legacy` and `legacy-crypto` imply the required extended runtime.
+- Same-profile raw release size: baseline `30,096,008` bytes; final
+  `29,570,824` bytes; delta `-525,184` bytes (`-1.75%`). `cargo-bloat` reported
+  approximately `18.3 MiB` versus `17.9 MiB` of `.text`; its output is treated
+  as attribution guidance, not exact accounting.
+- The normal dependency tree measured 409 unique entries at the baseline and
+  410 after the 1.0.6 upgrade; the small increase is not treated as a success
+  metric. Implementation crates remain transitively owned by `eggress-embed`
+  and by the explicitly documented SSH fallback.
+
+Verification passed:
+
+```text
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo check --manifest-path rust/Cargo.toml --all-targets
+cargo check --manifest-path rust/Cargo.toml --all-targets --features test-support
+cargo check --manifest-path rust/Cargo.toml --all-targets --all-features
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --features test-support --test provider_transport (35 passed)
+cargo test --manifest-path rust/Cargo.toml --all-features -- --test-threads=1 (476 passed, 53 suites)
+cargo build --manifest-path rust/Cargo.toml --locked --release
+cargo deny --manifest-path rust/Cargo.toml check
+git diff --check
+```
+
+Plans 187, 188, and 189 were all `Ready`, their prerequisites are now
+satisfied, and their statuses were advanced to complete with the SSH facade
+exception recorded in each phase. No later plan in `plans/` depends on Plan
+186 or these phases, so no additional future-plan status transition was
+required.

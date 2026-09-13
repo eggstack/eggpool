@@ -1,6 +1,6 @@
 # Plan 187: Eggress 1.0.6 production connector consolidation
 
-> **Status:** Ready
+> **Status:** complete (verified 2026-09-13; SSH facade exception documented)
 >
 > **Parent:** Plan 186 — Eggress embed consolidation roadmap
 >
@@ -299,3 +299,21 @@ Do not in this phase:
 - [ ] Existing timeout/admission/retry invariants remain intact.
 - [ ] Provider transport and full Rust qualification pass.
 - [ ] Remaining implementation-crate usage is limited to the documented test-support seam.
+
+## Closure evidence
+
+Verified 2026-09-13 at exact closure head `3c39e70`. All Eggress pins were upgraded atomically from `1.0.2`
+to `1.0.6`, and the provider transport suite passed before and after the
+change (35 tests in each run). `OutboundConnector::from_pproxy_uri` now owns
+normal single-hop and canonical multi-hop construction; the old TOML wrapper
+and scheme-based production selection were removed for those paths. The
+explicit `direct://` route, destination TLS, connection admission, timeout,
+retry, redaction, and no-fallback behavior remain qualified.
+
+During qualification, the published 1.0.6 embed implementation was shown to
+construct its executor without an SSH session cache, producing
+`no handler for protocols: [Ssh]`. The supported SSH path therefore remains
+in a narrowly named, matching-1.0.6 `eggress-ssh-fallback` feature with
+`SshSessionCache::new_compatibility()`. This is an intentional, documented
+facade exception rather than a silent loss of SSH support; all other normal
+proxy construction crosses the embed boundary.
