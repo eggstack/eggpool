@@ -45,10 +45,17 @@ and stable exit-code mapping. Reusable local process workflows are composed by
 `rust/src/coordinator/` owns endpoint detection, bounded request preparation,
 model/account routing, durable request and attempt state, provider dispatch,
 response adaptation, retry classification, and terminal finalization.
-Canonical wire intent is captured before provider adaptation in
-`rust/src/wire/ir.rs`; all alternate targets encode from that source rather
-than chaining translated payloads. Native stream adapters require provider
-terminal evidence and never synthesize a terminal event from transport EOF.
+Streaming is decomposed under `rust/src/coordinator/streaming/`: `coordinator.rs`
+owns pre-handoff selection, dispatch, timeout, and retry decisions;
+`execution.rs` owns the single post-handoff body/cancellation owner;
+`terminal.rs` owns terminal classification and finalization data helpers;
+`timeout.rs`, `types.rs`, and `diagnostics.rs` hold the pure policy, contract,
+and bounded-observation pieces. The `mod.rs` facade preserves the public
+`coordinator::streaming` imports. Canonical wire intent is captured before
+provider adaptation in `rust/src/wire/ir.rs`; all alternate targets encode
+from that source rather than chaining translated payloads. Native stream
+adapters require provider terminal evidence and never synthesize a terminal
+event from transport EOF.
 
 ## Subsystem ownership
 

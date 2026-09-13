@@ -32,6 +32,23 @@ the server modules thin: HTTP handlers must delegate inference lifecycle work
 to the coordinator, and lifecycle workflows must compose the existing process
 safety primitives.
 
+For streaming coordinator changes, run the focused C008 publication, boundary,
+finalization, and wire suites before the workspace suite:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_finalization -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_qualification -- --test-threads=1
+```
+
+Keep post-handoff execution single-owner and incremental while refactoring;
+transparent upstream replay is only valid before `StreamingExecution` is
+returned.
+
 Configuration changes must use `config_reload_policy::classify_transition`.
 Mutation paths should carry the redacted transition into apply logic, while
 `reload.rs` remains authoritative for server-side revalidation and generation

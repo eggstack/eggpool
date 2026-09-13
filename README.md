@@ -343,9 +343,12 @@ generation ownership is split under `rust/src/runtime_lifecycle/` by process,
 generation, lease, publication, recovery, and diagnostics concerns, reusable
 local lifecycle workflows are in `rust/src/operations/lifecycle.rs`, and the
 HTTP adapter is split under `rust/src/server/` into startup/route assembly,
-middleware, health/status, inference, and dashboard modules. The coordinator
-and wire layers remain the authorities for inference execution and stream
-terminal semantics.
+middleware, health/status, inference, and dashboard modules. Streaming
+coordinator internals are split under `rust/src/coordinator/streaming/` by
+pre-handoff coordination, post-handoff execution, terminal classification,
+timeout policy, request types, and bounded diagnostics; its `mod.rs` preserves
+the public import facade. The coordinator and wire layers remain the
+authorities for inference execution and stream terminal semantics.
 
 ## Development
 

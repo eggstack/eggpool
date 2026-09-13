@@ -29,7 +29,10 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 ## Verification pointers
 
 - CLI/config/errors: `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs`
-- Request path: `rust/src/request/`, `rust/src/coordinator/`
+- Request path: `rust/src/request/`, `rust/src/coordinator/`; streaming internals
+  are decomposed under `rust/src/coordinator/streaming/` with pre-handoff
+  coordination, post-handoff execution, terminal classification, timeout,
+  contract, and diagnostics modules behind the `mod.rs` facade.
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Providers/wire: `rust/src/providers/`, `rust/src/wire/`
@@ -37,3 +40,10 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
 - Operations: `rust/src/operations/`
 - Database/assets: `rust/src/db/`, `rust/assets/`
+
+For streaming changes, preserve the handoff boundary: retries belong only to
+`streaming/coordinator.rs` before `StreamingExecution` is returned;
+`streaming/execution.rs` owns the single downstream body and cancellation path;
+`streaming/terminal.rs` consumes wire terminal summaries and must not duplicate
+wire event parsing. Streams remain incremental and SSE transport EOF is not
+success without terminal evidence.
