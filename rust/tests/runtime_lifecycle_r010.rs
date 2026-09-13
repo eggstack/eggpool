@@ -143,3 +143,27 @@ fn production_state_source_audit_has_no_direct_generation_config_field() {
     assert!(source.contains("admit_inference_body"));
     assert!(source.contains("Extension<Arc<GenerationLease>>"));
 }
+
+#[test]
+fn runtime_lifecycle_modules_follow_state_machine_ownership() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let read = |module: &str| {
+        std::fs::read_to_string(format!("{root}/src/runtime_lifecycle/{module}"))
+            .expect("runtime lifecycle module")
+    };
+    let facade = read("mod.rs");
+    let diagnostics = read("diagnostics.rs");
+    let generation = read("generation.rs");
+    let lease = read("lease.rs");
+    let manager = read("manager.rs");
+    let process = read("process.rs");
+    let recovery = read("recovery.rs");
+
+    assert!(facade.contains("pub use process::ProcessRuntime"));
+    assert!(diagnostics.contains("pub struct RuntimeDiagnosticsSnapshot"));
+    assert!(generation.contains("pub struct RuntimeGenerationFactory"));
+    assert!(lease.contains("pub struct GenerationLease"));
+    assert!(manager.contains("pub struct RuntimeManager"));
+    assert!(process.contains("pub struct ProcessRuntime"));
+    assert!(recovery.contains("pub(crate) async fn reconcile"));
+}

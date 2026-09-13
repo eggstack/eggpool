@@ -119,7 +119,7 @@ deprecated and does not control a task. The existing `catalog_refresh` task
 provides recurring opportunities, and the model-info service selects due
 rows using per-row TTLs and source cooldowns.
 
-The runtime lifecycle state in ``rust/src/runtime_lifecycle.rs`` carries
+The runtime lifecycle package in ``rust/src/runtime_lifecycle/`` carries
 bounded task and generation transition diagnostics. They are exposed under
 ``/api/stats/runtime`` by the native Rust server.
 

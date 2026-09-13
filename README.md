@@ -338,7 +338,9 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 | Database recovery runbook | [docs/runbooks/database-recovery.md](docs/runbooks/database-recovery.md) |
 | Architecture overview | [architecture/README.md](architecture/README.md) |
 
-For contributors, the native CLI adapter is `rust/src/runtime.rs`, reusable
+For contributors, the native CLI adapter is `rust/src/runtime.rs`, runtime
+generation ownership is split under `rust/src/runtime_lifecycle/` by process,
+generation, lease, publication, recovery, and diagnostics concerns, reusable
 local lifecycle workflows are in `rust/src/operations/lifecycle.rs`, and the
 HTTP adapter is split under `rust/src/server/` into startup/route assembly,
 middleware, health/status, inference, and dashboard modules. The coordinator

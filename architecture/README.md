@@ -13,6 +13,14 @@ generations, provider clients, routing, request coordination, wire adaptation,
 operations, and graceful shutdown. The repository-root `pyproject.toml` and
 the scripts under `scripts/` are development/release tooling only.
 
+`rust/src/runtime_lifecycle/` is the lifecycle package. `process.rs` owns
+process-lifetime resources, `generation.rs` builds immutable candidates and
+owns generation close, `lease.rs` owns slots and request/finalization leases,
+`manager.rs` owns atomic publication and bounded retirement, `recovery.rs`
+owns startup reconciliation, and `diagnostics.rs` owns bounded projections
+and redaction helpers. `mod.rs` is only the compatibility facade and public
+re-export surface.
+
 `RuntimeManager` publishes immutable active and retiring generation slots. A
 generation contains provider clients, catalog, router, coordinator, health,
 statistics, and generation-leased background work. Rehash builds a complete
@@ -52,7 +60,7 @@ terminal evidence and never synthesize a terminal event from transport EOF.
 | Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
 | Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
-| Runtime and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs` |
+| Runtime and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs` |
 | HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
 | Operations and local lifecycle | `rust/src/operations/`, especially `config_mutation.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, and `control.rs` |
 

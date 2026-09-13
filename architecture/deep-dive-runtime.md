@@ -49,7 +49,33 @@ performance decision.
 
 ## Runtime generations
 
-`rust/src/runtime_lifecycle.rs` owns the generation state machine:
+The `rust/src/runtime_lifecycle/` package owns the generation state machine.
+Its modules follow state ownership rather than request flow:
+
+- `process.rs` owns `ProcessRuntime` and process-lifetime shared resources.
+- `generation.rs` owns candidate construction, immutable generation resources,
+  and the generation close boundary.
+- `lease.rs` owns generation slots, request leases, and retained terminal
+  references.
+- `manager.rs` owns the `ArcSwap` active pointer, publication gate, staged
+  swaps, and the bounded retiring queue.
+- `recovery.rs` owns bounded startup crash reconciliation.
+- `diagnostics.rs` owns secret-free lifecycle projections and bounded helpers.
+- `mod.rs` contains the compatibility re-exports only.
+
+The state machine exposed by those modules is:
+
+```text
+candidate built -> staged -> active pointer committed -> accepted
+                         \-> rolled back
+old active -> retiring -> lease/finalization drain -> close -> retired
+```
+
+The public lifecycle types remain re-exported from `runtime_lifecycle` so
+server, reload, operations, and integration-test callers do not depend on
+the internal file layout.
+
+The core ownership types are:
 
 - `RuntimeManager` owns the active and retiring generation slots.
 - `RuntimeGeneration` is the immutable snapshot used by request handling.
@@ -93,12 +119,14 @@ before atomic replacement. Restart-after-mutation is composed by
 
 ## Background work and shutdown
 
-`rust/src/task_supervisor.rs` registers bounded tasks for startup and
-generation construction. Generation-scoped supervisors own catalog refresh,
-health, maintenance, statistics, and retained finalization work according to
-the active task specification. Process-scoped containers such as the metrics
-coalescer and wire resolver are flushed or stopped through their existing
-shutdown contracts.
+`rust/src/task_supervisor.rs` remains the sole owner of supervised task
+handles, callback registration, task-spec diffs, and bounded task shutdown.
+It registers bounded tasks for startup and generation construction.
+Generation-scoped supervisors own catalog refresh, health, maintenance,
+statistics, and retained finalization work according to the active task
+specification. Process-scoped containers such as the metrics coalescer and
+wire resolver are flushed or stopped through their existing shutdown
+contracts.
 
 Shutdown first closes control-plane admission, then retires the active
 generation and joins its supervised work. Readiness, routing-trace writers,

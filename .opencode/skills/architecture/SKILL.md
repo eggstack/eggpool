@@ -33,7 +33,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Providers/wire: `rust/src/providers/`, `rust/src/wire/`
-- Runtime/reload: `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`
+- Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
 - Operations: `rust/src/operations/`
 - Database/assets: `rust/src/db/`, `rust/assets/`

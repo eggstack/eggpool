@@ -16,7 +16,7 @@ metadata/assets only.
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
 | Provider/account routing, quota, providers, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/providers/`, `rust/src/health/` |
 | Database and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
-| Runtime generations and reload | `rust/src/runtime_lifecycle.rs`, `rust/src/reload.rs`, `rust/src/server/mod.rs` |
+| Runtime generations and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs`, `rust/src/server/mod.rs` |
 | HTTP surfaces | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
 | Operations, lifecycle, update | `rust/src/operations/` |
 | Compatibility fixtures and qualification output | `tests/fixtures/`, `artifacts/qualification/` |
