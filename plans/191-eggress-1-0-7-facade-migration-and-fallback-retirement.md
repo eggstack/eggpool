@@ -2,7 +2,7 @@
 
 > **Status:** READY FOR IMPLEMENTATION
 >
-> **Baseline:** Eggpool `main` at `153aa54c5bdc7c7be07399f1ab833db9ef55f5f3`
+> **Baseline:** Eggpool `main` immediately before this plan at `9144ff910f2ef62055e0560fab850ad224f36c6d`
 >
 > **Parent context:** completed Plans 186–190
 >
@@ -10,17 +10,17 @@
 
 ## Executive summary
 
-Eggpool is currently pinned to Eggress `1.0.6`. The production provider transport normally uses the stable `eggress-embed::outbound::OutboundConnector`, but SSH-containing pproxy expressions are diverted into a temporary Eggpool-owned executor because Eggress 1.0.6's embed facade did not install SSH session state. That workaround is exposed through the default `eggress-ssh-fallback` feature and directly activates `eggress-core`, `eggress-config`, `eggress-pproxy-compat`, `eggress-server`, `eggress-uri`, and `eggress-transport-ssh`.
+Eggpool is pinned to Eggress `1.0.6`. Normal provider proxy construction uses the stable `eggress-embed::outbound::OutboundConnector`, but SSH-containing pproxy expressions are diverted into an Eggpool-owned executor because Eggress 1.0.6's embed facade did not install SSH session state. That workaround is exposed through the default `eggress-ssh-fallback` feature and directly activates `eggress-core`, `eggress-config`, `eggress-pproxy-compat`, `eggress-server`, `eggress-uri`, and `eggress-transport-ssh`.
 
-Eggress `1.0.7` closes that facade gap. Its `OutboundConnector` owns SSH session state internally, keeps native/TOML verified-host behavior distinct from explicit pproxy compatibility behavior, and its `ssh` feature weak-forwards pproxy SSH support instead of forcing the pproxy compatibility crate into SSH-only builds. The Eggress regression suite exercises real SSH byte traversal, fail-closed/redacted authentication failure, and native untrusted-host rejection.
+Eggress `1.0.7` closes that gap. Its `OutboundConnector` owns SSH session state internally; native/TOML SSH retains verified host-key policy while explicit pproxy compatibility uses the compatibility policy; the `ssh` feature weak-forwards pproxy SSH support rather than requiring the pproxy compatibility crate in an SSH-only consumer. Eggress's closure suite exercises real SSH byte traversal, fail-closed/redacted authentication failure, and native rejection of an untrusted host key.
 
-The correct Eggpool migration is therefore **not** to update the version while leaving the fallback in place. The intended result is:
+The correct migration is therefore not merely a version bump. The intended ownership boundary is:
 
 ```text
 Production provider proxy path
   Eggpool
     -> eggress-embed 1.0.7 OutboundConnector
-       -> direct / HTTP / SOCKS / SS / SSR / Trojan / SSH / multihop
+       -> HTTP / SOCKS / SS / SSR / Trojan / SSH / multihop
 
 Test-only custom proxy TLS trust path
   Eggpool test-support adapter
@@ -28,17 +28,17 @@ Test-only custom proxy TLS trust path
        only to inject an ephemeral verified TLS root for local fixtures
 ```
 
-The custom-root path remains intentional because `OutboundConnector` still does not expose an arbitrary caller-supplied `rustls::ClientConfig`, and adding such a public security-sensitive Eggress API solely for Eggpool tests would increase maintenance surface for no production benefit.
+The custom-root path remains intentional because `OutboundConnector` does not expose arbitrary caller-supplied `rustls::ClientConfig`, and adding a security-sensitive public Eggress hook solely to simplify Eggpool tests would increase long-term API burden without a production use case.
 
-This should be one bounded migration. Do not turn it into another Eggress abstraction redesign.
+The commit `9144ff9` that landed during research changed only Plan 190 closure evidence; it did not alter the Cargo/source integration described below.
 
 ---
 
-## Current state and evidence
+## Current state
 
-### Current Cargo boundary
+### Cargo boundary
 
-`rust/Cargo.toml` currently has:
+`rust/Cargo.toml` currently declares:
 
 ```toml
 [features]
@@ -56,92 +56,85 @@ eggress-ssh-fallback = [
 ]
 ```
 
-The facade and every direct Eggress implementation dependency are pinned to `=1.0.6`.
+`eggress-embed`, all optional implementation crates, and the Eggress fixture crates are pinned to `=1.0.6`.
 
-The current no-default feature contract deliberately excludes SSH, while the default product includes it. Preserve that useful capability distinction, but rename it around product capability rather than an obsolete workaround.
+Plan 190 also established a useful product property: the default build supports SSH, while `--no-default-features` is a supported reduced configuration that rejects SSH fail-closed. Preserve that capability distinction; only the fallback implementation is obsolete.
 
-### Current provider transport boundary
+### Provider transport boundary
 
 `rust/src/providers/transport.rs` currently:
 
 1. uses `OutboundConnector` for non-SSH proxy expressions;
-2. uses `proxy_uses_ssh()` to detect any SSH hop;
-3. routes SSH to `build_ssh_proxy_dialer()`;
-4. constructs an Eggpool-owned `ChainEgressProxyDialer` through `eggress-config`, `eggress-pproxy-compat`, `eggress-server`, `eggress-uri`, and `eggress-transport-ssh`;
+2. detects SSH with `proxy_uses_ssh()`;
+3. sends SSH to `build_ssh_proxy_dialer()`;
+4. reconstructs a chain using config/pproxy/server/uri implementation crates;
 5. creates `SshSessionCache::new_compatibility()` itself;
-6. reuses that same low-level chain builder for the `test-support` custom TLS-root constructor.
+6. reuses the same low-level chain dialer for the `test-support` custom TLS-root constructor.
 
-That production exception is exactly what 1.0.7 makes obsolete.
+The first five points are exactly the temporary ownership that 1.0.7 removes.
 
-### Existing test-only trust seam
+### Test-only trust seam
 
-`ProviderHttpClient::new_with_proxy_test_root` is gated by `test-support` and is used by the Trojan local fixture to provide a deterministic CA while retaining normal certificate and hostname verification. Plans 188–189 correctly concluded that this test seam should remain private/test-only rather than expanding Eggress's stable facade.
-
-The live SSH tests use the normal production constructor rather than the custom-root constructor. Therefore the custom-root seam no longer needs to own SSH session state after this migration.
+`ProviderHttpClient::new_with_proxy_test_root` is `test-support` only and is used by the real Trojan fixture to install a deterministic CA while retaining certificate and hostname verification. The live SSH fixture uses ordinary `ProviderHttpClient::new_with_proxy`, not the custom-root constructor. Therefore, after the 1.0.7 migration, the custom-root seam no longer needs SSH session-cache ownership.
 
 ---
 
 # Desired end state
 
-After this plan lands:
-
-1. All explicitly selected Eggress crates in Eggpool use exactly `1.0.7`.
-2. Ordinary provider proxy construction, including SSH and SSH-containing multihop chains, uses only `eggress-embed::outbound::OutboundConnector`.
-3. No production code parses or reconstructs Eggress chain internals for SSH.
-4. `eggress-ssh-fallback` no longer exists as a feature or code path.
-5. Eggpool retains a clean root `ssh` capability feature:
+1. All explicitly selected Eggress crates use `1.0.7`.
+2. Normal provider proxy construction, including SSH and SSH-containing multihop chains, uses only `eggress-embed::outbound::OutboundConnector`.
+3. Eggpool production code no longer reconstructs Eggress chain/config/executor state for SSH.
+4. `eggress-ssh-fallback` is removed as a feature and source path.
+5. A root `ssh` capability feature preserves existing semantics:
    - default build: SSH enabled;
-   - `--no-default-features`: SSH disabled and SSH proxy configuration fails closed during construction;
-   - `test-support`: implies `ssh` so the full provider transport qualification still exercises SSH.
-6. Direct Eggress implementation dependencies remain only where the custom-root test adapter genuinely requires them.
-7. `eggress-transport-ssh` is no longer a direct Eggpool dependency.
-8. The custom-root adapter does not build or own an SSH session cache.
-9. Credential redaction, proxy failure classification, cancellation/timeouts, no-direct-fallback behavior, and target routing remain unchanged.
-10. The default release footprint is measured against the current qualified 1.0.6/fallback baseline; the result is recorded honestly even if the main win is maintenance ownership rather than size.
+   - `--no-default-features`: SSH disabled and rejected during connector construction;
+   - `test-support`: implies `ssh` so the full transport suite exercises the normal production SSH path.
+6. Direct implementation dependencies remain only for the deterministic custom-root test adapter where demonstrably required.
+7. `eggress-transport-ssh` is not a direct Eggpool dependency.
+8. The custom-root adapter creates no SSH cache/state.
+9. Proxy failure classification, credential redaction, timeouts/cancellation, multihop order, and no-direct-fallback behavior remain unchanged.
+10. A comparable release measurement records any footprint change without making size reduction a prerequisite for the maintenance-boundary win.
 
 ---
 
 # Non-goals
 
-Do **not** use this migration to:
+Do not use this pass to:
 
-- add an Eggpool-specific API or feature to Eggress;
-- expose `ChainExecutor`, `SshSessionCache`, or arbitrary executor construction through `eggress-embed`;
-- add a generic custom-certificate-verifier or insecure TLS hook to Eggress;
-- weaken SSH host-key policy or TLS verification;
-- remove supported pproxy protocols to reduce binary size;
-- replace real proxy fixtures with mocks;
-- change provider retry/failover/account routing behavior;
-- replace Hyper, Rustls, Axum, or any unrelated transport component;
-- revisit the broader Eggfetch integration line of work;
+- add an Eggpool-specific Eggress API/feature/type;
+- expose Eggress `ChainExecutor` or `SshSessionCache` through the stable facade;
+- add an insecure/general-purpose TLS verifier hook;
+- weaken SSH host-key or proxy TLS verification;
+- remove supported proxy protocols for size;
+- replace live proxy fixtures with mocks;
+- change provider routing/retry/account behavior;
+- replace Hyper/Rustls/Axum or reopen Eggfetch work;
 - add a feature-power-set CI matrix;
-- chase transitive Eggress crates out of `Cargo.lock` when they remain legitimate facade dependencies;
-- bump unrelated dependencies merely because a newer version exists.
+- eliminate implementation crates that legitimately remain transitive through `eggress-embed`;
+- update unrelated dependencies merely because newer releases exist.
 
 ---
 
-# Workstream 0 — Reconfirm the published dependency surface
+# Workstream 0 — Verify registry resolution
 
-Before editing, confirm the registry resolves the release the user has published:
+Confirm the published release resolves from crates.io before editing the dependency graph:
 
 ```bash
 cargo search eggress-embed --limit 5
 cargo info eggress-embed@1.0.7
 ```
 
-Then create a minimal temporary Cargo project or use `cargo metadata` after the manifest edit to verify that `eggress-embed = "=1.0.7"` resolves from crates.io without a git/path override.
+After editing the manifest, require `cargo metadata --locked`/normal Cargo resolution to use registry packages only. Do not use a git/path override as the long-term migration.
 
-Do not use the Eggress repository `main` branch as a permanent dependency. The migration target is the published `1.0.7` crate line.
-
-If crates.io propagation is incomplete for one of the exact internal Eggress packages, stop before committing partial mixed-version pins. Resume only when the complete 1.0.7 graph resolves.
+If one of Eggress's exact internal 1.0.7 packages has not propagated yet, do not commit a mixed 1.0.6/1.0.7 state. Resume only after the complete line resolves.
 
 ---
 
-# Workstream 1 — Upgrade the complete Eggress line to 1.0.7
+# Workstream 1 — Upgrade and rewire Cargo features
 
-## 1.1 Production facade
+## 1.1 Facade
 
-Update:
+Use:
 
 ```toml
 eggress-embed = { version = "=1.0.7", default-features = false, features = [
@@ -151,11 +144,11 @@ eggress-embed = { version = "=1.0.7", default-features = false, features = [
 ] }
 ```
 
-Keep SSH activation on the Eggpool capability feature rather than embedding it unconditionally in the dependency declaration.
+Keep SSH controlled by the root product feature rather than enabling it unconditionally here.
 
-## 1.2 Replace the workaround feature with a capability feature
+## 1.2 Replace fallback with capability
 
-Preferred feature topology:
+Preferred topology:
 
 ```toml
 [features]
@@ -172,31 +165,23 @@ test-support = [
 ]
 ```
 
-This preserves the semantic behavior established by Plan 190:
+Because the crate is `publish = false`, remove `eggress-ssh-fallback` rather than preserving an obsolete compatibility alias unless a real external build consumer is discovered during implementation.
 
-- default builds support SSH;
-- reduced/no-default builds do not;
-- test-support runs the normal SSH product path plus the custom-root fixture path.
+## 1.3 Minimize test-support implementation dependencies
 
-Do not keep `eggress-ssh-fallback` as a misleading permanent alias unless a real external build consumer is discovered that depends on that feature name. `eggpool` is currently `publish = false`, so internal repository feature cleanup is preferred over carrying an obsolete compatibility name indefinitely.
+Expected optional `=1.0.7` dependencies are:
 
-## 1.3 Minimize the test-support implementation dependency set
+- `eggress-core` — target/executor-facing types used by the private custom-root dialer;
+- `eggress-config` — compile translated fixture configuration;
+- `eggress-pproxy-compat` — parse/translate the fixture pproxy URI;
+- `eggress-server` — create the executor with the supplied test TLS configuration;
+- `eggress-uri` — chain-hop type stored by the private test dialer.
 
-The custom-root adapter is currently the legitimate remaining reason for direct implementation crates. Start from the actual source requirements, not the old fallback list.
+Expected direct removal:
 
-Expected optional `1.0.7` dependencies:
+- `eggress-transport-ssh`.
 
-- `eggress-core` — target/stream/executor-facing types used by the private custom-root dialer;
-- `eggress-config` — compile translated test proxy configuration;
-- `eggress-pproxy-compat` — parse/translate the test pproxy URI;
-- `eggress-server` — build the executor with the supplied test TLS config;
-- `eggress-uri` — chain hop type stored by the private test dialer.
-
-Expected removal:
-
-- `eggress-transport-ssh` as a **direct** dependency.
-
-For `eggress-server`, the test-root path currently needs Trojan support, not SSH. Prefer the narrowest verified feature set, expected to be:
+For the direct test-only `eggress-server`, start with the minimum feature set required by the current custom-root Trojan fixture, expected to be:
 
 ```toml
 eggress-server = {
@@ -207,201 +192,156 @@ eggress-server = {
 }
 ```
 
-Do not retain `ssh`, `legacy-crypto`, or `pproxy-legacy` on the direct test-only server dependency unless compilation or a current custom-root test proves they are required. The ordinary SS/SSR/SSH provider tests use the facade path and should not dictate features on this private TLS-root adapter.
+Do not retain `ssh`, `legacy-crypto`, or `pproxy-legacy` on this direct test dependency unless a current custom-root test proves it needs them. SS/SSR/SSH qualification uses the normal facade path and should not dictate features on the custom-root adapter.
 
-If the direct `eggress-pproxy-compat` test dependency needs a feature for the Trojan translation path, add only the demonstrated feature and document why.
+## 1.4 Dev fixtures
 
-## 1.4 Upgrade dev-only fixture crates
-
-Update all directly selected Eggress fixture crates to `=1.0.7`, including at minimum:
+Update all directly selected Eggress dev dependencies to `=1.0.7`, including at minimum:
 
 - `eggress-core`;
 - `eggress-protocol-shadowsocks`;
 - `eggress-protocol-trojan`.
 
-Retain their current fixture-specific feature requirements unless the existing tests prove a safe reduction.
+Keep fixture-specific legacy features only where the current suite needs them.
 
-## 1.5 Lockfile coherence
+## 1.5 Lockfile and single-line proof
 
-Regenerate `rust/Cargo.lock` through normal Cargo resolution. Verify there is no mixed explicit Eggress `1.0.6`/`1.0.7` line:
+Regenerate `rust/Cargo.lock` normally. Verify no selected 1.0.6 line remains:
 
 ```bash
 cargo tree --manifest-path rust/Cargo.toml | rg 'eggress-[A-Za-z0-9_-]+ v1\.0\.(6|7)'
 ```
 
-Every Eggress package selected for this graph should resolve to `1.0.7` unless an independently versioned package proves otherwise. Do not use `[patch]`, git dependencies, or path overrides to force coherence.
+Do not add `[patch]`, git dependencies, or path overrides to force resolution.
 
 ---
 
-# Workstream 2 — Remove the production SSH fallback implementation
+# Workstream 2 — Retire the production fallback
 
 Primary file: `rust/src/providers/transport.rs`.
 
-## 2.1 Route every production proxy through OutboundConnector
+## 2.1 One production facade path
 
-Simplify `ProviderTcpConnector::new` to the stable facade boundary:
+Simplify `ProviderTcpConnector::new` to:
 
 ```text
-None                 -> direct HttpConnector
-Some("direct://")    -> validate through OutboundConnector, then intentional direct connector
-Some(other proxy)    -> EgressProxyDialer(OutboundConnector::from_pproxy_uri(...))
+None              -> direct HttpConnector
+Some("direct://") -> validate through OutboundConnector, then intentional direct connector
+Some(other)       -> EgressProxyDialer(OutboundConnector::from_pproxy_uri(...))
 ```
 
-SSH must no longer have a separate production match arm.
+SSH must no longer have a distinct production match arm.
 
-Delete production-only workaround pieces that become dead:
+Remove production workaround code that becomes dead:
 
-- `proxy_uses_ssh()` if no longer needed for any capability/error contract;
-- `build_ssh_proxy_dialer()` enabled and disabled variants;
-- production `ChainEgressProxyDialer` use;
-- direct production imports of `TargetAddr`, `TargetHost`, `ChainExecutor`, `ProxyHopSpec`, etc.;
-- creation of `SshSessionCache::new_compatibility()`;
-- comments explaining the Eggress 1.0.6 facade gap.
+- `proxy_uses_ssh()` if no longer required for reduced-feature construction semantics;
+- both `build_ssh_proxy_dialer()` cfg variants;
+- production `ChainEgressProxyDialer` ownership;
+- production imports of `TargetAddr`, `TargetHost`, `ProxyHopSpec`, executor internals, etc.;
+- `SshSessionCache::new_compatibility()` construction;
+- comments describing the 1.0.6 facade gap as current.
 
-The live SSH path must now be the same `EgressProxyDialer` type used by other Eggress proxy chains.
+The existing `EgressProxyDialer` must handle SSH exactly as it handles other Eggress chains.
 
-## 2.2 Preserve reduced-feature failure semantics
+## 2.2 Preserve no-default failure semantics
 
-With `--no-default-features`, `eggress-embed/ssh` is absent. An SSH URI passed to `OutboundConnector::from_pproxy_uri` must fail closed as an unsupported/invalid proxy configuration; Eggpool should map that construction failure to the existing `TransportError::ProxyConfiguration`.
+Without the root `ssh` feature, `eggress-embed/ssh` is absent. Prefer relying on 1.0.7's feature-aware parser/compiler so `OutboundConnector::from_pproxy_uri("ssh://...")` fails construction and Eggpool maps that to `TransportError::ProxyConfiguration`.
 
-Prefer relying on Eggress's feature-aware parser/compiler rather than preserving Eggpool's hand-written `proxy_uses_ssh()` classifier solely to reject SSH. This removes duplicated protocol knowledge.
+Do not retain Eggpool's hand-written SSH classifier merely out of habit; deleting duplicated protocol knowledge is part of the maintenance win.
 
-If 1.0.7 unexpectedly accepts an SSH URI without the `ssh` feature but only fails later during dialing, keep the smallest explicit construction-time capability guard needed to preserve Plan 190's fail-before-network contract, and document that behavior. Do not reintroduce the native executor fallback.
+If 1.0.7 unexpectedly accepts SSH without the feature and fails only during dialing, keep only the smallest explicit construction-time capability check needed to preserve Plan 190's fail-before-network contract. Never restore the native executor fallback.
 
-## 2.3 Preserve direct:// semantics
+## 2.3 Keep direct:// intentional
 
-Keep the current explicit `direct://` control behavior:
-
-1. validate the expression through Eggress;
-2. intentionally use Eggpool's direct `HttpConnector`;
-3. keep it distinguishable from proxy failure;
-4. never use direct transport as recovery from a failed proxy.
+Preserve the existing explicit `direct://` semantics: validate the expression through Eggress, then intentionally use Eggpool's direct connector. Proxy failures must never select this path as fallback.
 
 ---
 
-# Workstream 3 — Retain only the test-only custom TLS-root adapter
+# Workstream 3 — Make the low-level path test-root-only
 
-The custom-root constructor remains legitimate, but its implementation must no longer be conflated with the removed SSH workaround.
+## 3.1 Rename and gate it by purpose
 
-## 3.1 Gate the low-level chain dialer only on test-support
+Retain the low-level executor only for `new_with_proxy_test_root` and gate all of it with `#[cfg(feature = "test-support")]`.
 
-Rename the remaining low-level types/helpers to make their scope obvious, for example:
+Prefer names that expose intent, e.g.:
 
 - `ChainEgressProxyDialer` -> `TestRootProxyDialer`;
 - `build_chain_egress_dialer` -> `build_test_root_proxy_dialer`.
 
-Gate the entire low-level implementation with:
+Outside that block, ordinary provider source should reference only `eggress_embed` from the Eggress family.
 
-```rust
-#[cfg(feature = "test-support")]
-```
+## 3.2 Remove SSH state from the test adapter
 
-not with the deleted fallback feature.
+The test-root path exists to inject verified proxy TLS trust, not to implement SSH. Build the 1.0.7 server executor with the supplied TLS config and without an SSH session cache using the non-SSH signature selected by the final feature graph.
 
-Ordinary production source outside that block should import only `eggress_embed` from the Eggress family.
-
-## 3.2 Remove SSH ownership from the test adapter
-
-The custom-root path exists to inject deterministic proxy TLS trust. It should not create an SSH session cache.
-
-Construct the 1.0.7 server executor with the supplied TLS config and no SSH facility using the feature-appropriate `eggress-server` API. Conceptually:
+Conceptually:
 
 ```rust
 let executor = eggress_server::build_chain_executor(Some(tls_config), None);
 ```
 
-Use the exact 1.0.7 signature that compiles with `eggress-server`'s non-SSH feature slice.
+Use the exact 1.0.7 signature that compiles with the chosen test-only server features.
 
-The test-root constructor does not need to promise SSH support. Current SSH qualification uses `new_with_proxy`, which is the production facade path.
+The custom-root constructor does not need to promise SSH support; the SSH fixture already uses `new_with_proxy`.
 
-## 3.3 Preserve strict trust behavior
+## 3.3 Preserve strict trust
 
-The following Plan 188 invariants remain mandatory:
+Plan 188's security invariants remain mandatory:
 
-- supplied test CA succeeds for the real local Trojan TLS proxy;
-- missing/untrusted CA fails verification;
+- supplied fixture CA succeeds through real TLS verification;
+- absent/untrusted CA fails;
 - hostname verification remains enabled;
-- no `danger_accept_invalid_certs`, no no-op verifier, no blanket insecure mode;
-- production constructors cannot consume the custom root;
-- credential-bearing proxy URLs remain absent from public/debug errors.
+- production constructors cannot consume the test root;
+- no insecure/no-op verifier is introduced;
+- credential-bearing proxy URLs are not leaked through public/debug errors.
 
-Do not request a new Eggress facade trust hook solely to delete these few optional test dependencies.
+Do not request a new Eggress public trust hook solely to remove these test-only optional dependencies.
 
 ---
 
-# Workstream 4 — Update and strengthen migration regressions
+# Workstream 4 — Regression updates
 
 Primary suite: `rust/tests/provider_transport.rs`.
 
-## 4.1 Prove SSH now works through the normal facade
+## 4.1 Prove the fixed facade, not just construction
 
-Keep the existing live OpenSSH fixture and normal `ProviderHttpClient::new_with_proxy` SSH success test. Its success after the fallback code is deleted is the key migration proof.
+Keep the existing live OpenSSH fixture and ordinary `ProviderHttpClient::new_with_proxy` success test. After deleting fallback code, this is the key proof that Eggpool actually traverses `OutboundConnector` 1.0.7.
 
-Retain/verify:
+Retain assertions for:
 
-- actual byte traversal to the provider target;
-- private-key authentication behavior;
-- authentication failure classification;
-- authentication error redaction;
-- connect timeout/cancellation bounds;
+- byte traversal to the provider target;
+- private-key/auth behavior;
+- auth failure classification;
+- credential redaction;
+- timeout/cancellation bounds;
 - no proxy-to-direct fallback;
-- SSH in multihop chains if already covered by the current corpus.
+- SSH-containing multihop cases already in the corpus.
 
 Do not replace this with a construction-only test.
 
-## 4.2 Rename the no-default SSH regression around capability, not fallback
+## 4.2 Rename reduced-feature regression
 
-The current test:
-
-```text
-ssh_proxy_is_rejected_when_the_compatibility_fallback_is_disabled
-```
-
-becomes obsolete because there is no fallback.
-
-If the root `ssh` capability feature is retained as specified, replace it with a `#[cfg(not(feature = "ssh"))]` regression asserting that an SSH proxy is rejected as `TransportError::ProxyConfiguration` before network activity.
-
-Rename it accordingly, e.g.:
+Replace the now-obsolete `ssh_proxy_is_rejected_when_the_compatibility_fallback_is_disabled` test with a capability-oriented regression gated by `#[cfg(not(feature = "ssh"))]`, e.g.:
 
 ```text
 ssh_proxy_is_rejected_when_ssh_capability_is_disabled
 ```
 
-Also keep at least one non-SSH proxy construction/behavior case active under no-default features so a blanket proxy rejection cannot satisfy the reduced-feature test.
+It must assert `TransportError::ProxyConfiguration` before network activity.
 
-## 4.3 Preserve the custom-root pair
+Keep at least one non-SSH proxy case active under no-default features so an implementation that rejects all proxies cannot satisfy the reduced-feature suite.
 
-Retain the verified Trojan tests under `test-support`:
+## 4.3 Preserve custom-root pair and full corpus
 
-- success with the supplied test CA;
-- failure without that CA / with untrusted trust state;
-- auth failure redaction and no direct fallback.
+Retain the test-support Trojan success/failure pair and auth-redaction/no-direct-fallback behavior.
 
-These tests justify the remaining optional implementation-crate seam.
-
-## 4.4 Preserve full pproxy transport corpus
-
-The migration must not regress:
-
-- HTTP CONNECT;
-- SOCKS4/5 and authenticated variants;
-- Shadowsocks;
-- SSR/legacy compatibility;
-- Trojan;
-- SSH;
-- ordered multihop chains;
-- explicit `direct://`;
-- credential redaction;
-- provider/account client isolation;
-- pool/connect/read/write timeout behavior.
-
-Any protocol regression should be treated as a migration blocker, not worked around by restoring the old fallback wholesale.
+The migration must continue to qualify HTTP CONNECT, SOCKS4/5, Shadowsocks, SSR, Trojan, SSH, ordered multihop, explicit `direct://`, credential redaction, provider/account client isolation, and pool/connect/read/write timeout behavior.
 
 ---
 
-# Workstream 5 — Dependency ownership and feature-graph qualification
+# Workstream 5 — Ownership and feature-tree proof
 
-## 5.1 Source ownership search
+## 5.1 Source search
 
 Run:
 
@@ -409,19 +349,19 @@ Run:
 rg 'eggress_(core|config|pproxy_compat|server|uri|transport_ssh)' rust/src
 ```
 
-Expected result:
+Expected:
 
-- no `eggress_transport_ssh` references;
-- any remaining implementation-crate references exist only inside the explicit `#[cfg(feature = "test-support")]` custom-root block;
-- ordinary provider construction imports only `eggress_embed`.
+- zero `eggress_transport_ssh` references;
+- implementation-crate references only under `#[cfg(feature = "test-support")]`;
+- ordinary provider construction uses only `eggress_embed`.
 
-Also run:
+Also search current documentation/source for stale workaround wording:
 
 ```bash
-rg 'eggress-ssh-fallback|Eggress 1\.0\.6|1\.0\.6.*Eggress' rust .github architecture docs plans README.md
+rg 'eggress-ssh-fallback|Eggress 1\.0\.6|1\.0\.6.*Eggress' rust .github architecture docs README.md
 ```
 
-Do not rewrite completed historical plans wholesale. Add concise supersession/follow-up notes where necessary; source/docs/current architecture must not describe the fallback as active after migration.
+Historical plans should receive concise supersession notes rather than rewritten historical bodies.
 
 ## 5.2 Feature trees
 
@@ -435,28 +375,13 @@ cargo tree --manifest-path rust/Cargo.toml -e features --features test-support
 
 Confirm:
 
-### Default
+**Default:** root `ssh` and `eggress-embed/ssh` are active; there is no direct `eggpool -> eggress-transport-ssh` edge.
 
-- root `ssh` is active;
-- `eggress-embed/ssh` is active;
-- there is no root direct `eggpool -> eggress-transport-ssh` edge;
-- any transport-ssh crate in the graph is owned transitively by the facade.
+**No-default:** root/embed SSH are absent; SSH configuration fails closed; non-SSH proxy functionality remains available.
 
-### No-default
+**Test-support:** normal facade SSH is active; custom-root implementation deps are active; direct `eggress-transport-ssh` remains absent; direct `eggress-server` does not activate SSH solely for the TLS-root adapter.
 
-- root `ssh` is absent;
-- `eggress-embed/ssh` is absent;
-- SSH configuration fails closed;
-- non-SSH facade behavior remains available.
-
-### test-support
-
-- `ssh` is active for normal SSH qualification;
-- the custom-root direct implementation dependencies are active;
-- direct `eggress-transport-ssh` remains absent;
-- direct `eggress-server` does not activate SSH merely for the TLS-root adapter.
-
-Use inverse queries to distinguish direct ownership from facade transitives:
+Use inverse queries to distinguish transitive facade ownership from direct ownership:
 
 ```bash
 cargo tree --manifest-path rust/Cargo.toml -i eggress-embed
@@ -464,67 +389,59 @@ cargo tree --manifest-path rust/Cargo.toml -i eggress-server
 cargo tree --manifest-path rust/Cargo.toml -i eggress-transport-ssh
 ```
 
-Do not call transitive facade-owned crates a failed cleanup.
+Transitive implementation crates through `eggress-embed` are expected and are not a cleanup failure.
 
 ---
 
-# Workstream 6 — CI adjustment
+# Workstream 6 — CI
 
-The existing CI already compiles and lints `--no-default-features`, which is valuable and should remain.
+The existing single Rust CI job already checks/clippies `--no-default-features`. Keep those gates.
 
-Update only what feature renaming/removal requires. Do not add a matrix or a second general Rust job.
+Update CI only if cfg/feature-name changes require it; do not add a feature matrix or second general Rust job.
 
-Because the actual SSH fixture requires `sshd`, it is acceptable for the full live SSH transport qualification to remain a local/release closure command if the current hosted CI does not provision OpenSSH. Do not install a new service into ordinary Eggpool CI solely because Eggress's own CI already qualifies its internal facade.
-
-However, the Eggpool implementation commit must locally run the live provider SSH suite before closure, because the purpose of this migration is to prove Eggpool now traverses that fixed facade correctly.
-
-If CI currently runs tests that were conditionally keyed to `eggress-ssh-fallback`, update those cfgs to the new `ssh` capability name.
+The implementation closure must run the live provider SSH suite on a host with `sshd`/`ssh-keygen`, because this migration specifically changes Eggpool's SSH execution path. It is acceptable for that environment-sensitive proof to remain an explicit local/release closure command rather than provisioning OpenSSH in every ordinary Eggpool CI run; Eggress already permanently qualifies its internal facade in its own CI.
 
 ---
 
 # Workstream 7 — Footprint and maintenance closure
 
-The previous comparable baseline recorded by Plan 189 is:
+Plan 189's comparable baseline is:
 
 ```text
-release binary:       29,570,824 bytes
-cargo-bloat .text:    approximately 17.9 MiB
+release binary:    29,570,824 bytes
+cargo-bloat .text: ~17.9 MiB
 ```
 
-After 1.0.7 migration, perform a same-host/toolchain/profile release build:
+After migration, perform the same-profile release build:
 
 ```bash
 cargo build --manifest-path rust/Cargo.toml --release --locked
 ls -l rust/target/release/eggpool
 ```
 
-If `cargo-bloat` is already available:
+If `cargo-bloat` is already installed:
 
 ```bash
 cargo bloat --manifest-path rust/Cargo.toml --release --crates
 ```
 
-Also record the direct-dependency and feature-tree change.
+Record direct-dependency and feature-tree changes too.
 
-Interpretation rules:
+Interpretation:
 
-- a smaller binary is useful but not required;
-- roughly unchanged size is acceptable because the primary win is removal of Eggpool-owned executor/session-cache code and direct production dependencies;
-- a material increase should be investigated for accidental default-feature expansion or duplicate 1.0.6/1.0.7 resolution before closure.
+- smaller is useful but not required;
+- roughly unchanged is acceptable because the primary improvement is ownership/maintenance simplification;
+- a material increase must be investigated for accidental feature expansion or mixed Eggress resolution.
 
-Do not change release LTO/strip/codegen settings to manufacture a favorable comparison.
+Do not change release LTO/strip/codegen settings to manufacture a size result.
 
 ---
 
-# Workstream 8 — Documentation and plan lifecycle cleanup
+# Workstream 8 — Documentation and plan lifecycle
 
-Update current source-of-truth documentation that describes the 1.0.6 exception. Likely targets include:
+Update current source-of-truth material that describes the 1.0.6 exception, likely including `architecture/deep-dive-providers.md` and provider source comments.
 
-- `architecture/deep-dive-providers.md`;
-- provider/transport comments;
-- any current dependency/architecture documentation that calls `eggress-ssh-fallback` active.
-
-Desired durable wording:
+Durable target wording:
 
 ```text
 Eggpool delegates provider proxy-chain construction and execution to
@@ -533,22 +450,18 @@ default; the facade owns SSH session state. Eggpool retains one private
 `test-support` adapter only for deterministic custom proxy TLS roots.
 ```
 
-Add concise follow-up/supersession notes to completed Plans 186–190 only where useful to prevent a future agent from treating the 1.0.6 exception as current. Do not rewrite their historical closure evidence; it accurately describes what was true at the time.
+Do not rewrite Plans 186–190: their closure evidence describes the architecture that was actually qualified at the time. Add concise follow-up notes where needed. At minimum Plan 190 should note that its `eggress-ssh-fallback` boundary was retired by Plan 191 after the upstream 1.0.7 fix shipped.
 
-At minimum, Plan 190 should receive a note that its `eggress-ssh-fallback` capability boundary was retired by Plan 191 after the upstream fix shipped in 1.0.7.
+Append final closure evidence to this plan with:
 
-Append closure evidence to this Plan 191 containing:
-
-- implementation commit;
-- exact Eggress version line;
+- implementation/closure commit(s);
+- exact Eggress line;
 - final root feature topology;
-- final direct Eggress dependency classification;
-- provider transport test count/result;
-- no-default result;
-- all-features result;
+- direct Eggress dependency classification;
+- provider transport/no-default/all-features results;
 - live SSH success/auth-failure/timeout results;
 - test-root Trojan success/failure results;
-- dependency tree/inverse-query findings;
+- dependency-tree findings;
 - release binary size and optional cargo-bloat result;
 - `cargo deny` result;
 - confirmation that no Eggpool-specific Eggress API was added.
@@ -557,9 +470,7 @@ Append closure evidence to this Plan 191 containing:
 
 # Mandatory verification
 
-Run from repository root unless noted otherwise.
-
-## Formatting and compilation
+## Compile/lint
 
 ```bash
 cargo fmt --manifest-path rust/Cargo.toml --all -- --check
@@ -567,17 +478,12 @@ cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked --no-default-features
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked --features test-support
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked --all-features
-```
-
-## Clippy
-
-```bash
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked --no-default-features -- -D warnings
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked --all-features -- -D warnings
 ```
 
-## Behavioral qualification
+## Behavior
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --locked --no-default-features -- --test-threads=1
@@ -585,11 +491,9 @@ cargo test --manifest-path rust/Cargo.toml --locked --features test-support --te
 cargo test --manifest-path rust/Cargo.toml --locked --all-features -- --test-threads=1
 ```
 
-The provider transport invocation must run on a host with `sshd`/`ssh-keygen` available so the live SSH fixture actually executes.
+The provider transport invocation must be run where OpenSSH is available so the live SSH fixture actually executes.
 
-If the fixture currently hard-fails when OpenSSH is unavailable, retain that behavior for the explicit local qualification command. Do not silently convert a required migration proof into a skip.
-
-## Dependency/policy checks
+## Dependency/policy
 
 ```bash
 cargo tree --manifest-path rust/Cargo.toml -e features
@@ -609,7 +513,7 @@ cargo build --manifest-path rust/Cargo.toml --release --locked
 ls -l rust/target/release/eggpool
 ```
 
-Optional only if already installed:
+Optional if already installed:
 
 ```bash
 cargo bloat --manifest-path rust/Cargo.toml --release --crates
@@ -617,7 +521,7 @@ cargo bloat --manifest-path rust/Cargo.toml --release --crates
 
 ---
 
-# Expected files to change
+# Expected files
 
 Primary:
 
@@ -626,89 +530,87 @@ Primary:
 - `rust/src/providers/transport.rs`
 - `rust/tests/provider_transport.rs`
 
-Likely current-documentation/closure updates:
+Likely closure/docs:
 
 - `architecture/deep-dive-providers.md`
 - `plans/190-eggress-optional-feature-corrective-closure.md`
-- this plan's closure section
+- this plan
 
-Possible CI edit only if feature-name references require it:
+CI only if feature-name references require it:
 
 - `.github/workflows/ci.yml`
 
-Do not modify unrelated provider adapters, routing state, retry state, database migrations, updater behavior, dashboard code, or Python tooling.
+Do not modify unrelated routing, retries, DB, updater, dashboard/server, provider adapters, or Python tooling.
 
 ---
 
 # Implementation order
 
-1. Confirm complete Eggress 1.0.7 registry resolution.
-2. Change all direct/dev Eggress pins to 1.0.7 and resolve the lockfile.
-3. Introduce the root `ssh` capability feature and split `test-support` from the old fallback dependency set.
-4. Remove the SSH-specific production branch and route normal SSH through `OutboundConnector`.
-5. Rename/isolate the remaining low-level custom-root adapter under `test-support`.
-6. Remove the direct `eggress-transport-ssh` dependency and SSH cache construction.
-7. Minimize the test-only `eggress-server`/compat feature set based on actual compile/test evidence.
-8. Update cfg-gated tests from fallback terminology to SSH capability terminology.
+1. Confirm complete 1.0.7 registry resolution.
+2. Move every direct/dev Eggress pin to 1.0.7 and regenerate the lockfile.
+3. Replace `eggress-ssh-fallback` with the root `ssh` capability and split `test-support` dependency ownership.
+4. Route production SSH through `OutboundConnector` and delete fallback construction/state.
+5. Rename/isolate the low-level custom-root adapter under `test-support`.
+6. Remove direct `eggress-transport-ssh` and SSH cache construction.
+7. Minimize direct test-only server/compat features using compile/test evidence.
+8. Update cfg-gated tests to capability terminology.
 9. Run the live provider transport suite with OpenSSH available.
-10. Run no-default, default, test-support, and all-features compile/lint/test qualification.
-11. Inspect dependency/feature trees and verify no explicit 1.0.6 remnants or direct production implementation ownership.
+10. Run no-default/default/test-support/all-features compile, lint, and tests.
+11. Inspect feature/inverse trees and verify no 1.0.6 residue or direct production implementation ownership.
 12. Run policy checks and comparable release measurement.
-13. Update current architecture/docs and append historical-plan follow-up notes.
-14. Push the implementation commit and require normal CI green.
-15. Append final closure evidence and mark this plan complete only after the pushed head is verified.
+13. Update current docs and append historical follow-up notes.
+14. Push implementation and require normal CI green.
+15. Append pushed-head closure evidence and mark complete only after verification.
 
 ---
 
-# Failure and rollback rules
+# Failure policy
 
-If 1.0.7 introduces a regression in an existing non-SSH proxy protocol, first determine whether it is a feature-resolution mistake in Eggpool or a real Eggress regression. Do not restore the entire 1.0.6 fallback architecture as a generic workaround.
+If a non-SSH proxy protocol regresses on 1.0.7, first distinguish an Eggpool feature-resolution error from a real Eggress regression. Do not restore the whole 1.0.6 fallback architecture as a general workaround.
 
-If the 1.0.7 `OutboundConnector` SSH path fails Eggpool's real OpenSSH fixture despite passing Eggress's own facade tests:
+If the 1.0.7 facade SSH path fails Eggpool's real fixture despite Eggress's own regression suite:
 
-1. capture the exact URI and failure class without secrets;
-2. compare the Eggpool URI/target usage with the Eggress regression fixture;
-3. determine whether Eggpool depends on a compatibility behavior not covered upstream;
-4. create a narrow Eggress corrective issue/plan only if an actual upstream defect is proven;
-5. keep Eggpool on the last known-good state until the fixed published Eggress patch exists.
+1. capture the exact URI/failure class without secrets;
+2. compare Eggpool target/URI semantics with the upstream fixture;
+3. identify the missing compatibility behavior;
+4. create a narrow upstream correction only if an actual Eggress defect is proven;
+5. keep Eggpool on the last known-good state until a fixed published Eggress patch exists.
 
-Do not ship a mixed 1.0.7 facade + copied native fallback merely to force closure unless a separately documented emergency decision explicitly accepts that temporary state.
+Do not ship a mixed 1.0.7 facade plus copied native SSH fallback without a separately documented emergency decision.
 
 ---
 
 # Completion criteria
 
-Plan 191 is complete only when all applicable statements are true:
+Plan 191 is complete only when:
 
-1. Eggpool resolves the published Eggress `1.0.7` line with no git/path overrides.
-2. Every direct/dev Eggress pin selected by Eggpool is on 1.0.7.
-3. `eggress-ssh-fallback` is removed from Cargo features and source cfgs.
-4. The default product retains SSH through a normal `ssh -> eggress-embed/ssh` capability feature.
-5. `ProviderTcpConnector::new` routes SSH through `OutboundConnector`, not an Eggpool-built executor.
-6. Production source no longer creates `SshSessionCache` or reconstructs Eggress SSH chain state.
+1. Eggpool resolves published Eggress 1.0.7 without git/path overrides.
+2. Every directly selected Eggress production/test/dev crate is on 1.0.7.
+3. `eggress-ssh-fallback` is absent from Cargo features and source cfgs.
+4. Default SSH is expressed as `ssh -> eggress-embed/ssh`.
+5. `ProviderTcpConnector::new` sends SSH through `OutboundConnector`.
+6. Production source no longer creates `SshSessionCache` or reconstructs SSH chain state.
 7. `eggress-transport-ssh` is not a direct Eggpool dependency.
-8. Direct implementation-crate source usage is confined to the `test-support` custom-root adapter.
-9. The custom-root adapter owns no SSH state and retains strict TLS verification.
-10. Live SSH traversal passes through the normal constructor.
-11. SSH authentication failure remains correctly classified and credential-redacted.
-12. SSH timeout/cancellation remains bounded.
-13. Proxy failures cannot fall back to direct egress.
-14. No-default builds compile/lint/test and reject SSH capability fail-closed while preserving non-SSH proxy behavior.
-15. Trojan custom-root success and untrusted-root failure both remain green.
-16. HTTP/SOCKS/SS/SSR/Trojan/multihop/direct behavior remains qualified.
-17. Dependency-tree evidence confirms facade ownership rather than direct production implementation ownership.
-18. No unexpected Eggress 1.0.6 package remains in the selected graph.
-19. `cargo deny` passes.
-20. The release footprint delta versus the Plan 189 baseline is recorded and any material regression explained.
-21. Current documentation no longer describes the 1.0.6 fallback as active.
-22. Plan 190 is annotated as historically complete but superseded for current SSH architecture by this 1.0.7 migration.
-23. No new Eggpool-specific Eggress API or insecure trust escape hatch was introduced.
-24. This plan contains pushed-head closure evidence and is marked complete only after CI/qualification verification.
+8. Direct implementation-crate source use is confined to `test-support` custom-root code.
+9. That custom-root adapter owns no SSH state and preserves strict TLS verification.
+10. Live SSH traversal passes through the ordinary constructor.
+11. SSH auth failure remains correctly classified/redacted and timeout/cancellation remains bounded.
+12. Proxy failure cannot fall back to direct egress.
+13. No-default builds compile/lint/test, reject SSH fail-closed, and retain non-SSH proxy behavior.
+14. Trojan custom-root success and untrusted-root failure remain green.
+15. HTTP/SOCKS/SS/SSR/Trojan/multihop/direct behavior remains qualified.
+16. Feature-tree evidence confirms facade ownership and no unexpected 1.0.6 package remains.
+17. `cargo deny` passes.
+18. Release footprint delta versus Plan 189 is recorded and any material regression explained.
+19. Current documentation no longer describes the 1.0.6 workaround as active.
+20. Plan 190 is annotated as historically complete but superseded for current SSH architecture by this plan.
+21. No new Eggpool-specific Eggress API or insecure trust escape hatch was introduced.
+22. This plan contains pushed-head closure evidence and is marked complete only after CI/qualification verification.
 
 ---
 
 # Handoff note
 
-The goal is not "use a newer dependency." The goal is to consume the upstream ownership correction that Eggpool originally needed, delete the local compatibility ownership that correction makes obsolete, and leave a smaller, clearer trust/dependency boundary.
+The goal is not simply to consume a newer crate. The goal is to consume the upstream ownership fix that Eggpool originally needed, delete the local compatibility ownership that fix makes obsolete, and leave a smaller and more explicit trust/dependency boundary.
 
-Once the facade path passes Eggpool's real SSH fixture and the custom-root seam is cleanly test-only, stop. Further Eggress integration or general proxy refactoring belongs in a separate plan with independent justification.
+Once the stable facade passes Eggpool's real SSH fixture and the custom-root seam is cleanly test-only, stop. Further proxy architecture work requires a separate justification.
