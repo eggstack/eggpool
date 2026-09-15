@@ -32,6 +32,14 @@ the server modules thin: HTTP handlers must delegate inference lifecycle work
 to the coordinator, and lifecycle workflows must compose the existing process
 safety primitives.
 
+For `configsetup` integration changes, run the focused O005 contract target
+alongside the integration unit tests:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test operations_o005 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib operations::integrations
+```
+
 For streaming coordinator changes, run the focused C008 publication, boundary,
 finalization, and wire suites before the workspace suite:
 

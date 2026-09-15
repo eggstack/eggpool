@@ -102,6 +102,11 @@ eggpool configsetup aider --model openai/gpt-4 --write
 eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
 
+The generated Codex TOML uses the HTTP/SSE Responses API and references
+`EGGPOOL_API_KEY` without embedding the server key. Set it with
+`export EGGPOOL_API_KEY="$(eggpool getkey)"` in the environment that launches
+Codex.
+
 See [Agent Configuration](docs/agent-configuration.md) for all supported targets and options.
 
 For Codex, the deterministic Responses conformance target and the opt-in

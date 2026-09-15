@@ -4,7 +4,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use eggpool::operations::integrations::{
     IntegrationContext, IntegrationModel, ModelLimits, SnippetOptions, Target, apply_overrides,
-    build_integration_context, deliver, render_target, resolve_model,
+    build_integration_context, deliver, paste_hint, render_target, resolve_model,
 };
 use serde_json::{Map, Value};
 use tempfile::tempdir;
@@ -182,11 +182,58 @@ async fn default_delivery_hides_secrets_and_explicit_print_reveals_them() {
             write: false,
         },
         None,
-        None,
+        paste_hint(Target::Codex),
     )
     .await
     .expect("codex delivery");
-    assert!(codex.stdout.is_none());
+    assert_eq!(
+        codex.stdout.as_deref(),
+        Some("env_key = \"EGGPOOL_API_KEY\"")
+    );
+    assert!(
+        codex.messages.iter().any(
+            |message| message.contains("EGGPOOL_API_KEY") && message.contains("eggpool getkey")
+        )
+    );
+
+    let codex_print_secret = deliver(
+        "env_key = \"EGGPOOL_API_KEY\"",
+        Target::Codex,
+        &SnippetOptions {
+            print_secret: true,
+            no_clipboard: true,
+            force: false,
+            output: None,
+            write: false,
+        },
+        None,
+        paste_hint(Target::Codex),
+    )
+    .await
+    .expect("codex explicit print delivery");
+    assert_eq!(
+        codex_print_secret.stdout.as_deref(),
+        Some("env_key = \"EGGPOOL_API_KEY\"")
+    );
+}
+
+#[test]
+fn codex_does_not_fabricate_a_model_when_catalog_has_multiple_models() {
+    let mut context = context();
+    context.models.push(IntegrationModel {
+        model_id: "claude-sonnet/anthropic".into(),
+        base_model_id: "claude-sonnet".into(),
+        provider_id: Some("anthropic".into()),
+        display_name: "Claude Sonnet".into(),
+        capabilities: Value::Object(Map::new()),
+        source_metadata: Value::Object(Map::new()),
+        limits: ModelLimits::default(),
+    });
+
+    assert_eq!(
+        resolve_model(Target::Codex, None, &context, false).expect("model resolution"),
+        None
+    );
 }
 
 #[tokio::test]

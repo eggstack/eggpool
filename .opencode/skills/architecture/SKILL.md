@@ -41,6 +41,11 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
+- Treat `configsetup` renderers as format-specific delivery boundaries: a
+  target is secret-bearing only when its rendered artifact embeds the resolved
+  key. Codex emits an HTTP/SSE Responses TOML block with
+  `env_key = "EGGPOOL_API_KEY"`, so it is printable by default and must not
+  gain a Codex-private discovery or WebSocket contract.
 
 ## Verification pointers
 

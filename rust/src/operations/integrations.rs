@@ -157,11 +157,10 @@ impl Target {
     }
 
     pub const fn contains_secret(self) -> bool {
-        // Keep the generic delivery path fail-closed.  Codex uses an env-key
-        // reference rather than embedding the value, but its generated file
-        // is still a credential-bearing integration artifact and follows the
-        // same explicit-print contract as the other targets.
-        true
+        // The generic delivery path remains fail-closed for targets whose
+        // rendered artifact embeds the resolved key. Codex carries only the
+        // environment-variable name and must remain printable by default.
+        !matches!(self, Self::Codex)
     }
 }
 
@@ -433,6 +432,9 @@ pub fn paste_hint(target: Target) -> Option<&'static str> {
         }
         Target::Goose => Some("Export these variables before running Goose."),
         Target::Openhands => Some("Pass these environment variables to the OpenHands runtime."),
+        Target::Codex => Some(
+            "Set EGGPOOL_API_KEY in the environment used to launch Codex; retrieve the current key with `eggpool getkey`.",
+        ),
         _ => None,
     }
 }
@@ -1200,6 +1202,79 @@ mod tests {
         assert!(aider.contains(r#"'ep_'"'"'key\tail'"#));
         let codex = build_codex_toml_snippet(&context, Some("model\"\\x")).expect("toml");
         assert!(codex.contains("model = \"model\\\"\\\\x\""));
+    }
+
+    #[test]
+    fn codex_renderer_matches_the_http_responses_provider_contract() {
+        let context = context();
+        let snippet = build_codex_toml_snippet(&context, Some("router-alias")).expect("toml");
+        let parsed: toml::Value = snippet.parse().expect("valid TOML");
+        let provider = parsed
+            .get("model_providers")
+            .and_then(|value| value.get("eggpool"))
+            .and_then(toml::Value::as_table)
+            .expect("EggPool provider table");
+
+        assert_eq!(
+            parsed.get("model_provider").and_then(toml::Value::as_str),
+            Some("eggpool")
+        );
+        assert_eq!(
+            parsed.get("model").and_then(toml::Value::as_str),
+            Some("router-alias")
+        );
+        assert_eq!(
+            provider.get("name").and_then(toml::Value::as_str),
+            Some("EggPool")
+        );
+        assert_eq!(
+            provider.get("base_url").and_then(toml::Value::as_str),
+            Some("http://192.168.1.100:11300/v1")
+        );
+        assert_eq!(
+            provider.get("wire_api").and_then(toml::Value::as_str),
+            Some("responses")
+        );
+        assert_eq!(
+            provider
+                .get("supports_websockets")
+                .and_then(toml::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            provider.get("env_key").and_then(toml::Value::as_str),
+            Some("EGGPOOL_API_KEY")
+        );
+        assert!(!snippet.contains(&context.api_key));
+        assert!(!snippet.contains("chat_completions"));
+        assert!(!snippet.contains("OPENAI_API_KEY"));
+        assert!(!snippet.contains("models/") && !snippet.contains("/catalog"));
+    }
+
+    #[test]
+    fn codex_renderer_omits_model_when_none_is_selected() {
+        let context = context();
+        let snippet = build_codex_toml_snippet(&context, None).expect("toml");
+        let parsed: toml::Value = snippet.parse().expect("valid TOML");
+
+        assert_eq!(
+            parsed.get("model_provider").and_then(toml::Value::as_str),
+            Some("eggpool")
+        );
+        assert!(parsed.get("model").is_none());
+        assert!(
+            parsed
+                .get("model_providers")
+                .and_then(|value| value.get("eggpool"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn only_rendered_secret_targets_require_explicit_secret_printing() {
+        assert!(!Target::Codex.contains_secret());
+        assert!(Target::QwenCode.contains_secret());
+        assert!(Target::Aider.contains_secret());
     }
 
     #[test]

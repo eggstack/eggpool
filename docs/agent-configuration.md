@@ -29,7 +29,7 @@
 | `--output PATH` | Write output to a specific file |
 | `--force` | Overwrite existing output file |
 | `--no-clipboard` | Skip copying to clipboard |
-| `--print-secret` | Include the API key in the output (for Codex env vars) |
+| `--print-secret` | Print the resolved API key for targets whose generated artifact embeds it; it does not change Codex TOML |
 
 ## Examples
 
@@ -46,8 +46,8 @@ eggpool configsetup continue --model claude-sonnet-4 --output ~/.continue/eggpoo
 # Cline — skip clipboard
 eggpool configsetup cline --no-clipboard
 
-# Codex — print TOML block with secret for env var reference
-eggpool configsetup codex --print-secret
+# Codex — print the non-secret Responses provider block
+eggpool configsetup codex --model <eggpool-model-or-alias> --no-clipboard
 
 # Roo Code — write JSON profile
 eggpool configsetup roo-code --write
@@ -56,7 +56,7 @@ eggpool configsetup roo-code --write
 ## Output Behavior
 
 - Generated JSON, TOML, YAML, and shell snippets escape catalog/config values for the target format, including provider-suffixed model IDs.
-- The `--model` flag overrides the auto-detected model. Without it, the generator picks the best available model from the catalog.
+- The `--model` flag sets an explicit model or EggPool alias. If exactly one model is available, the shared resolver can fill it automatically; when multiple models are available, EggPool does not invent a preference.
 - `--write` writes to a sensible default location for the target (see the table above). `--output` always takes precedence.
 - Without `--write` or `--output`, the output is printed to stdout and copied to the clipboard (unless `--no-clipboard`).
 
@@ -81,16 +81,24 @@ supports_websockets = false
 ```
 
 Set `EGGPOOL_API_KEY` to EggPool's server key in the environment used to run
-Codex. The default server port is `11300`; use `--base-url` when the server is
+Codex. Retrieve the current key without putting it in the TOML with:
+
+```bash
+export EGGPOOL_API_KEY="$(eggpool getkey)"
+```
+
+The default server port is `11300`; use `--base-url` when the server is
 configured differently. Generate a model-specific snippet with:
 
 ```bash
 eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
 
-`--print-secret` is only needed when you explicitly want the resolved key in
-stdout. Automatic Codex model-picker discovery is optional/deferred; explicit
-model selection is the qualified supported path today. For a real current CLI
+The generated TOML contains `env_key = "EGGPOOL_API_KEY"`, never the resolved
+server key, so Codex output is printed normally without `--print-secret`.
+Passing `--print-secret` does not embed the key in Codex TOML. Use `--model` for
+the qualified setup path, or select the model explicitly when invoking Codex;
+automatic Codex model-picker discovery is deferred. For a real current CLI
 check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
 
 ## OpenCode Integration
