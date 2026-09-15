@@ -788,12 +788,14 @@ async fn endpoint_rejects_malformed_model_and_stateless_violations() {
     .await
     .expect_err("non-boolean stream is rejected");
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
-    // Responses without explicit store=false.
+    // Responses stateful storage is rejected, while omission remains
+    // stateless and is accepted by the native-preservation boundary.
     let stateless = Bytes::from(
         serde_json::to_vec(&json!({
             "model": MODEL,
             "input": [{"type": "message", "role": "user",
                 "content": [{"type": "input_text", "text": "hi"}]}],
+            "store": true,
         }))
         .expect("body"),
     );

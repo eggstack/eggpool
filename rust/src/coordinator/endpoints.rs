@@ -41,7 +41,7 @@ use crate::{
     },
     providers::ProviderClientPool,
     quota::{AccountQuota, QuotaEstimator},
-    request::StaticRoutingFacts,
+    request::{AdmissionError, StaticRoutingFacts, validate_responses_stateless_policy},
     routing::{EligibilityPolicy, RoutingRouter},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireProfileRegistry,
@@ -132,49 +132,33 @@ pub fn endpoint_error_body(surface: ClientSurface, message: &str) -> Vec<u8> {
 /// Returns a rejection message when stateful fields are present; `None`
 /// means the payload is stateless and may continue.
 pub fn validate_responses_stateless(payload: &Map<String, Value>) -> Option<String> {
-    if payload
-        .get("previous_response_id")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Some(
+    match validate_responses_stateless_policy(payload) {
+        Ok(()) => None,
+        Err(AdmissionError::StatefulResponsesFeature {
+            field: "previous_response_id",
+        }) => Some(
             "EggPool's /v1/responses is stateless only; previous_response_id is not supported."
                 .into(),
-        );
-    }
-    if payload
-        .get("conversation")
-        .is_some_and(|value| !value.is_null())
-    {
-        return Some(
+        ),
+        Err(AdmissionError::StatefulResponsesFeature {
+            field: "conversation",
+        }) => Some(
             "EggPool's /v1/responses is stateless only; conversation references are not supported."
                 .into(),
-        );
-    }
-    match payload.get("store") {
-        Some(Value::Bool(false)) => {}
-        Some(Value::Bool(true)) => {
-            return Some(
-                "EggPool's /v1/responses is stateless only; store=true is not supported.".into(),
-            );
+        ),
+        Err(AdmissionError::StatefulResponsesFeature { field: "store" }) => {
+            Some("EggPool's /v1/responses is stateless only; store=true is not supported.".into())
         }
-        None => {
-            return Some(
-                "EggPool's /v1/responses is stateless only; store=false must be explicitly set."
-                    .into(),
-            );
-        }
-        Some(_) => {
-            return Some(
-                "EggPool's /v1/responses is stateless only; store must be explicitly false.".into(),
-            );
-        }
-    }
-    if payload.get("background") == Some(&Value::Bool(true)) {
-        return Some(
+        Err(AdmissionError::StatefulResponsesFeature {
+            field: "background",
+        }) => Some(
             "EggPool's /v1/responses is stateless only; background=true is not supported.".into(),
-        );
+        ),
+        Err(AdmissionError::InvalidField { field: "store" }) => {
+            Some("EggPool's /v1/responses is stateless only; store must be a boolean.".into())
+        }
+        Err(_) => Some("EggPool's /v1/responses stateless policy rejected the request.".into()),
     }
-    None
 }
 
 /// Parse `model/provider` into `(model_id, provider_id)`.

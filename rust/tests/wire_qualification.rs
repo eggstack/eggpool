@@ -1270,3 +1270,99 @@ fn profile_identity_is_immutable_and_loss_policy_remains_explicit() {
             if error.reason == eggpool::wire::CodecReasonCode::LossRejected
     ));
 }
+
+#[test]
+fn native_responses_alias_rewrites_only_model_and_preserves_source_envelope() {
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let request = json!({
+        "model":"coding-fast",
+        "input":[
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+            {"type":"reasoning","id":"rs_1","encrypted_content":"opaque"},
+            {"type":"custom_tool_call","call_id":"call_1","name":"shell","input":"pwd"}
+        ],
+        "tools":[{"type":"custom","name":"shell","format":{"type":"text"}}],
+        "include":["reasoning.encrypted_content"],
+        "prompt_cache_key":"cache-key",
+        "text":{"format":{"type":"text"},"verbosity":"high"},
+        "x_future_extension":{"keep":true}
+    });
+    let raw = serde_json::to_vec(&request).expect("request JSON");
+    let mut context = context(ClientSurface::Responses, WireSurface::OpenaiResponses);
+    context.canonical_model_id = "coding-fast".into();
+    context.upstream_model_id = "provider/model-v2".into();
+    let prepared = runtime
+        .prepare_request(&raw, &context)
+        .expect("native request preparation");
+    let encoded: Value = serde_json::from_slice(&prepared.body.bytes).expect("encoded JSON");
+    let mut expected = request;
+    expected["model"] = json!("provider/model-v2");
+    assert_eq!(encoded, expected);
+    assert_eq!(prepared.notices.len(), 0);
+    assert_eq!(prepared.admission.canonical.messages.len(), 1);
+}
+
+#[test]
+fn native_responses_semantic_blockers_fail_before_cross_surface_encoding() {
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let raw = serde_json::to_vec(&json!({
+        "model":"fixture-model",
+        "input":[{"type":"reasoning","encrypted_content":"opaque"}],
+        "tools":[{"type":"web_search"}]
+    }))
+    .expect("request JSON");
+    let result = runtime.prepare_request(
+        &raw,
+        &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+    );
+    assert!(matches!(
+        result,
+        Err(WireRuntimeError::RequestAdaptation(error))
+            if error.reason == eggpool::wire::CodecReasonCode::UnsupportedSemanticFeature
+                && error.field.as_deref() == Some("input.native_item")
+    ));
+}
+
+#[test]
+fn cross_surface_responses_extensions_are_explicitly_noticed_and_policy_bound() {
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let raw = serde_json::to_vec(&json!({
+        "model":"fixture-model",
+        "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],
+        "x_future_extension":{"keep":true}
+    }))
+    .expect("request JSON");
+    let context = context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions);
+    let prepared = runtime
+        .prepare_request(&raw, &context)
+        .expect("safe extension is adapted");
+    assert_eq!(
+        prepared.notices[0].code.0,
+        "native_extension_not_representable"
+    );
+
+    let mut strict = context;
+    strict.adaptation_policy.loss_policy = LossPolicy::Reject;
+    assert!(matches!(
+        runtime.prepare_request(&raw, &strict),
+        Err(WireRuntimeError::RequestAdaptation(error))
+            if error.reason == eggpool::wire::CodecReasonCode::LossRejected
+    ));
+}
+
+#[test]
+fn native_responses_finite_response_passthrough_retains_unknown_fields() {
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let mut value = response_payload(WireSurface::OpenaiResponses);
+    value["future_response_field"] = json!({"preserve":true});
+    let body = serde_json::to_vec(&value).expect("response JSON");
+    let response = runtime
+        .decode_finite_response(
+            &body,
+            200,
+            &context(ClientSurface::Responses, WireSurface::OpenaiResponses),
+            true,
+        )
+        .expect("native response");
+    assert_eq!(response.client_body.expect("client body").bytes, body);
+}

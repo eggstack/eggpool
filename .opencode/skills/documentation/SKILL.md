@@ -39,6 +39,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   publication. Do not preserve stale caller-specific restart/reload lists.
 - Keep historical plans append-only. Git history is the archive for retired
   migration scaffolding; current docs must describe the shipped Rust runtime.
+- Document Responses as two bounded paths: canonical semantic adaptation and
+  source-native same-surface preservation. State the stateless policy from
+  admission (`store` omitted/false is accepted; stateful continuation and
+  background features are rejected) and never imply native-only items/tools
+  are translated losslessly.
 
 ## Checks
 

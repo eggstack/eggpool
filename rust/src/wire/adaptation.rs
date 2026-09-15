@@ -14,6 +14,7 @@ use crate::catalog::{CapabilityStatus, ThinkingCapability};
 use super::codec::{AdaptationNotice, CodecError, CodecOutput, CodecReasonCode};
 use super::ir::{CanonicalBlockKind, CanonicalRequest, ClientSurface, ReasoningMode};
 use super::registry::WireSurface;
+use crate::request::NativeRequestPreservation;
 
 pub const MAX_ADAPTATION_NOTICES: usize = 32;
 
@@ -213,6 +214,60 @@ pub fn request_notices(
         notices.push(notice(
             "parallel_tool_calls_not_representable",
             "parallel_tool_calls",
+            source,
+            Some(target),
+        ));
+    }
+    Ok(notices)
+}
+
+/// Apply the cross-surface policy to Responses syntax that has no canonical
+/// representation. Native same-surface forwarding never calls this helper.
+/// Unknown extension fields are safe to omit only with an explicit notice;
+/// native input items and tool definitions are semantic blockers.
+pub fn native_preservation_notices(
+    preservation: &NativeRequestPreservation,
+    target: WireSurface,
+) -> Result<Vec<AdaptationNotice>, CodecError> {
+    if target == WireSurface::OpenaiResponses {
+        return Ok(Vec::new());
+    }
+    let source = Some(WireSurface::OpenaiResponses);
+    if preservation.summary.has_cross_surface_blocker()
+        && preservation.summary.native_input_items > 0
+    {
+        return Err(CodecError {
+            reason: CodecReasonCode::UnsupportedSemanticFeature,
+            field: Some("input.native_item".into()),
+            source_surface: source,
+            target_surface: Some(target),
+        });
+    }
+    if preservation.summary.native_tool_definitions > 0 {
+        return Err(CodecError {
+            reason: CodecReasonCode::UnsupportedSemanticFeature,
+            field: Some("tools.native_definition".into()),
+            source_surface: source,
+            target_surface: Some(target),
+        });
+    }
+    let mut notices: Vec<_> = preservation
+        .summary
+        .extension_fields
+        .iter()
+        .map(|field| {
+            notice(
+                "native_extension_not_representable",
+                field,
+                source,
+                Some(target),
+            )
+        })
+        .collect();
+    if preservation.summary.extensions_truncated {
+        notices.push(notice(
+            "native_extensions_truncated",
+            "extensions",
             source,
             Some(target),
         ));

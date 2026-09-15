@@ -12,7 +12,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 - Client endpoints for OpenAI Chat Completions (`/v1/chat/completions`), stateless OpenAI Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
-- Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination
+- Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination, with bounded native Responses request preservation
 - Dynamic model discovery with load-based routing across multiple providers and accounts
 - Optional sticky model-router aliases with bounded selector affinity and live-reload continuity
 - Provider/model wire-surface contracts with per-surface paths and auth shapes
@@ -229,6 +229,16 @@ surface may differ from the public client endpoint; EggPool adapts through its
 canonical wire boundary. Existing
 `protocols`, `openai_path`, `responses_path`, and `anthropic_path` settings remain
 valid and are synthesized into equivalent candidates.
+
+Responses admission keeps a redacted canonical projection for routing and a
+bounded source-native envelope for same-surface forwarding. Native
+Responses-to-Responses requests preserve ordered Codex history, encrypted
+reasoning items, native tool definitions, and extension fields; an alias
+rewrite changes only the top-level `model`. Cross-surface adaptation rejects
+native-only items or tools before provider dispatch instead of silently
+dropping them. Responses remains stateless: `store` may be omitted or false,
+while `store: true`, continuation references, and background execution are
+rejected locally.
 
 EggPool keeps a bounded, in-memory preference for the last successful declared
 wire surface per provider/model. The preference is refreshed by ordinary

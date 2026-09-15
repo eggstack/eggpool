@@ -149,6 +149,86 @@ fn responses_and_messages_keep_surface_specific_intent() {
 }
 
 #[test]
+fn responses_preserve_native_history_and_tool_definitions_without_polluting_ir() {
+    let value = json!({
+        "model": "fixture-model",
+        "input": [
+            {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"hello"}]},
+            {"type":"reasoning", "id":"rs_1", "encrypted_content":"encrypted-sentinel"},
+            {"type":"custom_tool_call", "call_id":"call_1", "name":"shell", "input":"ls"},
+            {"type":"local_shell_call", "id":"shell_1", "action":{"type":"exec"}},
+            {"type":"tool_search_call", "id":"search_1", "query":"docs"},
+            {"type":"tool_search_output", "id":"search_1", "results":[]},
+            {"type":"web_search_call", "id":"web_1", "status":"completed"},
+            {"type":"future_item", "payload":{"safe":true}}
+        ],
+        "tools": [
+            {"type":"function", "name":"lookup", "parameters":{"type":"object"}},
+            {"type":"custom", "name":"shell", "format":{"type":"text"}},
+            {"type":"web_search", "search_context_size":"low"},
+            {"type":"namespace", "name":"browser", "tools":[]},
+            {"type":"future_tool", "version":1}
+        ],
+        "include":["reasoning.encrypted_content"],
+        "prompt_cache_key":"cache-key",
+        "text":{"format":{"type":"text"},"verbosity":"high"},
+        "x_future_extension":{"enabled":true}
+    });
+    let request = admit(value.clone(), ClientSurface::Responses);
+    let preservation = request
+        .native_preservation
+        .as_ref()
+        .expect("Responses retains native source");
+    assert_eq!(preservation.parsed, value);
+    assert_eq!(preservation.summary.native_input_items, 7);
+    assert_eq!(preservation.summary.native_tool_definitions, 4);
+    assert_eq!(
+        preservation.summary.extension_fields,
+        vec![
+            "include",
+            "prompt_cache_key",
+            "x_future_extension",
+            "text.verbosity"
+        ]
+    );
+    assert_eq!(request.canonical.messages.len(), 1);
+    assert_eq!(request.canonical.messages[0].text(), "hello");
+    assert_eq!(request.canonical.tools.len(), 1);
+    assert_eq!(request.canonical.tools[0].name, "lookup");
+    let debug = format!("{request:?}");
+    assert!(!debug.contains("encrypted-sentinel"));
+    assert!(!debug.contains("cache-key"));
+}
+
+#[test]
+fn responses_stateless_policy_accepts_omitted_store_and_rejects_stateful_fields() {
+    let accepted = admit(
+        json!({"model":"fixture-model", "input":"hello"}),
+        ClientSurface::Responses,
+    );
+    assert!(accepted.native_preservation.is_some());
+
+    for value in [
+        json!({"model":"fixture-model", "store":true}),
+        json!({"model":"fixture-model", "previous_response_id":"resp_1"}),
+        json!({"model":"fixture-model", "conversation":"conv_1"}),
+        json!({"model":"fixture-model", "background":true}),
+    ] {
+        let bytes = serde_json::to_vec(&value).expect("request JSON");
+        assert!(matches!(
+            admit_request(
+                &bytes,
+                AdmissionOptions {
+                    client_surface: ClientSurface::Responses,
+                    ..AdmissionOptions::default()
+                }
+            ),
+            Err(AdmissionError::StatefulResponsesFeature { .. })
+        ));
+    }
+}
+
+#[test]
 fn presence_distinguishes_missing_null_false_and_zero() {
     let request = admit(
         json!({

@@ -11,8 +11,8 @@ pub mod stream;
 
 pub use adaptation::{
     AdaptationOutcome, AdaptationPolicy, CapabilityDisposition, LossPolicy, MAX_ADAPTATION_NOTICES,
-    ReasoningCapabilityPolicy, apply_adaptation_policy, reasoning_capability_notices,
-    request_notices, stable_tool_call_id,
+    ReasoningCapabilityPolicy, apply_adaptation_policy, native_preservation_notices,
+    reasoning_capability_notices, request_notices, stable_tool_call_id,
 };
 pub use additional_codecs::{
     GeminiGenerateContentCodec, GeminiInteractionsCodec, OpenAiResponsesCodec,

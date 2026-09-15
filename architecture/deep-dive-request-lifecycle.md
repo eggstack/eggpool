@@ -14,6 +14,21 @@ codec under `rust/src/wire/` encodes the provider request and decodes finite or
 streaming responses. Native terminal evidence is required; transport EOF is
 never treated as successful completion.
 
+Responses admission deliberately creates two bounded products: the canonical
+semantic projection used by routing/accounting and a source-native preservation
+envelope holding the already-parsed request JSON plus redacted feature facts.
+Native Responses routing forwards the original validated bytes when possible;
+an alias target rewrites only `model` and compact-serializes the preserved
+object. Unknown/future input items and non-function tool definitions therefore
+survive native forwarding without expanding `CanonicalMessage` or
+`CanonicalContentBlock`. Cross-surface preparation consults the feature facts
+and rejects native-only semantic blockers before provider submission.
+
+The stateless Responses policy is enforced at admission as well as the HTTP
+adapter: `store` may be omitted or false, while `store: true`,
+`previous_response_id`, conversation references, and background execution are
+rejected locally.
+
 ### Streaming ownership
 
 The streaming coordinator is an internal package with an explicit handoff

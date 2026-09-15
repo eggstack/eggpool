@@ -22,6 +22,10 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Use the shared SQLite transaction/recovery contract; fail closed on commit or
   ownership ambiguity.
 - Preserve the canonical wire intent and never chain translated payloads.
+- For Responses admission, keep source-native preservation separate from the
+  canonical IR. Same-surface forwarding may rewrite only EggPool-owned fields
+  such as `model`; cross-surface codecs must reject native-only semantics or
+  emit explicit bounded adaptation notices.
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.

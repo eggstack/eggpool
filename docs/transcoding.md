@@ -37,7 +37,14 @@ wire encoding.
 The original canonical request is retained in `TranscodeContext` and
 `ProxyRequestContext`. A retry or future alternate-surface attempt must start
 from that source, not from the body emitted for an earlier provider. Native
-same-surface requests retain the existing byte-preserving fast path.
+same-surface requests retain the existing byte-preserving fast path. For
+Responses specifically, admission also retains a bounded source-native
+envelope outside the canonical IR. Responses-to-Responses forwarding keeps
+ordered native history, encrypted reasoning, native tools, and extensions;
+when an alias changes the upstream model, only the top-level `model` is
+rewritten. Cross-surface adaptation rejects native-only items/tools before
+dispatch and reports safely omittable extensions through bounded adaptation
+notices.
 
 ### Request ownership and media validation
 

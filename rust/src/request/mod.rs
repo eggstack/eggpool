@@ -8,8 +8,9 @@ pub mod body;
 pub mod limits;
 
 pub use admission::{
-    AdmissionError, AdmissionOptions, AdmittedRequest, StaticRoutingFacts, admit_request,
-    affinity_identity_input, canonical_request_from_value, routing_request_facts,
+    AdmissionError, AdmissionOptions, AdmittedRequest, NativeFeatureSummary,
+    NativeRequestPreservation, StaticRoutingFacts, admit_request, affinity_identity_input,
+    canonical_request_from_value, routing_request_facts, validate_responses_stateless_policy,
 };
 pub use body::{
     BodyEncodingError, EncodedJsonBody, encode_compact_json, encode_compact_json_bounded,

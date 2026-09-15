@@ -16,14 +16,21 @@ only preferences.
 Responses requests remain stateless. Requests carrying
 `previous_response_id`, any `conversation` reference, `store = true`, or
 `background = true` are rejected locally with HTTP 400 before provider
-selection or upstream I/O. Omitted `store` is also rejected: clients must send
+selection or upstream I/O. Omitted `store` is treated as stateless, as is
 `store: false`. EggPool does not persist response IDs, conversation history,
 retrieval state, cancellation state, or background jobs.
 
-The canonical IR is built from the original client request. An alternate wire
-codec always encodes from that source request; it never chains a previously
-translated provider payload. Surface-specific credentials are rendered at
-dispatch time and are not stored in the profile or metadata.
+Responses admission produces both a bounded canonical semantic projection and
+a source-native preservation envelope. Native Responses-to-Responses routing
+forwards the original validated JSON, or rewrites only the top-level `model`
+when an EggPool alias selects a different upstream model. This preserves input
+item order, reasoning replay fields, native tools, and current/future
+extension fields without putting arbitrary Responses JSON in the canonical IR.
+Cross-surface routing still encodes from canonical semantics; native-only
+items/tools fail with `UnsupportedSemanticFeature`, while safely omittable
+top-level extensions produce explicit adaptation notices. Surface-specific
+credentials are rendered at dispatch time and are not stored in the profile or
+metadata.
 
 ## Streaming
 

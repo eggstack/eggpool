@@ -996,12 +996,15 @@ async fn c011_malformed_client_input_rejected_before_dispatch() {
         .await
         .is_err()
     );
-    // Responses stateless violation: store must be explicitly false.
+    // Responses stateful storage is rejected.
     assert!(
         execute_finite(
             &fixture.state,
             ClientSurface::Responses,
-            Bytes::from(serde_json::to_vec(&json!({"model": MODEL, "input": []})).expect("body"),),
+            Bytes::from(
+                serde_json::to_vec(&json!({"model": MODEL, "input": [], "store": true}))
+                    .expect("body"),
+            ),
             HeaderMap::new(),
             None,
             new_proxy_request_id(),

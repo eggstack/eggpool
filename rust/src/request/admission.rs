@@ -30,6 +30,7 @@ const MAX_MESSAGES: usize = 1_024;
 const MAX_CONTENT_BLOCKS: usize = 2_048;
 const MAX_TOOLS: usize = 256;
 const MAX_METADATA: usize = 128;
+const MAX_NATIVE_EXTENSION_FIELDS: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AdmissionOptions {
@@ -72,11 +73,57 @@ pub enum AdmissionError {
     InvalidLimit { field: &'static str },
     #[error("request length arithmetic overflowed")]
     LengthOverflow,
+    #[error("stateful Responses feature is not supported: {field}")]
+    StatefulResponsesFeature { field: &'static str },
+}
+
+/// Bounded facts about Responses-native syntax that has no canonical
+/// projection.  The original parsed value is retained separately for native
+/// same-surface forwarding; this summary never contains request content.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NativeFeatureSummary {
+    pub native_input_items: usize,
+    pub native_tool_definitions: usize,
+    pub extension_fields: Vec<String>,
+    pub extensions_truncated: bool,
+}
+
+impl NativeFeatureSummary {
+    pub fn has_cross_surface_blocker(&self) -> bool {
+        self.native_input_items > 0 || self.native_tool_definitions > 0
+    }
+}
+
+/// Source-native request data retained only for the bounded request lifetime.
+///
+/// Debug output intentionally reports shape and size only; the parsed value
+/// can contain prompts, encrypted reasoning, tool arguments, and extensions.
+#[derive(Clone, PartialEq)]
+pub struct NativeRequestPreservation {
+    pub source_surface: ClientSurface,
+    pub parsed: Value,
+    pub summary: NativeFeatureSummary,
+}
+
+impl std::fmt::Debug for NativeRequestPreservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeRequestPreservation")
+            .field("source_surface", &self.source_surface)
+            .field("parsed_is_object", &self.parsed.is_object())
+            .field(
+                "parsed_bytes",
+                &serde_json::to_vec(&self.parsed).ok().map(|v| v.len()),
+            )
+            .field("summary", &self.summary)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdmittedRequest {
     pub canonical: CanonicalRequest,
+    pub native_preservation: Option<NativeRequestPreservation>,
     pub raw_body_bytes: usize,
     pub reservation_tokens: u64,
     pub context_tokens: u64,
@@ -118,8 +165,20 @@ pub fn admit_request(
     let reservation_tokens = estimate_reservation_tokens(raw_body);
     let context_tokens =
         estimate_context_input_tokens(raw_body, &value, options.extra_context_tokens);
+    let native_summary = (options.client_surface == ClientSurface::Responses)
+        .then(|| native_feature_summary(object));
+    let native_preservation = if options.client_surface == ClientSurface::Responses {
+        Some(NativeRequestPreservation {
+            source_surface: options.client_surface,
+            parsed: value,
+            summary: native_summary.expect("Responses summary was just computed"),
+        })
+    } else {
+        None
+    };
     Ok(AdmittedRequest {
         canonical,
+        native_preservation,
         raw_body_bytes: raw_body.len(),
         reservation_tokens,
         context_tokens,
@@ -201,6 +260,9 @@ fn canonical_request_from_object(
     object: &Map<String, Value>,
     surface: ClientSurface,
 ) -> Result<CanonicalRequest, AdmissionError> {
+    if surface == ClientSurface::Responses {
+        validate_responses_stateless_policy(object)?;
+    }
     let model = string_field(object, "model")?.trim().to_owned();
     if model.is_empty() {
         return Err(AdmissionError::InvalidModel);
@@ -212,7 +274,7 @@ fn canonical_request_from_object(
     let temperature = number_field(object, "temperature")?;
     let top_p = number_field(object, "top_p")?;
     let stop = stop_values(object, surface)?;
-    let tools = decode_tools(object.get("tools"))?;
+    let tools = decode_tools(object.get("tools"), surface)?;
     let tool_choice = decode_tool_choice(object.get("tool_choice"))?;
     let response_format = if surface == ClientSurface::Responses {
         object
@@ -342,36 +404,32 @@ fn decode_message_array(
     }
     items
         .iter()
-        .map(|item| {
+        .map(|item| -> Result<Option<CanonicalMessage>, AdmissionError> {
             let object = item.as_object().ok_or(AdmissionError::InvalidField {
                 field: "messages[]",
             })?;
             if surface == ClientSurface::Responses {
                 match object.get("type").and_then(Value::as_str) {
                     Some("function_call") => {
-                        return Ok(CanonicalMessage {
+                        return Ok(Some(CanonicalMessage {
                             role: CanonicalRole::Assistant,
                             content: vec![decode_response_function_call(object)?],
                             tool_call_id: None,
                             name: None,
                             refusal: None,
-                        });
+                        }));
                     }
                     Some("function_call_output") => {
-                        return Ok(CanonicalMessage {
+                        return Ok(Some(CanonicalMessage {
                             role: CanonicalRole::Tool,
                             content: vec![decode_response_function_output(object)?],
                             tool_call_id: None,
                             name: None,
                             refusal: None,
-                        });
+                        }));
                     }
                     Some("message") | None => {}
-                    Some(_) => {
-                        return Err(AdmissionError::UnsupportedContent {
-                            kind: "input item".into(),
-                        });
-                    }
+                    Some(_) => return Ok(None),
                 }
             }
             let role = decode_role(object.get("role"), protocol)?;
@@ -441,15 +499,16 @@ fn decode_message_array(
                 }
                 content = converted;
             }
-            Ok(CanonicalMessage {
+            Ok(Some(CanonicalMessage {
                 role,
                 content,
                 tool_call_id,
                 name: string_value(object.get("name"))?,
                 refusal: string_value(object.get("refusal"))?,
-            })
+            }))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|messages| messages.into_iter().flatten().collect())
 }
 
 fn decode_role(value: Option<&Value>, protocol: &str) -> Result<CanonicalRole, AdmissionError> {
@@ -960,7 +1019,10 @@ fn decode_response_function_output(
     })
 }
 
-fn decode_tools(value: Option<&Value>) -> Result<Vec<CanonicalTool>, AdmissionError> {
+fn decode_tools(
+    value: Option<&Value>,
+    surface: ClientSurface,
+) -> Result<Vec<CanonicalTool>, AdmissionError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -972,10 +1034,20 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<CanonicalTool>, AdmissionEr
     }
     items
         .iter()
-        .map(|item| {
+        .map(|item| -> Result<Option<CanonicalTool>, AdmissionError> {
             let object = item
                 .as_object()
                 .ok_or(AdmissionError::InvalidField { field: "tools[]" })?;
+            if surface == ClientSurface::Responses
+                && let Some(kind) = object.get("type")
+            {
+                let kind = kind.as_str().ok_or(AdmissionError::InvalidField {
+                    field: "tools[].type",
+                })?;
+                if kind != "function" {
+                    return Ok(None);
+                }
+            }
             let function = object
                 .get("function")
                 .and_then(Value::as_object)
@@ -987,15 +1059,146 @@ fn decode_tools(value: Option<&Value>) -> Result<Vec<CanonicalTool>, AdmissionEr
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            Ok(CanonicalTool {
+            Ok(Some(CanonicalTool {
                 name,
                 description: string_value(function.get("description"))?,
                 parameters,
                 cache_control: bounded_marker(function.get("cache_control"))?,
                 defer_loading: function.get("defer_loading").and_then(Value::as_bool),
-            })
+            }))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(|tools| tools.into_iter().flatten().collect())
+}
+
+/// Enforce EggPool's product-level stateless Responses contract at the
+/// request boundary.  Omitted `store` has the same stateless meaning as false.
+pub fn validate_responses_stateless_policy(
+    object: &Map<String, Value>,
+) -> Result<(), AdmissionError> {
+    for field in ["previous_response_id", "conversation"] {
+        if object.get(field).is_some_and(|value| !value.is_null()) {
+            return Err(AdmissionError::StatefulResponsesFeature { field });
+        }
+    }
+    match object.get("store") {
+        None | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => {
+            return Err(AdmissionError::StatefulResponsesFeature { field: "store" });
+        }
+        Some(_) => return Err(AdmissionError::InvalidField { field: "store" }),
+    }
+    if let Some(background) = object.get("background") {
+        match background {
+            Value::Bool(true) => {
+                return Err(AdmissionError::StatefulResponsesFeature {
+                    field: "background",
+                });
+            }
+            Value::Bool(false) | Value::Null => {}
+            _ => {
+                return Err(AdmissionError::InvalidField {
+                    field: "background",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
+    let native_input_items = object
+        .get("input")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.as_object()
+                        .and_then(|item| item.get("type"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| {
+                            !matches!(kind, "message" | "function_call" | "function_call_output")
+                        })
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let native_tool_definitions = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter(|tool| {
+                    tool.as_object()
+                        .and_then(|tool| tool.get("type"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind != "function")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let known_fields = [
+        "model",
+        "input",
+        "instructions",
+        "stream",
+        "store",
+        "background",
+        "previous_response_id",
+        "conversation",
+        "max_output_tokens",
+        "max_completion_tokens",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "response_format",
+        "text",
+        "reasoning",
+        "reasoning_effort",
+        "thinking",
+        "thinking_budget",
+        "metadata",
+        "cache_control",
+    ];
+    let extension_field_count = object
+        .keys()
+        .filter(|field| !known_fields.contains(&field.as_str()))
+        .count()
+        + object
+            .get("text")
+            .and_then(Value::as_object)
+            .map(|text| {
+                text.keys()
+                    .filter(|field| field.as_str() != "format")
+                    .count()
+            })
+            .unwrap_or(0);
+    let mut extension_fields: Vec<String> = object
+        .keys()
+        .filter(|field| !known_fields.contains(&field.as_str()))
+        .take(MAX_NATIVE_EXTENSION_FIELDS)
+        .cloned()
+        .collect();
+    if let Some(text) = object.get("text").and_then(Value::as_object) {
+        extension_fields.extend(
+            text.keys()
+                .filter(|field| field.as_str() != "format")
+                .map(|field| format!("text.{field}")),
+        );
+    }
+    extension_fields.truncate(MAX_NATIVE_EXTENSION_FIELDS);
+    NativeFeatureSummary {
+        native_input_items,
+        native_tool_definitions,
+        extension_fields,
+        extensions_truncated: extension_field_count > MAX_NATIVE_EXTENSION_FIELDS,
+    }
 }
 
 fn validate_tool_identity(

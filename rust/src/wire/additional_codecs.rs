@@ -205,6 +205,10 @@ fn map_admission_error(error: AdmissionError, source: ClientSurface) -> CodecErr
         AdmissionError::InvalidJson
         | AdmissionError::TopLevelNotObject
         | AdmissionError::InvalidModel => (CodecReasonCode::MalformedSourceRequest, None),
+        AdmissionError::StatefulResponsesFeature { field } => (
+            CodecReasonCode::UnsupportedSemanticFeature,
+            Some(field.to_owned()),
+        ),
     };
     CodecError {
         reason,

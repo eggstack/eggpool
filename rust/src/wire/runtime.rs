@@ -19,7 +19,8 @@ use super::{
     AdaptationNotice, AdaptationPolicy, CodecError, CodecReasonCode, ConfiguredWireProfile,
     DecodedProviderPayload, StreamAdapterKind, StreamError, StreamEventDecoder,
     StreamTerminalSummary, WireCodec, WireCodecId, WireProfileRegistry, WireSurface,
-    builtin_codec_instance, compatibility_path, encode_client_event,
+    apply_adaptation_policy, builtin_codec_instance, compatibility_path, encode_client_event,
+    native_preservation_notices,
 };
 use crate::model_router::AffinityIdentityInput;
 use crate::request::{
@@ -400,20 +401,66 @@ impl WireRuntime {
         }
 
         let codec = self.request_codec(context)?;
-        let request = if context.upstream_model_id == admission.canonical.model {
+        let model_rewrite_required = context.upstream_model_id != admission.canonical.model;
+        let request = if !model_rewrite_required {
             admission.canonical.clone()
         } else {
             let mut request = admission.canonical.clone();
             request.model.clone_from(&context.upstream_model_id);
             request
         };
-        let native_passthrough = context.profile_flags.body_passthrough
+        let native_path = context.profile_flags.body_passthrough
             && compatibility_path(
                 context.client_surface,
                 context.selected_profile.definition.surface,
-            ) == super::CompatibilityPath::Native
-            && context.upstream_model_id == admission.canonical.model;
-        let (body, notices) = if native_passthrough {
+            ) == super::CompatibilityPath::Native;
+        let native_responses = native_path
+            && context.client_surface == ClientSurface::Responses
+            && context.selected_profile.definition.surface == WireSurface::OpenaiResponses;
+        let (body, notices) = if native_responses {
+            let preservation = admission.native_preservation.as_ref().ok_or_else(|| {
+                WireRuntimeError::RequestAdaptation(CodecError {
+                    reason: CodecReasonCode::UnsupportedSemanticFeature,
+                    field: Some("responses.native_preservation".into()),
+                    source_surface: Some(WireSurface::OpenaiResponses),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                })
+            })?;
+            if !model_rewrite_required {
+                (
+                    EncodedWireBody {
+                        value: None,
+                        bytes: Bytes::copy_from_slice(raw_body),
+                    },
+                    Vec::new(),
+                )
+            } else {
+                let mut value = preservation.parsed.clone();
+                value
+                    .as_object_mut()
+                    .expect("admission only retains an object")
+                    .insert(
+                        "model".into(),
+                        Value::String(context.upstream_model_id.clone()),
+                    );
+                let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes)
+                    .map_err(|error| match error {
+                    crate::request::BodyEncodingError::TooLarge { .. } => {
+                        WireRuntimeError::BodyTooLarge
+                    }
+                    crate::request::BodyEncodingError::Serialize(_) => {
+                        WireRuntimeError::BodySerialization
+                    }
+                })?;
+                (
+                    EncodedWireBody {
+                        value: Some(value),
+                        bytes: encoded.bytes,
+                    },
+                    Vec::new(),
+                )
+            }
+        } else if native_path && !model_rewrite_required {
             (
                 EncodedWireBody {
                     value: None,
@@ -422,12 +469,17 @@ impl WireRuntime {
                 Vec::new(),
             )
         } else {
-            let output = codec
-                .encode_request_with_policy(
-                    &request,
-                    &context.selected_profile,
-                    &context.adaptation_policy,
+            let mut notices = if let Some(preservation) = admission.native_preservation.as_ref() {
+                native_preservation_notices(
+                    preservation,
+                    context.selected_profile.definition.surface,
                 )
+                .map_err(WireRuntimeError::RequestAdaptation)?
+            } else {
+                Vec::new()
+            };
+            let output = codec
+                .encode_request(&request, &context.selected_profile)
                 .map_err(WireRuntimeError::RequestAdaptation)?;
             let value = output.value;
             let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes)
@@ -439,12 +491,18 @@ impl WireRuntime {
                         WireRuntimeError::BodySerialization
                     }
                 })?;
+            notices.extend(output.notices);
+            let notices = apply_adaptation_policy(
+                crate::wire::CodecOutput { value, notices },
+                &context.adaptation_policy,
+            )
+            .map_err(WireRuntimeError::RequestAdaptation)?;
             (
                 EncodedWireBody {
-                    value: Some(value),
+                    value: Some(notices.value),
                     bytes: encoded.bytes,
                 },
-                output.notices,
+                notices.notices,
             )
         };
         let adapter = stream_adapter(context.selected_profile.definition.stream_codec)
@@ -861,6 +919,10 @@ fn map_admission_error(error: AdmissionError, context: &WireRuntimeContext) -> C
         AdmissionError::InvalidJson
         | AdmissionError::TopLevelNotObject
         | AdmissionError::InvalidModel => (CodecReasonCode::MalformedSourceRequest, None),
+        AdmissionError::StatefulResponsesFeature { field } => (
+            CodecReasonCode::UnsupportedSemanticFeature,
+            Some(field.into()),
+        ),
     };
     CodecError {
         reason,
