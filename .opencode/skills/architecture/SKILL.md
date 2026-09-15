@@ -35,7 +35,9 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   Responses-to-Responses compatibility. Observe raw SSE incrementally and
   forward valid source bytes unchanged; use a separate bounded stateful encoder
   for cross-surface output, including completed output items, indexes, and
-  distinct function-call/item identities.
+  distinct function-call/item identities. Interleaved translated calls must
+  remain keyed by source index/call identity, and later tool outputs must be
+  paired by `call_id` rather than output-item order.
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.

@@ -454,3 +454,9 @@ Do not claim general "OpenAI Responses compatibility" solely from Codex passing.
   strict formatting, Clippy, Pyright, release-doc, runtime-boundary, and shell
   syntax checks passed. The no-default-features Rust test matrix is included in
   the final verification run.
+
+## Plan 196 qualification note
+
+The deterministic closure work continues in Plan 196. The live text and
+client-tool-loop smoke remains pending until `EGGPOOL_CODEX_API_KEY` and
+`EGGPOOL_CODEX_MODEL` are supplied; no live qualification is claimed here.

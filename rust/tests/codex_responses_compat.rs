@@ -7,7 +7,7 @@
 use eggpool::request::{AdmissionOptions, admit_request};
 use eggpool::wire::ir::{CanonicalToolKind, ClientSurface};
 use eggpool::wire::{
-    ClientStreamEncoder, ConfiguredWireProfile, StreamAdapterKind, StreamEventDecoder,
+    ClientStreamEncoder, ConfiguredWireProfile, SseDecoder, StreamAdapterKind, StreamEventDecoder,
     StreamForwardingMode, StreamTerminalOutcome, WireCodecId, WireProfileDefinition, WireRuntime,
     WireRuntimeContext, WireSurface,
 };
@@ -48,6 +48,16 @@ fn context(client: ClientSurface, upstream: WireSurface) -> WireRuntimeContext {
 
 fn codex_request(input: Value) -> Vec<u8> {
     serde_json::to_vec(&input).expect("fixture JSON")
+}
+
+fn response_payloads(bytes: &[u8]) -> Vec<Value> {
+    let mut decoder = SseDecoder::default();
+    let mut frames = decoder.feed(bytes).expect("Responses SSE");
+    frames.extend(decoder.finish().expect("Responses SSE EOF").frames);
+    frames
+        .iter()
+        .filter_map(|frame| serde_json::from_str(&frame.data).ok())
+        .collect()
 }
 
 #[test]
@@ -298,7 +308,7 @@ fn malformed_freeform_wrapper_is_not_forwarded_as_json_text() {
 }
 
 #[test]
-fn translated_streams_keep_parallel_call_identity_and_eof_is_failure() {
+fn translated_streams_select_mode_and_reject_premature_eof() {
     let runtime = WireRuntime::embedded().expect("registry");
     let chat_context = context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions);
     let stream = runtime.stream(&chat_context).expect("translated stream");
@@ -321,4 +331,129 @@ fn translated_streams_keep_parallel_call_identity_and_eof_is_failure() {
         .expect("created");
     let (_, summary) = decoder.finish().expect("EOF classification");
     assert_eq!(summary.outcome, StreamTerminalOutcome::EofAfterPartialBody);
+}
+
+#[test]
+fn translated_parallel_tool_calls_accumulate_by_source_index() {
+    let upstream = [
+        json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id":"call_z","type":"function","function":{"name":"lookup_a","arguments":""}},
+            {"index":1,"id":"call_a","type":"function","function":{"name":"lookup_b","arguments":""}}
+        ]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"q\":\"b"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"a"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"}"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]
+    .into_iter()
+    .map(|payload| format!("data: {payload}\n\n"))
+    .chain(std::iter::once("data: [DONE]\n\n".into()))
+    .collect::<String>()
+    .into_bytes();
+
+    let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+    let mut events = decoder.push(&upstream).expect("provider stream");
+    let (tail, summary) = decoder.finish().expect("stream finalization");
+    events.extend(tail);
+    assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+
+    let mut encoder = ClientStreamEncoder::new(ClientSurface::Responses);
+    let mut downstream = Vec::new();
+    for event in &events {
+        downstream.extend(encoder.encode(event).expect("Responses encoding"));
+    }
+    let payloads = response_payloads(&downstream);
+    let done_items: Vec<&Value> = payloads
+        .iter()
+        .filter(|payload| payload["type"] == "response.output_item.done")
+        .collect();
+    assert_eq!(done_items.len(), 2);
+
+    let mut calls = done_items
+        .iter()
+        .map(|payload| {
+            let item = &payload["item"];
+            (
+                item["call_id"].as_str().expect("call ID"),
+                item["id"].as_str().expect("item ID"),
+                payload["output_index"].as_u64().expect("output index"),
+                item["name"].as_str().expect("tool name"),
+                item["arguments"].as_str().expect("arguments"),
+                item["status"].as_str().expect("status"),
+            )
+        })
+        .collect::<Vec<_>>();
+    calls.sort_by_key(|call| call.2);
+    assert_eq!(calls[0].0, "call_z");
+    assert_eq!(calls[0].3, "lookup_a");
+    assert_eq!(calls[0].4, r#"{"q":"a"}"#);
+    assert_eq!(calls[0].5, "completed");
+    assert_eq!(calls[1].0, "call_a");
+    assert_eq!(calls[1].3, "lookup_b");
+    assert_eq!(calls[1].4, r#"{"q":"b"}"#);
+    assert_eq!(calls[1].5, "completed");
+    assert!(!calls[0].1.is_empty());
+    assert!(!calls[1].1.is_empty());
+    assert_ne!(calls[0].0, calls[0].1);
+    assert_ne!(calls[1].0, calls[1].1);
+    assert_ne!(calls[0].1, calls[1].1);
+    assert_ne!(calls[0].2, calls[1].2);
+
+    let terminal_index = payloads
+        .iter()
+        .position(|payload| payload["type"] == "response.completed")
+        .expect("successful terminal");
+    assert_eq!(
+        payloads
+            .iter()
+            .filter(|payload| payload["type"] == "response.completed")
+            .count(),
+        1
+    );
+    assert_eq!(
+        payloads[..terminal_index]
+            .iter()
+            .filter(|payload| payload["type"] == "response.output_item.done")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn next_turn_tool_outputs_keep_call_pairing_when_order_is_reversed() {
+    let continuation = codex_request(json!({
+        "model":"eggpool-model",
+        "input":[
+            {"type":"function_call_output","call_id":"call_a","output":"result-for-b"},
+            {"type":"function_call_output","call_id":"call_z","output":"result-for-a"}
+        ]
+    }));
+    let admitted = admit_request(
+        &continuation,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("reversed tool outputs are admitted");
+
+    let outputs = admitted
+        .canonical
+        .messages
+        .iter()
+        .map(|message| {
+            (
+                message
+                    .tool_call_id
+                    .as_deref()
+                    .expect("tool output call ID"),
+                message.content[0].text.as_deref().expect("tool output"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs,
+        [("call_a", "result-for-b"), ("call_z", "result-for-a")]
+    );
 }

@@ -40,6 +40,9 @@ Cross-surface Responses output uses a separate stateful encoder. It keeps
 bounded active text, reasoning, and argument buffers; emits indexed completed
 message/reasoning/function/custom-call items; and keeps a generated output-item ID
 distinct from the canonical function invocation `call_id`. It never fabricates
-OpenAI encrypted reasoning content. EOF, cancellation, and malformed frames
-remain typed failures, and alternate wire negotiation is bounded and uses the
-same request submission budget as account retries.
+OpenAI encrypted reasoning content. Interleaved function-call deltas remain
+associated with their source index and call identity, while subsequent tool
+outputs are paired by `call_id` even when output-item order differs. EOF,
+cancellation, and malformed frames remain typed failures, and alternate wire
+negotiation is bounded and uses the same request submission budget as account
+retries.

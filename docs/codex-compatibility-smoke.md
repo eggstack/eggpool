@@ -14,17 +14,24 @@ scripts/smoke_codex_compat.sh
 ```
 
 The script defaults to `http://127.0.0.1:11300/v1`. Override it with
-`EGGPOOL_CODEX_BASE_URL` when the server uses another listener. It configures
-the current Codex CLI with `wire_api = "responses"` and
-`supports_websockets = false`, sends one bounded streamed request, and checks
-for a fixed response marker. It uses CLI overrides rather than changing the
-operator's Codex config, and it never prints the API key or response body on a
-successful run. Exit status 77 means the opt-in credential/model variables
-were not supplied.
+`EGGPOOL_CODEX_BASE_URL` when the server uses another listener. It reports the
+selected Codex CLI version, configures HTTP/SSE with `wire_api = "responses"`
+and `supports_websockets = false`, and runs two phases:
 
-For a stronger release check, set `EGGPOOL_CODEX_PROMPT` to a short request
-that causes the selected model to use one ordinary function tool, then repeat
-with a prompt that exercises the provider's custom/freeform tool behavior when
-that model supports it. The deterministic harness remains authoritative for
-wrapper shape, tool identity, reasoning replay, terminal events, and malformed
-wrapper rejection; a live smoke is supplementary provider evidence.
+1. a basic streamed text request that must return a fixed marker;
+2. a second request from a temporary read-only working directory that requires
+   Codex to use its shell tool to read `tool-smoke-marker.txt`, whose random
+   marker is not present in the prompt.
+
+Both phases use an explicit model, `--sandbox read-only`, and
+`approval_policy="never"`. CLI overrides leave the operator's Codex config
+unchanged. Temporary files are cleaned up, and the script does not print API
+keys or response bodies. Exit status 77 means the opt-in credential/model
+variables were not supplied.
+
+The deterministic Rust harness remains authoritative for wrapper shape, tool
+identity, interleaved argument accumulation, reasoning replay, terminal events,
+and malformed-wrapper rejection. A successful live smoke qualifies the tested
+Codex CLI version and selected upstream path only; it does not imply support
+for every future Codex version, provider, or native server tool. Translated
+provider live qualification must be recorded separately when it is run.

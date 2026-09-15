@@ -104,6 +104,13 @@ eggpool configsetup codex --model <eggpool-model-or-alias>
 
 See [Agent Configuration](docs/agent-configuration.md) for all supported targets and options.
 
+For Codex, the deterministic Responses conformance target and the opt-in
+two-phase text/tool-loop check are documented in
+[Codex compatibility smoke](docs/codex-compatibility-smoke.md). Live results
+qualify the tested Codex CLI and upstream path only; explicit model or alias
+selection remains the supported configuration, and `/v1/models` keeps the
+standard OpenAI-compatible schema.
+
 ### LAN Access
 
 By default, EggPool binds to localhost. To expose it on your LAN:

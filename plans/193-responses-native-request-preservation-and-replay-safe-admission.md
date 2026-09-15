@@ -1,6 +1,6 @@
 # Plan 193: Responses native request preservation and replay-safe admission
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** IMPLEMENTED
 >
 > **Baseline:** Eggpool `main` at `51d770e16598cdea76ed56670f68b885f7f68ed5`
 >
@@ -387,3 +387,12 @@ Avoid changing routing, retry, provider account, or transport modules unless tes
 7. Re-run existing codec/admission/coordinator tests before starting Plan 194.
 
 Do not start by adding every Codex `ResponseItem` variant to `CanonicalMessage`; that is the failure mode this plan is designed to avoid.
+
+## Completion evidence
+
+- Implemented in `0285cffd1179623cfcffd8a3b22018f609cc0964` (`Preserve native Responses requests across aliases`).
+- Admission retains a bounded native preservation envelope alongside the
+  canonical projection; same-surface alias routing rewrites only `model`.
+- Unknown/native input items and tools survive native forwarding, while
+  cross-surface blockers and adaptation notices remain explicit.
+- Stateless Responses policy is enforced before provider dispatch.

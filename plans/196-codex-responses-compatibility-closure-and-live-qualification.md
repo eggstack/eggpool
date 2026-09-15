@@ -648,3 +648,25 @@ Do not include API keys, provider account identifiers, request/response bodies c
 If this plan passes without exposing a production bug, the current Codex/Responses work should be considered **qualified and closed**. Future changes should be driven by a concrete Codex protocol change, a provider compatibility regression, or a separately scoped model-discovery feature request—not by further speculative redesign.
 
 The next unrelated maintenance item remains the existing Eggress 1.0.7 facade/fallback retirement work in Plan 191; do not mix that dependency migration into this Codex closure commit.
+
+## Local qualification evidence
+
+- Source baseline before this closure change: `18af1fcd` (`plans: add Codex Responses closure pass`).
+- Deterministic parallel-call fixture: PASS — two active calls, interleaved
+  source-index argument accumulation, distinct item/call IDs and output
+  indexes, exactly-once completed items, and completion before one terminal.
+- Continuation/output pairing with reversed output-item order: PASS.
+- Premature Responses EOF classification: PASS.
+- `operations_o002` bounded reproduction: 12/12 PASS; no production or test
+  synchronization change was justified.
+- Focused `codex_responses_compat`: 7 passed; full serial Rust workspace and
+  no-default-feature test matrices passed.
+- CI-equivalent formatting, Clippy, no-default check/Clippy, frozen tooling
+  sync, Ruff, Pyright, tooling tests, release-doc, runtime-boundary, and shell
+  syntax checks passed.
+- Live text and client-tool-loop smoke: NOT RUN; the required
+  `EGGPOOL_CODEX_API_KEY` and `EGGPOOL_CODEX_MODEL` variables were unavailable.
+  Plan 196 remains pending live qualification and makes no live-support claim.
+- `/v1/models` remains the standard OpenAI-compatible schema; automatic rich
+  Codex model discovery remains deferred; no new production dependencies were
+  introduced.

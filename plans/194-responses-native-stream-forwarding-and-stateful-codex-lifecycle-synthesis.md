@@ -1,6 +1,6 @@
 # Plan 194: Responses native stream forwarding and stateful Codex lifecycle synthesis
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** IMPLEMENTED
 >
 > **Baseline:** Eggpool `main` at `51d770e16598cdea76ed56670f68b885f7f68ed5`
 >
@@ -456,3 +456,14 @@ Do not create a second streaming coordinator.
 10. Only then proceed to Plan 195's Codex-level conformance harness.
 
 The implementation should borrow the **state ownership pattern** demonstrated by OpenCodex, not its entire proxy architecture. Eggpool already has the right routing/coordinator boundaries; it only needs wire-fidelity state at the stream codec edge.
+
+## Completion evidence
+
+- Implemented in `b3735c00f5ee24486a9d1b139d130a2183e558d7` (`Preserve native Responses streams and synthesize lifecycles`).
+- Responses-to-Responses streams use incremental native observation and raw
+  forwarding, preserving unknown valid events and strict terminal evidence.
+- Cross-surface Responses streams use bounded stateful lifecycle synthesis for
+  message, reasoning, and function/custom-call items, including authoritative
+  output-item completion and distinct item/call identities.
+- Premature EOF remains unsuccessful and translated output closes items before
+  one `response.completed` terminal.
