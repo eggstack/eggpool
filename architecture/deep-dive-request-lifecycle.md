@@ -51,6 +51,17 @@ provider body, incremental chunk handoff, idle timeout, downstream cancellation,
 and drop behavior. `terminal.rs` interprets `WireStream` terminal summaries and
 builds bounded finalization facts; it does not parse provider events itself.
 
+`WireStream` selects an explicit output mode from the client/upstream surface
+compatibility path. Native Responses-to-Responses streams feed each raw chunk
+through the incremental SSE observer, then forward the original bytes without
+reconstructing known events; valid unknown event types are therefore preserved.
+Canonical adaptation uses a stateful encoder owned by that stream. It retains
+only bounded active message, reasoning, and function-call buffers, allocates a
+stable response ID and output indexes, maps Responses item IDs back to
+function invocation `call_id`s, and emits completed output items before the
+terminal response. Native and translated Responses paths both require
+`response.completed` for success.
+
 Retries and alternate wire negotiation consume one shared bounded submission
 budget and are structurally unavailable after handoff. There is no whole-stream
 deadline, complete-stream buffer, or EOF-as-success shortcut: SSE completion

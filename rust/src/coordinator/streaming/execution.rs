@@ -11,7 +11,7 @@ use tokio::{runtime::Handle, time::timeout};
 use crate::{
     routing::{RoutingRouter, SelectionClaim},
     wire::ir::{CanonicalEventType, CanonicalUsage},
-    wire::{WireStream, WireSurface},
+    wire::{StreamForwardingMode, WireStream, WireSurface},
 };
 
 use crate::coordinator::{
@@ -368,8 +368,9 @@ enum ChunkDecode {
 }
 
 impl ActiveStream {
-    /// Push one raw provider chunk through M6 and encode canonical events to
-    /// the client surface. Never accumulates across calls.
+    /// Push one raw provider chunk through M6. Native Responses streams keep
+    /// the original bytes while the observer supplies terminal/accounting
+    /// evidence; translated streams use the per-stream stateful encoder.
     fn decode_chunk(&mut self, chunk: Bytes) -> ChunkDecode {
         let Some(wire) = self.wire.as_mut() else {
             // Legacy non-SSE pass-through: forward raw provider bytes.
@@ -387,6 +388,19 @@ impl ActiveStream {
                 return ChunkDecode::Skip;
             }
         };
+        if wire.forwarding_mode() == StreamForwardingMode::NativeObserved {
+            let saw_terminal = pushed.events.iter().any(|event| {
+                matches!(
+                    event.event_type,
+                    CanonicalEventType::ResponseComplete
+                        | CanonicalEventType::ResponseIncomplete
+                        | CanonicalEventType::Error
+                )
+            });
+            self.saw_terminal_event |= saw_terminal;
+            self.client_bytes = self.client_bytes.saturating_add(chunk.len());
+            return ChunkDecode::Forward(chunk, saw_terminal);
+        }
         let mut out = Vec::new();
         let mut saw_terminal = false;
         for event in &pushed.events {
@@ -398,7 +412,7 @@ impl ActiveStream {
             ) {
                 saw_terminal = true;
             }
-            match wire.encode_client_event(event) {
+            match wire.encode_client_event_stateful(event) {
                 Ok(bytes) if !bytes.is_empty() => {
                     self.events_forwarded = self.events_forwarded.saturating_add(1);
                     out.extend_from_slice(&bytes);

@@ -55,7 +55,10 @@ and bounded-observation pieces. The `mod.rs` facade preserves the public
 provider adaptation in `rust/src/wire/ir.rs`; all alternate targets encode
 from that source rather than chaining translated payloads. Native stream
 adapters require provider terminal evidence and never synthesize a terminal
-event from transport EOF.
+event from transport EOF. Responses same-surface streams use an incremental
+observer plus raw-byte forwarding so unknown valid events survive unchanged;
+cross-surface Responses streams use bounded per-stream encoder state for
+message, reasoning, and function-call item completion.
 
 ## Subsystem ownership
 

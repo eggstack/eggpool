@@ -5,7 +5,11 @@
 //! of canonical events at a time, and reports terminal evidence.  It does
 //! not own a socket, timeout, retry, handoff, cancellation, or finalization.
 
-use std::fmt;
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -17,6 +21,11 @@ use super::ir::{
 
 pub const MAX_SSE_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PROVIDER_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
+const MAX_TRANSLATED_ITEM_BYTES: usize = 256 * 1024;
+const MAX_TRANSLATED_STREAM_BYTES: usize = 512 * 1024;
+const MAX_ACTIVE_TOOL_CALLS: usize = 32;
+
+static NEXT_TRANSLATED_RESPONSE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One assembled SSE event.  Framing does not interpret provider JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +337,14 @@ pub enum StreamTerminalOutcome {
     EofAfterPartialBody,
 }
 
+/// Selects whether a stream is forwarded source-natively or synthesized from
+/// canonical events for the caller's surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamForwardingMode {
+    NativeObserved,
+    Translated,
+}
+
 /// Bounded summary consumed by the later coordinator/finalization boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamTerminalSummary {
@@ -364,6 +381,13 @@ pub struct StreamEventDecoder {
     post_terminal_data: bool,
     finalized: bool,
     framing_error: bool,
+    responses: Option<ResponsesDecoderState>,
+}
+
+#[derive(Debug, Default)]
+struct ResponsesDecoderState {
+    item_to_call: BTreeMap<String, String>,
+    completed_calls: BTreeMap<String, bool>,
 }
 
 impl fmt::Debug for StreamEventDecoder {
@@ -399,6 +423,8 @@ impl StreamEventDecoder {
             post_terminal_data: false,
             finalized: false,
             framing_error: false,
+            responses: (adapter == StreamAdapterKind::OpenaiResponsesSse)
+                .then(ResponsesDecoderState::default),
         }
     }
 
@@ -468,7 +494,11 @@ impl StreamEventDecoder {
             if let Some(event) = &frame.event {
                 frame_value.insert("event".into(), Value::String(event.clone()));
             }
-            let decoded = match decode_stream_event(self.adapter, &Value::Object(frame_value)) {
+            let decoded = match decode_stream_event_with_state(
+                self.adapter,
+                &Value::Object(frame_value),
+                self.responses.as_mut(),
+            ) {
                 Ok(decoded) => decoded.value,
                 Err(error) => {
                     self.parser_error_count += 1;
@@ -837,6 +867,14 @@ pub fn decode_stream_event(
     adapter: StreamAdapterKind,
     frame: &Value,
 ) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
+    decode_stream_event_with_state(adapter, frame, None)
+}
+
+fn decode_stream_event_with_state(
+    adapter: StreamAdapterKind,
+    frame: &Value,
+    responses: Option<&mut ResponsesDecoderState>,
+) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
     let frame_object = frame
         .as_object()
         .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))?;
@@ -852,7 +890,7 @@ pub fn decode_stream_event(
     match adapter {
         StreamAdapterKind::OpenaiChatSse => decode_openai_chat(frame_object, &payload, &mut events),
         StreamAdapterKind::OpenaiResponsesSse => {
-            decode_openai_responses(frame_object, &payload, &mut events)
+            decode_openai_responses(frame_object, &payload, &mut events, responses)
         }
         StreamAdapterKind::AnthropicMessagesSse => {
             decode_anthropic(frame_object, &payload, &mut events)
@@ -952,6 +990,7 @@ fn decode_openai_responses(
     _frame: &Map<String, Value>,
     payload: &Map<String, Value>,
     events: &mut Vec<CanonicalEvent>,
+    state: Option<&mut ResponsesDecoderState>,
 ) {
     let name = string(_frame.get("event"))
         .or_else(|| string(payload.get("type")))
@@ -964,7 +1003,9 @@ fn decode_openai_responses(
             event.model = string(response.get("model"));
             events.push(event);
         }
-        "response.output_text.delta" | "response.reasoning_summary_text.delta" => {
+        "response.output_text.delta"
+        | "response.reasoning_summary_text.delta"
+        | "response.reasoning_content.delta" => {
             let mut event = canonical_event(if name.contains("reasoning") {
                 CanonicalEventType::ReasoningDelta
             } else {
@@ -979,24 +1020,54 @@ fn decode_openai_responses(
             if let Some(item) = object(payload.get("item"))
                 && item.get("type").and_then(Value::as_str) == Some("function_call")
             {
+                let item_id = string(item.get("id"));
+                let invocation_id = string(item.get("call_id")).or_else(|| item_id.clone());
+                if let (Some(state), Some(item_id), Some(invocation_id)) =
+                    (state, item_id, invocation_id.clone())
+                {
+                    state.item_to_call.insert(item_id, invocation_id);
+                }
                 let mut event = canonical_event(CanonicalEventType::ToolCallStart);
-                event.call_id = string(item.get("call_id")).or_else(|| string(item.get("id")));
+                event.call_id = invocation_id;
                 event.name = string(item.get("name"));
                 events.push(event);
             }
         }
         "response.function_call_arguments.delta" => {
             let mut event = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
-            event.call_id = string(payload.get("item_id"));
+            let item_id = string(payload.get("item_id"));
+            event.call_id = item_id.as_ref().and_then(|item_id| {
+                state
+                    .as_deref()
+                    .and_then(|state| state.item_to_call.get(item_id).cloned())
+            });
+            if event.call_id.is_none() {
+                event.call_id = item_id;
+            }
             event.delta = string(payload.get("delta"));
-            events.push(event);
+            if event.delta.is_some() {
+                events.push(event);
+            }
         }
         "response.output_item.done" => {
             if let Some(item) = object(payload.get("item"))
                 && item.get("type").and_then(Value::as_str) == Some("function_call")
             {
+                let item_id = string(item.get("id"));
+                let invocation_id = string(item.get("call_id")).or_else(|| item_id.clone());
+                if let (Some(state), Some(item_id), Some(invocation_id)) =
+                    (state, item_id, invocation_id.clone())
+                {
+                    state.item_to_call.insert(item_id, invocation_id.clone());
+                    if state.completed_calls.contains_key(&invocation_id) {
+                        return;
+                    }
+                    state.completed_calls.insert(invocation_id, true);
+                }
                 let mut event = canonical_event(CanonicalEventType::ToolCallStop);
-                event.call_id = string(item.get("call_id")).or_else(|| string(item.get("id")));
+                event.call_id = invocation_id;
+                event.name = string(item.get("name"));
+                event.arguments = string(item.get("arguments"));
                 events.push(event);
             }
         }
@@ -1304,6 +1375,533 @@ fn put_token(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
     if let Some(value) = value {
         out.insert(key.into(), Value::from(value));
     }
+}
+
+#[derive(Debug)]
+struct ResponsesEncoderState {
+    response_id: String,
+    model: Option<String>,
+    sequence_number: u64,
+    next_output_index: usize,
+    next_item_id: u64,
+    active_message: Option<TranslatedMessageItem>,
+    active_reasoning: Option<TranslatedReasoningItem>,
+    active_tools: BTreeMap<String, TranslatedToolItem>,
+    retained_bytes: usize,
+    usage: Option<CanonicalUsage>,
+    created: bool,
+    terminal_emitted: bool,
+}
+
+#[derive(Debug)]
+struct TranslatedMessageItem {
+    id: String,
+    output_index: usize,
+    text: String,
+}
+
+#[derive(Debug)]
+struct TranslatedReasoningItem {
+    id: String,
+    output_index: usize,
+    text: String,
+}
+
+#[derive(Debug)]
+struct TranslatedToolItem {
+    item_id: String,
+    call_id: String,
+    name: String,
+    output_index: usize,
+    source_index: Option<usize>,
+    arguments: String,
+}
+
+impl ResponsesEncoderState {
+    fn new() -> Self {
+        let serial = NEXT_TRANSLATED_RESPONSE_ID.fetch_add(1, Ordering::Relaxed);
+        Self {
+            response_id: format!("resp_eggpool_{serial}"),
+            model: None,
+            sequence_number: 0,
+            next_output_index: 0,
+            next_item_id: 0,
+            active_message: None,
+            active_reasoning: None,
+            active_tools: BTreeMap::new(),
+            retained_bytes: 0,
+            usage: None,
+            created: false,
+            terminal_emitted: false,
+        }
+    }
+
+    fn item_id(&mut self, prefix: &str) -> String {
+        let id = format!("{prefix}_eggpool_{}", self.next_item_id);
+        self.next_item_id = self.next_item_id.saturating_add(1);
+        id
+    }
+
+    fn output_index(&mut self) -> usize {
+        let index = self.next_output_index;
+        self.next_output_index = self.next_output_index.saturating_add(1);
+        index
+    }
+
+    fn frame(&mut self, name: &str, mut payload: Map<String, Value>) -> Vec<u8> {
+        payload.insert("type".into(), Value::String(name.into()));
+        payload.insert("sequence_number".into(), Value::from(self.sequence_number));
+        self.sequence_number = self.sequence_number.saturating_add(1);
+        sse(Some(name), &Value::Object(payload))
+    }
+
+    fn response_frame(&mut self, name: &str, mut payload: Map<String, Value>) -> Vec<u8> {
+        payload.insert(
+            "response_id".into(),
+            Value::String(self.response_id.clone()),
+        );
+        self.frame(name, payload)
+    }
+
+    fn created_frame(&mut self) -> Vec<u8> {
+        let mut response = Map::new();
+        response.insert("id".into(), Value::String(self.response_id.clone()));
+        response.insert("object".into(), Value::String("response".into()));
+        response.insert("status".into(), Value::String("in_progress".into()));
+        if let Some(model) = &self.model {
+            response.insert("model".into(), Value::String(model.clone()));
+        }
+        self.created = true;
+        let mut payload = Map::new();
+        payload.insert("response".into(), Value::Object(response));
+        self.frame("response.created", payload)
+    }
+
+    fn ensure_created(&mut self, model: Option<&str>) -> Vec<u8> {
+        if self.model.is_none() {
+            self.model = model.map(ToOwned::to_owned);
+        }
+        if self.created {
+            Vec::new()
+        } else {
+            self.created_frame()
+        }
+    }
+
+    fn check_append(&self, current_bytes: usize, delta: &str) -> Result<(), CodecError> {
+        let next_item_bytes = current_bytes
+            .checked_add(delta.len())
+            .ok_or_else(|| CodecError::new(CodecReasonCode::ResourceLimitViolation))?;
+        let next_total = self
+            .retained_bytes
+            .checked_add(delta.len())
+            .ok_or_else(|| CodecError::new(CodecReasonCode::ResourceLimitViolation))?;
+        if next_item_bytes > MAX_TRANSLATED_ITEM_BYTES || next_total > MAX_TRANSLATED_STREAM_BYTES {
+            return Err(CodecError::new(CodecReasonCode::ResourceLimitViolation));
+        }
+        Ok(())
+    }
+
+    fn append(&mut self, current: &mut String, delta: &str) -> Result<(), CodecError> {
+        self.check_append(current.len(), delta)?;
+        current.push_str(delta);
+        self.retained_bytes += delta.len();
+        Ok(())
+    }
+
+    fn release(&mut self, bytes: usize) {
+        self.retained_bytes = self.retained_bytes.saturating_sub(bytes);
+    }
+}
+
+/// Stateful downstream stream encoder.  Chat and Messages retain their
+/// historical per-event grammar; Responses owns lifecycle state so translated
+/// streams contain complete message, reasoning, and function-call items.
+pub struct ClientStreamEncoder {
+    surface: ClientSurface,
+    responses: Option<ResponsesEncoderState>,
+}
+
+impl fmt::Debug for ClientStreamEncoder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClientStreamEncoder")
+            .field("surface", &self.surface)
+            .field("responses", &self.responses.is_some())
+            .finish()
+    }
+}
+
+impl ClientStreamEncoder {
+    #[must_use]
+    pub fn new(surface: ClientSurface) -> Self {
+        Self {
+            surface,
+            responses: (surface == ClientSurface::Responses).then(ResponsesEncoderState::new),
+        }
+    }
+
+    pub fn encode(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
+        if self.surface != ClientSurface::Responses {
+            return encode_client_event(self.surface, event);
+        }
+        self.encode_responses(event)
+    }
+
+    fn encode_responses(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
+        let state = self
+            .responses
+            .as_mut()
+            .expect("Responses encoder has Responses state");
+        if state.terminal_emitted {
+            return Ok(Vec::new());
+        }
+        let mut out = state.ensure_created(event.model.as_deref());
+        if let Some(usage) = &event.usage {
+            state.usage = Some(usage.clone());
+        }
+        match event.event_type {
+            CanonicalEventType::ResponseStart => {}
+            CanonicalEventType::TextDelta => {
+                state.close_reasoning(&mut out, "completed")?;
+                if state.active_message.is_none() {
+                    let item = TranslatedMessageItem {
+                        id: state.item_id("msg"),
+                        output_index: state.output_index(),
+                        text: String::new(),
+                    };
+                    let mut payload = Map::new();
+                    payload.insert("output_index".into(), Value::from(item.output_index));
+                    payload.insert("item".into(), message_item(&item, "in_progress"));
+                    out.extend(state.response_frame("response.output_item.added", payload));
+                    state.active_message = Some(item);
+                }
+                let delta = event.delta.as_deref().unwrap_or_default();
+                let (item_id, output_index) = {
+                    let item_len = state
+                        .active_message
+                        .as_ref()
+                        .expect("message item exists")
+                        .text
+                        .len();
+                    state.check_append(item_len, delta)?;
+                    let item = state.active_message.as_mut().expect("message item exists");
+                    item.text.push_str(delta);
+                    state.retained_bytes += delta.len();
+                    (item.id.clone(), item.output_index)
+                };
+                let mut payload = Map::new();
+                payload.insert("item_id".into(), Value::String(item_id));
+                payload.insert("output_index".into(), Value::from(output_index));
+                payload.insert("content_index".into(), Value::from(0));
+                payload.insert("delta".into(), Value::String(delta.into()));
+                out.extend(state.response_frame("response.output_text.delta", payload));
+            }
+            CanonicalEventType::ReasoningDelta => {
+                state.close_message(&mut out, "completed")?;
+                if state.active_reasoning.is_none() {
+                    let item = TranslatedReasoningItem {
+                        id: state.item_id("rs"),
+                        output_index: state.output_index(),
+                        text: String::new(),
+                    };
+                    let mut payload = Map::new();
+                    payload.insert("output_index".into(), Value::from(item.output_index));
+                    payload.insert("item".into(), reasoning_item(&item, "in_progress"));
+                    out.extend(state.response_frame("response.output_item.added", payload));
+                    state.active_reasoning = Some(item);
+                }
+                let delta = event.delta.as_deref().unwrap_or_default();
+                let (item_id, output_index) = {
+                    let item_len = state
+                        .active_reasoning
+                        .as_ref()
+                        .expect("reasoning item exists")
+                        .text
+                        .len();
+                    state.check_append(item_len, delta)?;
+                    let item = state
+                        .active_reasoning
+                        .as_mut()
+                        .expect("reasoning item exists");
+                    item.text.push_str(delta);
+                    state.retained_bytes += delta.len();
+                    (item.id.clone(), item.output_index)
+                };
+                let mut payload = Map::new();
+                payload.insert("item_id".into(), Value::String(item_id));
+                payload.insert("output_index".into(), Value::from(output_index));
+                payload.insert("summary_index".into(), Value::from(0));
+                payload.insert("content_index".into(), Value::from(0));
+                payload.insert("delta".into(), Value::String(delta.into()));
+                out.extend(state.response_frame("response.reasoning_summary_text.delta", payload));
+            }
+            CanonicalEventType::ToolCallStart => {
+                state.close_message(&mut out, "completed")?;
+                state.close_reasoning(&mut out, "completed")?;
+                let call_id = event.call_id.clone().unwrap_or_else(|| {
+                    format!(
+                        "call_eggpool_{}",
+                        event.index.unwrap_or(state.next_item_id as usize)
+                    )
+                });
+                if !state.active_tools.contains_key(&call_id) {
+                    if state.active_tools.len() >= MAX_ACTIVE_TOOL_CALLS {
+                        return Err(CodecError::new(CodecReasonCode::ResourceLimitViolation));
+                    }
+                    let item = TranslatedToolItem {
+                        item_id: state.item_id("fc"),
+                        call_id: call_id.clone(),
+                        name: event.name.clone().unwrap_or_default(),
+                        output_index: state.output_index(),
+                        source_index: event.index,
+                        arguments: String::new(),
+                    };
+                    let mut payload = Map::new();
+                    payload.insert("output_index".into(), Value::from(item.output_index));
+                    payload.insert("item".into(), function_item(&item, "in_progress"));
+                    out.extend(state.response_frame("response.output_item.added", payload));
+                    state.active_tools.insert(call_id, item);
+                }
+            }
+            CanonicalEventType::ToolCallArgumentsDelta => {
+                let call_id = event.call_id.clone().unwrap_or_else(|| {
+                    format!(
+                        "call_eggpool_{}",
+                        event.index.unwrap_or(state.next_item_id as usize)
+                    )
+                });
+                if !state.active_tools.contains_key(&call_id) {
+                    if state.active_tools.len() >= MAX_ACTIVE_TOOL_CALLS {
+                        return Err(CodecError::new(CodecReasonCode::ResourceLimitViolation));
+                    }
+                    let item = TranslatedToolItem {
+                        item_id: state.item_id("fc"),
+                        call_id: call_id.clone(),
+                        name: String::new(),
+                        output_index: state.output_index(),
+                        source_index: event.index,
+                        arguments: String::new(),
+                    };
+                    let mut payload = Map::new();
+                    payload.insert("output_index".into(), Value::from(item.output_index));
+                    payload.insert("item".into(), function_item(&item, "in_progress"));
+                    out.extend(state.response_frame("response.output_item.added", payload));
+                    state.active_tools.insert(call_id.clone(), item);
+                }
+                let delta = event.delta.as_deref().unwrap_or_default();
+                let (item_id, output_index) = {
+                    let item_len = state
+                        .active_tools
+                        .get(&call_id)
+                        .expect("tool exists")
+                        .arguments
+                        .len();
+                    state.check_append(item_len, delta)?;
+                    let item = state.active_tools.get_mut(&call_id).expect("tool exists");
+                    item.arguments.push_str(delta);
+                    state.retained_bytes += delta.len();
+                    (item.item_id.clone(), item.output_index)
+                };
+                let mut payload = Map::new();
+                payload.insert("item_id".into(), Value::String(item_id));
+                payload.insert("output_index".into(), Value::from(output_index));
+                payload.insert("delta".into(), Value::String(delta.into()));
+                out.extend(state.response_frame("response.function_call_arguments.delta", payload));
+            }
+            CanonicalEventType::ToolCallStop => {
+                state.close_tool(
+                    &mut out,
+                    event.call_id.as_deref(),
+                    event.arguments.as_deref(),
+                    "completed",
+                )?;
+            }
+            CanonicalEventType::ContentStop => {
+                let call_id = event.index.and_then(|index| {
+                    state
+                        .active_tools
+                        .values()
+                        .find(|item| item.source_index == Some(index))
+                        .map(|item| item.call_id.clone())
+                });
+                if let Some(call_id) = call_id {
+                    state.close_tool(&mut out, Some(&call_id), None, "completed")?;
+                }
+            }
+            CanonicalEventType::Usage => {}
+            CanonicalEventType::ResponseComplete => {
+                state.close_message(&mut out, "completed")?;
+                state.close_reasoning(&mut out, "completed")?;
+                state.close_all_tools(&mut out, "completed")?;
+                state.emit_terminal(&mut out, "response.completed", "completed")?;
+            }
+            CanonicalEventType::ResponseIncomplete => {
+                state.close_message(&mut out, "incomplete")?;
+                state.close_reasoning(&mut out, "incomplete")?;
+                state.close_all_tools(&mut out, "incomplete")?;
+                let name = if event.finish_reason.as_deref() == Some("failed") {
+                    "response.failed"
+                } else {
+                    "response.incomplete"
+                };
+                let status = if name == "response.failed" {
+                    "failed"
+                } else {
+                    "incomplete"
+                };
+                state.emit_terminal(&mut out, name, status)?;
+            }
+            CanonicalEventType::Error => {
+                state.close_message(&mut out, "incomplete")?;
+                state.close_reasoning(&mut out, "incomplete")?;
+                state.close_all_tools(&mut out, "incomplete")?;
+                let mut error = Map::new();
+                error.insert(
+                    "type".into(),
+                    Value::String(event.error_type.clone().unwrap_or_else(|| "error".into())),
+                );
+                error.insert(
+                    "message".into(),
+                    Value::String(event.error_message.clone().unwrap_or_default()),
+                );
+                let mut payload = Map::new();
+                payload.insert("error".into(), Value::Object(error));
+                out.extend(state.response_frame("error", payload));
+                state.terminal_emitted = true;
+            }
+            _ => {}
+        }
+        Ok(out)
+    }
+}
+
+impl ResponsesEncoderState {
+    fn close_message(&mut self, out: &mut Vec<u8>, status: &str) -> Result<(), CodecError> {
+        let Some(item) = self.active_message.take() else {
+            return Ok(());
+        };
+        self.release(item.text.len());
+        let mut payload = Map::new();
+        payload.insert("output_index".into(), Value::from(item.output_index));
+        payload.insert("item".into(), message_item(&item, status));
+        out.extend(self.response_frame("response.output_item.done", payload));
+        Ok(())
+    }
+
+    fn close_reasoning(&mut self, out: &mut Vec<u8>, status: &str) -> Result<(), CodecError> {
+        let Some(item) = self.active_reasoning.take() else {
+            return Ok(());
+        };
+        self.release(item.text.len());
+        let mut payload = Map::new();
+        payload.insert("output_index".into(), Value::from(item.output_index));
+        payload.insert("item".into(), reasoning_item(&item, status));
+        out.extend(self.response_frame("response.output_item.done", payload));
+        Ok(())
+    }
+
+    fn close_tool(
+        &mut self,
+        out: &mut Vec<u8>,
+        call_id: Option<&str>,
+        complete_arguments: Option<&str>,
+        status: &str,
+    ) -> Result<(), CodecError> {
+        let Some(key) = call_id else {
+            return Ok(());
+        };
+        let Some(mut item) = self.active_tools.remove(key) else {
+            return Ok(());
+        };
+        if let Some(arguments) = complete_arguments
+            && item.arguments != arguments
+        {
+            self.release(item.arguments.len());
+            item.arguments.clear();
+            self.append(&mut item.arguments, arguments)?;
+        }
+        self.release(item.arguments.len());
+        let mut delta = Map::new();
+        delta.insert("item_id".into(), Value::String(item.item_id.clone()));
+        delta.insert("output_index".into(), Value::from(item.output_index));
+        delta.insert("arguments".into(), Value::String(item.arguments.clone()));
+        out.extend(self.response_frame("response.function_call_arguments.done", delta));
+        let mut payload = Map::new();
+        payload.insert("output_index".into(), Value::from(item.output_index));
+        payload.insert("item".into(), function_item(&item, status));
+        out.extend(self.response_frame("response.output_item.done", payload));
+        Ok(())
+    }
+
+    fn close_all_tools(&mut self, out: &mut Vec<u8>, status: &str) -> Result<(), CodecError> {
+        let calls: Vec<String> = self.active_tools.keys().cloned().collect();
+        for call_id in calls {
+            self.close_tool(out, Some(&call_id), None, status)?;
+        }
+        Ok(())
+    }
+
+    fn emit_terminal(
+        &mut self,
+        out: &mut Vec<u8>,
+        name: &str,
+        status: &str,
+    ) -> Result<(), CodecError> {
+        if self.terminal_emitted {
+            return Ok(());
+        }
+        let mut response = Map::new();
+        response.insert("id".into(), Value::String(self.response_id.clone()));
+        response.insert("object".into(), Value::String("response".into()));
+        response.insert("status".into(), Value::String(status.into()));
+        response.insert("output".into(), Value::Array(Vec::new()));
+        response.insert(
+            "usage".into(),
+            self.usage
+                .as_ref()
+                .map(|usage| usage_value(usage, UsageProtocol::Openai))
+                .unwrap_or(Value::Null),
+        );
+        if let Some(model) = &self.model {
+            response.insert("model".into(), Value::String(model.clone()));
+        }
+        let mut payload = Map::new();
+        payload.insert("response".into(), Value::Object(response));
+        out.extend(self.frame(name, payload));
+        self.terminal_emitted = true;
+        Ok(())
+    }
+}
+
+fn message_item(item: &TranslatedMessageItem, status: &str) -> Value {
+    json!({
+        "id": item.id,
+        "type": "message",
+        "role": "assistant",
+        "status": status,
+        "content": [{"type":"output_text","text":item.text,"annotations":[]}]
+    })
+}
+
+fn reasoning_item(item: &TranslatedReasoningItem, status: &str) -> Value {
+    json!({
+        "id": item.id,
+        "type": "reasoning",
+        "status": status,
+        "summary": [{"type":"summary_text","text":item.text}]
+    })
+}
+
+fn function_item(item: &TranslatedToolItem, status: &str) -> Value {
+    json!({
+        "id": item.item_id,
+        "type": "function_call",
+        "call_id": item.call_id,
+        "name": item.name,
+        "arguments": item.arguments,
+        "status": status
+    })
 }
 
 /// Encode a canonical event to one of the three public client SSE grammars.

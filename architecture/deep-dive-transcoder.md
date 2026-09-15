@@ -23,6 +23,13 @@ consult the preservation summary first: native-only items/tools are a typed
 explicit adaptation notices rather than disappearing silently.
 
 Streaming adapters preserve native event grammar and require a native terminal
-event. EOF, cancellation, and malformed frames remain typed failures. Alternate
-wire negotiation is bounded and uses the same request submission budget as
-account retries.
+event. Responses-to-Responses uses an observe-and-forward mode: the bounded
+SSE decoder observes terminal/usage evidence while the original valid provider
+bytes, including unknown future event types, are sent to the caller unchanged.
+Cross-surface Responses output uses a separate stateful encoder. It keeps
+bounded active text, reasoning, and argument buffers; emits indexed completed
+message/reasoning/function-call items; and keeps a generated output-item ID
+distinct from the canonical function invocation `call_id`. It never fabricates
+OpenAI encrypted reasoning content. EOF, cancellation, and malformed frames
+remain typed failures, and alternate wire negotiation is bounded and uses the
+same request submission budget as account retries.

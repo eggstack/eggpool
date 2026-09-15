@@ -48,7 +48,10 @@ cargo test --manifest-path rust/Cargo.toml --test wire_qualification -- --test-t
 For Responses admission or wire-preservation changes, also run the focused
 canonical request, wire qualification, and coordinator stateless-contract
 targets. Verify native same-surface alias rewriting and cross-surface rejection
-before the workspace suite.
+before the workspace suite. For Responses streaming changes, also verify native
+unknown-event preservation, item-id/call-id mapping, authoritative
+`response.output_item.done` synthesis, bounded encoder overflow, and strict
+`response.completed`/EOF behavior in `wire_stream` and `wire_runtime`.
 
 Keep post-handoff execution single-owner and incremental while refactoring;
 transparent upstream replay is only valid before `StreamingExecution` is

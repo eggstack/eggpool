@@ -1,7 +1,7 @@
 use eggpool::wire::ir::{CanonicalEventType, ClientSurface};
 use eggpool::wire::{
-    SseDecoder, StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome, TerminalEvidence,
-    UsageProtocol, WireCodec, encode_client_event, normalize_usage,
+    ClientStreamEncoder, SseDecoder, StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome,
+    TerminalEvidence, UsageProtocol, WireCodec, encode_client_event, normalize_usage,
 };
 use serde_json::{Value, json};
 
@@ -503,4 +503,198 @@ fn finite_codec_trait_exposes_stream_decode_and_encode() {
             .unwrap(),
         b"data: [DONE]\n\n"
     );
+}
+
+fn event(event_type: CanonicalEventType) -> eggpool::wire::ir::CanonicalEvent {
+    eggpool::wire::ir::CanonicalEvent {
+        event_type,
+        response_id: None,
+        model: None,
+        index: None,
+        delta: None,
+        call_id: None,
+        name: None,
+        arguments: None,
+        finish_reason: None,
+        usage: None,
+        error_type: None,
+        error_message: None,
+    }
+}
+
+#[test]
+fn translated_responses_stream_has_authoritative_completed_items() {
+    let mut encoder = ClientStreamEncoder::new(ClientSurface::Responses);
+    let mut bytes = Vec::new();
+    let mut text = event(CanonicalEventType::TextDelta);
+    text.delta = Some("hello".into());
+    bytes.extend(encoder.encode(&text).unwrap());
+
+    let mut start = event(CanonicalEventType::ToolCallStart);
+    start.call_id = Some("call_1".into());
+    start.name = Some("lookup".into());
+    bytes.extend(encoder.encode(&start).unwrap());
+    let mut args = event(CanonicalEventType::ToolCallArgumentsDelta);
+    args.call_id = Some("call_1".into());
+    args.delta = Some(r#"{"q":"rust"}"#.into());
+    bytes.extend(encoder.encode(&args).unwrap());
+    let mut stop = event(CanonicalEventType::ToolCallStop);
+    stop.call_id = Some("call_1".into());
+    bytes.extend(encoder.encode(&stop).unwrap());
+    bytes.extend(
+        encoder
+            .encode(&event(CanonicalEventType::ResponseComplete))
+            .unwrap(),
+    );
+
+    let mut decoder = SseDecoder::default();
+    let frames = decoder.feed(&bytes).unwrap();
+    let mut frames = frames;
+    frames.extend(decoder.finish().unwrap().frames);
+    let payloads: Vec<Value> = frames
+        .iter()
+        .filter_map(|frame| serde_json::from_str(&frame.data).ok())
+        .collect();
+    let done_items: Vec<&Value> = payloads
+        .iter()
+        .filter(|payload| payload["type"] == "response.output_item.done")
+        .collect();
+    assert_eq!(
+        done_items.len(),
+        2,
+        "assistant and function items must close"
+    );
+    let function = done_items
+        .iter()
+        .find(|payload| payload["item"]["type"] == "function_call")
+        .expect("function item completion");
+    assert_eq!(function["item"]["call_id"], "call_1");
+    assert_eq!(function["item"]["name"], "lookup");
+    assert_eq!(function["item"]["arguments"], r#"{"q":"rust"}"#);
+    assert_eq!(function["item"]["status"], "completed");
+    assert_ne!(function["item"]["id"], "call_1");
+    let terminal = payloads
+        .iter()
+        .find(|payload| payload["type"] == "response.completed")
+        .expect("Responses terminal");
+    assert!(
+        terminal["response"]["id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    let sequence_numbers: Vec<u64> = payloads
+        .iter()
+        .filter_map(|payload| payload["sequence_number"].as_u64())
+        .collect();
+    assert!(sequence_numbers.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn responses_decoder_maps_item_id_to_call_id_and_deduplicates_completion() {
+    let source = concat!(
+        "event: response.output_item.added\n",
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"fc_item\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\"}}\n\n",
+        "event: response.function_call_arguments.delta\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_item\",\"delta\":\"{}\"}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"fc_item\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"fc_item\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n",
+    );
+    let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+    let events = decoder.push(source.as_bytes()).unwrap();
+    let starts: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == CanonicalEventType::ToolCallStart)
+        .collect();
+    let deltas: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == CanonicalEventType::ToolCallArgumentsDelta)
+        .collect();
+    let stops: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == CanonicalEventType::ToolCallStop)
+        .collect();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(deltas.len(), 1);
+    assert_eq!(starts[0].call_id.as_deref(), Some("call_1"));
+    assert_eq!(deltas[0].call_id.as_deref(), Some("call_1"));
+    assert_eq!(stops.len(), 1);
+    assert_eq!(stops[0].call_id.as_deref(), Some("call_1"));
+    assert_eq!(stops[0].arguments.as_deref(), Some("{}"));
+}
+
+#[test]
+fn translated_responses_encoder_rejects_unbounded_active_text() {
+    let mut encoder = ClientStreamEncoder::new(ClientSurface::Responses);
+    let mut text = event(CanonicalEventType::TextDelta);
+    text.delta = Some("x".repeat(256 * 1024 + 1));
+    assert!(matches!(
+        encoder.encode(&text),
+        Err(eggpool::wire::CodecError {
+            reason: eggpool::wire::CodecReasonCode::ResourceLimitViolation,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn canonical_tool_events_from_each_provider_family_close_as_responses_items() {
+    let fixtures = [
+        (
+            StreamAdapterKind::OpenaiChatSse,
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"chat_call\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{\\\"q\\\":\\\"x\\\"}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                "data: [DONE]\n\n"
+            ),
+        ),
+        (
+            StreamAdapterKind::AnthropicMessagesSse,
+            concat!(
+                "event: content_block_start\n",
+                "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"anthropic_call\",\"name\":\"lookup\"}}\n\n",
+                "event: content_block_delta\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n",
+                "event: content_block_stop\n",
+                "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                "event: message_stop\n",
+                "data: {\"type\":\"message_stop\"}\n\n"
+            ),
+        ),
+        (
+            StreamAdapterKind::GeminiInteractionsSse,
+            concat!(
+                "event: step.start\n",
+                "data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"function_call\",\"id\":\"gemini_call\",\"name\":\"lookup\"}}\n\n",
+                "event: step.delta\n",
+                "data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"arguments_delta\",\"arguments\":\"{}\"}}\n\n",
+                "event: interaction.completed\n",
+                "data: {\"event_type\":\"interaction.completed\",\"interaction\":{\"status\":\"completed\"}}\n\n"
+            ),
+        ),
+    ];
+    for (adapter, source) in fixtures {
+        let mut decoder = StreamEventDecoder::new(adapter);
+        let mut events = decoder.push(source.as_bytes()).unwrap();
+        events.extend(decoder.finish().unwrap().0);
+        let mut encoder = ClientStreamEncoder::new(ClientSurface::Responses);
+        let mut encoded = Vec::new();
+        for event in events {
+            encoded.extend(encoder.encode(&event).unwrap());
+        }
+        let mut framing = SseDecoder::default();
+        let mut frames = framing.feed(&encoded).unwrap();
+        frames.extend(framing.finish().unwrap().frames);
+        assert!(frames.iter().any(|frame| {
+            frame.event.as_deref() == Some("response.output_item.done")
+                && frame.data.contains("function_call")
+                && frame.data.contains("\"status\":\"completed\"")
+        }));
+        assert!(
+            frames
+                .iter()
+                .any(|frame| frame.event.as_deref() == Some("response.completed"))
+        );
+    }
 }

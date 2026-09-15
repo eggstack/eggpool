@@ -43,7 +43,10 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   source-native same-surface preservation. State the stateless policy from
   admission (`store` omitted/false is accepted; stateful continuation and
   background features are rejected) and never imply native-only items/tools
-  are translated losslessly.
+  are translated losslessly. For streams, document native Responses
+  observe-and-forward behavior separately from bounded cross-surface lifecycle
+  synthesis, including authoritative completed output items and strict
+  terminal evidence.
 
 ## Checks
 

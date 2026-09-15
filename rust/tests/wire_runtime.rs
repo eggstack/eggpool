@@ -4,9 +4,9 @@ use eggpool::wire::ir::ClientSurface;
 use eggpool::{
     request::StaticRoutingFacts,
     wire::{
-        ConfiguredWireProfile, FiniteResponseOutcome, StreamTerminalOutcome, WireCodecId,
-        WireProfileDefinition, WireProfileFlags, WireRuntime, WireRuntimeContext, WireRuntimeError,
-        WireSurface,
+        ConfiguredWireProfile, FiniteResponseOutcome, StreamForwardingMode, StreamTerminalOutcome,
+        WireCodecId, WireProfileDefinition, WireProfileFlags, WireRuntime, WireRuntimeContext,
+        WireRuntimeError, WireSurface,
     },
 };
 use serde_json::{Value, json};
@@ -292,4 +292,29 @@ fn runtime_and_context_are_shareable_without_mutable_global_codec_state() {
             });
         }
     });
+}
+
+#[test]
+fn responses_same_surface_streams_use_native_observation_mode() {
+    let runtime = WireRuntime::embedded().expect("embedded registry");
+    let context = context(WireSurface::OpenaiResponses, ClientSurface::Responses);
+    assert!(context.profile_flags.body_passthrough);
+    assert!(context.profile_flags.stream_native_passthrough);
+    let mut stream = runtime.stream(&context).expect("Responses stream");
+    assert_eq!(
+        stream.forwarding_mode(),
+        StreamForwardingMode::NativeObserved
+    );
+    let unknown = b"event: response.future_event\ndata: {\"type\":\"response.future_event\",\"future\":true}\n\n";
+    let terminal = b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":1}}}\n\n";
+    assert!(stream.push(unknown).unwrap().events.is_empty());
+    assert!(
+        stream.push(terminal).unwrap().events.iter().any(
+            |event| event.event_type == eggpool::wire::ir::CanonicalEventType::ResponseComplete
+        )
+    );
+    assert_eq!(
+        stream.finalize().unwrap().terminal.outcome,
+        StreamTerminalOutcome::Success
+    );
 }

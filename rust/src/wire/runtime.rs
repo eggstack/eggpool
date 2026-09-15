@@ -16,11 +16,11 @@ use super::ir::{
     ClientSurface, ProviderErrorEvidence,
 };
 use super::{
-    AdaptationNotice, AdaptationPolicy, CodecError, CodecReasonCode, ConfiguredWireProfile,
-    DecodedProviderPayload, StreamAdapterKind, StreamError, StreamEventDecoder,
-    StreamTerminalSummary, WireCodec, WireCodecId, WireProfileRegistry, WireSurface,
-    apply_adaptation_policy, builtin_codec_instance, compatibility_path, encode_client_event,
-    native_preservation_notices,
+    AdaptationNotice, AdaptationPolicy, ClientStreamEncoder, CodecError, CodecReasonCode,
+    ConfiguredWireProfile, DecodedProviderPayload, StreamAdapterKind, StreamError,
+    StreamEventDecoder, StreamForwardingMode, StreamTerminalSummary, WireCodec, WireCodecId,
+    WireProfileRegistry, WireSurface, apply_adaptation_policy, builtin_codec_instance,
+    compatibility_path, encode_client_event, native_preservation_notices,
 };
 use crate::model_router::AffinityIdentityInput;
 use crate::request::{
@@ -38,14 +38,18 @@ const MAX_PROVIDER_KIND_BYTES: usize = 64;
 pub struct WireProfileFlags {
     pub supports_streaming: bool,
     pub body_passthrough: bool,
+    pub stream_native_passthrough: bool,
 }
 
 impl WireProfileFlags {
     pub fn for_surfaces(client: ClientSurface, upstream: WireSurface) -> Self {
+        let native = compatibility_path(client, upstream) == super::CompatibilityPath::Native;
         Self {
             supports_streaming: true,
-            body_passthrough: compatibility_path(client, upstream)
-                == super::CompatibilityPath::Native,
+            body_passthrough: native,
+            stream_native_passthrough: native
+                && client == ClientSurface::Responses
+                && upstream == WireSurface::OpenaiResponses,
         }
     }
 }
@@ -55,6 +59,7 @@ impl Default for WireProfileFlags {
         Self {
             supports_streaming: true,
             body_passthrough: false,
+            stream_native_passthrough: false,
         }
     }
 }
@@ -717,7 +722,13 @@ impl WireRuntime {
             identity: WireRuntimeIdentity::from_context(context),
             client_surface: context.client_surface,
             adapter,
+            mode: if context.profile_flags.stream_native_passthrough {
+                StreamForwardingMode::NativeObserved
+            } else {
+                StreamForwardingMode::Translated
+            },
             decoder: StreamEventDecoder::new(adapter),
+            encoder: ClientStreamEncoder::new(context.client_surface),
             bytes_observed: 0,
         })
     }
@@ -805,8 +816,10 @@ impl WireRuntime {
 pub struct WireStream {
     pub identity: WireRuntimeIdentity,
     pub adapter: StreamAdapterKind,
+    pub mode: StreamForwardingMode,
     client_surface: ClientSurface,
     decoder: StreamEventDecoder,
+    encoder: ClientStreamEncoder,
     bytes_observed: usize,
 }
 
@@ -816,6 +829,7 @@ impl fmt::Debug for WireStream {
             .debug_struct("WireStream")
             .field("identity", &self.identity)
             .field("adapter", &self.adapter)
+            .field("mode", &self.mode)
             .field("client_surface", &self.client_surface)
             .field("decoder", &self.decoder)
             .finish()
@@ -870,6 +884,25 @@ impl WireStream {
         self.decoder.usage()
     }
 
+    #[must_use]
+    pub const fn forwarding_mode(&self) -> StreamForwardingMode {
+        self.mode
+    }
+
+    /// Encode a translated event using the state owned by this stream. Native
+    /// observed streams must forward their original bytes instead.
+    pub fn encode_client_event_stateful(
+        &mut self,
+        event: &CanonicalEvent,
+    ) -> Result<Bytes, WireRuntimeError> {
+        self.encoder
+            .encode(event)
+            .map(Bytes::from)
+            .map_err(WireRuntimeError::ResponseAdaptation)
+    }
+
+    /// Legacy stateless helper retained for codec qualification fixtures. The
+    /// live coordinator uses [`Self::encode_client_event_stateful`].
     pub fn encode_client_event(&self, event: &CanonicalEvent) -> Result<Bytes, WireRuntimeError> {
         encode_client_event(self.client_surface, event)
             .map(Bytes::from)

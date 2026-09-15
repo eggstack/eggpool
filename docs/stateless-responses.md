@@ -34,13 +34,18 @@ metadata.
 
 ## Streaming
 
-The stream adapter translates native upstream events into Responses events for
-the client. `response.completed` is the only successful Responses terminal;
-`response.failed` and `response.incomplete` are terminal non-success outcomes.
-Gemini Interactions uses `interaction.completed`, while Gemini
-`generateContent` uses a candidate `finishReason`. A transport EOF without
-native terminal evidence is classified as incomplete and never receives a
-synthetic client terminal event.
+Responses streaming has two modes. When both client and upstream surfaces are
+Responses, EggPool incrementally observes the SSE framing and terminal/usage
+evidence while forwarding the original valid bytes unchanged, including
+unknown forward-compatible events. When the upstream surface differs, a
+stateful bounded encoder synthesizes Responses message, reasoning, and
+function-call lifecycles. Function calls end with an authoritative
+`response.output_item.done` containing complete arguments, a separate output
+item ID, the canonical `call_id`, name, and status. `response.completed` is the
+only successful Responses terminal; `response.failed` and
+`response.incomplete` are terminal non-success outcomes. A transport EOF
+without native terminal evidence is classified as incomplete and never
+receives a synthetic client terminal event.
 
 ## Configuration
 

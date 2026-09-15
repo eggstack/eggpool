@@ -143,7 +143,7 @@ use crate::routing::RoutingRouter;
 use crate::wire::ir::{
     CacheCounterStatus, CanonicalEventType, CanonicalUsage, ProviderErrorEvidence,
 };
-use crate::wire::{StreamTerminalOutcome, TerminalEvidence, WireSurface};
+use crate::wire::{StreamForwardingMode, StreamTerminalOutcome, TerminalEvidence, WireSurface};
 
 use super::{
     AttemptStreamFacts, OUTCOME_COMPLETED_CANONICAL, OUTCOME_COMPLETED_COMPATIBILITY,
@@ -296,7 +296,8 @@ pub(crate) fn store_eof(
                     ) {
                         stream.saw_terminal_event = true;
                     }
-                    if let Ok(bytes) = wire.encode_client_event(event)
+                    if wire.forwarding_mode() == StreamForwardingMode::Translated
+                        && let Ok(bytes) = wire.encode_client_event_stateful(event)
                         && !bytes.is_empty()
                     {
                         stream.events_forwarded = stream.events_forwarded.saturating_add(1);

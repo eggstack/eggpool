@@ -22,7 +22,7 @@ The transcoder sits in the request path and:
 1. **Rewrites the request body** before dispatch using the selected surface codec.
 2. **Decodes the response body** back to the client's expected format.
 3. **Re-renders non-retryable errors** in the client protocol so error handling stays uniform.
-4. **Translates streaming SSE events** from one shared bounded frame stream in real time, preserving native terminal semantics.
+4. **Adapts streaming SSE events** from one shared bounded frame stream in real time, preserving native terminal semantics. Same-surface Responses streams are observed and forwarded without payload reconstruction; cross-surface Responses streams use bounded lifecycle state to synthesize complete output items.
 
 ### Canonical request and reasoning boundary
 
@@ -69,7 +69,14 @@ the completion/usage observer and, when needed, the selected transcoder.
 `DecodedSSEFrame.json_object()` lazily caches a parsed object so two consumers
 never parse the same frame twice. Concrete transcoders do not parse raw bytes;
 their `translate_frame()` and `finish()` methods are synchronous. Native
-protocol responses remain byte-for-byte pass-through apart from observation.
+Responses responses remain byte-for-byte pass-through apart from observation
+when the client and upstream Responses surfaces match. Other translated
+streams retain only bounded active text, reasoning, and tool argument state.
+Responses output indexes and sequence numbers are downstream serialization
+state; function-call `call_id` is kept distinct from the generated output-item
+ID, and `response.output_item.done` is emitted before `response.completed`.
+Encrypted reasoning is preserved only on the native Responses path and is
+never synthesized from plaintext.
 
 Usage and cost fields are preserved exactly as the upstream reported them — no translation, no rounding, no loss.
 

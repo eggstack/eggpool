@@ -35,7 +35,8 @@ pub use runtime::{
     WireStream,
 };
 pub use stream::{
-    MAX_SSE_FRAME_BYTES, SSEFrame, SseDecodeError, SseDecodeResult, SseDecoder, SseFrame,
-    StreamError, StreamEventDecoder, StreamTerminalOutcome, StreamTerminalSummary,
-    TerminalEvidence, UsageProtocol, decode_stream_event, encode_client_event, normalize_usage,
+    ClientStreamEncoder, MAX_SSE_FRAME_BYTES, SSEFrame, SseDecodeError, SseDecodeResult,
+    SseDecoder, SseFrame, StreamError, StreamEventDecoder, StreamForwardingMode,
+    StreamTerminalOutcome, StreamTerminalSummary, TerminalEvidence, UsageProtocol,
+    decode_stream_event, encode_client_event, normalize_usage,
 };

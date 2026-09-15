@@ -12,7 +12,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 - Client endpoints for OpenAI Chat Completions (`/v1/chat/completions`), stateless OpenAI Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
-- Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination, with bounded native Responses request preservation
+- Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination, with bounded native Responses request and stream preservation
 - Dynamic model discovery with load-based routing across multiple providers and accounts
 - Optional sticky model-router aliases with bounded selector affinity and live-reload continuity
 - Provider/model wire-surface contracts with per-surface paths and auth shapes
@@ -239,6 +239,16 @@ native-only items or tools before provider dispatch instead of silently
 dropping them. Responses remains stateless: `store` may be omitted or false,
 while `store: true`, continuation references, and background execution are
 rejected locally.
+
+Responses streaming has two bounded paths. Responses-to-Responses streams are
+observed for terminal evidence and usage while the original SSE event payloads
+— including forward-compatible unknown events — are forwarded unchanged.
+Streams translated from Chat, Messages, or Gemini use a per-stream encoder
+that emits indexed, completed message/reasoning/function-call items before one
+`response.completed` terminal. A translated function call keeps its canonical
+`call_id` separate from its generated Responses output-item ID; translated
+argument and reasoning buffers are bounded. `response.completed` remains the
+only successful Responses terminal, and EOF without terminal evidence fails.
 
 EggPool keeps a bounded, in-memory preference for the last successful declared
 wire surface per provider/model. The preference is refreshed by ordinary

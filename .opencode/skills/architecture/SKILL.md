@@ -26,6 +26,11 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   canonical IR. Same-surface forwarding may rewrite only EggPool-owned fields
   such as `model`; cross-surface codecs must reject native-only semantics or
   emit explicit bounded adaptation notices.
+- For Responses streaming, select the explicit native-observed path only for
+  Responses-to-Responses compatibility. Observe raw SSE incrementally and
+  forward valid source bytes unchanged; use a separate bounded stateful encoder
+  for cross-surface output, including completed output items, indexes, and
+  distinct function-call/item identities.
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
@@ -49,5 +54,5 @@ For streaming changes, preserve the handoff boundary: retries belong only to
 `streaming/coordinator.rs` before `StreamingExecution` is returned;
 `streaming/execution.rs` owns the single downstream body and cancellation path;
 `streaming/terminal.rs` consumes wire terminal summaries and must not duplicate
-wire event parsing. Streams remain incremental and SSE transport EOF is not
-success without terminal evidence.
+wire event parsing. Streams remain incremental, translated Responses state is
+bounded, and SSE transport EOF is not success without terminal evidence.
