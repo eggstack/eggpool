@@ -62,11 +62,36 @@ eggpool configsetup roo-code --write
 
 ## Codex Integration
 
-The Codex integration emits a `[model_providers.eggpool]` TOML block with `wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"` reference. Use `--print-secret` to include the actual API key in the output:
+Codex uses EggPool through the HTTP/SSE Responses path. Start with an explicit
+EggPool model or alias; the standard `/v1/models` endpoint intentionally keeps
+its OpenAI-compatible schema and is not a Codex remote-catalog endpoint.
+
+The current generated block is equivalent to:
+
+```toml
+model = "<eggpool-model-or-alias>"
+model_provider = "eggpool"
+
+[model_providers.eggpool]
+name = "EggPool"
+base_url = "http://127.0.0.1:11300/v1"
+env_key = "EGGPOOL_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+```
+
+Set `EGGPOOL_API_KEY` to EggPool's server key in the environment used to run
+Codex. The default server port is `11300`; use `--base-url` when the server is
+configured differently. Generate a model-specific snippet with:
 
 ```bash
-eggpool configsetup codex --print-secret
+eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
+
+`--print-secret` is only needed when you explicitly want the resolved key in
+stdout. Automatic Codex model-picker discovery is optional/deferred; explicit
+model selection is the qualified supported path today. For a real current CLI
+check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
 
 ## OpenCode Integration
 

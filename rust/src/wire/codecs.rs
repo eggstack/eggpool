@@ -15,8 +15,8 @@ use super::codec::{
 use super::ir::{
     CacheCounterStatus, CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage,
     CanonicalOutputBlock, CanonicalRequest, CanonicalResponse, CanonicalRole, CanonicalToolChoice,
-    CanonicalUsage, ClientSurface, MediaSource, ProviderErrorEvidence, ReasoningMode,
-    ToolChoiceMode,
+    CanonicalToolKind, CanonicalUsage, ClientSurface, MediaSource, ProviderErrorEvidence,
+    ReasoningMode, ToolChoiceMode,
 };
 use super::registry::{ConfiguredWireProfile, WireSurface};
 use crate::request::{
@@ -256,7 +256,7 @@ fn encode_openai_request(request: &CanonicalRequest) -> Result<CodecOutput<Value
                             "function": {
                                 "name": tool.name,
                                 "description": tool.description,
-                                "parameters": Value::Object(tool.parameters.clone()),
+                                "parameters": Value::Object(tool.function_parameters()),
                             }
                         })
                     })
@@ -335,7 +335,7 @@ fn encode_anthropic_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                         let mut value = json!({
                             "name": tool.name,
                             "description": tool.description.clone().unwrap_or_default(),
-                            "input_schema": Value::Object(tool.parameters.clone()),
+                            "input_schema": Value::Object(tool.function_parameters()),
                         });
                         if is_valid_cache_control(tool.cache_control.as_ref()) {
                             let marker = tool.cache_control.as_ref().expect("validated marker");
@@ -451,10 +451,16 @@ fn encode_stop(values: &[String]) -> Value {
 fn encode_openai_message(message: &CanonicalMessage) -> Value {
     let mut item = Map::new();
     item.insert("role".into(), Value::String(message.role.as_str().into()));
-    item.insert(
-        "content".into(),
-        encode_openai_content_lossless(&message.content),
-    );
+    let content = if message.role == CanonicalRole::Tool
+        && message.content.len() == 1
+        && message.content[0].kind == CanonicalBlockKind::ToolResult
+        && message.content[0].media.is_none()
+    {
+        Value::String(message.content[0].text.clone().unwrap_or_default())
+    } else {
+        encode_openai_content_lossless(&message.content)
+    };
+    item.insert("content".into(), content);
     if let Some(id) = &message.tool_call_id {
         item.insert("tool_call_id".into(), Value::String(id.clone()));
     }
@@ -468,9 +474,11 @@ fn encode_openai_message(message: &CanonicalMessage) -> Value {
                 "type": "function",
                 "function": {
                     "name": block.name,
-                    "arguments": block.arguments.clone().unwrap_or_else(|| {
-                        block.tool_input.as_ref().map(compact_json).unwrap_or_default()
-                    }),
+                    "arguments": wrapped_arguments(
+                        block.arguments.as_deref(),
+                        block.tool_input.as_ref(),
+                        block.tool_kind,
+                    ),
                 }
             })
         })
@@ -859,6 +867,7 @@ fn decode_openai_message_output(
             call_id: None,
             name: None,
             arguments: None,
+            tool_kind: CanonicalToolKind::Function,
         }),
         Some(Value::Array(blocks)) => {
             for block in blocks {
@@ -882,6 +891,7 @@ fn decode_openai_message_output(
                         call_id: None,
                         name: None,
                         arguments: None,
+                        tool_kind: CanonicalToolKind::Function,
                     });
                     continue;
                 }
@@ -919,6 +929,7 @@ fn decode_openai_message_output(
                     call_id: None,
                     name: None,
                     arguments: None,
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
         }
@@ -935,6 +946,7 @@ fn decode_openai_message_output(
             call_id: None,
             name: None,
             arguments: None,
+            tool_kind: CanonicalToolKind::Function,
         });
     }
     if let Some(reasoning) = message.get("reasoning_content") {
@@ -948,6 +960,7 @@ fn decode_openai_message_output(
             call_id: None,
             name: None,
             arguments: None,
+            tool_kind: CanonicalToolKind::Function,
         });
     }
     Ok(output)
@@ -971,6 +984,7 @@ fn decode_openai_tool_call(value: &Value) -> Result<CanonicalOutputBlock, CodecE
         call_id: Some(id),
         name: Some(name),
         arguments: Some(arguments),
+        tool_kind: CanonicalToolKind::Function,
     })
 }
 
@@ -1003,6 +1017,7 @@ fn decode_anthropic_response(
                 call_id: None,
                 name: None,
                 arguments: None,
+                tool_kind: CanonicalToolKind::Function,
             }),
             "image" | "document" => output.push(CanonicalOutputBlock {
                 kind: if kind == "document" {
@@ -1015,6 +1030,7 @@ fn decode_anthropic_response(
                 call_id: None,
                 name: None,
                 arguments: None,
+                tool_kind: CanonicalToolKind::Function,
             }),
             "thinking" => output.push(CanonicalOutputBlock {
                 kind: CanonicalBlockKind::Reasoning,
@@ -1023,6 +1039,7 @@ fn decode_anthropic_response(
                 call_id: None,
                 name: None,
                 arguments: None,
+                tool_kind: CanonicalToolKind::Function,
             }),
             "tool_use" => {
                 let input = object
@@ -1036,6 +1053,7 @@ fn decode_anthropic_response(
                     call_id: Some(required_string(object, "id", "content[].id")?),
                     name: Some(required_string(object, "name", "content[].name")?),
                     arguments: Some(compact_json(input)),
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
             "redacted_thinking" => {
@@ -1142,7 +1160,7 @@ pub(crate) fn encode_openai_response(
                 "type": "function",
                 "function": {
                     "name": block.name.clone().unwrap_or_default(),
-                    "arguments": block.arguments.clone().unwrap_or_default(),
+                    "arguments": wrapped_arguments(block.arguments.as_deref(), None, block.tool_kind),
                 }
             })
         })
@@ -1208,14 +1226,18 @@ pub(crate) fn encode_anthropic_response(
             })),
             CanonicalBlockKind::ToolCall => {
                 let arguments = block.arguments.as_deref().unwrap_or("{}");
-                let input = serde_json::from_str::<Value>(arguments).map_err(|_| {
-                    codec_error(
-                        CodecReasonCode::MalformedProviderResponse,
-                        Some("output.tool_call.arguments"),
-                        None,
-                        Some(WireSurface::AnthropicMessages),
-                    )
-                })?;
+                let input = if block.tool_kind == CanonicalToolKind::Freeform {
+                    json!({"input": arguments})
+                } else {
+                    serde_json::from_str::<Value>(arguments).map_err(|_| {
+                        codec_error(
+                            CodecReasonCode::MalformedProviderResponse,
+                            Some("output.tool_call.arguments"),
+                            None,
+                            Some(WireSurface::AnthropicMessages),
+                        )
+                    })?
+                };
                 if !input.is_object() {
                     return Err(codec_error(
                         CodecReasonCode::MalformedProviderResponse,
@@ -1543,6 +1565,11 @@ fn insert_token(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
 }
 
 fn tool_input_value(block: &CanonicalContentBlock) -> Result<Value, CodecError> {
+    if block.tool_kind == CanonicalToolKind::Freeform {
+        return Ok(json!({
+            "input": block.arguments.clone().unwrap_or_default(),
+        }));
+    }
     if let Some(input) = &block.tool_input {
         return Ok(Value::Object(input.clone()));
     }
@@ -1564,6 +1591,23 @@ fn tool_input_value(block: &CanonicalContentBlock) -> Result<Value, CodecError> 
             None,
             Some(WireSurface::AnthropicMessages),
         ))
+    }
+}
+
+fn wrapped_arguments(
+    arguments: Option<&str>,
+    tool_input: Option<&Map<String, Value>>,
+    kind: CanonicalToolKind,
+) -> String {
+    let arguments = arguments
+        .map(ToOwned::to_owned)
+        .or_else(|| tool_input.map(compact_json))
+        .unwrap_or_default();
+    if kind == CanonicalToolKind::Freeform {
+        serde_json::to_string(&json!({"input": arguments}))
+            .unwrap_or_else(|_| "{\"input\":\"\"}".into())
+    } else {
+        arguments
     }
 }
 

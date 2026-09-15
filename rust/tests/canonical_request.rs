@@ -9,7 +9,8 @@ use eggpool::{
     },
     routing::ThinkingRequirement,
     wire::ir::{
-        CanonicalBlockKind, CanonicalRole, ClientSurface, Presence, ReasoningMode, ToolChoiceMode,
+        CanonicalBlockKind, CanonicalRole, CanonicalToolKind, ClientSurface, Presence,
+        ReasoningMode, ToolChoiceMode,
     },
 };
 use serde_json::json;
@@ -149,7 +150,7 @@ fn responses_and_messages_keep_surface_specific_intent() {
 }
 
 #[test]
-fn responses_preserve_native_history_and_tool_definitions_without_polluting_ir() {
+fn responses_preserve_native_history_and_project_portable_tools_into_ir() {
     let value = json!({
         "model": "fixture-model",
         "input": [
@@ -180,8 +181,8 @@ fn responses_preserve_native_history_and_tool_definitions_without_polluting_ir()
         .as_ref()
         .expect("Responses retains native source");
     assert_eq!(preservation.parsed, value);
-    assert_eq!(preservation.summary.native_input_items, 7);
-    assert_eq!(preservation.summary.native_tool_definitions, 4);
+    assert_eq!(preservation.summary.native_input_items, 6);
+    assert_eq!(preservation.summary.native_tool_definitions, 3);
     assert_eq!(
         preservation.summary.extension_fields,
         vec![
@@ -191,10 +192,12 @@ fn responses_preserve_native_history_and_tool_definitions_without_polluting_ir()
             "text.verbosity"
         ]
     );
-    assert_eq!(request.canonical.messages.len(), 1);
+    assert_eq!(request.canonical.messages.len(), 2);
     assert_eq!(request.canonical.messages[0].text(), "hello");
-    assert_eq!(request.canonical.tools.len(), 1);
+    assert_eq!(request.canonical.tools.len(), 2);
     assert_eq!(request.canonical.tools[0].name, "lookup");
+    assert_eq!(request.canonical.tools[1].name, "shell");
+    assert_eq!(request.canonical.tools[1].kind, CanonicalToolKind::Freeform);
     let debug = format!("{request:?}");
     assert!(!debug.contains("encrypted-sentinel"));
     assert!(!debug.contains("cache-key"));

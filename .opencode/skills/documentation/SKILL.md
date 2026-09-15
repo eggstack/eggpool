@@ -47,6 +47,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   observe-and-forward behavior separately from bounded cross-surface lifecycle
   synthesis, including authoritative completed output items and strict
   terminal evidence.
+- For Codex integration docs, show the generated `[model_providers.eggpool]`
+  Responses configuration with WebSockets disabled, an explicit model/alias,
+  the actual server default port, and the `EGGPOOL_API_KEY` environment
+  contract. Keep discovery deferred unless it has a separate non-breaking
+  endpoint; `/v1/models` remains the standard OpenAI schema.
 
 ## Checks
 

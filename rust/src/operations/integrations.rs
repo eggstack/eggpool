@@ -462,6 +462,7 @@ pub fn build_codex_toml_snippet(
         "name = \"EggPool\"".to_owned(),
         format!("base_url = {}", toml_string(&context.base_url)?),
         "wire_api = \"responses\"".to_owned(),
+        "supports_websockets = false".to_owned(),
         "env_key = \"EGGPOOL_API_KEY\"".to_owned(),
     ]);
     Ok(lines.join("\n"))

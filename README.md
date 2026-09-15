@@ -99,7 +99,7 @@ eggpool configsetup claude-code
 eggpool configsetup aider --model openai/gpt-4 --write
 
 # Codex (Responses wire API)
-eggpool configsetup codex --print-secret
+eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
 
 See [Agent Configuration](docs/agent-configuration.md) for all supported targets and options.
@@ -249,6 +249,14 @@ that emits indexed, completed message/reasoning/function-call items before one
 `call_id` separate from its generated Responses output-item ID; translated
 argument and reasoning buffers are bounded. `response.completed` remains the
 only successful Responses terminal, and EOF without terminal evidence fails.
+
+Responses `custom` tools are portable to function-style upstreams through a
+deterministic single-string `input` wrapper. EggPool uses the declared tool
+kind to unwrap provider calls and emits an authoritative `custom_tool_call`
+item; malformed wrappers fail closed. Native/server tools remain native-only
+unless a general semantic equivalent exists. Codex should start with an
+explicit model or alias: `/v1/models` remains the standard OpenAI model-list
+contract, and richer Codex model-picker discovery is deferred.
 
 EggPool keeps a bounded, in-memory preference for the last successful declared
 wire surface per provider/model. The preference is refreshed by ordinary

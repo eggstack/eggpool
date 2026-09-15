@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::{CapabilityStatus, ThinkingCapability};
 
 use super::codec::{AdaptationNotice, CodecError, CodecOutput, CodecReasonCode};
-use super::ir::{CanonicalBlockKind, CanonicalRequest, ClientSurface, ReasoningMode};
+use super::ir::{
+    CanonicalBlockKind, CanonicalRequest, CanonicalToolKind, ClientSurface, ReasoningMode,
+};
 use super::registry::WireSurface;
 use crate::request::NativeRequestPreservation;
 
@@ -632,6 +634,19 @@ fn tool_notices(
     source: Option<WireSurface>,
     notices: &mut Vec<AdaptationNotice>,
 ) {
+    if target != WireSurface::OpenaiResponses
+        && request
+            .tools
+            .iter()
+            .any(|tool| tool.kind == CanonicalToolKind::Freeform)
+    {
+        notices.push(notice(
+            "freeform_tool_wrapped_as_function",
+            "tools.custom",
+            source,
+            Some(target),
+        ));
+    }
     if matches!(target, WireSurface::GeminiGenerateContent) {
         let has_ids = request.messages.iter().any(|message| {
             message.content.iter().any(|block| {

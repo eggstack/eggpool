@@ -13,8 +13,8 @@ use crate::{
     routing::RoutingRequestFacts,
     wire::ir::{
         CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage, CanonicalRequest,
-        CanonicalRole, CanonicalTool, CanonicalToolChoice, ClientSurface, MediaSource, Presence,
-        ReasoningIntent, ReasoningMode, RequestPresence, ToolChoiceMode,
+        CanonicalRole, CanonicalTool, CanonicalToolChoice, CanonicalToolKind, ClientSurface,
+        MediaSource, Presence, ReasoningIntent, ReasoningMode, RequestPresence, ToolChoiceMode,
     },
 };
 
@@ -423,7 +423,25 @@ fn decode_message_array(
                         return Ok(Some(CanonicalMessage {
                             role: CanonicalRole::Tool,
                             content: vec![decode_response_function_output(object)?],
+                            tool_call_id: string_value(object.get("call_id"))?,
+                            name: None,
+                            refusal: None,
+                        }));
+                    }
+                    Some("custom_tool_call") => {
+                        return Ok(Some(CanonicalMessage {
+                            role: CanonicalRole::Assistant,
+                            content: vec![decode_response_custom_tool_call(object)?],
                             tool_call_id: None,
+                            name: None,
+                            refusal: None,
+                        }));
+                    }
+                    Some("custom_tool_call_output") => {
+                        return Ok(Some(CanonicalMessage {
+                            role: CanonicalRole::Tool,
+                            content: vec![decode_response_custom_tool_output(object)?],
+                            tool_call_id: string_value(object.get("call_id"))?,
                             name: None,
                             refusal: None,
                         }));
@@ -475,6 +493,7 @@ fn decode_message_array(
                             name: None,
                             arguments: None,
                             tool_input: None,
+                            tool_kind: CanonicalToolKind::Function,
                             is_error: false,
                             signature: None,
                             cache_control: None,
@@ -663,6 +682,7 @@ fn decode_content_block(
             name: None,
             arguments: None,
             tool_input: None,
+            tool_kind: CanonicalToolKind::Function,
             is_error: false,
             signature: None,
             cache_control: None,
@@ -680,6 +700,7 @@ fn decode_content_block(
             name: None,
             arguments: None,
             tool_input: None,
+            tool_kind: CanonicalToolKind::Function,
             is_error: false,
             signature: object
                 .get("signature")
@@ -697,6 +718,7 @@ fn decode_content_block(
             name: None,
             arguments: None,
             tool_input: None,
+            tool_kind: CanonicalToolKind::Function,
             is_error: object
                 .get("is_error")
                 .and_then(Value::as_bool)
@@ -713,6 +735,7 @@ fn decode_content_block(
             name: None,
             arguments: None,
             tool_input: None,
+            tool_kind: CanonicalToolKind::Function,
             is_error: false,
             signature: None,
             cache_control: None,
@@ -855,6 +878,7 @@ fn media_block(
         name: None,
         arguments: None,
         tool_input: None,
+        tool_kind: CanonicalToolKind::Function,
         is_error: false,
         signature: None,
         cache_control: None,
@@ -956,6 +980,7 @@ fn decode_openai_tool_call(value: &Value) -> Result<CanonicalContentBlock, Admis
         name: string_value(function.get("name"))?,
         arguments: string_value(function.get("arguments"))?,
         tool_input: None,
+        tool_kind: CanonicalToolKind::Function,
         is_error: false,
         signature: None,
         cache_control: None,
@@ -976,6 +1001,7 @@ fn tool_call_block(
         name: string_value(object.get("name"))?,
         arguments: None,
         tool_input: input,
+        tool_kind: CanonicalToolKind::Function,
         is_error: false,
         signature: None,
         cache_control: None,
@@ -994,6 +1020,7 @@ fn decode_response_function_call(
         name: string_value(object.get("name"))?,
         arguments: string_value(object.get("arguments"))?,
         tool_input: None,
+        tool_kind: CanonicalToolKind::Function,
         is_error: false,
         signature: None,
         cache_control: None,
@@ -1012,6 +1039,45 @@ fn decode_response_function_output(
         name: None,
         arguments: None,
         tool_input: None,
+        tool_kind: CanonicalToolKind::Function,
+        is_error: false,
+        signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
+    })
+}
+
+fn decode_response_custom_tool_call(
+    object: &Map<String, Value>,
+) -> Result<CanonicalContentBlock, AdmissionError> {
+    Ok(CanonicalContentBlock {
+        kind: CanonicalBlockKind::ToolCall,
+        text: None,
+        media: None,
+        call_id: string_value(object.get("call_id"))?,
+        name: string_value(object.get("name"))?,
+        arguments: string_value(object.get("input"))?,
+        tool_input: None,
+        tool_kind: CanonicalToolKind::Freeform,
+        is_error: false,
+        signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
+    })
+}
+
+fn decode_response_custom_tool_output(
+    object: &Map<String, Value>,
+) -> Result<CanonicalContentBlock, AdmissionError> {
+    Ok(CanonicalContentBlock {
+        kind: CanonicalBlockKind::ToolResult,
+        text: string_value(object.get("output"))?,
+        media: None,
+        call_id: string_value(object.get("call_id"))?,
+        name: None,
+        arguments: None,
+        tool_input: None,
+        tool_kind: CanonicalToolKind::Freeform,
         is_error: false,
         signature: None,
         cache_control: None,
@@ -1044,6 +1110,16 @@ fn decode_tools(
                 let kind = kind.as_str().ok_or(AdmissionError::InvalidField {
                     field: "tools[].type",
                 })?;
+                if kind == "custom" {
+                    return Ok(Some(CanonicalTool {
+                        kind: CanonicalToolKind::Freeform,
+                        name: string_field(object, "name")?,
+                        description: string_value(object.get("description"))?,
+                        parameters: Map::new(),
+                        cache_control: None,
+                        defer_loading: None,
+                    }));
+                }
                 if kind != "function" {
                     return Ok(None);
                 }
@@ -1060,6 +1136,7 @@ fn decode_tools(
                 .cloned()
                 .unwrap_or_default();
             Ok(Some(CanonicalTool {
+                kind: CanonicalToolKind::Function,
                 name,
                 description: string_value(function.get("description"))?,
                 parameters,
@@ -1118,7 +1195,14 @@ fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
                         .and_then(|item| item.get("type"))
                         .and_then(Value::as_str)
                         .is_some_and(|kind| {
-                            !matches!(kind, "message" | "function_call" | "function_call_output")
+                            !matches!(
+                                kind,
+                                "message"
+                                    | "function_call"
+                                    | "function_call_output"
+                                    | "custom_tool_call"
+                                    | "custom_tool_call_output"
+                            )
                         })
                 })
                 .count()
@@ -1134,7 +1218,7 @@ fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
                     tool.as_object()
                         .and_then(|tool| tool.get("type"))
                         .and_then(Value::as_str)
-                        .is_some_and(|kind| kind != "function")
+                        .is_some_and(|kind| !matches!(kind, "function" | "custom"))
                 })
                 .count()
         })

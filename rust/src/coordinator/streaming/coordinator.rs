@@ -573,11 +573,12 @@ impl StreamingCoordinator {
                     &identity,
                     &provider,
                 );
-                let decoded = self.wire.decode_finite_response(
+                let decoded = self.wire.decode_finite_response_for_request(
                     &body,
                     upstream.status.as_u16(),
                     &context,
                     true,
+                    &request.admitted.canonical,
                 );
                 match decoded {
                     Ok(decoded) => match decoded.outcome {
@@ -918,7 +919,10 @@ impl StreamingCoordinator {
                 &identity,
                 &provider,
             );
-            let wire_stream = match self.wire.stream(&context) {
+            let wire_stream = match self
+                .wire
+                .stream_for_request(&context, &request.admitted.canonical)
+            {
                 Ok(stream) => stream,
                 Err(error) => {
                     let headers = StreamClientHeaders {

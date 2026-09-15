@@ -165,6 +165,7 @@ pub struct CanonicalContentBlock {
     pub name: Option<String>,
     pub arguments: Option<String>,
     pub tool_input: Option<Map<String, Value>>,
+    pub tool_kind: CanonicalToolKind,
     pub is_error: bool,
     pub signature: Option<String>,
     pub cache_control: Option<Value>,
@@ -181,12 +182,23 @@ impl CanonicalContentBlock {
             name: None,
             arguments: None,
             tool_input: None,
+            tool_kind: CanonicalToolKind::Function,
             is_error: false,
             signature: None,
             cache_control: None,
             prompt_cache_breakpoint: None,
         }
     }
+}
+
+/// Provider-neutral tool semantics.  `Freeform` is deliberately smaller than
+/// any one client protocol's custom-tool schema; the source-native definition
+/// remains in the bounded Responses preservation envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CanonicalToolKind {
+    #[default]
+    Function,
+    Freeform,
 }
 
 impl fmt::Debug for CanonicalContentBlock {
@@ -200,6 +212,7 @@ impl fmt::Debug for CanonicalContentBlock {
             .field("name", &self.name)
             .field("arguments_bytes", &self.arguments.as_ref().map(String::len))
             .field("tool_input_keys", &self.tool_input.as_ref().map(Map::len))
+            .field("tool_kind", &self.tool_kind)
             .field("is_error", &self.is_error)
             .field("signature_present", &self.signature.is_some())
             .field("cache_control_present", &self.cache_control.is_some())
@@ -245,6 +258,7 @@ impl fmt::Debug for CanonicalMessage {
 
 #[derive(Clone, PartialEq)]
 pub struct CanonicalTool {
+    pub kind: CanonicalToolKind,
     pub name: String,
     pub description: Option<String>,
     pub parameters: Map<String, Value>,
@@ -252,10 +266,27 @@ pub struct CanonicalTool {
     pub defer_loading: Option<bool>,
 }
 
+impl CanonicalTool {
+    /// Return the JSON schema used by function-only provider grammars.
+    pub fn function_parameters(&self) -> Map<String, Value> {
+        if self.kind == CanonicalToolKind::Freeform {
+            return serde_json::from_value(json!({
+                "type": "object",
+                "properties": {"input": {"type": "string"}},
+                "required": ["input"],
+                "additionalProperties": false,
+            }))
+            .expect("freeform wrapper schema is valid JSON");
+        }
+        self.parameters.clone()
+    }
+}
+
 impl fmt::Debug for CanonicalTool {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CanonicalTool")
+            .field("kind", &self.kind)
             .field("name", &self.name)
             .field(
                 "description_bytes",
@@ -532,10 +563,31 @@ impl CanonicalRequest {
         }).collect()));
         add_common_fields(&mut out, self, "max_output_tokens");
         if !self.tools.is_empty() {
-            out.insert("tools".into(), Value::Array(self.tools.iter().map(|tool| json!({
-                "type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(),
-                "parameters":Value::Object(tool.parameters.clone()), "strict":false
-            })).collect()));
+            out.insert(
+                "tools".into(),
+                Value::Array(
+                    self.tools
+                        .iter()
+                        .map(|tool| {
+                            if tool.kind == CanonicalToolKind::Freeform {
+                                json!({
+                                    "type": "custom",
+                                    "name": tool.name,
+                                    "description": tool.description.clone().unwrap_or_default(),
+                                })
+                            } else {
+                                json!({
+                                    "type": "function",
+                                    "name": tool.name,
+                                    "description": tool.description.clone().unwrap_or_default(),
+                                    "parameters": Value::Object(tool.function_parameters()),
+                                    "strict": false
+                                })
+                            }
+                        })
+                        .collect(),
+                ),
+            );
         }
         Value::Object(out)
     }
@@ -549,6 +601,7 @@ pub struct CanonicalOutputBlock {
     pub call_id: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
+    pub tool_kind: CanonicalToolKind,
 }
 
 impl fmt::Debug for CanonicalOutputBlock {
@@ -560,6 +613,7 @@ impl fmt::Debug for CanonicalOutputBlock {
             .field("call_id_present", &self.call_id.is_some())
             .field("name", &self.name)
             .field("arguments_bytes", &self.arguments.as_ref().map(String::len))
+            .field("tool_kind", &self.tool_kind)
             .finish()
     }
 }
@@ -766,12 +820,12 @@ fn encode_tools_and_choice(
     if !request.tools.is_empty() {
         out.insert("tools".into(), Value::Array(request.tools.iter().map(|tool| {
             if anthropic {
-                let mut value = json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "input_schema":Value::Object(tool.parameters.clone())});
+                let mut value = json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "input_schema":Value::Object(tool.function_parameters())});
                 if let Some(marker) = &tool.cache_control {
                     value["cache_control"] = marker.clone();
                 }
                 value
-            } else { json!({"type":"function", "function":{"name":tool.name, "description":tool.description, "parameters":Value::Object(tool.parameters.clone())}}) }
+            } else { json!({"type":"function", "function":{"name":tool.name, "description":tool.description, "parameters":Value::Object(tool.function_parameters())}}) }
         }).collect()));
     }
     if let Some(choice) = &request.tool_choice {
@@ -804,9 +858,14 @@ fn encode_chat_message(message: &CanonicalMessage) -> Value {
     if let Some(id) = &message.tool_call_id {
         item.insert("tool_call_id".into(), Value::String(id.clone()));
     }
-    let calls: Vec<Value> = message.content.iter().filter(|block| block.kind == CanonicalBlockKind::ToolCall).map(|block| json!({
-        "id":block.call_id, "type":"function", "function":{"name":block.name, "arguments":block.arguments}
-    })).collect();
+    let calls: Vec<Value> = message.content.iter().filter(|block| block.kind == CanonicalBlockKind::ToolCall).map(|block| {
+        let arguments = if block.tool_kind == CanonicalToolKind::Freeform {
+            json!({"input": block.arguments.clone().unwrap_or_default()}).to_string()
+        } else {
+            block.arguments.clone().unwrap_or_default()
+        };
+        json!({"id":block.call_id, "type":"function", "function":{"name":block.name, "arguments":arguments}})
+    }).collect();
     if !calls.is_empty() {
         item.insert("tool_calls".into(), Value::Array(calls));
     }

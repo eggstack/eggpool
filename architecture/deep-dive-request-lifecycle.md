@@ -21,8 +21,10 @@ Native Responses routing forwards the original validated bytes when possible;
 an alias target rewrites only `model` and compact-serializes the preserved
 object. Unknown/future input items and non-function tool definitions therefore
 survive native forwarding without expanding `CanonicalMessage` or
-`CanonicalContentBlock`. Cross-surface preparation consults the feature facts
-and rejects native-only semantic blockers before provider submission.
+`CanonicalContentBlock`; Responses custom/freeform tools are the deliberate
+portable exception and retain their kind in the canonical projection.
+Cross-surface preparation consults the feature facts and rejects native-only
+semantic blockers before provider submission.
 
 The stateless Responses policy is enforced at admission as well as the HTTP
 adapter: `store` may be omitted or false, while `store: true`,
@@ -59,7 +61,8 @@ Canonical adaptation uses a stateful encoder owned by that stream. It retains
 only bounded active message, reasoning, and function-call buffers, allocates a
 stable response ID and output indexes, maps Responses item IDs back to
 function invocation `call_id`s, and emits completed output items before the
-terminal response. Native and translated Responses paths both require
+terminal response. Freeform calls use the declared per-request tool map to
+emit `custom_tool_call` items. Native and translated Responses paths both require
 `response.completed` for success.
 
 Retries and alternate wire negotiation consume one shared bounded submission

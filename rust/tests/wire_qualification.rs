@@ -1299,7 +1299,7 @@ fn native_responses_alias_rewrites_only_model_and_preserves_source_envelope() {
     expected["model"] = json!("provider/model-v2");
     assert_eq!(encoded, expected);
     assert_eq!(prepared.notices.len(), 0);
-    assert_eq!(prepared.admission.canonical.messages.len(), 1);
+    assert_eq!(prepared.admission.canonical.messages.len(), 2);
 }
 
 #[test]

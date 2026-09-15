@@ -11,6 +11,10 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
 
+`/v1/models` remains the standard OpenAI-compatible model-list contract. It is
+not a Codex-private remote catalog and does not claim Codex reasoning,
+context, shell, or tool metadata.
+
 Configured virtual model routers are included in `/v1/models` as compact,
 capability-free entries with `owned_by = "eggpool"` and
 `eggpool.virtual = true`. They do not expose selector prompts, route

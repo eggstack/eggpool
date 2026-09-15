@@ -52,6 +52,11 @@ before the workspace suite. For Responses streaming changes, also verify native
 unknown-event preservation, item-id/call-id mapping, authoritative
 `response.output_item.done` synthesis, bounded encoder overflow, and strict
 `response.completed`/EOF behavior in `wire_stream` and `wire_runtime`.
+Codex compatibility changes additionally run the deterministic
+`codex_responses_compat` target. It covers native request preservation,
+function/freeform wrapper round trips, malformed-wrapper rejection, and the
+current Codex `output_item.done`/terminal contract; no Codex runtime dependency
+or credential is required.
 
 Keep post-handoff execution single-owner and incremental while refactoring;
 transparent upstream replay is only valid before `StreamingExecution` is

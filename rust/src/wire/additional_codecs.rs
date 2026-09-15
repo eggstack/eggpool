@@ -17,8 +17,8 @@ use super::codecs::{encode_anthropic_response, encode_openai_response};
 use super::ir::{
     CacheCounterStatus, CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage,
     CanonicalOutputBlock, CanonicalRequest, CanonicalResponse, CanonicalRole, CanonicalToolChoice,
-    CanonicalUsage, ClientSurface, MediaSource, ProviderErrorEvidence, ReasoningMode,
-    ToolChoiceMode,
+    CanonicalToolKind, CanonicalUsage, ClientSurface, MediaSource, ProviderErrorEvidence,
+    ReasoningMode, ToolChoiceMode,
 };
 use super::registry::{CodecFamily, ConfiguredWireProfile, WireSurface};
 use crate::request::{AdmissionError, canonical_request_from_value};
@@ -271,7 +271,7 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
         if !tool_results.is_empty() {
             for block in tool_results {
                 input.push(json!({
-                    "type":"function_call_output",
+                    "type": if block.tool_kind == CanonicalToolKind::Freeform { "custom_tool_call_output" } else { "function_call_output" },
                     "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
                     "output":block.text.clone().unwrap_or_default()
                 }));
@@ -283,12 +283,21 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
             .iter()
             .filter(|block| block.kind == CanonicalBlockKind::ToolCall)
         {
-            input.push(json!({
-                "type":"function_call",
-                "call_id":block.call_id.clone().unwrap_or_default(),
-                "name":block.name.clone().unwrap_or_default(),
-                "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())
-            }));
+            if block.tool_kind == CanonicalToolKind::Freeform {
+                input.push(json!({
+                    "type":"custom_tool_call",
+                    "call_id":block.call_id.clone().unwrap_or_default(),
+                    "name":block.name.clone().unwrap_or_default(),
+                    "input":block.arguments.clone().unwrap_or_default()
+                }));
+            } else {
+                input.push(json!({
+                    "type":"function_call",
+                    "call_id":block.call_id.clone().unwrap_or_default(),
+                    "name":block.name.clone().unwrap_or_default(),
+                    "arguments":block.arguments.clone().unwrap_or_else(|| block.tool_input.as_ref().map(compact_json).unwrap_or_default())
+                }));
+            }
         }
         let message_blocks: Vec<_> = message
             .content
@@ -408,7 +417,13 @@ fn responses_content(blocks: &[&CanonicalContentBlock], role: CanonicalRole) -> 
 }
 
 fn response_tools(request: &CanonicalRequest) -> Vec<Value> {
-    request.tools.iter().map(|tool| json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.parameters.clone()), "strict":false})).collect()
+    request.tools.iter().map(|tool| {
+        if tool.kind == CanonicalToolKind::Freeform {
+            json!({"type":"custom", "name":tool.name, "description":tool.description.clone().unwrap_or_default()})
+        } else {
+            json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters()), "strict":false})
+        }
+    }).collect()
 }
 
 fn openai_response_tool_choice(choice: &CanonicalToolChoice) -> Value {
@@ -460,7 +475,7 @@ fn encode_interactions_request(
         out.insert("system_instruction".into(), Value::String(system.text()));
     }
     if !request.tools.is_empty() {
-        out.insert("tools".into(), Value::Array(request.tools.iter().map(|tool| json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.parameters.clone())})).collect()));
+        out.insert("tools".into(), Value::Array(request.tools.iter().map(|tool| json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters())})).collect()));
     }
     let mut generation = Map::new();
     add_generation_controls(&mut generation, request, false);
@@ -527,7 +542,7 @@ fn encode_generate_content_request(
         out.insert("generationConfig".into(), Value::Object(generation));
     }
     if !request.tools.is_empty() {
-        out.insert("tools".into(), json!([{"function_declarations":request.tools.iter().map(|tool| json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.parameters.clone())})).collect::<Vec<_>>()}]));
+        out.insert("tools".into(), json!([{"function_declarations":request.tools.iter().map(|tool| json!({"name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters())})).collect::<Vec<_>>()}]));
     }
     if let Some(choice) = &request.tool_choice {
         let mut config = Map::new();
@@ -721,6 +736,11 @@ fn tool_args(block: &CanonicalContentBlock) -> Result<Value, CodecError> {
     if let Some(input) = &block.tool_input {
         return Ok(Value::Object(input.clone()));
     }
+    if block.tool_kind == CanonicalToolKind::Freeform {
+        return Ok(json!({
+            "input": block.arguments.clone().unwrap_or_default(),
+        }));
+    }
     let value: Value =
         serde_json::from_str(block.arguments.as_deref().unwrap_or("{}")).map_err(|_| {
             error(
@@ -799,6 +819,16 @@ fn decode_responses_response(
                 call_id: Some(required_string(item, "call_id", "output[].call_id")?),
                 name: Some(required_string(item, "name", "output[].name")?),
                 arguments: Some(required_string(item, "arguments", "output[].arguments")?),
+                tool_kind: CanonicalToolKind::Function,
+            }),
+            Some("custom_tool_call") => output.push(CanonicalOutputBlock {
+                kind: CanonicalBlockKind::ToolCall,
+                text: None,
+                media: None,
+                call_id: Some(required_string(item, "call_id", "output[].call_id")?),
+                name: Some(required_string(item, "name", "output[].name")?),
+                arguments: Some(required_string(item, "input", "output[].input")?),
+                tool_kind: CanonicalToolKind::Freeform,
             }),
             Some("reasoning") => {
                 let summary = item
@@ -856,6 +886,7 @@ fn decode_responses_response(
                                 call_id: None,
                                 name: None,
                                 arguments: None,
+                                tool_kind: CanonicalToolKind::Function,
                             });
                         }
                         Some(_) => {
@@ -946,6 +977,7 @@ fn decode_interactions_response(
                     call_id: Some(call_id),
                     name: Some(name),
                     arguments: Some(arguments),
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
             Some("function_response") => {
@@ -957,6 +989,7 @@ fn decode_interactions_response(
                     call_id: tool_ids.get(&name).cloned(),
                     name: Some(name),
                     arguments: None,
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
             Some(_) => return Err(unsupported("steps[].type", WireSurface::GeminiInteractions)),
@@ -1067,6 +1100,7 @@ fn decode_generate_content_response(
                     call_id: None,
                     name: None,
                     arguments: None,
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
             if let Some(call) = part.get("functionCall") {
@@ -1092,6 +1126,7 @@ fn decode_generate_content_response(
                     call_id: Some(call_id),
                     name: Some(name),
                     arguments: Some(arguments),
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
             if let Some(result) = part.get("functionResponse") {
@@ -1116,6 +1151,7 @@ fn decode_generate_content_response(
                     }),
                     name: optional_string(result, "name")?,
                     arguments: None,
+                    tool_kind: CanonicalToolKind::Function,
                 });
             }
         }
@@ -1153,7 +1189,13 @@ fn encode_responses_response(
             CanonicalBlockKind::Text => output.push(json!({"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":block.text.clone().unwrap_or_default()}]})),
             CanonicalBlockKind::Refusal => output.push(json!({"type":"message", "role":"assistant", "content":[{"type":"refusal", "refusal":block.text.clone().unwrap_or_default()}]})),
             CanonicalBlockKind::Reasoning => output.push(json!({"type":"reasoning", "summary":[{"type":"summary_text", "text":block.text.clone().unwrap_or_default()}]})),
-            CanonicalBlockKind::ToolCall => output.push(json!({"type":"function_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "arguments":block.arguments.clone().unwrap_or_default()})),
+            CanonicalBlockKind::ToolCall => {
+                if block.tool_kind == CanonicalToolKind::Freeform {
+                    output.push(json!({"type":"custom_tool_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "input":block.arguments.clone().unwrap_or_default()}));
+                } else {
+                    output.push(json!({"type":"function_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "arguments":block.arguments.clone().unwrap_or_default()}));
+                }
+            }
             CanonicalBlockKind::Image | CanonicalBlockKind::Document => {
                 let media = block.media.as_ref().ok_or_else(|| error(CodecReasonCode::UnsupportedSemanticFeature, Some("output.media"), None, Some(WireSurface::OpenaiResponses)))?;
                 let value = media.uri.clone().or_else(|| media.file_id.clone()).or_else(|| media.data.as_ref().map(|data| format!("data:{};base64,{}", media.media_type.as_deref().unwrap_or("application/octet-stream"), data))).unwrap_or_default();
@@ -1430,6 +1472,7 @@ fn text_output(kind: CanonicalBlockKind, text: String) -> CanonicalOutputBlock {
         call_id: None,
         name: None,
         arguments: None,
+        tool_kind: CanonicalToolKind::Function,
     }
 }
 

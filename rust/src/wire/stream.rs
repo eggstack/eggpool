@@ -16,7 +16,8 @@ use thiserror::Error;
 
 use super::codec::{CodecError, CodecOutput, CodecReasonCode, StreamAdapterKind};
 use super::ir::{
-    CacheCounterStatus, CanonicalEvent, CanonicalEventType, CanonicalUsage, ClientSurface,
+    CacheCounterStatus, CanonicalEvent, CanonicalEventType, CanonicalTool, CanonicalToolKind,
+    CanonicalUsage, ClientSurface,
 };
 
 pub const MAX_SSE_FRAME_BYTES: usize = 64 * 1024;
@@ -1018,7 +1019,10 @@ fn decode_openai_responses(
         }
         "response.output_item.added" => {
             if let Some(item) = object(payload.get("item"))
-                && item.get("type").and_then(Value::as_str) == Some("function_call")
+                && matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("function_call" | "custom_tool_call")
+                )
             {
                 let item_id = string(item.get("id"));
                 let invocation_id = string(item.get("call_id")).or_else(|| item_id.clone());
@@ -1033,7 +1037,7 @@ fn decode_openai_responses(
                 events.push(event);
             }
         }
-        "response.function_call_arguments.delta" => {
+        "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
             let mut event = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
             let item_id = string(payload.get("item_id"));
             event.call_id = item_id.as_ref().and_then(|item_id| {
@@ -1051,7 +1055,10 @@ fn decode_openai_responses(
         }
         "response.output_item.done" => {
             if let Some(item) = object(payload.get("item"))
-                && item.get("type").and_then(Value::as_str) == Some("function_call")
+                && matches!(
+                    item.get("type").and_then(Value::as_str),
+                    Some("function_call" | "custom_tool_call")
+                )
             {
                 let item_id = string(item.get("id"));
                 let invocation_id = string(item.get("call_id")).or_else(|| item_id.clone());
@@ -1067,7 +1074,8 @@ fn decode_openai_responses(
                 let mut event = canonical_event(CanonicalEventType::ToolCallStop);
                 event.call_id = invocation_id;
                 event.name = string(item.get("name"));
-                event.arguments = string(item.get("arguments"));
+                event.arguments =
+                    string(item.get("arguments")).or_else(|| string(item.get("input")));
                 events.push(event);
             }
         }
@@ -1387,6 +1395,8 @@ struct ResponsesEncoderState {
     active_message: Option<TranslatedMessageItem>,
     active_reasoning: Option<TranslatedReasoningItem>,
     active_tools: BTreeMap<String, TranslatedToolItem>,
+    tool_kinds: BTreeMap<String, CanonicalToolKind>,
+    index_to_call: BTreeMap<usize, String>,
     retained_bytes: usize,
     usage: Option<CanonicalUsage>,
     created: bool,
@@ -1415,10 +1425,11 @@ struct TranslatedToolItem {
     output_index: usize,
     source_index: Option<usize>,
     arguments: String,
+    tool_kind: CanonicalToolKind,
 }
 
 impl ResponsesEncoderState {
-    fn new() -> Self {
+    fn new(tools: &[CanonicalTool]) -> Self {
         let serial = NEXT_TRANSLATED_RESPONSE_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             response_id: format!("resp_eggpool_{serial}"),
@@ -1429,6 +1440,11 @@ impl ResponsesEncoderState {
             active_message: None,
             active_reasoning: None,
             active_tools: BTreeMap::new(),
+            tool_kinds: tools
+                .iter()
+                .map(|tool| (tool.name.clone(), tool.kind))
+                .collect(),
+            index_to_call: BTreeMap::new(),
             retained_bytes: 0,
             usage: None,
             created: false,
@@ -1535,9 +1551,15 @@ impl fmt::Debug for ClientStreamEncoder {
 impl ClientStreamEncoder {
     #[must_use]
     pub fn new(surface: ClientSurface) -> Self {
+        Self::new_with_tools(surface, &[])
+    }
+
+    #[must_use]
+    pub fn new_with_tools(surface: ClientSurface, tools: &[CanonicalTool]) -> Self {
         Self {
             surface,
-            responses: (surface == ClientSurface::Responses).then(ResponsesEncoderState::new),
+            responses: (surface == ClientSurface::Responses)
+                .then(|| ResponsesEncoderState::new(tools)),
         }
     }
 
@@ -1656,21 +1678,37 @@ impl ClientStreamEncoder {
                         output_index: state.output_index(),
                         source_index: event.index,
                         arguments: String::new(),
+                        tool_kind: state
+                            .tool_kinds
+                            .get(event.name.as_deref().unwrap_or_default())
+                            .copied()
+                            .unwrap_or_default(),
                     };
                     let mut payload = Map::new();
                     payload.insert("output_index".into(), Value::from(item.output_index));
                     payload.insert("item".into(), function_item(&item, "in_progress"));
                     out.extend(state.response_frame("response.output_item.added", payload));
+                    if let Some(index) = event.index {
+                        state.index_to_call.insert(index, call_id.clone());
+                    }
                     state.active_tools.insert(call_id, item);
                 }
             }
             CanonicalEventType::ToolCallArgumentsDelta => {
-                let call_id = event.call_id.clone().unwrap_or_else(|| {
-                    format!(
-                        "call_eggpool_{}",
-                        event.index.unwrap_or(state.next_item_id as usize)
-                    )
-                });
+                let call_id = event
+                    .call_id
+                    .clone()
+                    .or_else(|| {
+                        event
+                            .index
+                            .and_then(|index| state.index_to_call.get(&index).cloned())
+                    })
+                    .unwrap_or_else(|| {
+                        format!(
+                            "call_eggpool_{}",
+                            event.index.unwrap_or(state.next_item_id as usize)
+                        )
+                    });
                 if !state.active_tools.contains_key(&call_id) {
                     if state.active_tools.len() >= MAX_ACTIVE_TOOL_CALLS {
                         return Err(CodecError::new(CodecReasonCode::ResourceLimitViolation));
@@ -1682,6 +1720,7 @@ impl ClientStreamEncoder {
                         output_index: state.output_index(),
                         source_index: event.index,
                         arguments: String::new(),
+                        tool_kind: CanonicalToolKind::Function,
                     };
                     let mut payload = Map::new();
                     payload.insert("output_index".into(), Value::from(item.output_index));
@@ -1706,8 +1745,17 @@ impl ClientStreamEncoder {
                 let mut payload = Map::new();
                 payload.insert("item_id".into(), Value::String(item_id));
                 payload.insert("output_index".into(), Value::from(output_index));
+                let event_name = if state
+                    .active_tools
+                    .get(&call_id)
+                    .is_some_and(|item| item.tool_kind == CanonicalToolKind::Freeform)
+                {
+                    "response.custom_tool_call_input.delta"
+                } else {
+                    "response.function_call_arguments.delta"
+                };
                 payload.insert("delta".into(), Value::String(delta.into()));
-                out.extend(state.response_frame("response.function_call_arguments.delta", payload));
+                out.extend(state.response_frame(event_name, payload));
             }
             CanonicalEventType::ToolCallStop => {
                 state.close_tool(
@@ -1821,12 +1869,25 @@ impl ResponsesEncoderState {
             item.arguments.clear();
             self.append(&mut item.arguments, arguments)?;
         }
+        if item.tool_kind == CanonicalToolKind::Freeform {
+            let input = unwrap_freeform_arguments(&item.arguments)?;
+            self.release(item.arguments.len());
+            self.check_append(0, &input)?;
+            self.retained_bytes = self.retained_bytes.saturating_add(input.len());
+            item.arguments = input;
+        }
         self.release(item.arguments.len());
         let mut delta = Map::new();
         delta.insert("item_id".into(), Value::String(item.item_id.clone()));
         delta.insert("output_index".into(), Value::from(item.output_index));
-        delta.insert("arguments".into(), Value::String(item.arguments.clone()));
-        out.extend(self.response_frame("response.function_call_arguments.done", delta));
+        let done_event = if item.tool_kind == CanonicalToolKind::Freeform {
+            delta.insert("input".into(), Value::String(item.arguments.clone()));
+            "response.custom_tool_call_input.done"
+        } else {
+            delta.insert("arguments".into(), Value::String(item.arguments.clone()));
+            "response.function_call_arguments.done"
+        };
+        out.extend(self.response_frame(done_event, delta));
         let mut payload = Map::new();
         payload.insert("output_index".into(), Value::from(item.output_index));
         payload.insert("item".into(), function_item(&item, status));
@@ -1894,14 +1955,37 @@ fn reasoning_item(item: &TranslatedReasoningItem, status: &str) -> Value {
 }
 
 fn function_item(item: &TranslatedToolItem, status: &str) -> Value {
-    json!({
-        "id": item.item_id,
-        "type": "function_call",
-        "call_id": item.call_id,
-        "name": item.name,
-        "arguments": item.arguments,
-        "status": status
-    })
+    if item.tool_kind == CanonicalToolKind::Freeform {
+        json!({
+            "id": item.item_id,
+            "type": "custom_tool_call",
+            "call_id": item.call_id,
+            "name": item.name,
+            "input": item.arguments,
+            "status": status
+        })
+    } else {
+        json!({
+            "id": item.item_id,
+            "type": "function_call",
+            "call_id": item.call_id,
+            "name": item.name,
+            "arguments": item.arguments,
+            "status": status
+        })
+    }
+}
+
+fn unwrap_freeform_arguments(arguments: &str) -> Result<String, CodecError> {
+    let value: Value = serde_json::from_str(arguments)
+        .map_err(|_| CodecError::new(CodecReasonCode::MalformedProviderEvent))?;
+    value
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get("input"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))
 }
 
 /// Encode a canonical event to one of the three public client SSE grammars.

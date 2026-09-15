@@ -12,8 +12,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::ir::{
-    CanonicalBlockKind, CanonicalEvent, CanonicalRequest, CanonicalResponse, CanonicalUsage,
-    ClientSurface, ProviderErrorEvidence,
+    CanonicalBlockKind, CanonicalEvent, CanonicalRequest, CanonicalResponse, CanonicalToolKind,
+    CanonicalUsage, ClientSurface, ProviderErrorEvidence,
 };
 use super::{
     AdaptationNotice, AdaptationPolicy, ClientStreamEncoder, CodecError, CodecReasonCode,
@@ -557,6 +557,34 @@ impl WireRuntime {
         context: &WireRuntimeContext,
         encode_client: bool,
     ) -> Result<FiniteResponse, WireRuntimeError> {
+        self.decode_finite_response_with_tools(body, status, context, encode_client, None)
+    }
+
+    pub fn decode_finite_response_for_request(
+        &self,
+        body: &[u8],
+        status: u16,
+        context: &WireRuntimeContext,
+        encode_client: bool,
+        request: &CanonicalRequest,
+    ) -> Result<FiniteResponse, WireRuntimeError> {
+        self.decode_finite_response_with_tools(
+            body,
+            status,
+            context,
+            encode_client,
+            Some(&request.tools),
+        )
+    }
+
+    fn decode_finite_response_with_tools(
+        &self,
+        body: &[u8],
+        status: u16,
+        context: &WireRuntimeContext,
+        encode_client: bool,
+        tools: Option<&[super::ir::CanonicalTool]>,
+    ) -> Result<FiniteResponse, WireRuntimeError> {
         self.validate_context(context)?;
         if body.len() > context.max_provider_body_bytes {
             return Err(WireRuntimeError::BodyTooLarge);
@@ -618,7 +646,19 @@ impl WireRuntime {
                     bytes_observed: body.len(),
                 },
             }),
-            DecodedProviderPayload::Response(response) => {
+            DecodedProviderPayload::Response(mut response) => {
+                if let Some(tools) = tools
+                    && compatibility_path(
+                        context.client_surface,
+                        context.selected_profile.definition.surface,
+                    ) == super::CompatibilityPath::CanonicalAdaptation
+                {
+                    classify_freeform_output(
+                        &mut response,
+                        tools,
+                        context.selected_profile.definition.surface,
+                    )?;
+                }
                 let metadata = SemanticContentMetadata::response(&response);
                 let usage = response.usage.clone();
                 let mut all_notices = notices;
@@ -712,6 +752,22 @@ impl WireRuntime {
     }
 
     pub fn stream(&self, context: &WireRuntimeContext) -> Result<WireStream, WireRuntimeError> {
+        self.stream_for_tools(context, &[])
+    }
+
+    pub fn stream_for_request(
+        &self,
+        context: &WireRuntimeContext,
+        request: &CanonicalRequest,
+    ) -> Result<WireStream, WireRuntimeError> {
+        self.stream_for_tools(context, &request.tools)
+    }
+
+    fn stream_for_tools(
+        &self,
+        context: &WireRuntimeContext,
+        tools: &[super::ir::CanonicalTool],
+    ) -> Result<WireStream, WireRuntimeError> {
         self.validate_context(context)?;
         if !context.profile_flags.supports_streaming {
             return Err(self.profile_error(context, ProfileMismatchReason::StreamingUnavailable));
@@ -728,7 +784,7 @@ impl WireRuntime {
                 StreamForwardingMode::Translated
             },
             decoder: StreamEventDecoder::new(adapter),
-            encoder: ClientStreamEncoder::new(context.client_surface),
+            encoder: ClientStreamEncoder::new_with_tools(context.client_surface, tools),
             bytes_observed: 0,
         })
     }
@@ -923,6 +979,53 @@ fn stream_adapter(codec: WireCodecId) -> Result<StreamAdapterKind, ProfileMismat
         | WireCodecId::GeminiInteractions
         | WireCodecId::GeminiGenerateContent => Err(ProfileMismatchReason::StreamCodecUnavailable),
     }
+}
+
+fn classify_freeform_output(
+    response: &mut CanonicalResponse,
+    tools: &[super::ir::CanonicalTool],
+    surface: WireSurface,
+) -> Result<(), WireRuntimeError> {
+    let freeform_names: std::collections::BTreeSet<&str> = tools
+        .iter()
+        .filter(|tool| tool.kind == CanonicalToolKind::Freeform)
+        .map(|tool| tool.name.as_str())
+        .collect();
+    for block in &mut response.output {
+        if block.kind != CanonicalBlockKind::ToolCall
+            || !block
+                .name
+                .as_deref()
+                .is_some_and(|name| freeform_names.contains(name))
+        {
+            continue;
+        }
+        let arguments = block.arguments.as_deref().unwrap_or_default();
+        let parsed: Value = serde_json::from_str(arguments).map_err(|_| {
+            WireRuntimeError::ResponseAdaptation(CodecError {
+                reason: CodecReasonCode::MalformedProviderResponse,
+                field: Some("tool_call.arguments.input".into()),
+                source_surface: Some(surface),
+                target_surface: Some(WireSurface::OpenaiResponses),
+            })
+        })?;
+        let input = parsed
+            .as_object()
+            .filter(|object| object.len() == 1)
+            .and_then(|object| object.get("input"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.input".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                })
+            })?;
+        block.tool_kind = CanonicalToolKind::Freeform;
+        block.arguments = Some(input.to_owned());
+    }
+    Ok(())
 }
 
 fn provider_malformed_error(surface: WireSurface) -> CodecError {

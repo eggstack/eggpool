@@ -26,6 +26,11 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   canonical IR. Same-surface forwarding may rewrite only EggPool-owned fields
   such as `model`; cross-surface codecs must reject native-only semantics or
   emit explicit bounded adaptation notices.
+- Keep the provider-neutral tool distinction narrow: ordinary function tools
+  remain unchanged, while Responses `custom` tools use
+  `CanonicalToolKind::Freeform` and a deterministic function wrapper only on
+  function-style targets. The per-request declaration, not a tool name alone,
+  must drive unwrapping and downstream `custom_tool_call` reconstruction.
 - For Responses streaming, select the explicit native-observed path only for
   Responses-to-Responses compatibility. Observe raw SSE incrementally and
   forward valid source bytes unchanged; use a separate bounded stateful encoder

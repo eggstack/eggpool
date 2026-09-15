@@ -32,6 +32,14 @@ top-level extensions produce explicit adaptation notices. Surface-specific
 credentials are rendered at dispatch time and are not stored in the profile or
 metadata.
 
+Ordinary function tools are portable across the built-in function-tool
+surfaces. Responses `custom` tools are represented canonically as bounded
+freeform tools and, for a function-only upstream, use a deterministic
+`{"input":"..."}` wrapper. The wrapper is removed before the downstream
+Responses `custom_tool_call` item is emitted; malformed wrappers fail closed.
+Other native/server tools remain native-only and are preserved on a native
+Responses route or rejected before dispatch when no semantic equivalent exists.
+
 ## Streaming
 
 Responses streaming has two modes. When both client and upstream surfaces are
@@ -68,4 +76,6 @@ The built-in registry owns five closed surface IDs:
 
 The Codex integration renderer emits a current `[model_providers.eggpool]`
 block with `wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
-reference — see `eggpool configsetup codex --print-secret`.
+reference, with WebSockets disabled — see
+`eggpool configsetup codex --model <model>`. Codex model discovery is not
+provided by `/v1/models`; configure an explicit model or alias.

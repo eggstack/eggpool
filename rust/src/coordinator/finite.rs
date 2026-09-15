@@ -709,11 +709,12 @@ impl FiniteCoordinator {
                 &identity,
                 &provider,
             );
-            let decoded = match self.wire.decode_finite_response(
+            let decoded = match self.wire.decode_finite_response_for_request(
                 &body,
                 upstream.status.as_u16(),
                 &context,
                 true,
+                &request.admitted.canonical,
             ) {
                 Ok(value) => value,
                 Err(error) => {

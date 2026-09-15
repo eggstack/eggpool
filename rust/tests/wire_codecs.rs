@@ -338,6 +338,7 @@ fn unsupported_media_and_invalid_tool_arguments_fail_explicitly() {
                 call_id: Some("toolu-1".into()),
                 name: Some("lookup".into()),
                 arguments: Some("not-json".into()),
+                tool_kind: eggpool::wire::ir::CanonicalToolKind::Function,
             }],
             finish_reason: Some("tool_use".into()),
             usage: None,

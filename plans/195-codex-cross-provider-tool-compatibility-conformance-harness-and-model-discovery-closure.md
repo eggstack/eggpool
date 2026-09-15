@@ -1,6 +1,6 @@
 # Plan 195: Codex cross-provider tool compatibility, conformance harness, and model-discovery closure
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** IMPLEMENTED (2026-09-15)
 >
 > **Baseline:** Eggpool `main` at `51d770e16598cdea76ed56670f68b885f7f68ed5`
 >
@@ -434,3 +434,23 @@ At closure, record in the final implementation commit/plan note:
 - whether optional model discovery was implemented or intentionally deferred.
 
 Do not claim general "OpenAI Responses compatibility" solely from Codex passing. The tests should separately retain Eggpool's provider-neutral Responses surface and native-forwarding guarantees.
+
+## Completion evidence
+
+- Added `CanonicalToolKind::{Function,Freeform}` with deterministic
+  function-only wrapping and per-request custom-tool reconstruction; native
+  Responses requests/streams remain preserved and observed without re-encoding.
+- Added `rust/tests/codex_responses_compat.rs` with current Codex provenance
+  `508a006d7aaa485ac0367c9e45c69ebb948af518` and OpenCodex reference
+  `e4a8539b957b7ae7cd278666f0364eb0f82d4ac3`.
+- Added the opt-in `scripts/smoke_codex_compat.sh` procedure and documented
+  custom-provider setup. The installed local Codex CLI reported version
+  `codex-cli 0.154.0`; live credentials were not present, so the harness
+  passed its explicit skip path rather than claiming live-provider evidence.
+- Codex model discovery remains intentionally deferred; standard `/v1/models`
+  is unchanged.
+- Local verification: default-feature Rust workspace `493 passed` across 54
+  suites; the focused Codex target `5 passed`; tooling `75 passed, 1 skipped`;
+  strict formatting, Clippy, Pyright, release-doc, runtime-boundary, and shell
+  syntax checks passed. The no-default-features Rust test matrix is included in
+  the final verification run.

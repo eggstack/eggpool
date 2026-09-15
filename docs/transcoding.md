@@ -27,7 +27,7 @@ The transcoder sits in the request path and:
 ### Canonical request and reasoning boundary
 
 `rust/src/wire/ir.rs` contains the portable subset used for cross-surface
-replay: ordered messages/content blocks, function tools and choices, response
+replay: ordered messages/content blocks, function/freeform tools and choices, response
 format intent, normalized usage, response blocks, and bounded stream events.
 `ReasoningIntent` records `unspecified`, explicit disable, named effort,
 fixed budget, adaptive, or toggle semantics. Named effort is not converted to
@@ -45,6 +45,14 @@ when an alias changes the upstream model, only the top-level `model` is
 rewritten. Cross-surface adaptation rejects native-only items/tools before
 dispatch and reports safely omittable extensions through bounded adaptation
 notices.
+
+Responses `custom` tools are the portable freeform exception: a function-only
+target receives a strict single-string `input` wrapper, and the per-request
+tool declaration maps the provider call back to a Responses
+`custom_tool_call`/`custom_tool_call_output` pair. The mapping is not persisted
+or inferred from a name alone. Native/server tools without a reusable semantic
+equivalent remain preserved only on native Responses routes or fail before
+provider dispatch.
 
 ### Request ownership and media validation
 
