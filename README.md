@@ -92,6 +92,9 @@ Generate configuration for your coding agent:
 # OpenCode
 eggpool configsetup opencode
 
+# OpenCode — managed install with drift detection
+eggpool configsetup opencode --apply
+
 # Claude Code
 eggpool configsetup claude-code
 
@@ -100,21 +103,25 @@ eggpool configsetup aider --model openai/gpt-4 --write
 
 # Codex (Responses wire API)
 eggpool configsetup codex --model <eggpool-model-or-alias>
+
+# Codex — managed install with generated model catalog
+eggpool configsetup codex --apply
 ```
 
 The generated Codex TOML uses the HTTP/SSE Responses API and references
 `EGGPOOL_API_KEY` without embedding the server key. Set it with
 `export EGGPOOL_API_KEY="$(eggpool getkey)"` in the environment that launches
-Codex.
+Codex. OpenCode likewise references `{env:EGGPOOL_API_KEY}` through the
+Responses-capable `@ai-sdk/openai` runtime.
 
-See [Agent Configuration](docs/agent-configuration.md) for all supported targets and options.
+See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, and options.
 
 For Codex, the deterministic Responses conformance target and the opt-in
 two-phase text/tool-loop check are documented in
 [Codex compatibility smoke](docs/codex-compatibility-smoke.md). Live results
-qualify the tested Codex CLI and upstream path only; explicit model or alias
-selection remains the supported configuration, and `/v1/models` keeps the
-standard OpenAI-compatible schema.
+qualify the tested Codex CLI and upstream path only; the managed
+`model_catalog_json` enables picker discovery while an explicit model or alias
+remains supported, and `/v1/models` keeps the standard OpenAI-compatible schema.
 
 ### LAN Access
 
@@ -266,9 +273,9 @@ Responses `custom` tools are portable to function-style upstreams through a
 deterministic single-string `input` wrapper. EggPool uses the declared tool
 kind to unwrap provider calls and emits an authoritative `custom_tool_call`
 item; malformed wrappers fail closed. Native/server tools remain native-only
-unless a general semantic equivalent exists. Codex should start with an
-explicit model or alias: `/v1/models` remains the standard OpenAI model-list
-contract, and richer Codex model-picker discovery is deferred.
+unless a general semantic equivalent exists. Codex may use an explicit model
+or alias, or install the managed `model_catalog_json` for picker discovery:
+`/v1/models` remains the standard OpenAI model-list contract.
 
 EggPool keeps a bounded, in-memory preference for the last successful declared
 wire surface per provider/model. The preference is refreshed by ordinary

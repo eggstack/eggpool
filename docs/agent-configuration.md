@@ -2,14 +2,16 @@
 
 `eggpool configsetup` generates configuration snippets for popular coding agents. Each target produces format-appropriate output (JSON, TOML, YAML, or shell exports) that references your running EggPool instance.
 
+Codex and OpenCode additionally support a managed lifecycle that installs a generated model catalog/provider block with ownership, drift detection, and safe removal. All other targets keep the snippet/clipboard/output workflow.
+
 ## Supported Targets
 
 | Target | Command | Output Format | `--write` Default | Model |
 |--------|---------|---------------|-------------------|-------|
-| OpenCode | `eggpool configsetup opencode` | JSON provider config | N/A (clipboard) | auto |
+| OpenCode | `eggpool configsetup opencode` | JSON provider config (Responses runtime) | N/A (clipboard) | auto (all models) |
 | Claude Code | `eggpool configsetup claude-code` | JSON snippet | N/A (clipboard) | N/A |
 | Aider | `eggpool configsetup aider` | Shell env exports | `.env.eggpool` | recommended |
-| Codex | `eggpool configsetup codex` | TOML `[model_providers.eggpool]` block (Responses wire API) | N/A (printed) | recommended |
+| Codex | `eggpool configsetup codex` | TOML `[model_providers.eggpool]` block (Responses wire API) + generated `model_catalog_json` | N/A (printed) | optional with catalog |
 | Qwen Code | `eggpool configsetup qwen-code` | JSON provider block | N/A (printed) | optional |
 | Kilo | `eggpool configsetup kilo` | JSON provider block | N/A (printed) | optional |
 | Continue | `eggpool configsetup continue` | YAML model block | `~/.continue/eggpool.yaml` | usually yes |
@@ -24,18 +26,50 @@
 |--------|-------------|
 | `--host HOST` | Override the EggPool host (default: `localhost`) |
 | `--base-url URL` | Override the full base URL |
-| `--model MODEL` | Override the default model |
-| `--write` | Write output to the default file for the target |
-| `--output PATH` | Write output to a specific file |
-| `--force` | Overwrite existing output file |
+| `--model MODEL` | Override the default model (Codex: optional root `model`; OpenCode exposes all models) |
+| `--write` | Write output to the default file for the target (snippet mode only) |
+| `--output PATH` | Write output to a specific file (snippet mode only) |
+| `--force` | Overwrite existing output file; in lifecycle mode, converge despite detected drift |
 | `--no-clipboard` | Skip copying to clipboard |
-| `--print-secret` | Print the resolved API key for targets whose generated artifact embeds it; it does not change Codex TOML |
+| `--print-secret` | Print the resolved API key for targets whose generated artifact embeds it; it does not change Codex/OpenCode output (both reference `EGGPOOL_API_KEY`) |
+
+## Managed Lifecycle (Codex and OpenCode)
+
+```sh
+eggpool configsetup codex --apply
+eggpool configsetup codex --sync
+eggpool configsetup codex --check
+eggpool configsetup codex --remove
+eggpool configsetup codex --dry-run
+
+eggpool configsetup opencode --apply
+eggpool configsetup opencode --sync
+eggpool configsetup opencode --check
+eggpool configsetup opencode --remove
+eggpool configsetup opencode --dry-run
+```
+
+Lifecycle semantics:
+
+- `--apply`: create/update EggPool-owned generated artifacts and make the minimum safe client-config changes.
+- `--sync`: recompute model catalog/provider facts and converge only EggPool-owned state. Refuses unsafe drift.
+- `--check`: read-only validation. Reports whether client config, generated catalog, base URL, environment-key reference, and hashes are current. No mutations; exits non-zero on drift.
+- `--remove`: remove only EggPool-owned generated files/fields when current state still matches ownership evidence; restores previously captured values where safely possible.
+- `--dry-run`: render the exact proposed diff/actions without writing. Can be combined with `--apply`/`--sync`/`--remove`/`--check` or used alone.
+
+Repeated `--apply`/`--sync` is idempotent. Drift in a user-edited client config causes a safe refusal rather than silent clobbering; re-run with `--force` to converge deliberately. `--output`/`--write` cannot be combined with lifecycle flags; the snippet workflow remains for users who do not want automatic changes.
+
+Ownership manifests live under the EggPool state directory (`~/.local/state/eggpool/integrations/<target>/manifest.json`) and record the client config path, pre/post hashes, owned fields, previous values, catalog path/hash, and schema version. No secrets are stored.
 
 ## Examples
 
 ```sh
 # OpenCode — print JSON config to stdout
 eggpool configsetup opencode
+
+# OpenCode — managed install with drift detection
+eggpool configsetup opencode --apply
+eggpool configsetup opencode --check
 
 # Aider — write .env.eggpool with a specific model
 eggpool configsetup aider --model openai/gpt-4 --write
@@ -49,6 +83,10 @@ eggpool configsetup cline --no-clipboard
 # Codex — print the non-secret Responses provider block
 eggpool configsetup codex --model <eggpool-model-or-alias> --no-clipboard
 
+# Codex — managed install with generated model catalog
+eggpool configsetup codex --apply
+eggpool configsetup codex --check
+
 # Roo Code — write JSON profile
 eggpool configsetup roo-code --write
 ```
@@ -56,21 +94,21 @@ eggpool configsetup roo-code --write
 ## Output Behavior
 
 - Generated JSON, TOML, YAML, and shell snippets escape catalog/config values for the target format, including provider-suffixed model IDs.
-- The `--model` flag sets an explicit model or EggPool alias. If exactly one model is available, the shared resolver can fill it automatically; when multiple models are available, EggPool does not invent a preference.
+- The `--model` flag sets an explicit model or EggPool alias. If exactly one model is available, the shared resolver can fill it automatically; when multiple models are available, EggPool does not invent a preference. With a Codex catalog installed, no top-level `model` is required: the user can choose from the Codex model UI/CLI.
 - `--write` writes to a sensible default location for the target (see the table above). `--output` always takes precedence.
 - Without `--write` or `--output`, the output is printed to stdout and copied to the clipboard (unless `--no-clipboard`).
 
 ## Codex Integration
 
-Codex uses EggPool through the HTTP/SSE Responses path. Start with an explicit
-EggPool model or alias; the standard `/v1/models` endpoint intentionally keeps
-its OpenAI-compatible schema and is not a Codex remote-catalog endpoint.
+Codex uses EggPool through the HTTP/SSE Responses path. The standard `/v1/models` endpoint intentionally keeps its OpenAI-compatible schema and is not a Codex remote-catalog endpoint. Rich picker discovery is provided locally through a generated `model_catalog_json` file owned by EggPool.
 
-The current generated block is equivalent to:
+The managed catalog is derived from EggPool's existing catalog/model-info/routing facts as a provider-neutral projection: context/output limits are conservative minimums, boolean features and input modalities are intersections, reasoning efforts intersect, unknown stays unknown (never optimistic), no capability is inferred from model-ID substrings, and WebSockets/remote compaction stay disabled. The generated JSON is deterministic, bounded, and carries no credentials or provider-private source metadata.
+
+The current generated block with a managed catalog is equivalent to:
 
 ```toml
-model = "<eggpool-model-or-alias>"
 model_provider = "eggpool"
+model_catalog_json = "/home/user/.local/state/eggpool/integrations/codex/eggpool-codex-models.json"
 
 [model_providers.eggpool]
 name = "EggPool"
@@ -80,39 +118,32 @@ wire_api = "responses"
 supports_websockets = false
 ```
 
-Set `EGGPOOL_API_KEY` to EggPool's server key in the environment used to run
-Codex. Retrieve the current key without putting it in the TOML with:
+Set `EGGPOOL_API_KEY` to EggPool's server key in the environment used to run Codex. Retrieve the current key without putting it in the TOML with:
 
 ```bash
 export EGGPOOL_API_KEY="$(eggpool getkey)"
 ```
 
-The default server port is `11300`; use `--base-url` when the server is
-configured differently. Generate a model-specific snippet with:
+The default server port is `11300`; use `--base-url` when the server is configured differently. Generate a model-specific snippet with:
 
 ```bash
 eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
 
-The generated TOML contains `env_key = "EGGPOOL_API_KEY"`, never the resolved
-server key, so Codex output is printed normally without `--print-secret`.
-Passing `--print-secret` does not embed the key in Codex TOML. Use `--model` for
-the qualified setup path, or select the model explicitly when invoking Codex;
-automatic Codex model-picker discovery is deferred. For a real current CLI
-check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
+The generated TOML contains `env_key = "EGGPOOL_API_KEY"`, never the resolved server key, so Codex output is printed normally without `--print-secret`. Passing `--print-secret` does not embed the key in Codex TOML. When `CODEX_HOME` is set, managed commands respect it for locating `config.toml`; the generated catalog itself stays under EggPool state unless the Codex contract requires otherwise. Codex config mutation owns only root `model_provider`, root `model_catalog_json`, optional root `model` (only when explicitly requested), and the `[model_providers.eggpool]` table, preserving comments and unrelated content with atomic writes and drift refusal. For a real current CLI check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
 
-EggPool relies on Codex local compaction by default and does not advertise
-remote v2 compaction: the generated provider keeps the current
-custom-provider `Unsupported` behavior until the complete trigger
-request/result path is qualified end to end. Operators whose upstream natively
-supports the historical compact contract may opt in per provider surface with
-`supports_remote_compaction_v1 = true` plus a `compact_path_template`; the
-bounded `POST /v1/responses/compact` operation then forwards natively with
-normal routing, accounting, and health ownership. See
-[Stateless Responses](stateless-responses.md).
+EggPool relies on Codex local compaction by default and does not advertise remote v2 compaction: the generated provider keeps the current custom-provider `Unsupported` behavior until the complete trigger request/result path is qualified end to end. The catalog advertises a conservative 90% auto-compaction threshold derived from each model's guaranteed context window. Operators whose upstream natively supports the historical compact contract may opt in per provider surface with `supports_remote_compaction_v1 = true` plus a `compact_path_template`; the bounded `POST /v1/responses/compact` operation then forwards natively with normal routing, accounting, and health ownership. See [Stateless Responses](stateless-responses.md).
 
 ## OpenCode Integration
 
-`eggpool configsetup opencode` generates an OpenCode-compatible JSON configuration. When thinking/reasoning capabilities are discovered for a model, the output includes `"thinking": "supported"` annotations so OpenCode's model picker can surface them.
+`eggpool configsetup opencode` generates an OpenCode-compatible JSON configuration from the same provider-neutral projection. The provider uses the Responses-capable `@ai-sdk/openai` runtime with `baseURL` ending at `/v1`, per-model `limit.context`/`limit.output` where known, `modalities` (text plus image only when guaranteed), and `reasoning`/`variants` only where the projection guarantees reasoning. Image/tool capability is never claimed across a heterogeneous alias route.
+
+The generated file references `EGGPOOL_API_KEY` through OpenCode's `{env:EGGPOOL_API_KEY}` interpolation and never embeds the resolved server key, so OpenCode output prints by default like Codex. Set the variable in the environment that launches OpenCode:
+
+```bash
+export EGGPOOL_API_KEY="$(eggpool getkey)"
+```
+
+Managed OpenCode installation merges only the `provider.eggpool` key, preserving all other config content. Existing files with JSONC comments are never silently rewritten: `--apply` refuses with guidance to use `--dry-run`/generated output until a safe preserving mutator is available. Global config lives at `~/.config/opencode/opencode.json` (`OPENCODE_CONFIG` overrides).
 
 Provider-scoped model IDs are used when `models.collapse_models = false` (the default), so OpenCode can disambiguate providers serving the same upstream model.

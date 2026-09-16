@@ -47,8 +47,13 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Treat `configsetup` renderers as format-specific delivery boundaries: a
   target is secret-bearing only when its rendered artifact embeds the resolved
   key. Codex emits an HTTP/SSE Responses TOML block with
-  `env_key = "EGGPOOL_API_KEY"`, so it is printable by default and must not
-  gain a Codex-private discovery or WebSocket contract.
+  `env_key = "EGGPOOL_API_KEY"` and OpenCode uses `{env:EGGPOOL_API_KEY}`
+  with the Responses-capable `@ai-sdk/openai` runtime, so both are printable
+  by default. Codex picker discovery uses an EggPool-owned generated
+  `model_catalog_json` built from the conservative provider-neutral
+  projection (minimum limits, intersected capabilities, unknown stays
+  unknown, no name inference, no WebSocket advertisement); `/v1/models`
+  remains the standard OpenAI schema.
 
 ## Verification pointers
 

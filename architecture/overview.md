@@ -289,7 +289,11 @@ installable-releases catalog), `provenance.rs` (install-provenance detection),
 operator services), `metrics.rs` (bounded scalar-only coalescer),
 `integrations.rs` (`eggpool configsetup` renderers for opencode/claude-code/
 aider/codex and others; Codex emits HTTP/SSE Responses TOML with
-`env_key = "EGGPOOL_API_KEY"`, printable by default, no embedded secret).
+`env_key = "EGGPOOL_API_KEY"`, printable by default, no embedded secret;
+OpenCode uses `{env:EGGPOOL_API_KEY}` with the Responses-capable
+`@ai-sdk/openai` runtime; Codex/OpenCode share one conservative
+provider-neutral projection plus managed `--apply`/`--sync`/`--check`/
+`--remove`/`--dry-run` lifecycle with ownership manifests and drift refusal).
 
 Deep dives: [Control plane](deep-dive-control.md),
 [Deployment](deep-dive-deployment.md), [Backup/restore](deep-dive-lifecycle.md),
@@ -327,9 +331,11 @@ Deep dives: [Observability](deep-dive-observability.md),
   `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
   model-info/backup disabled; request/accounting durability preserved).
 - Codex contract: `[model_providers.eggpool]` Responses shape with
-  `wire_api = "responses"`, `supports_websockets = false`, explicit
-  model/alias, server `base_url`, and `EGGPOOL_API_KEY` env contract; see
-  [Integrations](deep-dive-integrations.md).
+  `wire_api = "responses"`, `supports_websockets = false`, generated
+  `model_catalog_json` picker discovery, optional explicit model/alias,
+  server `base_url`, and `EGGPOOL_API_KEY` env contract; OpenCode uses the
+  Responses-capable `@ai-sdk/openai` runtime with `{env:EGGPOOL_API_KEY}`;
+  see [Integrations](deep-dive-integrations.md).
 
 ### 14. Native dependencies and feature gates
 

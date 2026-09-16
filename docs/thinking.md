@@ -483,16 +483,16 @@ For streaming, include `"stream": true` as usual. Thinking stream deltas are tra
 
 ## 9. OpenCode Integration
 
-`eggpool configsetup opencode` generates an OpenCode-compatible configuration that includes thinking annotations for discovered models.
+`eggpool configsetup opencode` generates an OpenCode-compatible configuration that includes reasoning annotations for discovered models.
 
 ### Discovery Logic
 
-The generator (`rust/src/operations/integrations.rs`) inspects each model's `capabilities.thinking.status`:
+The generator (`rust/src/operations/integrations.rs`) projects each model through the provider-neutral agent projection and inspects `capabilities.thinking.status`:
 
-- **`"supported"`** → emits `"thinking": "supported"` in the model entry.
-- **All other statuses** (`"unknown"`, `"unsupported"`, `"mixed"`, `"conflicting"`) → the `thinking` field is **omitted**.
+- **`"supported"`** → emits `"reasoning": true` plus `variants` for each validated `supported_efforts` entry.
+- **All other statuses** (`"unknown"`, `"unsupported"`, `"mixed"`, `"conflicting"`) → the `reasoning` field is **omitted**.
 
-This means the generated config never claims thinking support for models without confirmed upstream backing.
+This means the generated config never claims reasoning support for models without confirmed upstream backing.
 
 ### Provider-Scoped Model IDs
 
@@ -505,20 +505,22 @@ When `collapse_models = false`, the generator renders provider-suffixed model ID
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "eggpool": {
-      "npm": "@ai-sdk/openai-compatible",
+      "npm": "@ai-sdk/openai",
       "name": "EggPool",
       "options": {
         "baseURL": "http://localhost:11300/v1",
-        "apiKey": "ep_..."
+        "apiKey": "{env:EGGPOOL_API_KEY}"
       },
       "models": {
         "claude-sonnet-4-20250514/anthropic-prod": {
           "name": "Claude Sonnet 4/anthropic-prod",
-          "thinking": "supported",
-          "limit": { "context": 200000 }
+          "limit": { "context": 200000 },
+          "modalities": { "input": ["text"], "output": ["text"] },
+          "reasoning": true
         },
         "gpt-4o/openai": {
-          "limit": { "context": 128000 }
+          "limit": { "context": 128000 },
+          "modalities": { "input": ["text"], "output": ["text"] }
         }
       }
     }
@@ -526,7 +528,7 @@ When `collapse_models = false`, the generator renders provider-suffixed model ID
 }
 ```
 
-Note that `gpt-4o/openai` has no `thinking` field — its capability status is `unknown` or `unsupported`, so the annotation is omitted.
+Note that `gpt-4o/openai` has no `reasoning` field — its capability status is `unknown` or `unsupported`, so the annotation is omitted. Set `EGGPOOL_API_KEY` in the environment that launches OpenCode.
 
 Source: `rust/src/operations/integrations.rs`
 

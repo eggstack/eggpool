@@ -56,12 +56,14 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   synthesis, including authoritative completed output items and strict
   terminal evidence.
 - For Codex integration docs, show the generated `[model_providers.eggpool]`
-  Responses configuration with WebSockets disabled, an explicit model/alias,
-  the actual server default port, and the `EGGPOOL_API_KEY` environment
-  contract. The generated TOML references `EGGPOOL_API_KEY` and never embeds
-  the resolved key; `--print-secret` does not change that Codex behavior. Keep
-  discovery deferred unless it has a separate non-breaking endpoint;
-  `/v1/models` remains the standard OpenAI schema.
+  Responses configuration with WebSockets disabled, the generated
+  `model_catalog_json` picker path, an optional explicit model/alias, the
+  actual server default port, and the `EGGPOOL_API_KEY` environment contract.
+  The generated TOML references `EGGPOOL_API_KEY` and never embeds the
+  resolved key; `--print-secret` does not change that Codex behavior. For
+  OpenCode, document the Responses-capable `@ai-sdk/openai` runtime with
+  `{env:EGGPOOL_API_KEY}` interpolation and per-model limits from the same
+  projection. `/v1/models` remains the standard OpenAI schema.
 
 ## Checks
 

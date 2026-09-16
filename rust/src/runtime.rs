@@ -1280,6 +1280,80 @@ async fn recover(path: &Path, source: Option<PathBuf>) -> Result<(), BootstrapEr
     Ok(())
 }
 
+struct ResolvedLifecycle {
+    apply: bool,
+    sync: bool,
+    check: bool,
+    remove: bool,
+    dry_run: bool,
+    force: bool,
+    model: Option<String>,
+    host: Option<String>,
+    base_url: Option<String>,
+    print_secret: bool,
+    no_clipboard: bool,
+    output: Option<PathBuf>,
+    write: bool,
+}
+
+struct GenericSnippet {
+    print_secret: bool,
+    no_clipboard: bool,
+    force: bool,
+    output: Option<PathBuf>,
+    write: bool,
+    model: Option<String>,
+    base_url: Option<String>,
+    host: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lifecycle_options_from_args(
+    apply: bool,
+    sync: bool,
+    check: bool,
+    remove: bool,
+    dry_run: bool,
+    force: bool,
+    model: Option<String>,
+    host: Option<String>,
+    base_url: Option<String>,
+    print_secret: bool,
+    no_clipboard: bool,
+    _force_again: bool,
+    output: Option<PathBuf>,
+    write: bool,
+) -> ResolvedLifecycle {
+    ResolvedLifecycle {
+        apply,
+        sync,
+        check,
+        remove,
+        dry_run,
+        force,
+        model,
+        host,
+        base_url,
+        print_secret,
+        no_clipboard,
+        output,
+        write,
+    }
+}
+
+fn generic_options_from_args(args: &crate::cli::ConfigsetupArgs) -> GenericSnippet {
+    GenericSnippet {
+        print_secret: args.print_secret,
+        no_clipboard: args.no_clipboard,
+        force: args.force,
+        output: args.output.clone(),
+        write: args.write,
+        model: args.model.clone(),
+        base_url: args.base_url.clone(),
+        host: args.host.clone(),
+    }
+}
+
 async fn configsetup(
     path: &Path,
     command: crate::cli::ConfigsetupCommand,
@@ -1288,18 +1362,80 @@ async fn configsetup(
 
     let pre_mutation_config = config::Config::from_toml(path)?;
 
-    let (target, args) = match command {
-        crate::cli::ConfigsetupCommand::Opencode => (Target::Opencode, None),
-        crate::cli::ConfigsetupCommand::ClaudeCode => (Target::ClaudeCode, None),
-        crate::cli::ConfigsetupCommand::Aider(args) => (Target::Aider, Some(args)),
-        crate::cli::ConfigsetupCommand::Codex(args) => (Target::Codex, Some(args)),
-        crate::cli::ConfigsetupCommand::QwenCode(args) => (Target::QwenCode, Some(args)),
-        crate::cli::ConfigsetupCommand::Kilo(args) => (Target::Kilo, Some(args)),
-        crate::cli::ConfigsetupCommand::Continue(args) => (Target::Continue, Some(args)),
-        crate::cli::ConfigsetupCommand::Cline(args) => (Target::Cline, Some(args)),
-        crate::cli::ConfigsetupCommand::RooCode(args) => (Target::RooCode, Some(args)),
-        crate::cli::ConfigsetupCommand::Goose(args) => (Target::Goose, Some(args)),
-        crate::cli::ConfigsetupCommand::Openhands(args) => (Target::Openhands, Some(args)),
+    let (target, args, lifecycle) = match command {
+        crate::cli::ConfigsetupCommand::Opencode(args) => (
+            Target::Opencode,
+            None,
+            Some(lifecycle_options_from_args(
+                args.apply,
+                args.sync,
+                args.check,
+                args.remove,
+                args.dry_run,
+                args.force,
+                args.model.clone(),
+                args.host.clone(),
+                args.base_url.clone(),
+                args.print_secret,
+                args.no_clipboard,
+                args.force,
+                args.output.clone(),
+                args.write,
+            )),
+        ),
+        crate::cli::ConfigsetupCommand::ClaudeCode => (Target::ClaudeCode, None, None),
+        crate::cli::ConfigsetupCommand::Aider(args) => {
+            (Target::Aider, Some(generic_options_from_args(&args)), None)
+        }
+        crate::cli::ConfigsetupCommand::Codex(args) => (
+            Target::Codex,
+            None,
+            Some(lifecycle_options_from_args(
+                args.apply,
+                args.sync,
+                args.check,
+                args.remove,
+                args.dry_run,
+                args.force,
+                args.model.clone(),
+                args.host.clone(),
+                args.base_url.clone(),
+                args.print_secret,
+                args.no_clipboard,
+                args.force,
+                args.output.clone(),
+                args.write,
+            )),
+        ),
+        crate::cli::ConfigsetupCommand::QwenCode(args) => (
+            Target::QwenCode,
+            Some(generic_options_from_args(&args)),
+            None,
+        ),
+        crate::cli::ConfigsetupCommand::Kilo(args) => {
+            (Target::Kilo, Some(generic_options_from_args(&args)), None)
+        }
+        crate::cli::ConfigsetupCommand::Continue(args) => (
+            Target::Continue,
+            Some(generic_options_from_args(&args)),
+            None,
+        ),
+        crate::cli::ConfigsetupCommand::Cline(args) => {
+            (Target::Cline, Some(generic_options_from_args(&args)), None)
+        }
+        crate::cli::ConfigsetupCommand::RooCode(args) => (
+            Target::RooCode,
+            Some(generic_options_from_args(&args)),
+            None,
+        ),
+        crate::cli::ConfigsetupCommand::Goose(args) => {
+            (Target::Goose, Some(generic_options_from_args(&args)), None)
+        }
+        crate::cli::ConfigsetupCommand::Openhands(args) => (
+            Target::Openhands,
+            Some(generic_options_from_args(&args)),
+            None,
+        ),
     };
 
     let mut context = if target == Target::ClaudeCode {
@@ -1314,49 +1450,15 @@ async fn configsetup(
         eprintln!("Generated new server API key.");
     }
 
-    if target == Target::Opencode {
-        let snippet = integrations::render_target(target, &context, None)
-            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-        let delivery = integrations::deliver(
-            &snippet,
+    if let Some(lifecycle_args) = lifecycle {
+        return run_managed_configsetup(
+            path,
+            &pre_mutation_config,
             target,
-            &SnippetOptions {
-                print_secret: true,
-                no_clipboard: false,
-                force: false,
-                output: None,
-                write: false,
-            },
-            None,
-            None,
+            lifecycle_args,
+            context,
         )
-        .await
-        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-        if let Some(stdout) = delivery.stdout {
-            println!("{stdout}");
-        }
-        if !delivery
-            .messages
-            .iter()
-            .any(|message| message == "Copied config to clipboard.")
-        {
-            eprintln!("Could not copy to clipboard. Use the printed config above.");
-        }
-        for message in delivery.messages {
-            eprintln!("{message}");
-        }
-        if !context.models.is_empty() {
-            eprintln!("Generated config with {} models.", context.models.len());
-        } else {
-            eprintln!(
-                "Generated provider connection block (no model limits). Run 'eggpool models refresh' to populate model metadata."
-            );
-        }
-        if context.config_mutated || context.transcoder_mutated {
-            restart_after_integration_mutation(path, &pre_mutation_config).await?;
-        }
-        eprintln!("Paste into ~/.config/opencode/opencode.json.");
-        return Ok(());
+        .await;
     }
 
     if target == Target::ClaudeCode {
@@ -1431,6 +1533,174 @@ async fn configsetup(
         if context.config_mutated || context.transcoder_mutated {
             restart_after_integration_mutation(path, &pre_mutation_config).await?;
         }
+    }
+    Ok(())
+}
+
+async fn run_managed_configsetup(
+    path: &Path,
+    pre_mutation_config: &config::Config,
+    target: crate::operations::integrations::Target,
+    lifecycle_args: ResolvedLifecycle,
+    mut context: crate::operations::integrations::IntegrationContext,
+) -> Result<(), BootstrapError> {
+    use crate::operations::integrations::{
+        self, LifecycleAction, LifecycleOptions, SnippetOptions,
+    };
+
+    context = integrations::apply_overrides(
+        context,
+        lifecycle_args.host.as_deref(),
+        lifecycle_args.base_url.as_deref(),
+    )
+    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+
+    let lifecycle_mode = if lifecycle_args.apply {
+        Some(LifecycleAction::Apply)
+    } else if lifecycle_args.sync {
+        Some(LifecycleAction::Sync)
+    } else if lifecycle_args.check {
+        Some(LifecycleAction::Check)
+    } else if lifecycle_args.remove {
+        Some(LifecycleAction::Remove)
+    } else if lifecycle_args.dry_run {
+        Some(LifecycleAction::DryRun)
+    } else {
+        None
+    };
+
+    // Snippet mode preserves the existing clipboard/output workflow.
+    let Some(action) = lifecycle_mode else {
+        if target == crate::operations::integrations::Target::Opencode {
+            let snippet = integrations::render_target(target, &context, None)
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            let delivery = integrations::deliver(
+                &snippet,
+                target,
+                &SnippetOptions {
+                    print_secret: lifecycle_args.print_secret,
+                    no_clipboard: lifecycle_args.no_clipboard,
+                    force: lifecycle_args.force,
+                    output: lifecycle_args.output,
+                    write: lifecycle_args.write,
+                },
+                None,
+                Some("Paste into ~/.config/opencode/opencode.json. Set EGGPOOL_API_KEY in the environment that launches OpenCode."),
+            )
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            if let Some(stdout) = delivery.stdout {
+                println!("{stdout}");
+            }
+            for message in delivery.messages {
+                eprintln!("{message}");
+            }
+            if !context.models.is_empty() {
+                eprintln!("Generated config with {} models.", context.models.len());
+            } else {
+                eprintln!(
+                    "Generated provider connection block (no model limits). Run 'eggpool models refresh' to populate model metadata."
+                );
+            }
+            if context.config_mutated || context.transcoder_mutated {
+                restart_after_integration_mutation(path, pre_mutation_config).await?;
+            }
+            return Ok(());
+        }
+        // Codex snippet mode: explicit model/alias is optional now that the
+        // managed catalog enables picker discovery.
+        let model = integrations::resolve_model(
+            target,
+            lifecycle_args.model.as_deref(),
+            &context,
+            lifecycle_args.write || lifecycle_args.output.is_some(),
+        )
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let snippet = integrations::render_target(target, &context, model.as_deref())
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let delivery = integrations::deliver(
+            &snippet,
+            target,
+            &SnippetOptions {
+                print_secret: lifecycle_args.print_secret,
+                no_clipboard: lifecycle_args.no_clipboard,
+                force: lifecycle_args.force,
+                output: lifecycle_args.output,
+                write: lifecycle_args.write,
+            },
+            integrations::default_path(target).as_deref(),
+            integrations::paste_hint(target),
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        if let Some(stdout) = delivery.stdout {
+            println!("{stdout}");
+        }
+        for message in delivery.messages {
+            eprintln!("{message}");
+        }
+        if context.config_mutated || context.transcoder_mutated {
+            restart_after_integration_mutation(path, pre_mutation_config).await?;
+        }
+        return Ok(());
+    };
+
+    // Lifecycle mode and snippet output modes are mutually exclusive.
+    if lifecycle_args.output.is_some() || lifecycle_args.write {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "--output/--write cannot be combined with --apply/--sync/--check/--remove/--dry-run",
+        ));
+    }
+
+    // For Codex, an explicit model is optional; with a rich catalog the user
+    // can pick from the Codex UI/CLI. For OpenCode all models are exposed.
+    let model = if target == crate::operations::integrations::Target::Codex {
+        lifecycle_args.model.clone()
+    } else {
+        None
+    };
+
+    let options = LifecycleOptions {
+        action,
+        dry_run: lifecycle_args.dry_run,
+        force: lifecycle_args.force,
+        model,
+    };
+
+    let report = match target {
+        crate::operations::integrations::Target::Codex => {
+            integrations::codex_lifecycle(&context, &options, None, None)
+        }
+        crate::operations::integrations::Target::Opencode => {
+            integrations::opencode_lifecycle(&context, &options, None, None)
+        }
+        other => {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                format!("lifecycle flags are not supported for {}", other.name()),
+            ));
+        }
+    }
+    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+
+    if let Some(diff) = report.diff.as_deref() {
+        println!("{diff}");
+    }
+    for message in &report.messages {
+        eprintln!("{message}");
+    }
+    if context.config_mutated || context.transcoder_mutated {
+        restart_after_integration_mutation(path, pre_mutation_config).await?;
+    }
+    if action == LifecycleAction::Check && !report.up_to_date {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            format!(
+                "{} check found drift; run with --sync or --apply to converge",
+                report.target
+            ),
+        ));
     }
     Ok(())
 }

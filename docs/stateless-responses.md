@@ -77,8 +77,10 @@ The built-in registry owns five closed surface IDs:
 The Codex integration renderer emits a current `[model_providers.eggpool]`
 block with `wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
 reference, with WebSockets disabled — see
-`eggpool configsetup codex --model <model>`. Codex model discovery is not
-provided by `/v1/models`; configure an explicit model or alias.
+`eggpool configsetup codex --model <model>` and the managed
+`eggpool configsetup codex --apply` catalog lifecycle. Codex picker discovery
+is provided by the generated `model_catalog_json`, not by `/v1/models`;
+an explicit model or alias remains supported.
 
 ## Remote compaction compatibility
 

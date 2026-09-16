@@ -317,10 +317,10 @@ pub struct DeploySystemdArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigsetupCommand {
-    Opencode,
+    Opencode(ConfigsetupLifecycleArgs),
     ClaudeCode,
     Aider(ConfigsetupArgs),
-    Codex(ConfigsetupArgs),
+    Codex(ConfigsetupLifecycleArgs),
     QwenCode(ConfigsetupArgs),
     Kilo(ConfigsetupArgs),
     Continue(ConfigsetupArgs),
@@ -347,6 +347,36 @@ pub struct ConfigsetupArgs {
     pub base_url: Option<String>,
     #[arg(long)]
     pub host: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ConfigsetupLifecycleArgs {
+    #[arg(long = "print-secret")]
+    pub print_secret: bool,
+    #[arg(long = "no-clipboard")]
+    pub no_clipboard: bool,
+    #[arg(long)]
+    pub force: bool,
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+    #[arg(long)]
+    pub write: bool,
+    #[arg(long)]
+    pub model: Option<String>,
+    #[arg(long = "base-url")]
+    pub base_url: Option<String>,
+    #[arg(long)]
+    pub host: Option<String>,
+    #[arg(long, conflicts_with_all = ["sync", "check", "remove"])]
+    pub apply: bool,
+    #[arg(long, conflicts_with_all = ["apply", "check", "remove"])]
+    pub sync: bool,
+    #[arg(long, conflicts_with_all = ["apply", "sync", "remove"])]
+    pub check: bool,
+    #[arg(long, conflicts_with_all = ["apply", "sync", "check"])]
+    pub remove: bool,
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
 }
 
 pub fn parse<I, T>(args: I) -> Result<Cli, clap::Error>
