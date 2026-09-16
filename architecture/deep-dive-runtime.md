@@ -1,6 +1,6 @@
 # Deep Dive: Runtime and Process Management
 
-Back to [Overview](README.md)
+Back to [Architecture](README.md)
 
 ## Purpose
 

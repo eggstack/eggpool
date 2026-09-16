@@ -1,6 +1,6 @@
 # Deep Dive: Deployment & Operations
 
-Back to [Overview](overview.md)
+Back to [Architecture](README.md)
 
 ## Purpose
 
@@ -47,64 +47,40 @@ portability, and qualification tooling. The most relevant commands are
 
 ## Systemd Integration
 
-```ini
-[Unit]
-Description=EggPool
-Documentation=https://github.com/eggstack/eggpool
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=eggpool
-Group=eggpool
-WorkingDirectory=/var/lib/eggpool
-ExecStart=/usr/local/bin/eggpool --config /etc/eggpool/config.toml serve
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=5
-TimeoutStopSec=30
-KillSignal=SIGTERM
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/eggpool /var/lib/eggpool/backups
-PrivateTmp=yes
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictSUIDSGID=yes
-RestrictNamespaces=yes
-RestrictRealtime=yes
-LockPersonality=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-SystemCallFilter=@system-service
-SystemCallArchitectures=native
-EnvironmentFile=/etc/eggpool/env
-
-[Install]
-WantedBy=multi-user.target
-```
+The deployed unit lives at `deploy/eggpool.service`. CLI-rendered snippets
+are owned by `rust/src/operations/deploy.rs` (`render_production_systemd` and
+related renderers for personal/production layouts, logrotate, and cron). The
+checked-in unit and the renderer output are related but not byte-identical
+artifacts: the deployed file carries the production hardening set
+(`Environment=HOME/PATH/PIPX_HOME/PIPX_BIN_DIR/EGGPOOL_LOG_FILE`,
+`ProtectHome`, extended `ReadWritePaths`, `StartLimitInterval`/`StartLimitBurst`,
+and the SIGHUP/reload comment), while renderers cover personal and production
+variants with their own `ExecStart`/`ReadWritePaths` shapes. Do not copy a unit
+from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 
 ## Configuration
 
 ### `config.toml`
 
-Runtime configuration. Key sections:
+Runtime configuration. Selected sections (see `config.example.toml` and
+`rust/src/config.rs` for the full contract):
 - `[server]` — host, port, and compatibility/diagnostic settings
 - `[upstream]` — default upstream settings
 - `[database]` — SQLite path, WAL mode
-- `[routing]` — fairness mode/epsilon/scope
+- `[routing]` — fairness mode/epsilon/scope, plus `[routing.wire_negotiation]` and `[routing.trace]`
 - `[models]` — collapse_models, catalog withdrawal
 - `[providers.<id>]` — per-provider config
 - `[transcoder]` — protocol transcoding
-
+- `[limits]` — request/media/token bounds
+- `[pricing]` — accounting-only pricing catalogs
+- `[readiness_probe]` — readiness gating
 - `[model_info]` — source enablement
+- `[update_checker]` — background freshness probes
 - `[dashboard]` — theme, auth policy
 - `[metrics]` — buffering, flush modes
-- `[backup]` — automatic backup schedule
 - `[security]` — header redaction and exact trusted reverse-proxy peers
+- `[backup]` — automatic backup schedule
+- `[model_overrides]` / `[model_capabilities]` / `[model_routers]` — per-model and semantic routing policy
 
 ### `.env`
 
@@ -114,15 +90,14 @@ API key storage. Never committed.
 
 `eggpool rehash` applies supported changes without restart:
 - Control socket at `<runtime_dir>/eggpool.sock`, resolved by the native path helpers from `$EGGPOOL_RUNTIME_DIR`, suitable `$XDG_RUNTIME_DIR`, private state, and UID-scoped `/tmp` fallbacks. The server requires the runtime directory to be an owner-only `0o700` directory and the socket to be an owner-only `0o600` socket.
-- LIVE fields: provider/account/routing families, transcoder, cache, subset of models, retention durations
-- RESTART_REQUIRED: everything else
+- Live vs. restart-required is owned solely by `rust/src/config_reload_policy.rs::classify_transition`. Mutation paths classify before atomic replacement and `rust/src/reload.rs` reclassifies server-side before generation publication; mixed transitions are wholly restart-required. Do not maintain a separate field list here.
 - JSON output pinned at 9 keys
 
 ## Monitoring
 
 ### Dashboard
 
-Self-updating HTML dashboard with 50 themes:
+Self-updating HTML dashboard with 50 named theme files plus a built-in default (51 choices in `THEME_NAMES`):
 - `/` — Overview
 - `/models` — Model catalog
 - `/runtime` — Live metrics
@@ -161,7 +136,6 @@ Automatic backup task (zip archives):
 
 ## Key Invariants
 
-- Systemd unit is byte-for-byte identical to bundled deploy artifact
 - `eggpool rehash` serializes reload transactions (one at a time)
 - `reload_in_progress` uses the stable reload-busy exit code
 - `eggpool connect`/`logout` don't silently restart
