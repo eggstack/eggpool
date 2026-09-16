@@ -27,8 +27,9 @@ The transcoder sits in the request path and:
 ### Canonical request and reasoning boundary
 
 `rust/src/wire/ir.rs` contains the portable subset used for cross-surface
-replay: ordered messages/content blocks, function/freeform tools and choices, response
-format intent, normalized usage, response blocks, and bounded stream events.
+replay: ordered messages/content blocks, function/freeform/deferred-search
+tools and choices, response format intent, normalized usage, response blocks,
+and bounded stream events.
 `ReasoningIntent` records `unspecified`, explicit disable, named effort,
 fixed budget, adaptive, or toggle semantics. Named effort is not converted to
 a guessed token budget; the selected provider/model capability owns the final
@@ -49,10 +50,14 @@ notices.
 Responses `custom` tools are the portable freeform exception: a function-only
 target receives a strict single-string `input` wrapper, and the per-request
 tool declaration maps the provider call back to a Responses
-`custom_tool_call`/`custom_tool_call_output` pair. The mapping is not persisted
-or inferred from a name alone. Native/server tools without a reusable semantic
-equivalent remain preserved only on native Responses routes or fail before
-provider dispatch.
+`custom_tool_call`/`custom_tool_call_output` pair. Client-executed
+`tool_search` is the portable deferred-search exception: the wrapper reuses
+the exact bounded `query`/`limit` schema and maps back to an authoritative
+`tool_search_call` with distinct item/call IDs. Both mappings are
+declaration-scoped, never inferred from a name alone, and never persisted.
+Hosted/server search, namespaces, and other native/server tools without a
+reusable semantic equivalent remain preserved only on native Responses routes
+or fail before provider dispatch. Eggpool never executes the search.
 
 ### Request ownership and media validation
 

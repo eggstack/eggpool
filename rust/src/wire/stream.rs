@@ -1729,6 +1729,10 @@ impl ClientStreamEncoder {
                     state.active_tools.insert(call_id.clone(), item);
                 }
                 let delta = event.delta.as_deref().unwrap_or_default();
+                let is_deferred = state
+                    .active_tools
+                    .get(&call_id)
+                    .is_some_and(|item| item.tool_kind == CanonicalToolKind::DeferredSearch);
                 let (item_id, output_index) = {
                     let item_len = state
                         .active_tools
@@ -1742,6 +1746,14 @@ impl ClientStreamEncoder {
                     state.retained_bytes += delta.len();
                     (item.item_id.clone(), item.output_index)
                 };
+                // Deferred search has no portable argument-delta event; the
+                // authoritative `tool_search_call` done item carries the
+                // bounded `query`/`limit` object. Accumulate silently so
+                // interleaved parallel calls stay keyed by source index/call
+                // identity without inventing a delta grammar.
+                if is_deferred {
+                    return Ok(out);
+                }
                 let mut payload = Map::new();
                 payload.insert("item_id".into(), Value::String(item_id));
                 payload.insert("output_index".into(), Value::from(output_index));
@@ -1875,19 +1887,29 @@ impl ResponsesEncoderState {
             self.check_append(0, &input)?;
             self.retained_bytes = self.retained_bytes.saturating_add(input.len());
             item.arguments = input;
+        } else if item.tool_kind == CanonicalToolKind::DeferredSearch {
+            // Reject malformed wrapper arguments rather than handing wrapper
+            // JSON to Codex as if it were a valid native search call.
+            let canonical = validate_deferred_stream_arguments(&item.arguments)?;
+            self.release(item.arguments.len());
+            self.check_append(0, &canonical)?;
+            self.retained_bytes = self.retained_bytes.saturating_add(canonical.len());
+            item.arguments = canonical;
         }
         self.release(item.arguments.len());
-        let mut delta = Map::new();
-        delta.insert("item_id".into(), Value::String(item.item_id.clone()));
-        delta.insert("output_index".into(), Value::from(item.output_index));
-        let done_event = if item.tool_kind == CanonicalToolKind::Freeform {
-            delta.insert("input".into(), Value::String(item.arguments.clone()));
-            "response.custom_tool_call_input.done"
-        } else {
-            delta.insert("arguments".into(), Value::String(item.arguments.clone()));
-            "response.function_call_arguments.done"
-        };
-        out.extend(self.response_frame(done_event, delta));
+        if item.tool_kind != CanonicalToolKind::DeferredSearch {
+            let mut delta = Map::new();
+            delta.insert("item_id".into(), Value::String(item.item_id.clone()));
+            delta.insert("output_index".into(), Value::from(item.output_index));
+            let done_event = if item.tool_kind == CanonicalToolKind::Freeform {
+                delta.insert("input".into(), Value::String(item.arguments.clone()));
+                "response.custom_tool_call_input.done"
+            } else {
+                delta.insert("arguments".into(), Value::String(item.arguments.clone()));
+                "response.function_call_arguments.done"
+            };
+            out.extend(self.response_frame(done_event, delta));
+        }
         let mut payload = Map::new();
         payload.insert("output_index".into(), Value::from(item.output_index));
         payload.insert("item".into(), function_item(&item, status));
@@ -1964,6 +1986,23 @@ fn function_item(item: &TranslatedToolItem, status: &str) -> Value {
             "input": item.arguments,
             "status": status
         })
+    } else if item.tool_kind == CanonicalToolKind::DeferredSearch {
+        // Authoritative completed item Codex needs. `call_id` and the
+        // Responses item `id` stay distinct; arguments are the bounded
+        // `query`/`limit` object, never wrapper JSON text. `in_progress`
+        // creation carries an empty object per current Codex behavior.
+        let arguments: Value = serde_json::from_str(&item.arguments)
+            .ok()
+            .filter(|value: &Value| value.is_object())
+            .unwrap_or_else(|| json!({}));
+        json!({
+            "id": item.item_id,
+            "type": "tool_search_call",
+            "execution": "client",
+            "call_id": item.call_id,
+            "status": status,
+            "arguments": arguments,
+        })
     } else {
         json!({
             "id": item.item_id,
@@ -1974,6 +2013,11 @@ fn function_item(item: &TranslatedToolItem, status: &str) -> Value {
             "status": status
         })
     }
+}
+
+fn validate_deferred_stream_arguments(arguments: &str) -> Result<String, CodecError> {
+    crate::wire::ir::validate_tool_search_arguments_string(arguments)
+        .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))
 }
 
 fn unwrap_freeform_arguments(arguments: &str) -> Result<String, CodecError> {

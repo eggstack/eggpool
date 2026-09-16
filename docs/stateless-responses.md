@@ -33,12 +33,15 @@ credentials are rendered at dispatch time and are not stored in the profile or
 metadata.
 
 Ordinary function tools are portable across the built-in function-tool
-surfaces. Responses `custom` tools are represented canonically as bounded
-freeform tools and, for a function-only upstream, use a deterministic
-`{"input":"..."}` wrapper. The wrapper is removed before the downstream
-Responses `custom_tool_call` item is emitted; malformed wrappers fail closed.
-Other native/server tools remain native-only and are preserved on a native
-Responses route or rejected before dispatch when no semantic equivalent exists.
+surfaces. Responses `custom` tools are bounded freeform tools and, for a
+function-only upstream, use a deterministic `{"input":"..."}` wrapper;
+client-executed `tool_search` is a bounded deferred-search tool and uses its
+exact `query`/`limit` schema as the wrapper function. The wrapper is removed
+before the downstream `custom_tool_call`/`tool_search_call` item is emitted;
+malformed wrappers fail closed. Hosted/server search, namespaces, and other
+native/server tools remain native-only and are preserved on a native Responses
+route or rejected before dispatch when no semantic equivalent exists. Eggpool
+never executes the search itself; Codex remains the tool executor.
 
 ## Streaming
 
@@ -47,10 +50,12 @@ Responses, EggPool incrementally observes the SSE framing and terminal/usage
 evidence while forwarding the original valid bytes unchanged, including
 unknown forward-compatible events. When the upstream surface differs, a
 stateful bounded encoder synthesizes Responses message, reasoning, and
-function-call lifecycles. Function calls end with an authoritative
-`response.output_item.done` containing complete arguments, a separate output
-item ID, the canonical `call_id`, name, and status. `response.completed` is the
-only successful Responses terminal; `response.failed` and
+tool-call lifecycles. Function, freeform, and deferred-search calls end with
+an authoritative `response.output_item.done` containing complete arguments, a
+separate output item ID, the canonical `call_id`, and status; deferred
+`tool_search_call` items carry `execution: client` and the bounded
+`query`/`limit` object with distinct item/call IDs. `response.completed` is
+the only successful Responses terminal; `response.failed` and
 `response.incomplete` are terminal non-success outcomes. A transport EOF
 without native terminal evidence is classified as incomplete and never
 receives a synthetic client terminal event.

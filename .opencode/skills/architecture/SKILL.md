@@ -28,16 +28,21 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   emit explicit bounded adaptation notices.
 - Keep the provider-neutral tool distinction narrow: ordinary function tools
   remain unchanged, while Responses `custom` tools use
-  `CanonicalToolKind::Freeform` and a deterministic function wrapper only on
-  function-style targets. The per-request declaration, not a tool name alone,
-  must drive unwrapping and downstream `custom_tool_call` reconstruction.
+  `CanonicalToolKind::Freeform` and client-executed `tool_search` uses
+  `CanonicalToolKind::DeferredSearch`, each with a deterministic function
+  wrapper only on function-style targets. The per-request declaration, not a
+  tool name alone, must drive unwrapping and downstream
+  `custom_tool_call`/`tool_search_call` reconstruction. Hosted/server search
+  stays native-only; Eggpool never executes the search.
 - For Responses streaming, select the explicit native-observed path only for
   Responses-to-Responses compatibility. Observe raw SSE incrementally and
   forward valid source bytes unchanged; use a separate bounded stateful encoder
   for cross-surface output, including completed output items, indexes, and
-  distinct function-call/item identities. Interleaved translated calls must
-  remain keyed by source index/call identity, and later tool outputs must be
-  paired by `call_id` rather than output-item order.
+  distinct call/item identities. Deferred argument fragments accumulate
+  silently by source index/call identity with an authoritative
+  `tool_search_call` done item. Interleaved translated calls must remain keyed
+  by source index/call identity, and later tool outputs must be paired by
+  `call_id` rather than output-item order.
 - Routing is deterministic and load-based, never cost-based. Selector (virtual
   model) decisions happen before provider/account routing and cannot pin an
   account, bypass health/quota, or reselect after submission.

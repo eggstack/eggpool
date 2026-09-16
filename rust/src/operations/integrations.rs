@@ -113,6 +113,8 @@ pub struct AgentModelCapabilities {
     pub input_images: Option<bool>,
     pub reasoning: Option<AgentReasoningCapabilities>,
     pub function_tools: Option<bool>,
+    pub freeform_tools: Option<bool>,
+    pub deferred_tool_search: Option<bool>,
     pub responses: bool,
     pub websockets: bool,
 }
@@ -133,6 +135,8 @@ impl AgentModelCapabilities {
             input_images: None,
             reasoning: None,
             function_tools: None,
+            freeform_tools: None,
+            deferred_tool_search: None,
             responses: true,
             websockets: false,
         }
@@ -154,6 +158,21 @@ pub fn project_model(model: &IntegrationModel) -> AgentModelProjection {
         }
         if let Some(tools) = object.get("supports_tools").and_then(Value::as_bool) {
             capabilities.function_tools = Some(tools);
+        }
+        // Freeform (`custom`) and deferred (`tool_search`) stay unknown
+        // unless the catalog explicitly proves them. Unknown is conservative:
+        // renderers must not advertise them optimistically.
+        if let Some(freeform) = object
+            .get("supports_freeform_tools")
+            .and_then(Value::as_bool)
+        {
+            capabilities.freeform_tools = Some(freeform);
+        }
+        if let Some(deferred) = object
+            .get("supports_deferred_tool_search")
+            .and_then(Value::as_bool)
+        {
+            capabilities.deferred_tool_search = Some(deferred);
         }
         if let Some(thinking) = object.get("thinking").and_then(Value::as_object)
             && thinking.get("status").and_then(Value::as_str)
@@ -283,6 +302,29 @@ pub fn aggregate_projections(
             None
         }
     };
+    let intersect_optional_bool =
+        |select: fn(&AgentModelCapabilities) -> Option<bool>| -> Option<bool> {
+            let mut values = BTreeSet::new();
+            for capability in projections {
+                match select(capability) {
+                    Some(value) => {
+                        values.insert(value);
+                    }
+                    None => {
+                        values.insert(true);
+                        values.insert(false);
+                    }
+                }
+            }
+            if values.len() == 1 {
+                Some(*values.iter().next().expect("single value"))
+            } else {
+                None
+            }
+        };
+    let freeform_tools = intersect_optional_bool(|capability| capability.freeform_tools);
+    let deferred_tool_search =
+        intersect_optional_bool(|capability| capability.deferred_tool_search);
     let reasoning = {
         if projections
             .iter()
@@ -319,6 +361,8 @@ pub fn aggregate_projections(
         input_images,
         reasoning,
         function_tools,
+        freeform_tools,
+        deferred_tool_search,
         responses: true,
         websockets: false,
     }
@@ -2933,6 +2977,8 @@ mod tests {
                 summaries: false,
             }),
             function_tools: Some(true),
+            freeform_tools: None,
+            deferred_tool_search: None,
             responses: true,
             websockets: false,
         };
@@ -2947,6 +2993,8 @@ mod tests {
                 summaries: false,
             }),
             function_tools: Some(true),
+            freeform_tools: None,
+            deferred_tool_search: None,
             responses: true,
             websockets: false,
         };

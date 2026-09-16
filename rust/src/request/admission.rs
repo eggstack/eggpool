@@ -14,7 +14,9 @@ use crate::{
     wire::ir::{
         CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage, CanonicalRequest,
         CanonicalRole, CanonicalTool, CanonicalToolChoice, CanonicalToolKind, ClientSurface,
-        MediaSource, Presence, ReasoningIntent, ReasoningMode, RequestPresence, ToolChoiceMode,
+        MAX_TOOL_SEARCH_DESCRIPTION_BYTES, MAX_TOOL_SEARCH_TOOLS, MediaSource, Presence,
+        ReasoningIntent, ReasoningMode, RequestPresence, TOOL_SEARCH_TOOL_NAME, ToolChoiceMode,
+        default_tool_search_parameters,
     },
 };
 
@@ -562,6 +564,38 @@ fn decode_message_array(
                         return Ok(Some(CanonicalMessage {
                             role: CanonicalRole::Tool,
                             content: vec![decode_response_custom_tool_output(object)?],
+                            tool_call_id: string_value(object.get("call_id"))?,
+                            name: None,
+                            refusal: None,
+                        }));
+                    }
+                    Some("tool_search_call") => {
+                        // Only client-executed search has a portable
+                        // semantic. Hosted/server search stays native-only so
+                        // cross-surface routes fail before provider dispatch
+                        // instead of silently dropping the tool.
+                        let is_client =
+                            object.get("execution").and_then(Value::as_str) == Some("client");
+                        if !is_client {
+                            return Ok(None);
+                        }
+                        return Ok(Some(CanonicalMessage {
+                            role: CanonicalRole::Assistant,
+                            content: vec![decode_response_tool_search_call(object)?],
+                            tool_call_id: None,
+                            name: None,
+                            refusal: None,
+                        }));
+                    }
+                    Some("tool_search_output") => {
+                        let is_client =
+                            object.get("execution").and_then(Value::as_str) == Some("client");
+                        if !is_client {
+                            return Ok(None);
+                        }
+                        return Ok(Some(CanonicalMessage {
+                            role: CanonicalRole::Tool,
+                            content: vec![decode_response_tool_search_output(object)?],
                             tool_call_id: string_value(object.get("call_id"))?,
                             name: None,
                             refusal: None,
@@ -1206,6 +1240,185 @@ fn decode_response_custom_tool_output(
     })
 }
 
+fn is_client_tool_search_declaration(object: &Map<String, Value>) -> bool {
+    object.get("type").and_then(Value::as_str) == Some("tool_search")
+        && object.get("execution").and_then(Value::as_str) == Some("client")
+}
+
+fn decode_tool_search_declaration(
+    object: &Map<String, Value>,
+) -> Result<CanonicalTool, AdmissionError> {
+    if let Some(name) = object.get("name").and_then(Value::as_str)
+        && name != TOOL_SEARCH_TOOL_NAME
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "tools[].name",
+        });
+    }
+    let description = string_value(object.get("description"))?;
+    if description
+        .as_deref()
+        .is_some_and(|description| description.len() > MAX_TOOL_SEARCH_DESCRIPTION_BYTES)
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "tools[].description",
+        });
+    }
+    let parameters = object
+        .get("parameters")
+        .map(|value| {
+            value
+                .as_object()
+                .cloned()
+                .ok_or(AdmissionError::InvalidField {
+                    field: "tools[].parameters",
+                })
+        })
+        .transpose()?
+        .unwrap_or_else(default_tool_search_parameters);
+    if serde_json::to_vec(&parameters)
+        .map(|encoded| encoded.len() > 16 * 1024)
+        .unwrap_or(true)
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "tools[].parameters",
+        });
+    }
+    Ok(CanonicalTool {
+        kind: CanonicalToolKind::DeferredSearch,
+        name: TOOL_SEARCH_TOOL_NAME.to_owned(),
+        description,
+        parameters,
+        cache_control: None,
+        defer_loading: None,
+    })
+}
+
+/// Decode one client-executed `tool_search_call` history item.
+///
+/// Provenance: OpenAI Codex `4701aa4b4239c70063ab6f2fcb835324f9c109f4`
+/// (`codex-rs/tools/src/tool_spec.rs`, `tool_search_spec.rs`,
+/// `core/src/tools/handlers/tool_search.rs`) and the public Responses
+/// `tool_search` guide. Only `execution == "client"` with a defined
+/// `call_id` is portable; hosted/server search stays native-only and is
+/// handled by the caller returning `None`.
+fn decode_response_tool_search_call(
+    object: &Map<String, Value>,
+) -> Result<CanonicalContentBlock, AdmissionError> {
+    let call_id = string_value(object.get("call_id"))?.ok_or(AdmissionError::InvalidField {
+        field: "tool_call.id",
+    })?;
+    if call_id.trim().is_empty() {
+        return Err(AdmissionError::InvalidField {
+            field: "tool_call.id",
+        });
+    }
+    if let Some(name) = object.get("name").and_then(Value::as_str)
+        && name != TOOL_SEARCH_TOOL_NAME
+    {
+        return Err(AdmissionError::InvalidField {
+            field: "tool_call.name",
+        });
+    }
+    let arguments_value = object
+        .get("arguments")
+        .ok_or(AdmissionError::InvalidField {
+            field: "tool_call.arguments",
+        })?;
+    // Current Codex sends an object; accept a JSON string defensively but
+    // still validate the bounded `query`/`limit` shape.
+    let arguments_string = if let Some(object) = arguments_value.as_object() {
+        crate::wire::ir::validate_tool_search_arguments_value(&Value::Object(object.clone()))
+            .ok_or(AdmissionError::InvalidField {
+                field: "tool_call.arguments",
+            })?
+    } else if let Some(text) = arguments_value.as_str() {
+        crate::wire::ir::validate_tool_search_arguments_string(text).ok_or(
+            AdmissionError::InvalidField {
+                field: "tool_call.arguments",
+            },
+        )?
+    } else {
+        return Err(AdmissionError::InvalidField {
+            field: "tool_call.arguments",
+        });
+    };
+    Ok(CanonicalContentBlock {
+        kind: CanonicalBlockKind::ToolCall,
+        text: None,
+        media: None,
+        call_id: Some(call_id),
+        name: Some(TOOL_SEARCH_TOOL_NAME.to_owned()),
+        arguments: Some(arguments_string),
+        tool_input: None,
+        tool_kind: CanonicalToolKind::DeferredSearch,
+        is_error: false,
+        signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
+    })
+}
+
+/// Decode one client-executed `tool_search_output` history item.
+///
+/// The discovered `tools` array is preserved as bounded JSON text so a later
+/// function-capable upstream sees the search result as an ordinary function
+/// result. Ordering relative to other calls/results is preserved by the
+/// caller; this helper never converts the output to user text.
+fn decode_response_tool_search_output(
+    object: &Map<String, Value>,
+) -> Result<CanonicalContentBlock, AdmissionError> {
+    let call_id = string_value(object.get("call_id"))?.ok_or(AdmissionError::InvalidField {
+        field: "tool_result.call_id",
+    })?;
+    if call_id.trim().is_empty() {
+        return Err(AdmissionError::InvalidField {
+            field: "tool_result.call_id",
+        });
+    }
+    let tools =
+        object
+            .get("tools")
+            .and_then(Value::as_array)
+            .ok_or(AdmissionError::InvalidField {
+                field: "tool_result.output",
+            })?;
+    if tools.len() > MAX_TOOL_SEARCH_TOOLS {
+        return Err(AdmissionError::CollectionLimit {
+            kind: "tool_search_output.tools",
+        });
+    }
+    for tool in tools {
+        if !tool.is_object() {
+            return Err(AdmissionError::InvalidField {
+                field: "tool_result.output",
+            });
+        }
+    }
+    let encoded = serde_json::to_string(tools).map_err(|_| AdmissionError::InvalidField {
+        field: "tool_result.output",
+    })?;
+    if encoded.len() > crate::wire::ir::MAX_TOOL_SEARCH_OUTPUT_BYTES {
+        return Err(AdmissionError::CollectionLimit {
+            kind: "tool_search_output.tools",
+        });
+    }
+    Ok(CanonicalContentBlock {
+        kind: CanonicalBlockKind::ToolResult,
+        text: Some(encoded),
+        media: None,
+        call_id: Some(call_id),
+        name: None,
+        arguments: None,
+        tool_input: None,
+        tool_kind: CanonicalToolKind::DeferredSearch,
+        is_error: false,
+        signature: None,
+        cache_control: None,
+        prompt_cache_breakpoint: None,
+    })
+}
+
 fn decode_tools(
     value: Option<&Value>,
     surface: ClientSurface,
@@ -1240,6 +1453,12 @@ fn decode_tools(
                         cache_control: None,
                         defer_loading: None,
                     }));
+                }
+                if kind == "tool_search" {
+                    if is_client_tool_search_declaration(object) {
+                        return decode_tool_search_declaration(object).map(Some);
+                    }
+                    return Ok(None);
                 }
                 if kind != "function" {
                     return Ok(None);
@@ -1304,6 +1523,16 @@ pub fn validate_responses_stateless_policy(
     Ok(())
 }
 
+fn is_portable_tool_search_input(item: &Map<String, Value>) -> bool {
+    let kind = item.get("type").and_then(Value::as_str);
+    let is_client = item.get("execution").and_then(Value::as_str) == Some("client");
+    let has_call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .is_some_and(|call_id| !call_id.trim().is_empty());
+    matches!(kind, Some("tool_search_call" | "tool_search_output")) && is_client && has_call_id
+}
+
 fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
     let native_input_items = object
         .get("input")
@@ -1312,19 +1541,28 @@ fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
             items
                 .iter()
                 .filter(|item| {
-                    item.as_object()
-                        .and_then(|item| item.get("type"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|kind| {
-                            !matches!(
-                                kind,
-                                "message"
-                                    | "function_call"
-                                    | "function_call_output"
-                                    | "custom_tool_call"
-                                    | "custom_tool_call_output"
-                            )
-                        })
+                    let Some(item) = item.as_object() else {
+                        return true;
+                    };
+                    let kind = item.get("type").and_then(Value::as_str);
+                    if matches!(
+                        kind,
+                        Some(
+                            "message"
+                                | "function_call"
+                                | "function_call_output"
+                                | "custom_tool_call"
+                                | "custom_tool_call_output"
+                        )
+                    ) {
+                        return false;
+                    }
+                    // Client-executed search has a portable canonical form;
+                    // hosted/server search stays native-only.
+                    if is_portable_tool_search_input(item) {
+                        return false;
+                    }
+                    true
                 })
                 .count()
         })
@@ -1336,10 +1574,17 @@ fn native_feature_summary(object: &Map<String, Value>) -> NativeFeatureSummary {
             tools
                 .iter()
                 .filter(|tool| {
-                    tool.as_object()
-                        .and_then(|tool| tool.get("type"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|kind| !matches!(kind, "function" | "custom"))
+                    let Some(tool) = tool.as_object() else {
+                        return true;
+                    };
+                    let kind = tool.get("type").and_then(Value::as_str);
+                    if matches!(kind, Some("function" | "custom")) {
+                        return false;
+                    }
+                    if kind == Some("tool_search") && is_client_tool_search_declaration(tool) {
+                        return false;
+                    }
+                    true
                 })
                 .count()
         })

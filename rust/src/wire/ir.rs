@@ -193,12 +193,103 @@ impl CanonicalContentBlock {
 
 /// Provider-neutral tool semantics.  `Freeform` is deliberately smaller than
 /// any one client protocol's custom-tool schema; the source-native definition
-/// remains in the bounded Responses preservation envelope.
+/// remains in the bounded Responses preservation envelope.  `DeferredSearch`
+/// is the narrow client-executed `tool_search` semantic: Codex remains the
+/// tool executor and Eggpool only transports the declaration/call/output
+/// lifecycle. Hosted/server-executed search stays native-only and never
+/// becomes this kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CanonicalToolKind {
     #[default]
     Function,
     Freeform,
+    DeferredSearch,
+}
+
+/// Canonical name for the deferred tool-search entrypoint.
+///
+/// The per-request declaration, not this string alone, drives unwrapping and
+/// downstream `tool_search_call` reconstruction. An ordinary function named
+/// `tool_search` stays [`CanonicalToolKind::Function`].
+pub const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+
+/// Default result limit used when a client-executed declaration omits an
+/// explicit schema. Mirrors the current Codex default (8) without inferring
+/// provider precision elsewhere.
+pub const TOOL_SEARCH_DEFAULT_LIMIT: u64 = 8;
+
+/// Bounded validation limits for deferred tool-search payloads. These bound
+/// the Codex `query`/`limit` shape and the transported `tools` array; they
+/// never store plugin state, credentials, or raw bodies beyond the request.
+pub const MAX_TOOL_SEARCH_QUERY_BYTES: usize = 8 * 1024;
+pub const MAX_TOOL_SEARCH_ARGS_BYTES: usize = 16 * 1024;
+pub const MAX_TOOL_SEARCH_OUTPUT_BYTES: usize = 256 * 1024;
+pub const MAX_TOOL_SEARCH_TOOLS: usize = 64;
+pub const MAX_TOOL_SEARCH_DESCRIPTION_BYTES: usize = 8 * 1024;
+
+/// Return the default client-executed search schema (`query` required,
+/// optional numeric `limit`). Used only when a client declaration omits an
+/// explicit bounded schema; stored declarations always win.
+pub fn default_tool_search_parameters() -> Map<String, Value> {
+    serde_json::from_value(json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query for deferred tools."},
+            "limit": {"type": "number", "description": "Maximum number of tools to return."},
+        },
+        "required": ["query"],
+        "additionalProperties": false,
+    }))
+    .expect("default tool-search schema is valid JSON")
+}
+
+/// Validate one client-executed `tool_search` arguments object.
+///
+/// Accepts the current Codex shape (`query` required non-empty string,
+/// optional positive numeric `limit`, no other properties) in either object
+/// or JSON-string form. Returns the canonical compact JSON string on success.
+/// Malformed input must fail closed; callers must not forward wrapper JSON
+/// to Codex as if it were a valid native call.
+pub fn validate_tool_search_arguments_string(arguments: &str) -> Option<String> {
+    if arguments.len() > MAX_TOOL_SEARCH_ARGS_BYTES {
+        return None;
+    }
+    let value: Value = serde_json::from_str(arguments).ok()?;
+    validate_tool_search_arguments_value(&value)?;
+    Some(arguments.to_owned())
+}
+
+/// Validate a parsed arguments value and return its compact encoding.
+pub fn validate_tool_search_arguments_value(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    if object.len() > 2 {
+        return None;
+    }
+    for key in object.keys() {
+        if key.len() > 256 || (key != "query" && key != "limit") {
+            return None;
+        }
+    }
+    let query = object.get("query")?.as_str()?;
+    if query.trim().is_empty() || query.len() > MAX_TOOL_SEARCH_QUERY_BYTES {
+        return None;
+    }
+    if let Some(limit) = object.get("limit") {
+        let valid = limit
+            .as_u64()
+            .is_some_and(|limit| limit > 0 && limit <= 1000)
+            || limit.as_f64().is_some_and(|limit| {
+                limit.is_finite() && limit > 0.0 && limit <= 1000.0 && limit.fract() == 0.0
+            });
+        if !valid {
+            return None;
+        }
+    }
+    let encoded = serde_json::to_string(value).ok()?;
+    if encoded.len() > MAX_TOOL_SEARCH_ARGS_BYTES {
+        return None;
+    }
+    Some(encoded)
 }
 
 impl fmt::Debug for CanonicalContentBlock {
@@ -268,6 +359,11 @@ pub struct CanonicalTool {
 
 impl CanonicalTool {
     /// Return the JSON schema used by function-only provider grammars.
+    ///
+    /// `Freeform` uses a deterministic single-string `input` wrapper.
+    /// `DeferredSearch` reuses the exact client-executed search schema
+    /// (`query` required, optional `limit`) so the upstream model performs
+    /// the same bounded search Codex would execute locally.
     pub fn function_parameters(&self) -> Map<String, Value> {
         if self.kind == CanonicalToolKind::Freeform {
             return serde_json::from_value(json!({
@@ -277,6 +373,12 @@ impl CanonicalTool {
                 "additionalProperties": false,
             }))
             .expect("freeform wrapper schema is valid JSON");
+        }
+        if self.kind == CanonicalToolKind::DeferredSearch {
+            if self.parameters.is_empty() {
+                return default_tool_search_parameters();
+            }
+            return self.parameters.clone();
         }
         self.parameters.clone()
     }
@@ -574,6 +676,13 @@ impl CanonicalRequest {
                                     "type": "custom",
                                     "name": tool.name,
                                     "description": tool.description.clone().unwrap_or_default(),
+                                })
+                            } else if tool.kind == CanonicalToolKind::DeferredSearch {
+                                json!({
+                                    "type": "tool_search",
+                                    "execution": "client",
+                                    "description": tool.description.clone().unwrap_or_default(),
+                                    "parameters": Value::Object(tool.function_parameters()),
                                 })
                             } else {
                                 json!({

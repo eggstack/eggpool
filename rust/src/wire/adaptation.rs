@@ -647,6 +647,19 @@ fn tool_notices(
             Some(target),
         ));
     }
+    if target != WireSurface::OpenaiResponses
+        && request
+            .tools
+            .iter()
+            .any(|tool| tool.kind == CanonicalToolKind::DeferredSearch)
+    {
+        notices.push(notice(
+            "deferred_tool_search_wrapped_as_function",
+            "tools.tool_search",
+            source,
+            Some(target),
+        ));
+    }
     if matches!(target, WireSurface::GeminiGenerateContent) {
         let has_ids = request.messages.iter().any(|message| {
             message.content.iter().any(|block| {
@@ -704,6 +717,25 @@ pub const fn client_wire_surface(surface: ClientSurface) -> WireSurface {
         ClientSurface::Responses => WireSurface::OpenaiResponses,
         ClientSurface::Messages => WireSurface::AnthropicMessages,
     }
+}
+
+/// Reusable capability fact for deferred `tool_search`.
+///
+/// Native Responses forwarding preserves the declaration/call/output
+/// lifecycle byte-for-byte. Every other built-in surface carries ordinary
+/// function tools, so a client-executed search bridges deterministically as
+/// a `tool_search` wrapper function. Hosted/server search stays native-only.
+/// Unknown future surfaces must opt in explicitly rather than silently
+/// dropping the tool.
+pub const fn supports_deferred_tool_search(target: WireSurface) -> bool {
+    matches!(
+        target,
+        WireSurface::OpenaiResponses
+            | WireSurface::OpenaiChatCompletions
+            | WireSurface::AnthropicMessages
+            | WireSurface::GeminiInteractions
+            | WireSurface::GeminiGenerateContent
+    )
 }
 
 /// Derive a repeatable ID for provider responses that have no native call ID.

@@ -270,11 +270,39 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
             .collect();
         if !tool_results.is_empty() {
             for block in tool_results {
-                input.push(json!({
-                    "type": if block.tool_kind == CanonicalToolKind::Freeform { "custom_tool_call_output" } else { "function_call_output" },
-                    "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
-                    "output":block.text.clone().unwrap_or_default()
-                }));
+                if block.tool_kind == CanonicalToolKind::DeferredSearch {
+                    let call_id = block
+                        .call_id
+                        .clone()
+                        .or_else(|| message.tool_call_id.clone())
+                        .unwrap_or_default();
+                    let tools: Value = block
+                        .text
+                        .as_deref()
+                        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                        .filter(|value| value.is_array())
+                        .ok_or_else(|| {
+                            error(
+                                CodecReasonCode::MalformedSourceRequest,
+                                Some("tool_search_output.tools"),
+                                Some(client_wire_surface(request.client_surface)),
+                                Some(WireSurface::OpenaiResponses),
+                            )
+                        })?;
+                    input.push(json!({
+                        "type": "tool_search_output",
+                        "execution": "client",
+                        "call_id": call_id,
+                        "status": "completed",
+                        "tools": tools,
+                    }));
+                } else {
+                    input.push(json!({
+                        "type": if block.tool_kind == CanonicalToolKind::Freeform { "custom_tool_call_output" } else { "function_call_output" },
+                        "call_id":block.call_id.clone().or_else(|| message.tool_call_id.clone()).unwrap_or_default(),
+                        "output":block.text.clone().unwrap_or_default()
+                    }));
+                }
             }
             continue;
         }
@@ -289,6 +317,27 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                     "call_id":block.call_id.clone().unwrap_or_default(),
                     "name":block.name.clone().unwrap_or_default(),
                     "input":block.arguments.clone().unwrap_or_default()
+                }));
+            } else if block.tool_kind == CanonicalToolKind::DeferredSearch {
+                let arguments: Value = block
+                    .arguments
+                    .as_deref()
+                    .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+                    .filter(|value| value.is_object())
+                    .ok_or_else(|| {
+                        error(
+                            CodecReasonCode::MalformedSourceRequest,
+                            Some("tool_search_call.arguments"),
+                            Some(client_wire_surface(request.client_surface)),
+                            Some(WireSurface::OpenaiResponses),
+                        )
+                    })?;
+                input.push(json!({
+                    "type": "tool_search_call",
+                    "execution": "client",
+                    "call_id": block.call_id.clone().unwrap_or_default(),
+                    "status": "completed",
+                    "arguments": arguments,
                 }));
             } else {
                 input.push(json!({
@@ -420,8 +469,14 @@ fn response_tools(request: &CanonicalRequest) -> Vec<Value> {
     request.tools.iter().map(|tool| {
         if tool.kind == CanonicalToolKind::Freeform {
             json!({"type":"custom", "name":tool.name, "description":tool.description.clone().unwrap_or_default()})
+        } else if tool.kind == CanonicalToolKind::DeferredSearch {
+            json!({"type":"tool_search", "execution":"client", "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters())})
         } else {
-            json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters()), "strict":false})
+            let mut value = json!({"type":"function", "name":tool.name, "description":tool.description.clone().unwrap_or_default(), "parameters":Value::Object(tool.function_parameters()), "strict":false});
+            if tool.defer_loading == Some(true) {
+                value["defer_loading"] = Value::Bool(true);
+            }
+            value
         }
     }).collect()
 }
@@ -830,6 +885,49 @@ fn decode_responses_response(
                 arguments: Some(required_string(item, "input", "output[].input")?),
                 tool_kind: CanonicalToolKind::Freeform,
             }),
+            Some("tool_search_call") => {
+                // Native hosted (`execution: server`, `call_id: null`) and
+                // client-executed (`execution: client`, defined `call_id`)
+                // calls both decode so native finite forwarding stays
+                // byte-exact. Cross-surface bridging is gated later: only
+                // client calls with a defined ID are portable.
+                let call_id = optional_string(item, "call_id")?;
+                let arguments_value = item
+                    .get("arguments")
+                    .ok_or_else(|| response_error("output[].arguments"))?;
+                let arguments = if let Some(object) = arguments_value.as_object() {
+                    compact_value(&Value::Object(object.clone()))
+                } else if let Some(text) = arguments_value.as_str() {
+                    text.to_owned()
+                } else {
+                    return Err(response_error("output[].arguments"));
+                };
+                output.push(CanonicalOutputBlock {
+                    kind: CanonicalBlockKind::ToolCall,
+                    text: None,
+                    media: None,
+                    call_id,
+                    name: Some(crate::wire::ir::TOOL_SEARCH_TOOL_NAME.to_owned()),
+                    arguments: Some(arguments),
+                    tool_kind: CanonicalToolKind::DeferredSearch,
+                });
+            }
+            Some("tool_search_output") => {
+                let call_id = optional_string(item, "call_id")?;
+                let tools = item
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| response_error("output[].tools"))?;
+                output.push(CanonicalOutputBlock {
+                    kind: CanonicalBlockKind::ToolResult,
+                    text: Some(compact_value(&Value::Array(tools.clone()))),
+                    media: None,
+                    call_id,
+                    name: None,
+                    arguments: None,
+                    tool_kind: CanonicalToolKind::DeferredSearch,
+                });
+            }
             Some("reasoning") => {
                 let summary = item
                     .get("summary")
@@ -1192,6 +1290,18 @@ fn encode_responses_response(
             CanonicalBlockKind::ToolCall => {
                 if block.tool_kind == CanonicalToolKind::Freeform {
                     output.push(json!({"type":"custom_tool_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "input":block.arguments.clone().unwrap_or_default()}));
+                } else if block.tool_kind == CanonicalToolKind::DeferredSearch {
+                    let arguments: Value = block
+                        .arguments
+                        .as_deref()
+                        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+                        .filter(|value| value.is_object())
+                        .unwrap_or(Value::Object(Map::new()));
+                    if let Some(call_id) = block.call_id.clone() {
+                        output.push(json!({"type":"tool_search_call", "execution":"client", "call_id":call_id, "status":"completed", "arguments":arguments}));
+                    } else {
+                        output.push(json!({"type":"tool_search_call", "execution":"server", "call_id":Value::Null, "status":"completed", "arguments":arguments}));
+                    }
                 } else {
                     output.push(json!({"type":"function_call", "call_id":block.call_id.clone().unwrap_or_default(), "name":block.name.clone().unwrap_or_default(), "arguments":block.arguments.clone().unwrap_or_default()}));
                 }

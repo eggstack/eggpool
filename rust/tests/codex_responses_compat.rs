@@ -2,7 +2,22 @@
 //!
 //! Fixture provenance: OpenAI Codex 508a006d7aaa485ac0367c9e45c69ebb948af518
 //! and OpenCodex bridge reference e4a8539b957b7ae7cd278666f0364eb0f82d4ac3.
-//! These commits are audit markers only; neither is a runtime dependency.
+//! Deferred `tool_search` fixtures are additionally provenanced from OpenAI
+//! Codex 4701aa4b4239c70063ab6f2fcb835324f9c109f4
+//! (`codex-rs/tools/src/tool_spec.rs`, `tool_discovery.rs`,
+//! `core/src/tools/handlers/tool_search.rs`, `tool_search_spec.rs`,
+//! `core/src/context_manager/normalize.rs`) and the public Responses
+//! `tool_search` guide (client `execution`, `query`/`limit` schema,
+//! `tool_search_call`/`tool_search_output` lifecycle). These commits are
+//! audit markers only; none is a runtime dependency.
+//!
+//! Conformance maintenance policy: when a new Codex tool/item/event appears,
+//! classify it as (1) native-preservation only, (2) provider-neutral portable
+//! semantic, or (3) unsupported/non-portable. Only category 2 expands the
+//! canonical translation. Update fixture provenance only when
+//! compatibility-sensitive source behavior changes; do not churn the pinned
+//! commit for unrelated upstream UI/features. Eggpool never executes
+//! searches, plugins, MCP tools, or newly discovered tools itself.
 
 use eggpool::request::{AdmissionOptions, admit_request};
 use eggpool::wire::ir::{CanonicalToolKind, ClientSurface};
@@ -455,5 +470,546 @@ fn next_turn_tool_outputs_keep_call_pairing_when_order_is_reversed() {
     assert_eq!(
         outputs,
         [("call_a", "result-for-b"), ("call_z", "result-for-a")]
+    );
+}
+
+// Plan 201: deferred `tool_search` compatibility. Provenance: Codex
+// 4701aa4b4239c70063ab6f2fcb835324f9c109f4. Only client-executed search
+// (`execution: client` with a defined `call_id`) is portable; hosted/server
+// search stays native-only. Eggpool never executes the search itself.
+
+fn tool_search_declaration() -> Value {
+    json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Searches over deferred tool metadata with BM25.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query for deferred tools."},
+                "limit": {"type": "number", "description": "Maximum number of tools to return. Defaults to 8."}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        }
+    })
+}
+
+#[test]
+fn deferred_tool_search_native_declaration_and_history_are_preserved() {
+    let body = codex_request(json!({
+        "model": "eggpool-model",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "find it"}]},
+            {"type": "tool_search_call", "id": "tsc_1", "call_id": "call-search-1", "execution": "client", "status": "completed", "arguments": {"query": "create calendar event", "limit": 8}},
+            {"type": "tool_search_output", "execution": "client", "call_id": "call-search-1", "status": "completed", "tools": [
+                {"type": "function", "name": "get_shipping_eta", "description": "Look up shipping ETA.", "defer_loading": true, "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"], "additionalProperties": false}}
+            ]}
+        ],
+        "tools": [tool_search_declaration()],
+    }));
+    let admitted = admit_request(
+        &body,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("client tool_search is admitted");
+    assert_eq!(admitted.canonical.tools.len(), 1);
+    assert_eq!(
+        admitted.canonical.tools[0].kind,
+        CanonicalToolKind::DeferredSearch
+    );
+    assert_eq!(admitted.canonical.tools[0].name, "tool_search");
+    // Portable search does not count as a native cross-surface blocker.
+    assert_eq!(
+        admitted
+            .native_preservation
+            .as_ref()
+            .unwrap()
+            .summary
+            .native_tool_definitions,
+        0
+    );
+    assert_eq!(
+        admitted
+            .native_preservation
+            .as_ref()
+            .unwrap()
+            .summary
+            .native_input_items,
+        0
+    );
+
+    let runtime = WireRuntime::embedded().expect("registry");
+    let native = WireRuntimeContext::new(
+        ClientSurface::Responses,
+        profile(WireSurface::OpenaiResponses),
+        "eggpool-model",
+        "eggpool-model",
+    );
+    let prepared = runtime
+        .prepare_request(&body, &native)
+        .expect("native request");
+    assert_eq!(prepared.body.bytes.as_ref(), body.as_slice());
+}
+
+#[test]
+fn deferred_tool_search_uses_a_deterministic_function_wrapper_on_chat() {
+    let body = codex_request(json!({
+        "model": "eggpool-model",
+        "input": "find the shipping tool",
+        "tools": [tool_search_declaration()]
+    }));
+    let runtime = WireRuntime::embedded().expect("registry");
+    let prepared = runtime
+        .prepare_request(
+            &body,
+            &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+        )
+        .expect("translated request");
+    let value = prepared.body.value.expect("encoded request");
+    assert_eq!(value["tools"][0]["type"], "function");
+    assert_eq!(value["tools"][0]["function"]["name"], "tool_search");
+    let params = &value["tools"][0]["function"]["parameters"];
+    assert_eq!(params["required"], json!(["query"]));
+    assert!(params["properties"].get("query").is_some());
+    assert!(
+        prepared
+            .notices
+            .iter()
+            .any(|notice| notice.code.0 == "deferred_tool_search_wrapped_as_function")
+    );
+
+    // Next-turn output becomes an ordinary function result, not user text.
+    let continuation = codex_request(json!({
+        "model": "eggpool-model",
+        "input": [
+            {"type": "tool_search_call", "call_id": "call-search-1", "execution": "client", "status": "completed", "arguments": {"query": "shipping", "limit": 1}},
+            {"type": "tool_search_output", "execution": "client", "call_id": "call-search-1", "status": "completed", "tools": [
+                {"type": "function", "name": "get_shipping_eta", "description": "Look up shipping ETA.", "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}}}
+            ]}
+        ],
+        "tools": [tool_search_declaration()]
+    }));
+    let prepared = runtime
+        .prepare_request(
+            &continuation,
+            &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+        )
+        .expect("translated continuation");
+    let encoded = prepared.body.value.expect("encoded continuation");
+    let messages = encoded["messages"].as_array().expect("messages");
+    // Assistant search call projects as a function call with the bounded
+    // query object preserved verbatim.
+    assert_eq!(
+        messages[0]["tool_calls"][0]["function"]["name"],
+        "tool_search"
+    );
+    let args: Value = serde_json::from_str(
+        messages[0]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .expect("wrapper arguments are JSON");
+    assert_eq!(args["query"], "shipping");
+    // Search output projects as a tool result paired by call_id.
+    assert_eq!(messages[1]["tool_call_id"], "call-search-1");
+    let tools: Value =
+        serde_json::from_str(messages[1]["content"].as_str().unwrap()).expect("tools JSON");
+    assert_eq!(tools[0]["name"], "get_shipping_eta");
+}
+
+#[test]
+fn deferred_tool_search_stream_reconstructs_call_with_stable_ids() {
+    let tool = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::DeferredSearch,
+        name: "tool_search".into(),
+        description: None,
+        parameters: eggpool::wire::ir::default_tool_search_parameters(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    // Upstream calls the wrapper function; arguments arrive split across
+    // deltas and interleaved by source index in the parallel test below.
+    let upstream = [
+        json!({"choices":[{"delta":{"tool_calls":[{"id":"provider-call-9","index":0,"function":{"name":"tool_search"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\":\"cal"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"endar\",\"limit\":1}"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]
+    .into_iter()
+    .map(|payload| format!("data: {payload}\n\n"))
+    .chain(std::iter::once("data: [DONE]\n\n".into()))
+    .collect::<String>()
+    .into_bytes();
+    let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+    let mut events = decoder.push(&upstream).expect("provider stream");
+    let (tail, summary) = decoder.finish().expect("stream finalization");
+    events.extend(tail);
+    assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+
+    let mut encoder =
+        ClientStreamEncoder::new_with_tools(ClientSurface::Responses, std::slice::from_ref(&tool));
+    let mut downstream = Vec::new();
+    for event in &events {
+        downstream.extend(encoder.encode(event).expect("Responses encoding"));
+    }
+    let text = String::from_utf8(downstream).expect("UTF-8 SSE");
+    assert!(text.contains("\"type\":\"tool_search_call\""));
+    assert!(text.contains("\"execution\":\"client\""));
+    assert!(text.contains("\"call_id\":\"provider-call-9\""));
+    assert!(text.contains("\"query\":\"calendar\""));
+    assert!(!text.contains("\"type\":\"function_call\""));
+    assert!(text.contains("response.output_item.done"));
+
+    let payloads = response_payloads(&downstream_with_done(&tool, &events));
+    let done = payloads
+        .iter()
+        .find(|payload| payload["type"] == "response.output_item.done")
+        .expect("authoritative done");
+    let item = &done["item"];
+    assert_eq!(item["type"], "tool_search_call");
+    assert_eq!(item["call_id"], "provider-call-9");
+    assert_ne!(
+        item["id"].as_str().expect("item ID"),
+        item["call_id"].as_str().expect("call ID"),
+        "item ID and call_id stay distinct"
+    );
+    assert!(!item["id"].as_str().unwrap().is_empty());
+}
+
+fn downstream_with_done(
+    tool: &eggpool::wire::ir::CanonicalTool,
+    events: &[eggpool::wire::ir::CanonicalEvent],
+) -> Vec<u8> {
+    let mut encoder =
+        ClientStreamEncoder::new_with_tools(ClientSurface::Responses, std::slice::from_ref(tool));
+    let mut out = Vec::new();
+    for event in events {
+        out.extend(encoder.encode(event).expect("encode"));
+    }
+    out
+}
+
+#[test]
+fn deferred_parallel_calls_do_not_cross_contaminate_wrapper_state() {
+    let function = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::Function,
+        name: "lookup".into(),
+        description: None,
+        parameters: Default::default(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    let freeform = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::Freeform,
+        name: "apply_patch".into(),
+        description: None,
+        parameters: Default::default(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    let deferred = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::DeferredSearch,
+        name: "tool_search".into(),
+        description: None,
+        parameters: eggpool::wire::ir::default_tool_search_parameters(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    let tools = [&function, &freeform, &deferred]
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let upstream = [
+        json!({"choices":[{"delta":{"tool_calls":[
+            {"index":0,"id":"call-func-1","type":"function","function":{"name":"lookup","arguments":""}},
+            {"index":1,"id":"call-free-1","type":"function","function":{"name":"apply_patch","arguments":""}},
+            {"index":2,"id":"call-search-1","type":"function","function":{"name":"tool_search","arguments":""}}
+        ]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"arguments":"{\"query\":\""}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"a"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"input\":\""}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"arguments":"docs\",\"limit\":"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"patch\"}"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"arguments":"2}"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]
+    .into_iter()
+    .map(|payload| format!("data: {payload}\n\n"))
+    .chain(std::iter::once("data: [DONE]\n\n".into()))
+    .collect::<String>()
+    .into_bytes();
+    let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+    let mut events = decoder.push(&upstream).expect("provider stream");
+    let (tail, summary) = decoder.finish().expect("finalization");
+    events.extend(tail);
+    assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+
+    let mut encoder = ClientStreamEncoder::new_with_tools(ClientSurface::Responses, &tools);
+    let mut downstream = Vec::new();
+    for event in &events {
+        downstream.extend(encoder.encode(event).expect("encode"));
+    }
+    let payloads = response_payloads(&downstream);
+    let done: Vec<&Value> = payloads
+        .iter()
+        .filter(|payload| payload["type"] == "response.output_item.done")
+        .collect();
+    assert_eq!(done.len(), 3);
+    let mut kinds: Vec<&str> = done
+        .iter()
+        .map(|payload| payload["item"]["type"].as_str().unwrap())
+        .collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        ["custom_tool_call", "function_call", "tool_search_call"]
+    );
+    let search = done
+        .iter()
+        .find(|payload| payload["item"]["type"] == "tool_search_call")
+        .unwrap();
+    assert_eq!(search["item"]["call_id"], "call-search-1");
+    assert_eq!(search["item"]["execution"], "client");
+    let ids: Vec<&str> = done
+        .iter()
+        .map(|payload| payload["item"]["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert_ne!(ids[0], ids[1]);
+    assert_ne!(ids[1], ids[2]);
+    assert_ne!(ids[0], ids[2]);
+}
+
+#[test]
+fn malformed_tool_search_wrapper_fails_closed() {
+    let tool = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::DeferredSearch,
+        name: "tool_search".into(),
+        description: None,
+        parameters: eggpool::wire::ir::default_tool_search_parameters(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    let mut encoder = ClientStreamEncoder::new_with_tools(ClientSurface::Responses, &[tool]);
+    encoder
+        .encode(&eggpool::wire::ir::CanonicalEvent {
+            event_type: eggpool::wire::ir::CanonicalEventType::ToolCallStart,
+            response_id: None,
+            model: None,
+            index: Some(0),
+            delta: None,
+            call_id: Some("call-search-1".into()),
+            name: Some("tool_search".into()),
+            arguments: None,
+            finish_reason: None,
+            usage: None,
+            error_type: None,
+            error_message: None,
+        })
+        .expect("start");
+    // Missing required `query` must not reach Codex as a native call.
+    let error = encoder
+        .encode(&eggpool::wire::ir::CanonicalEvent {
+            event_type: eggpool::wire::ir::CanonicalEventType::ToolCallStop,
+            response_id: None,
+            model: None,
+            index: Some(0),
+            delta: None,
+            call_id: Some("call-search-1".into()),
+            name: Some("tool_search".into()),
+            arguments: Some("{\"limit\":0}".into()),
+            finish_reason: None,
+            usage: None,
+            error_type: None,
+            error_message: None,
+        })
+        .expect_err("malformed search arguments must fail");
+    assert_eq!(
+        error.reason,
+        eggpool::wire::CodecReasonCode::MalformedProviderEvent
+    );
+
+    // Admission also fails closed on malformed history.
+    let malformed = codex_request(json!({
+        "model": "eggpool-model",
+        "input": [
+            {"type": "tool_search_call", "call_id": "call-search-1", "execution": "client", "status": "completed", "arguments": {"limit": 0}}
+        ],
+        "tools": [tool_search_declaration()]
+    }));
+    let error = admit_request(
+        &malformed,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect_err("malformed history must fail");
+    assert!(matches!(
+        error,
+        eggpool::request::AdmissionError::InvalidField { .. }
+    ));
+}
+
+#[test]
+fn ordinary_function_named_tool_search_is_never_reclassified_by_name() {
+    // An ordinary function named `tool_search` without declaration metadata
+    // stays a function end to end.
+    let body = codex_request(json!({
+        "model": "eggpool-model",
+        "input": "run it",
+        "tools": [{"type": "function", "name": "tool_search", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}]
+    }));
+    let admitted = admit_request(
+        &body,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("ordinary function is admitted");
+    assert_eq!(admitted.canonical.tools.len(), 1);
+    assert_eq!(
+        admitted.canonical.tools[0].kind,
+        CanonicalToolKind::Function
+    );
+
+    let runtime = WireRuntime::embedded().expect("registry");
+    let prepared = runtime
+        .prepare_request(
+            &body,
+            &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+        )
+        .expect("translated request");
+    let value = prepared.body.value.expect("encoded");
+    assert_eq!(value["tools"][0]["function"]["name"], "tool_search");
+    assert!(
+        !prepared
+            .notices
+            .iter()
+            .any(|notice| notice.code.0 == "deferred_tool_search_wrapped_as_function")
+    );
+
+    // Upstream calling that ordinary function must come back as a function
+    // call, not a `tool_search_call`, because translation identity is
+    // declaration-scoped.
+    let upstream = [
+        json!({"choices":[{"delta":{"tool_calls":[{"id":"call-ord-1","index":0,"function":{"name":"tool_search"}}]}}]}),
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"egg\"}"}}]}}]}),
+        json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+    ]
+    .into_iter()
+    .map(|payload| format!("data: {payload}\n\n"))
+    .chain(std::iter::once("data: [DONE]\n\n".into()))
+    .collect::<String>()
+    .into_bytes();
+    let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+    let mut events = decoder.push(&upstream).expect("stream");
+    let (tail, _) = decoder.finish().expect("finish");
+    events.extend(tail);
+    let ordinary = eggpool::wire::ir::CanonicalTool {
+        kind: CanonicalToolKind::Function,
+        name: "tool_search".into(),
+        description: None,
+        parameters: Default::default(),
+        cache_control: None,
+        defer_loading: None,
+    };
+    let mut encoder = ClientStreamEncoder::new_with_tools(ClientSurface::Responses, &[ordinary]);
+    let mut downstream = Vec::new();
+    for event in &events {
+        downstream.extend(encoder.encode(event).expect("encode"));
+    }
+    let text = String::from_utf8(downstream).expect("utf8");
+    assert!(text.contains("\"type\":\"function_call\""));
+    assert!(!text.contains("tool_search_call"));
+}
+
+#[test]
+fn hosted_tool_search_is_rejected_before_provider_dispatch() {
+    // Bare/hosted `tool_search` has no portable function wrapper. It must
+    // fail before provider I/O rather than silently disappearing (which
+    // would change model behavior).
+    let body = codex_request(json!({
+        "model": "eggpool-model",
+        "input": "list orders",
+        "tools": [{"type": "tool_search"}]
+    }));
+    let runtime = WireRuntime::embedded().expect("registry");
+    let error = runtime
+        .prepare_request(
+            &body,
+            &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+        )
+        .expect_err("hosted search must not route cross-surface");
+    assert!(matches!(
+        error,
+        eggpool::wire::WireRuntimeError::RequestAdaptation(error)
+            if error.reason == eggpool::wire::CodecReasonCode::UnsupportedSemanticFeature
+    ));
+
+    // Hosted history is likewise native-only.
+    let history = codex_request(json!({
+        "model": "eggpool-model",
+        "input": [
+            {"type": "tool_search_call", "execution": "server", "call_id": null, "status": "completed", "arguments": {"paths": ["crm"]}},
+            {"type": "tool_search_output", "execution": "server", "call_id": null, "status": "completed", "tools": []}
+        ],
+        "tools": [{"type": "tool_search"}]
+    }));
+    let error = runtime
+        .prepare_request(
+            &history,
+            &context(ClientSurface::Responses, WireSurface::OpenaiChatCompletions),
+        )
+        .expect_err("hosted history must not route cross-surface");
+    assert!(matches!(
+        error,
+        eggpool::wire::WireRuntimeError::RequestAdaptation(_)
+    ));
+}
+
+#[test]
+fn unknown_future_native_tool_event_still_preserved_on_responses_route() {
+    let body = codex_request(json!({
+        "model": "eggpool-model",
+        "input": "hello",
+        "tools": [tool_search_declaration()],
+        "future_tool_event": {"type": "tool_search_future", "execution": "client"}
+    }));
+    let runtime = WireRuntime::embedded().expect("registry");
+    let native = runtime
+        .prepare_request(
+            &body,
+            &context(ClientSurface::Responses, WireSurface::OpenaiResponses),
+        )
+        .expect("native request");
+    // Same-surface forwarding rewrites only the EggPool-owned model field;
+    // unknown/current tool-search-adjacent extensions survive byte-for-byte
+    // under the native observe-and-forward path.
+    let value: Value = serde_json::from_slice(&native.body.bytes).expect("json");
+    assert_eq!(value["future_tool_event"]["type"], "tool_search_future");
+
+    let rewritten = runtime
+        .prepare_request(
+            &body,
+            &WireRuntimeContext::new(
+                ClientSurface::Responses,
+                profile(WireSurface::OpenaiResponses),
+                "eggpool-model",
+                "provider-model",
+            ),
+        )
+        .expect("alias rewrite");
+    let rewritten_value = rewritten.body.value.expect("rewritten");
+    assert_eq!(rewritten_value["model"], "provider-model");
+    assert_eq!(
+        rewritten_value["future_tool_event"]["type"],
+        "tool_search_future"
     );
 }

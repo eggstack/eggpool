@@ -73,9 +73,12 @@ unknown-event preservation, item-id/call-id mapping, authoritative
 `response.completed`/EOF behavior in `wire_stream` and `wire_runtime`.
 Codex compatibility changes additionally run the deterministic
 `codex_responses_compat` target. It covers native request preservation,
-function/freeform wrapper round trips, interleaved parallel-call identity,
-malformed-wrapper rejection, and the current Codex `output_item.done`/terminal
-contract; no Codex runtime dependency or credential is required. Remote-compaction
+function/freeform/deferred-search wrapper round trips, interleaved
+parallel-call identity, declaration-scoped `tool_search` reconstruction,
+ordinary-`tool_search`-name non-reclassification, hosted-search
+pre-dispatch rejection, malformed-wrapper rejection, and the current Codex
+`output_item.done`/terminal contract; no Codex runtime dependency or
+credential is required. Remote-compaction
 changes additionally run the deterministic `codex_compaction_compat` target. It
 covers compact admission, native alias rewriting, byte-exact native forwarding,
 bounded compact success/failure validation, explicit unsupported-target rejection,

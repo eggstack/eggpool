@@ -13,6 +13,7 @@ pub use adaptation::{
     AdaptationOutcome, AdaptationPolicy, CapabilityDisposition, LossPolicy, MAX_ADAPTATION_NOTICES,
     ReasoningCapabilityPolicy, apply_adaptation_policy, native_preservation_notices,
     reasoning_capability_notices, request_notices, stable_tool_call_id,
+    supports_deferred_tool_search,
 };
 pub use additional_codecs::{
     GeminiGenerateContentCodec, GeminiInteractionsCodec, OpenAiResponsesCodec,

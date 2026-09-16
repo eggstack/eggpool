@@ -21,6 +21,7 @@ use super::{
     StreamEventDecoder, StreamForwardingMode, StreamTerminalSummary, WireCodec, WireCodecId,
     WireProfileRegistry, WireSurface, apply_adaptation_policy, builtin_codec_instance,
     compatibility_path, encode_client_event, native_preservation_notices,
+    supports_deferred_tool_search,
 };
 use crate::model_router::AffinityIdentityInput;
 use crate::request::{
@@ -473,6 +474,26 @@ impl WireRuntime {
                     target_surface: Some(context.selected_profile.definition.surface),
                 }));
             }
+        }
+        // Deferred `tool_search` requires either native Responses
+        // preservation or the exact function-wrapper bridge. Known-
+        // incompatible targets fail here, before provider dispatch, rather
+        // than silently dropping the tool and changing model behavior.
+        // Never infer the semantic from the string `tool_search` alone; the
+        // canonical declaration kind drives this gate.
+        if admission
+            .canonical
+            .tools
+            .iter()
+            .any(|tool| tool.kind == CanonicalToolKind::DeferredSearch)
+            && !supports_deferred_tool_search(context.selected_profile.definition.surface)
+        {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("tools.tool_search".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
         }
 
         let codec = self.request_codec(context)?;
@@ -1276,30 +1297,21 @@ fn classify_freeform_output(
         .filter(|tool| tool.kind == CanonicalToolKind::Freeform)
         .map(|tool| tool.name.as_str())
         .collect();
+    let deferred_names: std::collections::BTreeSet<&str> = tools
+        .iter()
+        .filter(|tool| tool.kind == CanonicalToolKind::DeferredSearch)
+        .map(|tool| tool.name.as_str())
+        .collect();
     for block in &mut response.output {
-        if block.kind != CanonicalBlockKind::ToolCall
-            || !block
-                .name
-                .as_deref()
-                .is_some_and(|name| freeform_names.contains(name))
-        {
+        if block.kind != CanonicalBlockKind::ToolCall {
             continue;
         }
-        let arguments = block.arguments.as_deref().unwrap_or_default();
-        let parsed: Value = serde_json::from_str(arguments).map_err(|_| {
-            WireRuntimeError::ResponseAdaptation(CodecError {
-                reason: CodecReasonCode::MalformedProviderResponse,
-                field: Some("tool_call.arguments.input".into()),
-                source_surface: Some(surface),
-                target_surface: Some(WireSurface::OpenaiResponses),
-            })
-        })?;
-        let input = parsed
-            .as_object()
-            .filter(|object| object.len() == 1)
-            .and_then(|object| object.get("input"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
+        let Some(name) = block.name.as_deref() else {
+            continue;
+        };
+        if freeform_names.contains(name) {
+            let arguments = block.arguments.as_deref().unwrap_or_default();
+            let parsed: Value = serde_json::from_str(arguments).map_err(|_| {
                 WireRuntimeError::ResponseAdaptation(CodecError {
                     reason: CodecReasonCode::MalformedProviderResponse,
                     field: Some("tool_call.arguments.input".into()),
@@ -1307,8 +1319,49 @@ fn classify_freeform_output(
                     target_surface: Some(WireSurface::OpenaiResponses),
                 })
             })?;
-        block.tool_kind = CanonicalToolKind::Freeform;
-        block.arguments = Some(input.to_owned());
+            let input = parsed
+                .as_object()
+                .filter(|object| object.len() == 1)
+                .and_then(|object| object.get("input"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    WireRuntimeError::ResponseAdaptation(CodecError {
+                        reason: CodecReasonCode::MalformedProviderResponse,
+                        field: Some("tool_call.arguments.input".into()),
+                        source_surface: Some(surface),
+                        target_surface: Some(WireSurface::OpenaiResponses),
+                    })
+                })?;
+            block.tool_kind = CanonicalToolKind::Freeform;
+            block.arguments = Some(input.to_owned());
+            continue;
+        }
+        // Declaration-scoped deferred classification: an ordinary function
+        // named `tool_search` is never reclassified without declaration
+        // metadata. Malformed wrapper arguments fail closed rather than
+        // reaching Codex as native search calls.
+        if deferred_names.contains(name) {
+            let arguments = block.arguments.as_deref().unwrap_or_default();
+            let value: Value = serde_json::from_str(arguments).map_err(|_| {
+                WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.tool_search".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                })
+            })?;
+            let canonical = crate::wire::ir::validate_tool_search_arguments_value(&value)
+                .ok_or_else(|| {
+                    WireRuntimeError::ResponseAdaptation(CodecError {
+                        reason: CodecReasonCode::MalformedProviderResponse,
+                        field: Some("tool_call.arguments.tool_search".into()),
+                        source_surface: Some(surface),
+                        target_surface: Some(WireSurface::OpenaiResponses),
+                    })
+                })?;
+            block.tool_kind = CanonicalToolKind::DeferredSearch;
+            block.arguments = Some(canonical);
+        }
     }
     Ok(())
 }

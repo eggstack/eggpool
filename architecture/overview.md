@@ -183,9 +183,11 @@ owns reasoning/tool/capability and loss policy. Two bounded Responses paths:
 canonical semantic adaptation and source-native same-surface preservation
 (ordered items, encrypted reasoning, native tools preserved; alias targets
 rewrite only EggPool-owned `model`). `custom` tools map to
-`CanonicalToolKind::Freeform` with per-request-declaration unwrapping.
-Streaming has native observe-and-forward (unknown valid events preserved) and
-bounded cross-surface synthesis (indexed completed items, stable response ID,
+`CanonicalToolKind::Freeform` and client-executed `tool_search` maps to
+`CanonicalToolKind::DeferredSearch`, both with per-request-declaration
+unwrapping; hosted/server search stays native-only. Streaming has native
+observe-and-forward (unknown valid events preserved) and bounded
+cross-surface synthesis (indexed completed items, stable response ID,
 `call_id`-paired tool outputs, `response.completed` required).
 
 Deep dive: [Transcoding](deep-dive-transcoder.md).

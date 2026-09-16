@@ -5,8 +5,8 @@ Back to [Architecture](README.md)
 `rust/src/wire/` owns the closed codec registry and protocol adaptation between
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
 surfaces. `rust/src/wire/ir.rs` captures canonical request, reasoning, usage,
-function/freeform tool, response-block, provider-error, and stream-event
-semantics before adaptation.
+function/freeform/deferred-search tool, response-block, provider-error, and
+stream-event semantics before adaptation.
 
 Each concrete codec builds a fresh target payload from canonical intent. Loss
 policy and provider capability contracts independently govern reasoning, tools,
@@ -23,14 +23,16 @@ consult the preservation summary first: native-only items/tools are a typed
 `UnsupportedSemanticFeature` blocker, and safely omittable extensions become
 explicit adaptation notices rather than disappearing silently.
 
-Responses `custom` tools are represented by the provider-neutral
-`CanonicalToolKind::Freeform`. Function-only codecs wrap the freeform body in
-one bounded `input` string property and use the per-request declaration to
-unwrap provider calls back into `custom_tool_call` items. A malformed wrapper
-is a typed provider-event/response adaptation failure; it is never forwarded
-as wrapper JSON text. Namespaces, tool-search, shell, image-generation, and
-other server-owned tools remain native-only unless a general canonical
-equivalent is added.
+Responses `custom` tools use provider-neutral
+`CanonicalToolKind::Freeform`; client-executed `tool_search` uses
+`CanonicalToolKind::DeferredSearch`. Function-only codecs wrap freeform bodies
+in one bounded `input` string and expose deferred search with its exact
+bounded `query`/`limit` schema, using the per-request declaration (never the
+name alone) to reconstruct downstream `custom_tool_call`/`tool_search_call`
+items. Malformed wrappers fail closed and are never forwarded as wrapper JSON
+text. Namespaces, hosted/server search, shell, image-generation, and other
+server-owned tools remain native-only unless a general canonical equivalent is
+added. Eggpool never executes the search itself.
 
 Remote-compaction capabilities (`supports_remote_compaction_v1` plus an
 optional compact path, `supports_remote_compaction_v2`) live on the
@@ -49,11 +51,14 @@ SSE decoder observes terminal/usage evidence while the original valid provider
 bytes, including unknown future event types, are sent to the caller unchanged.
 Cross-surface Responses output uses a separate stateful encoder. It keeps
 bounded active text, reasoning, and argument buffers; emits indexed completed
-message/reasoning/function/custom-call items; and keeps a generated output-item ID
-distinct from the canonical function invocation `call_id`. It never fabricates
-OpenAI encrypted reasoning content. Interleaved function-call deltas remain
-associated with their source index and call identity, while subsequent tool
-outputs are paired by `call_id` even when output-item order differs. EOF,
+message/reasoning/function/custom/deferred-search call items; and keeps a
+generated output-item ID distinct from the canonical invocation `call_id`.
+Deferred argument fragments accumulate silently by source index/call identity
+(no invented delta grammar); the authoritative `tool_search_call` done item
+carries the bounded `query`/`limit` object. It never fabricates OpenAI
+encrypted reasoning content. Interleaved call deltas remain associated with
+their source index and call identity, while subsequent tool outputs are paired
+by `call_id` even when output-item order differs. EOF,
 cancellation, and malformed frames remain typed failures, and alternate wire
 negotiation is bounded and uses the same request submission budget as account
 retries.

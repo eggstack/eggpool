@@ -270,11 +270,14 @@ argument and reasoning buffers are bounded. `response.completed` remains the
 only successful Responses terminal, and EOF without terminal evidence fails.
 
 Responses `custom` tools are portable to function-style upstreams through a
-deterministic single-string `input` wrapper. EggPool uses the declared tool
-kind to unwrap provider calls and emits an authoritative `custom_tool_call`
-item; malformed wrappers fail closed. Native/server tools remain native-only
-unless a general semantic equivalent exists. Codex may use an explicit model
-or alias, or install the managed `model_catalog_json` for picker discovery:
+deterministic single-string `input` wrapper; client-executed `tool_search`
+is portable through its exact bounded `query`/`limit` wrapper. EggPool uses
+the declared tool kind to unwrap provider calls and emits authoritative
+`custom_tool_call`/`tool_search_call` items; malformed wrappers fail closed.
+Hosted/server search and other native/server tools remain native-only unless
+a general semantic equivalent exists. Eggpool never executes the search;
+Codex remains the tool executor. Codex may use an explicit model or alias,
+or install the managed `model_catalog_json` for picker discovery:
 `/v1/models` remains the standard OpenAI model-list contract.
 
 EggPool keeps a bounded, in-memory preference for the last successful declared

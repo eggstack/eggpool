@@ -77,11 +77,13 @@ compatibility path. Native Responses-to-Responses streams feed each raw chunk
 through the incremental SSE observer, then forward the original bytes without
 reconstructing known events; valid unknown event types are therefore preserved.
 Canonical adaptation uses a stateful encoder owned by that stream. It retains
-only bounded active message, reasoning, and function-call buffers, allocates a
+only bounded active message, reasoning, and tool-call buffers, allocates a
 stable response ID and output indexes, maps Responses item IDs back to
-function invocation `call_id`s, and emits completed output items before the
-terminal response. Freeform calls use the declared per-request tool map to
-emit `custom_tool_call` items. Native and translated Responses paths both require
+invocation `call_id`s, and emits completed output items before the terminal
+response. Freeform calls use the declared per-request tool map to emit
+`custom_tool_call` items; client-executed deferred search uses the same
+declaration scope to emit authoritative `tool_search_call` items with distinct
+item/call IDs. Native and translated Responses paths both require
 `response.completed` for success.
 
 Retries and alternate wire negotiation consume one shared bounded submission
