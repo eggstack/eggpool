@@ -986,6 +986,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "eggpool-connect"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "eggpool-client-config",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "eggpool-model-routing"
 version = "0.1.0"
 dependencies = [

@@ -83,9 +83,50 @@ eggpool configremote opencode --base-url https://pool.example.internal/v1
 
 Precedence: explicit `--base-url` wins, configured advertisement is next, and a detected LAN address is offered only when compatible with the listen config (wildcard binds via LAN detection; explicit non-loopback binds via their own host). Loopback-only without an advertisement fails with guidance rather than emitting a misleading command.
 
-`configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output notes that version-pinned bootstrap installers arrive in a later release; use token/JSON today.
+`configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output notes that version-pinned bootstrap installers arrive in a later release; use token/JSON with `eggpool-connect` today.
 
 The token references `GET /api/integrations/v1/profile` (authenticated, revisioned) rather than embedding a model inventory, so it stays reusable as models change.
+
+## Desktop Helper (`eggpool-connect`)
+
+The narrow `eggpool-connect` binary receives a secret-free `epc1` token and
+configures Codex/OpenCode transactionally on Linux, macOS, and Windows. It is
+not an agent harness or proxy: it only detects the local client, fetches the
+current integration projection, backs up byte-exact, mutates EggPool-owned
+fields atomically, validates, and rolls back automatically on failure.
+
+```sh
+eggpool-connect plan --profile 'epc1.…'
+eggpool-connect install --profile 'epc1.…'
+eggpool-connect verify --client codex
+eggpool-connect backups --client codex
+eggpool-connect restore <backup-id>
+eggpool-connect remove --client codex
+```
+
+Behavior:
+
+- `plan` never mutates the filesystem and suits workgroup troubleshooting.
+- `install` shows the plan and requires confirmation by default; `--yes`
+  approves non-interactively after all safety checks.
+- Credentials come from `EGGPOOL_API_KEY`, a secure TTY prompt, or
+  `--api-key-stdin` (never argv). The token carries no credential.
+- Every mutation commits a byte-exact backup first under
+  `<user-state>/eggpool-connect/backups/<id>/` (see
+  [Filesystem layout](filesystem-layout.md)); post-write validation failure
+  restores automatically, with a distinct rollback-failure error pinning the
+  backup ID/path when recovery itself fails.
+- `restore` takes a pre-restore backup first, so restore is reversible.
+- `remove` deletes only EggPool-owned fields/artifacts and refuses on drift
+  without `--force`.
+- Repeated installs are idempotent no-ops after validation; remote revision
+  changes update only owned artifacts.
+- OpenCode files with JSONC comments and OpenCode V2 (`providers` plural)
+  shapes fail closed with manual guidance until the preserving V2 adapter
+  lands; Codex preserves comments/unrelated TOML today.
+- Default setup never modifies shell profiles or persistent environment
+  variables; each desktop still needs `EGGPOOL_API_KEY` in the environment
+  that launches the client.
 
 ## Examples
 

@@ -99,6 +99,10 @@ eggpool configsetup opencode --apply
 eggpool configremote codex
 eggpool configremote opencode --format token
 
+# Desktop — transactional install from a profile token
+eggpool-connect plan --profile 'epc1.…'
+eggpool-connect install --profile 'epc1.…'
+
 # Claude Code
 eggpool configsetup claude-code
 
@@ -118,7 +122,7 @@ The generated Codex TOML uses the HTTP/SSE Responses API and references
 Codex. OpenCode likewise references `{env:EGGPOOL_API_KEY}` through the
 Responses-capable `@ai-sdk/openai` runtime.
 
-See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, remote `configremote` profiles, and options.
+See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, remote `configremote` profiles, and the transactional `eggpool-connect` desktop helper (`plan`/`install`/`verify`/`backups`/`restore`/`remove` with byte-exact backups and automatic rollback).
 
 For Codex, the deterministic Responses conformance target and the opt-in
 two-phase text/tool-loop check are documented in
@@ -136,6 +140,7 @@ By default, EggPool binds to localhost. To expose it on your LAN:
 3. Advertise the desktop URL: `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`
 4. Restart: `eggpool restart`
 5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token)
+6. On each desktop: `eggpool-connect install --profile 'epc1.…'` (confirms plan, backs up byte-exact, verifies, rolls back on failure)
 
 See [Firewall](docs/firewall.md) for restricting access to your LAN.
 
@@ -344,9 +349,14 @@ affinity cache remain EggPool-owned.
 
 The portable Codex/OpenCode projection, connection profiles, `epc1` tokens,
 renderers, and mutation primitives are available as the small Rust crate at
-`rust/crates/eggpool-client-config/`. EggPool's `configsetup` adapter feeds
-that crate; `Config`/catalog/database loading, server key resolution,
-endpoint choice, CLI delivery, and local lifecycle paths remain EggPool-owned.
+`rust/crates/eggpool-client-config/`. EggPool's `configsetup`/`configremote`
+adapter feeds that crate; `Config`/catalog/database loading, server key
+resolution, endpoint choice, CLI delivery, and local lifecycle paths remain
+EggPool-owned. The transactional desktop helper at
+`rust/crates/eggpool-connect/` links the same crate to `plan`/`install`/
+`verify`/`backups`/`restore`/`remove` Codex/OpenCode clients with byte-exact
+backups and automatic rollback; it contains no proxy server, agent loop,
+daemon, or tool execution.
 
 See the copyable [Model routing guide](docs/model-routing.md) for the complete
 schema, fallback behavior, and troubleshooting guidance.

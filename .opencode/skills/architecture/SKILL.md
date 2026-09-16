@@ -66,6 +66,15 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   catalog refresh); `GET /api/integrations/v1/profile` is the authenticated,
   versioned, bounded, deterministic, sanitized projection with revision/ETag
   and must never inherit a dashboard-public exemption.
+- Keep the desktop helper transactional and narrow: `rust/crates/eggpool-connect/`
+  links only `eggpool-client-config` plus Clap/Serde/Hyper-Rustls/Tokio/TOML
+  (no Axum/SQLite/Eggress, no proxy/agent/daemon). It owns the explicit
+  `Decoded -> … -> Committed` state machine, byte-exact backups before the
+  first write, atomic same-directory replacement with symlink/special-file
+  refusal, local + client-native validation without inference, automatic
+  rollback with distinct rollback-failure evidence, reversible restore, and
+  ownership-aware remove. Credentials come from `EGGPOOL_API_KEY`/TTY/
+  `--api-key-stdin` (never argv) and never reach logs/manifests/configs.
 
 ## Verification pointers
 
@@ -80,7 +89,8 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Portable client config: `rust/crates/eggpool-client-config/` (projection,
   profiles, `epc1` tokens, renderers, mutation primitives; no Config/catalog/
   DB/key/endpoint/CLI/file IO), `rust/src/operations/integrations.rs`
-  (EggPool adapter)
+  (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop
+  helper: plan/install/verify/backups/restore/remove)
 - Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`

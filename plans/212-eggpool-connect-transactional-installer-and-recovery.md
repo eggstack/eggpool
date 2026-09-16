@@ -1,6 +1,8 @@
 # Plan 212: `eggpool-connect` transactional installer and recovery
 
-> **Status:** ready for implementation
+> **Status:** complete
+>
+> **Completed:** 2026-09-16 — `rust/crates/eggpool-connect/` lands as the narrow desktop binary over `eggpool-client-config` (plan/install/verify/backups/restore/remove, explicit state machine, byte-exact backups, atomic writes, automatic rollback, stable exit codes); focused helper suites (36 unit + 14 transaction) + serial workspace suite + no-default guards + tooling validators green locally (see commit).
 >
 > **Baseline:** EggPool `main` at `6997cdbb4cee4ec69c71cab15b53b039c7e3309a` (2026-09-16)
 >

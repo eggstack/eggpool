@@ -80,6 +80,29 @@ deploy user before writing the unit file.
 | `/var/log/eggpool/` | `eggpool:eggpool` | `0750` | Log directory |
 | `/opt/eggpool/` | `root:eggpool` | `0755` | Application directory |
 
+## Desktop helper state (`eggpool-connect`)
+
+The desktop helper keeps its own user-private state separate from the proxy:
+
+```
+<user-state>/eggpool-connect/
+├── artifacts/codex/eggpool-codex-models.json  # Generated Codex catalog
+└── backups/<backup-id>/
+    ├── manifest.json          # Secret-free recovery metadata
+    ├── config.bin             # Byte-exact pre-write client config (absent when originally absent)
+    └── generated-artifacts/…  # Pre-write helper-owned artifacts
+```
+
+Resolution: Linux honors `$XDG_STATE_HOME` with `~/.local/state` fallback;
+macOS uses `~/Library/Application Support`; Windows uses `%LOCALAPPDATA%`.
+`$EGGPOOL_CONNECT_STATE_DIR` overrides for tests/advanced operators.
+Backup/state roots are owner-only on POSIX (`0o700` dirs, `0o600` files).
+Manifests record schema version, backup ID/time, target, normalized config
+path, pre-write SHA-256, file mode, client version/variant, profile
+fingerprint (never credentials), artifact hashes, and parent backup.
+Retention keeps the newest 10 per target and never deletes the only recovery
+point. `restore` takes a pre-restore backup first.
+
 ## Notes
 
 - The `env` file must be readable by the `eggpool` user but not world-readable.

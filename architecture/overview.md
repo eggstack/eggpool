@@ -80,7 +80,11 @@ command tree (`serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `status`, `runtime-status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
-`db` without touching coordinator/server internals. `rust/src/error.rs`
+`db` without touching coordinator/server internals. The separate
+`eggpool-connect` desktop binary (`rust/crates/eggpool-connect/`) owns the
+receiving-machine `plan`/`install`/`verify`/`backups`/`restore`/`remove`
+contract over the same portable crate and never touches coordinator/server
+internals either. `rust/src/error.rs`
 (`AppError`/`BootstrapError`) owns the typed error hierarchy and stable
 exit-code mapping; HTTP/status mappings for server surfaces live with their
 adapters and retain context without secrets or raw bodies. `rust/src/version.rs`
@@ -306,7 +310,10 @@ and `eggpool.configremote/v1` JSON from the advertised `[integrations].advertise
 without key creation or config mutation; the authenticated
 `GET /api/integrations/v1/profile` serves the same projection with
 deterministic revision/ETag; `Config`/catalog/DB/key/endpoint/CLI/file IO
-stays here, portable projection/profiles/tokens/renderers stay in the crate).
+stays here, portable projection/profiles/tokens/renderers stay in the crate;
+`rust/crates/eggpool-connect/` is the transactional desktop counterpart with
+an explicit state machine, byte-exact backups, atomic writes, and automatic
+rollback).
 
 Deep dives: [Control plane](deep-dive-control.md),
 [Deployment](deep-dive-deployment.md), [Backup/restore](deep-dive-lifecycle.md),
@@ -346,7 +353,10 @@ Deep dives: [Observability](deep-dive-observability.md),
   is the read-only remote exporter); `runtime.rs` keeps
   prompts/presentation/exit codes, `operations/lifecycle.rs` keeps reusable
   workflows, `operations/status.rs` keeps health aggregation,
-  `server/*` stays thin.
+  `server/*` stays thin. Desktop: `eggpool-connect plan|install|verify|
+  backups|restore|remove` (secret-free `epc1` input, credential via
+  `EGGPOOL_API_KEY`/TTY/`--api-key-stdin`, byte-exact backups, atomic writes,
+  automatic rollback, stable exit codes).
 - Config profiles: full `config.example.toml` plus low-wear
   `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
   model-info/backup disabled; request/accounting durability preserved).
@@ -362,8 +372,9 @@ Deep dives: [Observability](deep-dive-observability.md),
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
 `tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.6
-(optional SSH compat), plus the path crates `eggpool-model-routing` and
-`eggpool-client-config`. Default `eggress-ssh-fallback` supports SSH upstreams;
+(optional SSH compat), plus the path crates `eggpool-model-routing`,
+`eggpool-client-config`, and the `eggpool-connect` desktop binary (narrow
+Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `eggress-ssh-fallback` supports SSH upstreams;
 `--no-default-features` still compiles/tests, keeps direct/non-SSH proxy, and
 rejects SSH proxy config pre-dial. Test-only `test-support` adds deterministic
 local TLS peers; protocol fixture crates stay dev-only.
@@ -404,7 +415,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Routing/quota/health/accounts | `rust/src/routing/`, `quota/`, `health/`, `accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
-| Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` | [Integrations](deep-dive-integrations.md) |
+| Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
 | Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |

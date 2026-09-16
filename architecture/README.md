@@ -45,7 +45,13 @@ boundary for Codex/OpenCode projection, connection profiles, `epc1` tokens,
 renderers, mutation primitives, ownership types, and validation. EggPool
 adapts `Config`/catalog/database facts into its portable types and keeps
 server key resolution, endpoint choice, CLI delivery, HTTP serving, and
-runtime paths in `rust/src/operations/integrations.rs`.
+runtime paths in `rust/src/operations/integrations.rs`. The narrow
+`eggpool-connect` desktop binary in `rust/crates/eggpool-connect/` links the
+same crate to implement `plan`/`install`/`verify`/`backups`/`restore`/`remove`
+with an explicit transaction state machine, byte-exact backups, atomic writes,
+and automatic rollback; it owns only receiving-machine detection, credential
+prompting, profile fetching, and local mutation, with no Axum, SQLite,
+Eggress, proxy, agent, or daemon functionality.
 
 The CLI adapter in `rust/src/runtime.rs` owns dispatch, prompts, presentation,
 and stable exit-code mapping. Reusable local process workflows are composed by
@@ -79,7 +85,7 @@ message, reasoning, and function-call item completion.
 | CLI, configuration, errors | `rust/src/cli.rs`, `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/error.rs` |
 | Request and coordinator | `rust/src/request/`, `rust/src/coordinator/` |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
-| Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` (EggPool adapter) |
+| Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop helper) |
 | Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
 | Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |

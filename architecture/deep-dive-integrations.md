@@ -212,3 +212,52 @@ comments and unrelated TOML with atomic writes. OpenCode merges only
 `provider.eggpool` and refuses to rewrite JSONC-comment files silently.
 Both refuse on drift without `--force` and remove only EggPool-owned state.
 See `docs/agent-configuration.md` for the operator contract.
+
+## Transactional desktop helper (`eggpool-connect`)
+
+`rust/crates/eggpool-connect/` is the small desktop counterpart over the
+same portable crate. It owns only receiving-machine concerns and never
+duplicates renderers:
+
+- CLI: `plan` (read-only, no filesystem mutation), `install` (plan +
+  confirmation by default, `--yes` for non-interactive use after safety
+  checks), `verify --client`, `backups`, `restore <id>`, `remove --client`
+  with `--config` overrides, `--api-key-stdin`, `--no-verify-network`,
+  `--json`, and `--force` for owned drift only.
+- Sequence before any write: decode/validate `ConnectionProfileV1`, resolve
+  the advertised URL, obtain the credential separately (`EGGPOOL_API_KEY` >
+  TTY prompt > `--api-key-stdin`; never argv), fetch the authenticated
+  `GET /api/integrations/v1/profile` over narrow Hyper/Rustls with TLS
+  verification and bounded responses, validate schema/bounds/revision, detect
+  the local client/version, and plan the mutation.
+- State machine: `Decoded -> RemoteProfileValidated -> ClientDetected ->
+  MutationPlanned -> BackupCommitted -> ConfigWritten -> LocalParseValidated
+  -> ClientNativeValidated -> Committed`. Before `BackupCommitted` no target
+  file changes; after it every failure attempts automatic restoration and
+  reports both the original failure and the rollback result, with a distinct
+  rollback-failure error pinning backup ID/path (never contents/secrets).
+- Backups: byte-exact snapshots under `<user-state>/eggpool-connect/
+  backups/<id>/` (`manifest.json` + `config.bin` + `generated-artifacts/…`),
+  user-private (`0o700`/`0o600` on POSIX), secret-free manifests (profile
+  fingerprint, never credentials), conservative retention (newest 10 per
+  target, never the only recovery point). `restore` takes a pre-restore
+  backup first, making restore itself reversible.
+- Mutation: regular-file-or-absent check with symlink/device/FIFO/socket
+  refusal, complete proposed bytes in memory, pre-write parse validation,
+  same-directory temp file with restrictive permissions, fsync, atomic
+  rename, and permission preservation. No in-place truncate writes.
+- Validation: Layer 1 re-parses installed config/catalog through the shared
+  adapter (EggPool-owned fields only); Layer 2 runs `codex debug models` +
+  `codex doctor --json` or `opencode models` time-bound with bounded
+  redacted diagnostics and no inference/quota use. Missing executables
+  require explicit `--yes` consent instead of pretending success.
+- `remove` is ownership-aware (restores captured previous values where
+  valid, refuses on drift without `--force`); repeated installs are
+  idempotent no-ops after validation; remote revision updates converge only
+  owned artifacts without noisy rewrites. Credential persistence is deferred:
+  default setup never touches shell profiles or persistent environment state.
+- Dependency surface (verified via `cargo tree -p eggpool-connect`): Clap,
+  Serde/JSON, SHA-2, TOML, narrow Hyper/Rustls/`webpki-roots`, Tokio, and the
+  portable crate. No Axum, SQLite, Eggress, routing, provider codecs, or
+  dashboard assets, so publishing a Windows helper never implies Windows
+  proxy support.
