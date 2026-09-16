@@ -437,6 +437,23 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = dir.path().join("opencode.json");
         let expected = vec!["qual-probe-model/qual-probe".to_owned()];
+        // Without a real client binary the probe fails closed before
+        // consulting runners (mirrors the Codex guard above).
+        if crate::process::find_executable("opencode").is_none() {
+            let error = validate_native(
+                &runner,
+                ClientTarget::Opencode,
+                &config,
+                dir.path(),
+                "",
+                Duration::from_secs(1),
+                &expected,
+            )
+            .await
+            .expect_err("must fail closed without an executable");
+            assert!(error.to_string().contains("not available"));
+            return;
+        }
         let detail = validate_native(
             &runner,
             ClientTarget::Opencode,
