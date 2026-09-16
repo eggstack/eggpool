@@ -32,6 +32,14 @@ the server modules thin: HTTP handlers must delegate inference lifecycle work
 to the coordinator, and lifecycle workflows must compose the existing process
 safety primitives.
 
+Native test targets live in `rust/tests/` (serial `--test-threads=1`). The
+coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
+`c012`) plus `coordinator_boundaries`/`finalization`/`publication`; routing is
+`routing_domain`, `routing_domain_d008`, `routing_claims`, `quota`; lifecycle is
+`runtime_lifecycle_r002`–`r013`; wire is `wire_codecs`, `wire_stream`,
+`wire_runtime`, `wire_qualification`, `wire_adaptation`, `wire_profiles`,
+`wire_multimodal`; operations is `operations_o002`–`o010`.
+
 For `configsetup` integration changes, run the focused O005 contract target
 alongside the integration unit tests:
 
@@ -41,10 +49,13 @@ cargo test --manifest-path rust/Cargo.toml --lib operations::integrations
 ```
 
 For streaming coordinator changes, run the focused C008 publication, boundary,
-finalization, and wire suites before the workspace suite:
+finalization, and wire suites before the workspace suite (add `coordinator_c009`
+and `coordinator_c011` for terminal/retry behavior changes):
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c009 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c011 -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_finalization -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1

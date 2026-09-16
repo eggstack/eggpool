@@ -38,6 +38,9 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   distinct function-call/item identities. Interleaved translated calls must
   remain keyed by source index/call identity, and later tool outputs must be
   paired by `call_id` rather than output-item order.
+- Routing is deterministic and load-based, never cost-based. Selector (virtual
+  model) decisions happen before provider/account routing and cannot pin an
+  account, bypass health/quota, or reselect after submission.
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
@@ -49,18 +52,24 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 
 ## Verification pointers
 
-- CLI/config/errors: `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs`
-- Request path: `rust/src/request/`, `rust/src/coordinator/`; streaming internals
-  are decomposed under `rust/src/coordinator/streaming/` with pre-handoff
-  coordination, post-handoff execution, terminal classification, timeout,
-  contract, and diagnostics modules behind the `mod.rs` facade.
+- CLI/config/errors: `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs`, `rust/src/lib.rs` (module map), `rust/src/version.rs`
+- Request path: `rust/src/request/` (`admission.rs`, `body.rs`, `limits.rs`), `rust/src/coordinator/` (`finite.rs`, `attempt.rs`, `publication.rs`, `finalization.rs`, `failure.rs`, `wire_resolver.rs`, `endpoints.rs`, `semantic.rs`, `reconciliation.rs`); streaming internals
+  are decomposed under `rust/src/coordinator/streaming/` as `coordinator.rs` (pre-handoff),
+  `execution.rs` (post-handoff), `terminal.rs` (terminal classification), `timeout.rs` (policy),
+  `types.rs` (contracts), `diagnostics.rs` (bounded observation) behind the `mod.rs` facade.
+- Routing/accounting: `rust/src/routing/` (`router.rs`, `eligibility.rs`, `fairness.rs`, `claim.rs`), `rust/src/accounts/registry.rs`, `rust/src/catalog/` (`cache.rs`, `refresh.rs`), `rust/src/quota/` (`state.rs`, `estimator.rs`, `scorer.rs`), `rust/src/health/` (`health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`, `effects.rs`, `quarantine.rs`, `repository.rs`)
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
-- Providers/wire: `rust/src/providers/`, `rust/src/wire/`
-- Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`
+- Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)
+- Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
-- Operations: `rust/src/operations/`
-- Database/assets: `rust/src/db/`, `rust/assets/`
+- Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `metrics.rs`, `integrations.rs`)
+- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`), `rust/assets/db/migrations/` (v1–v54, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
+
+Start routing changes at `architecture/deep-dive-routing.md`, provider/transport
+changes at `architecture/deep-dive-providers.md`, and reload changes at
+`architecture/deep-dive-control.md` + `deep-dive-runtime.md`. The review index in
+`architecture/overview.md` is the module-to-deep-dive map; do not duplicate it here.
 
 For streaming changes, preserve the handoff boundary: retries belong only to
 `streaming/coordinator.rs` before `StreamingExecution` is returned;

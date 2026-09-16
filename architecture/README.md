@@ -5,6 +5,11 @@ runtime shipped by EggPool. Historical migration context is limited to the
 concise [migration history](../docs/migration-history.md) pointer; Git history
 is the archival authority.
 
+Agent entry: `AGENTS.md` is the workflow index, `.opencode/skills/` holds task
+guidance (`architecture`, `development`, `deployment`, `documentation`,
+`plan`), and `plans/` is append-only history. The review index in
+`overview.md` maps each module to its authority paths and deep dive.
+
 ## Runtime shape
 
 `rust/src/main.rs` and `rust/src/cli.rs` own the executable and command tree.

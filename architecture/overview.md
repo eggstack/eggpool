@@ -348,9 +348,10 @@ Release/validation tooling only: `scripts/` validators/builders/qualifiers
 `validate_release_artifacts.py`, `validate_release_workflow.py`,
 `build_release_artifacts.py`, qualification harnesses), `tests/tooling/`
 pytest suite, `packaging/` release manifests. No Python runtime fallback; never
-import the retired application. Native tests live in `rust/tests/` (serial
-`--test-threads=1`): `cli_contract`, `coordinator_c007`–`c014` +
-`coordinator_boundaries`/`finalization`/`publication`, `wire_*`
+ import the retired application. Native tests live in `rust/tests/` (serial
+ `--test-threads=1`): `cli_contract`, `coordinator_c007`–`c011`, `c013`–`c014`
+ (there is no `c012`) +
+ `coordinator_boundaries`/`finalization`/`publication`, `wire_*`
 (`codecs`, `stream`, `runtime`, `qualification`, `adaptation`, `profiles`,
 `multimodal`), `operations_o002`–`o010`, `runtime_lifecycle_r002`–`r013`,
 `routing_*`, `quota`, `health`, `catalog_refresh`, `model_router`,

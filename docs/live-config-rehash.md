@@ -103,7 +103,7 @@ D2 LIVE families:
   ``enabled`` adds/removes the task.
 
 The periodic task loop in ``rust/src/task_supervisor.rs``
-re-reads ``self._interval_s`` and ``self._initial_delay_s`` each
+re-reads the task ``TaskSpec`` fields (``interval_s`` and ``initial_delay_s``) each
 iteration so live interval changes take effect at the next tick
 boundary — not from the last completion time.  For tasks changed via
 ``apply_spec_diff``, the old task is stopped and a new one is started

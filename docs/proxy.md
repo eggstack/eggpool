@@ -23,7 +23,7 @@ account with `proxy = "name"`. Keep credentials in environment variables where
 possible and use a disposable configuration for connectivity checks.
 
 ```toml
-[network.proxies.egress]
+[proxies.egress]
 url = "socks5://127.0.0.1:1080"
 
 [providers.example.accounts]

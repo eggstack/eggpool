@@ -39,6 +39,14 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   publication. Do not preserve stale caller-specific restart/reload lists.
 - Keep historical plans append-only. Git history is the archive for retired
   migration scaffolding; current docs must describe the shipped Rust runtime.
+  New plans follow the `plans/` lifecycle in the `plan` skill; do not invent a
+  second numbering or status scheme.
+- Never document Python-era runtime details as current: no ASGI server, no
+  `yield`/`json.dumps`/`_execute_streaming`/`_build_stream_generator` internals,
+  no `self._`-style Python fields, no `tests/unit/*.py` paths. The streaming
+  path is Rust/Hyper SSE under `rust/src/coordinator/streaming/` + `rust/src/wire/`,
+  periodic tasks are `TaskSpec { interval_s, initial_delay_s }` in
+  `rust/src/task_supervisor.rs`, and native tests live in `rust/tests/`.
 - Document Responses as two bounded paths: canonical semantic adaptation and
   source-native same-surface preservation. State the stateless policy from
   admission (`store` omitted/false is accepted; stateful continuation and

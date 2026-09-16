@@ -479,7 +479,7 @@ To temporarily enable traces for diagnostics, set `mode = "sampled"` or
 | Dashboard loads slowly under request load | DB lock contention | Set `database.worker_threads = 2` explicitly |
 | Dashboard still slow | Insufficient concurrency | Check dashboard telemetry; ensure connection pool and maintenance budgets are adequate for your workload |
 | High write volume / microSD wear | Routing trace writes | Set `routing.trace.mode = "off"` |
-| Background tasks cluster at minute boundaries | Task scheduling | Default is staggered; check `initial_delay_s` |
+| Background tasks cluster at minute boundaries | Task scheduling | Default is staggered (internal `TaskSpec::initial_delay_s` classes, not an operator config key) |
 | Stale dashboard data | Cache TTL | Wait 30s or check dashboard cache settings |
 
 ---

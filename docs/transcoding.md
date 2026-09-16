@@ -670,27 +670,27 @@ pressure when many transcoded streams are in flight concurrently:
   `usage` property returns a default `StreamUsageResult()`; callers
   should always read usage from the coordinator's observer.
 - **Synchronous frame translation**: The streaming transcoder's
-  interface is synchronous. The per-frame work (cached JSON parsing, nested
-  dict construction, `json.dumps`)
-  performs no async I/O, so awaiting a coroutine per chunk is
+  per-frame work (cached JSON parsing, nested map construction,
+  `serde_json` serialization)
+  performs no async I/O, so spawning an async task per chunk is
   unnecessary scheduler overhead. Any future implementation that
   requires async I/O must not be placed in this per-chunk path without
   a separate design review.
 - **Coalesced per-chunk output**: The coordinator joins the bytes the
   transcoder produces for one upstream chunk into a single
-  `yield b"".join(out_chunks)` rather than yielding each translated
+  body write rather than yielding each translated
   frame separately. This preserves wire ordering and granularity while
-  reducing ASGI send calls. `[DONE]` and the terminal
+  reducing Hyper body writes. `[DONE]` and the terminal
   `message_delta`/`message_stop` frames are still emitted in the
   correct order.
 - **Single-pass `include_usage`**: `upstream_include_usage` is computed
-  once in `_execute_streaming` (after any injection of OpenAI
+  once during streaming dispatch setup (after any injection of OpenAI
   `stream_options.include_usage`) and threaded into
-  `_build_stream_generator` via an explicit parameter. The generator
+  the stream generator via an explicit parameter. The generator
   no longer re-parses the request body to determine the include-usage
   behaviour.
 - **Compact JSON frames**: Frame helpers use
-  `json.dumps(data, separators=(",", ":"))`. SSE clients parse the
+  compact `serde_json` serialization (no extra whitespace). SSE clients parse the
   JSON payload and never rely on preserved whitespace, so this
   reduces both output bytes and serialization work.
 

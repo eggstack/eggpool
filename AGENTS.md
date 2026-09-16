@@ -8,16 +8,19 @@ Load the matching skill before task work (in `.opencode/skills/`):
 - `development` — full lint/test matrix, focused targets per subsystem
 - `deployment` — release artifact, systemd, installer ownership
 - `documentation` — doc map, accuracy rules, what not to duplicate here
+- `plan` — `plans/` append-only lifecycle, numbering, closure passes
 
-For runtime behavior changes, start at `architecture/README.md` + the relevant
-deep dive. Do not copy deep-dive detail into `AGENTS.md`.
+For runtime behavior changes, start at `architecture/README.md` + the
+`architecture/overview.md` review index + the relevant deep dive. Do not copy
+deep-dive detail into `AGENTS.md`.
 
 ## Layout
 
-- Runtime (authority): `rust/src/` (`main.rs`/`cli.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` request lifecycle, `wire/` protocol codecs, `runtime_lifecycle/` generations, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/`).
-- Reusable policy crate: `rust/crates/eggpool-model-routing/` (neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`).
-- Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. Native runtime tests live in `rust/tests/`.
+- Runtime (authority): `rust/src/` (`main.rs`/`cli.rs`/`lib.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` + `coordinator/streaming/` request lifecycle, `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` + `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity, `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` + `task_supervisor.rs`, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/` v1–v54).
+- Reusable policy crate: `rust/crates/eggpool-model-routing/` (`policy.rs`, `identity.rs`; neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`).
+- Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. Native runtime tests live in `rust/tests/` (note: `coordinator_c012` does not exist; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
 - Config examples: `config.example.toml`, `config.sbc.example.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`; API keys from environment/`.env`, never committed.
+- Plans: `plans/` is append-only history (~200 files, mostly closed). See the `plan` skill before adding one. `.agents/` holds no custom agent definitions.
 
 ## Commands (run from repo root)
 
@@ -39,7 +42,7 @@ uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 
-# Focused: single target / single test
+# Focused: single target / single test (see development skill for subsystem index)
 cargo test --manifest-path rust/Cargo.toml --test <target> -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets <test_name> -- --test-threads=1
 

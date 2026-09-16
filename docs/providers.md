@@ -632,7 +632,7 @@ stream_timeouts = { first_byte_timeout_s = 1800, idle_timeout_s = 1800 }
   connections per provider.
 - **File descriptors:** each connection holds one socket. Bump the
   process `nofile` ulimit to at least `2 × max_connections` plus headroom
-  for SQLite, the ASGI server, and DNS.
+   for SQLite, the Rust HTTP server, and DNS.
 - **Provider throttling:** some upstreams rate-limit aggressively when
   they see bursty TLS handshakes. Raise `keepalive_timeout_s` to keep
   the pool warm rather than relying on short-lived connections.

@@ -20,6 +20,17 @@ uninstall, runtime paths, and control-socket behavior. Historical Python
 packages remain immutable external artifacts selected only by explicit,
 catalogued compatible exact version.
 
+Ownership: `rust/src/operations/deploy.rs` renders systemd/logrotate/cron,
+`operations/backup.rs` owns staged atomic ZIP backup/restore,
+`operations/update.rs` owns GitHub release discovery + SHA-256 verified
+transition, `operations/paths.rs` owns config/data/state/log/PID/socket
+resolution, and `operations/lifecycle.rs` owns start/stop/restart/ensure-running
+composition. Start at `architecture/deep-dive-deployment.md` and
+`architecture/deep-dive-lifecycle.md` for design; use `docs/deployment.md`,
+`docs/backup-restore.md`, `docs/upgrading.md`, and `docs/raspberry-pi.md` for
+operator procedures. Config examples are `config.example.toml` (full) and
+`config.sbc.example.toml` (low-wear SBC profile).
+
 ## Safe checks
 
 ```bash

@@ -753,11 +753,19 @@ This small polish pass hardens the trace metadata and the no-health-penalty guar
 
 ## 13. Tests for Closing-Pass Behavior
 
-The closing pass adds regression coverage in:
+The closing pass adds regression coverage in the native Rust suite
+(run serially with `--test-threads=1`):
 
-- `tests/unit/test_capability_routing.py` — Phase A (`extract_thinking_status_from_entry`), Phase E (top-level `reasoning_content`)
-- `tests/unit/test_capabilities.py` — Phase A, Phase D (`is_thinking_warning`, `classify_thinking_warning_decision`)
-- `tests/unit/test_transcoder/test_budget_resolver.py` — Phase B (`BudgetResolutionError` is a `CapabilityError`)
-- `tests/unit/test_transcoder/test_anthropic_to_openai_body.py` — Phase G (explicit kind)
-- `tests/unit/test_thinking_budget_provider_cleanup.py` — Phase H (selected-provider effort mapping, clamp validation, strict-rejection cleanup invariants, streaming parity, idempotency) and Phase I (`upstream_fields` population + preservation, no-health-penalty regression)
-- `tests/contract/test_transcoder_contract.py` — Phase A integration (annotated `claude-3` with `status = "supported"`)
+- `rust/tests/wire_adaptation.rs` — capability/routing classification phases
+  (thinking-status extraction, top-level `reasoning_content` detection,
+  warning classification)
+- `rust/tests/wire_codecs.rs` + `rust/tests/wire_qualification.rs` —
+  budget-resolution error shape (`CapabilityError` semantics) and explicit
+  dropped-thinking-kind coverage
+- `rust/tests/routing_domain.rs` (+ `routing_domain_d008.rs`) —
+  selected-provider effort mapping and clamp validation
+- `rust/tests/coordinator_c007.rs` / `coordinator_c008.rs` —
+  strict-rejection cleanup invariants, streaming parity, idempotency,
+  `upstream_fields` population + preservation, and the no-health-penalty
+  regression (capability rejection stays a client-validation outcome and never
+  records an upstream health signal)

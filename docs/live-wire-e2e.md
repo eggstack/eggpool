@@ -1,7 +1,7 @@
 # Live Wire-Surface Verification
 
 EggPool's provider-wire acceptance suite is deliberately opt-in. It uses a
-temporary SQLite database and configuration, calls EggPool's public ASGI
+temporary SQLite database and configuration, calls EggPool's public HTTP
 endpoints, and records only sanitized outbound observations (provider,
 account alias, model, path/surface, status, auth scheme, semantic field names,
 streaming, attempt ordinal, and selection source). It never records keys,

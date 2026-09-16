@@ -358,6 +358,7 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 | Deployment (install, systemd, production) | [docs/deployment.md](docs/deployment.md) |
 | Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
 | Semantic model routing | [docs/model-routing.md](docs/model-routing.md) |
+| Model-router configuration reference | [docs/configuration.md](docs/configuration.md) |
 | API endpoints | [docs/api-reference.md](docs/api-reference.md) |
 | Agent configuration (OpenCode, Claude Code, Aider, etc.) | [docs/agent-configuration.md](docs/agent-configuration.md) |
 | Stateless Responses support | [docs/stateless-responses.md](docs/stateless-responses.md) |
