@@ -198,6 +198,13 @@ pub enum FiniteCoordinatorError {
 
 /// Request input for C007.  Admission is performed once here; the result is
 /// then reused by the attempt builder rather than decoding the body again.
+///
+/// `operation` distinguishes an ordinary assistant completion (`Generate`)
+/// from a remote-compaction operation (`Compact`) whose output replaces
+/// retained history. Compact requests carry their bounded compact admission
+/// alongside the canonical admitted view so the coordinator can prepare the
+/// native compact path while reusing the normal routing, publication,
+/// retry, and finalization ownership.
 #[derive(Debug, Clone)]
 pub struct FiniteRequest {
     pub proxy_request_id: String,
@@ -208,6 +215,8 @@ pub struct FiniteRequest {
     pub client_surface: ClientSurface,
     pub admitted: AdmittedRequest,
     pub routing_facts: RoutingRequestFacts,
+    pub operation: super::endpoints::InferenceOperation,
+    pub compact_admission: Option<crate::request::CompactAdmittedRequest>,
 }
 
 impl FiniteRequest {
@@ -238,6 +247,50 @@ impl FiniteRequest {
             client_surface,
             admitted,
             routing_facts,
+            operation: super::endpoints::InferenceOperation::Generate,
+            compact_admission: None,
+        })
+    }
+
+    /// Build one bounded remote-compaction request. The compact endpoint
+    /// shares the stateless Responses contract and body bounds with ordinary
+    /// Responses admission but is always finite, requires an `input` history
+    /// payload, and never accepts a `compaction_trigger` item.
+    pub fn new_compact(
+        proxy_request_id: impl Into<String>,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        mut routing_inputs: StaticRoutingFacts,
+    ) -> Result<Self, AdmissionError> {
+        let compact = crate::request::admit_compact_request(
+            &raw_body,
+            crate::request::AdmissionOptions {
+                client_surface: ClientSurface::Responses,
+                ..crate::request::AdmissionOptions::default()
+            },
+        )?;
+        if routing_inputs.requested_protocol.is_none() {
+            routing_inputs.requested_protocol = Some(ClientSurface::Responses.protocol().into());
+        }
+        let routing_facts = compact.routing_facts(&routing_inputs);
+        let admitted = AdmittedRequest {
+            canonical: compact.canonical.clone(),
+            native_preservation: Some(compact.native_preservation.clone()),
+            raw_body_bytes: compact.raw_body_bytes,
+            reservation_tokens: compact.reservation_tokens,
+            context_tokens: compact.context_tokens,
+        };
+        Ok(Self {
+            proxy_request_id: proxy_request_id.into(),
+            raw_body,
+            incoming_headers,
+            request_id: None,
+            correlation_id: None,
+            client_surface: ClientSurface::Responses,
+            admitted,
+            routing_facts,
+            operation: super::endpoints::InferenceOperation::Compact,
+            compact_admission: Some(compact),
         })
     }
 
@@ -264,7 +317,14 @@ impl FiniteRequest {
             client_surface,
             admitted,
             routing_facts,
+            operation: super::endpoints::InferenceOperation::Generate,
+            compact_admission: None,
         })
+    }
+
+    /// Compact operation label for safe diagnostics (no content).
+    pub fn operation(&self) -> super::endpoints::InferenceOperation {
+        self.operation
     }
 }
 
@@ -429,7 +489,7 @@ impl FiniteCoordinator {
                 claim.rollback_claim()?;
                 return Err(FiniteCoordinatorError::MissingProvider { provider_id });
             };
-            let profiles = self
+            let mut profiles = self
                 .provider_profiles
                 .get(&provider_id)
                 .cloned()
@@ -437,6 +497,30 @@ impl FiniteCoordinator {
             if profiles.is_empty() {
                 claim.rollback_claim()?;
                 return Err(FiniteCoordinatorError::MissingWireProfile { provider_id });
+            }
+            // Compact operations filter to natively compact-capable Responses
+            // surfaces before submission. Accounts without a qualified compact
+            // target are skipped without upstream I/O; when none remain the
+            // loop converges to no-eligible-route rather than a lossy
+            // translated compaction.
+            let is_compact = request.operation == super::endpoints::InferenceOperation::Compact;
+            if is_compact {
+                profiles.retain(|profile| {
+                    profile.definition.surface == crate::wire::WireSurface::OpenaiResponses
+                        && provider
+                            .wire_surfaces
+                            .get(profile.definition.surface.as_str())
+                            .is_some_and(|surface| {
+                                crate::wire::CompactionCapabilities::from_surface_config(surface)
+                                    .native_v1_supported()
+                            })
+                });
+                if profiles.is_empty() {
+                    claim.rollback_claim()?;
+                    excluded_accounts.insert(claim.account_name().to_owned());
+                    preferred_account = None;
+                    continue;
+                }
             }
 
             let candidates = self.attempts.prepare_candidates(profiles, "static");
@@ -502,33 +586,71 @@ impl FiniteCoordinator {
                 stream: false,
                 candidate_fingerprint: resolution.fingerprint.clone(),
             };
-            let prepared = match self
-                .attempts
-                .prepare_admitted(attempt_input, request.admitted.clone())
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    let response = self.error_response(
-                        request.client_surface,
-                        &request.proxy_request_id,
-                        attempt_number,
-                        StatusCode::BAD_REQUEST,
-                        "request could not be prepared for the selected provider",
-                    );
-                    let data = self.local_failure_data(
-                        &identity,
-                        &candidate.profile,
-                        StatusCode::BAD_REQUEST,
-                        "LocalPreparation",
-                        request_bytes,
-                    );
-                    let _ = error;
-                    return Ok(self.pending_terminal(
-                        published.identity,
-                        Some(published.claim),
-                        response,
-                        data,
-                    ));
+            // Compact operations prepare through the native compact path
+            // (source-native preservation plus EggPool-owned model rewrite);
+            // unsupported targets fail here, before submission.
+            let prepared = if is_compact {
+                let Some(compact_admission) = request.compact_admission.as_ref() else {
+                    return Err(FiniteCoordinatorError::InvalidFacts);
+                };
+                match self
+                    .attempts
+                    .prepare_compact(attempt_input, compact_admission)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            StatusCode::BAD_REQUEST,
+                            "compact request could not be prepared for the selected provider",
+                        );
+                        let data = self.local_failure_data(
+                            &identity,
+                            &candidate.profile,
+                            StatusCode::BAD_REQUEST,
+                            "LocalPreparation",
+                            request_bytes,
+                        );
+                        let _ = error;
+                        return Ok(self.pending_terminal(
+                            published.identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                }
+            } else {
+                match self
+                    .attempts
+                    .prepare_admitted(attempt_input, request.admitted.clone())
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            StatusCode::BAD_REQUEST,
+                            "request could not be prepared for the selected provider",
+                        );
+                        let data = self.local_failure_data(
+                            &identity,
+                            &candidate.profile,
+                            StatusCode::BAD_REQUEST,
+                            "LocalPreparation",
+                            request_bytes,
+                        );
+                        let _ = error;
+                        return Ok(self.pending_terminal(
+                            published.identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
                 }
             };
 
@@ -709,6 +831,249 @@ impl FiniteCoordinator {
                 &identity,
                 &provider,
             );
+            // Compact operations validate the native replacement-history
+            // result without canonicalizing it into an ordinary completion.
+            // A semantic validation failure is never a successful provider
+            // response. Retry, health, usage, and finalization ownership are
+            // otherwise identical to normal generation.
+            if is_compact {
+                let decoded = match self.wire.decode_compact_response(
+                    &body,
+                    upstream.status.as_u16(),
+                    &context,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let observation = self.observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::LocalPreparation,
+                            Some(upstream.status),
+                            Some(FailureCategory::Fatal),
+                            None,
+                            alternate_wire_available,
+                            "response_adaptation",
+                        );
+                        let (effects, first) = self.decide(&observation)?;
+                        if first {
+                            self.apply_effects(&published.claim, &effects);
+                        }
+                        let error_class = match &error {
+                            crate::wire::WireRuntimeError::BodyTooLarge => "ResponseBodyTooLarge",
+                            _ => "ResponseAdaptation",
+                        };
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "compact response could not be adapted for the client",
+                        );
+                        let data = self.local_failure_data(
+                            &identity,
+                            &candidate.profile,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            error_class,
+                            request_bytes,
+                        );
+                        let _ = error;
+                        let _ = effects;
+                        return Ok(self.pending_terminal(
+                            published.identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                };
+                match decoded.outcome {
+                    crate::wire::CompactResponseOutcome::Success => {
+                        self.wire_resolver.accept(
+                            &identity.provider_id,
+                            &identity.model_id,
+                            &resolution.fingerprint,
+                            candidate.surface(),
+                            Instant::now(),
+                        );
+                        self.router.record_success(&published.claim);
+                        let client_body = decoded
+                            .client_body
+                            .as_ref()
+                            .map(|body| body.bytes.clone())
+                            .unwrap_or_else(|| Bytes::from_static(b"{}"));
+                        let status = upstream.status;
+                        let provider_bytes = body.len();
+                        let upstream_request_id = upstream.upstream_request_id.clone();
+                        let headers_elapsed = upstream.headers_elapsed;
+                        let total_elapsed = request_start.elapsed();
+                        let client_response = self.client_response(
+                            status,
+                            &upstream.headers,
+                            client_body,
+                            &request.proxy_request_id,
+                            attempt_number,
+                        );
+                        let data = self.success_data(
+                            &identity,
+                            decoded.usage.as_ref(),
+                            upstream.status,
+                            headers_elapsed,
+                            total_elapsed,
+                            request_bytes,
+                            provider_bytes,
+                            upstream_request_id,
+                        );
+                        return Ok(self.pending_terminal(
+                            identity,
+                            Some(published.claim),
+                            client_response,
+                            data,
+                        ));
+                    }
+                    crate::wire::CompactResponseOutcome::ProviderError(error) => {
+                        let signal = provider_error_signal(&error);
+                        let observation = self.observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::ProviderResponse,
+                            Some(upstream.status),
+                            None,
+                            signal,
+                            alternate_wire_available,
+                            "response_status",
+                        );
+                        let (effects, first) = self.decide(&observation)?;
+                        if first {
+                            self.apply_effects(&published.claim, &effects);
+                        }
+                        if effects.wire_effect == "reject_candidate" {
+                            self.wire_resolver.reject(
+                                &identity.provider_id,
+                                &identity.model_id,
+                                &resolution.fingerprint,
+                                candidate.surface(),
+                                Instant::now(),
+                            );
+                        }
+                        if self.should_retry(&effects) {
+                            last_upstream = Some(LastUpstream {
+                                status: upstream.status,
+                                headers: upstream.headers.clone(),
+                                body: body.clone(),
+                                effects: effects.clone(),
+                                upstream_request_id: upstream.upstream_request_id.clone(),
+                                headers_elapsed: upstream.headers_elapsed,
+                            });
+                            self.cleanup_failed_attempt(
+                                &published,
+                                self.retry_cleanup_data(
+                                    &identity,
+                                    upstream_protocol,
+                                    &effects,
+                                    Some(upstream.status),
+                                    upstream.upstream_request_id.clone(),
+                                    upstream.headers_elapsed,
+                                    request_bytes,
+                                    body.len(),
+                                ),
+                            )
+                            .await?;
+                            self.prepare_next(
+                                &mut attempt_number,
+                                &mut preferred_account,
+                                &mut excluded_accounts,
+                                &identity,
+                                &effects,
+                            );
+                            continue;
+                        }
+                        let provider_bytes = body.len();
+                        let mut response = self.client_response(
+                            upstream.status,
+                            &upstream.headers,
+                            body.clone(),
+                            &request.proxy_request_id,
+                            attempt_number,
+                        );
+                        let upstream_fault =
+                            matches!(upstream.status.as_u16(), 408 | 425 | 429 | 500..=599);
+                        if upstream_fault
+                            && attempt_number >= self.retry_policy.max_attempts.max(1)
+                            && let Ok(value) = HeaderValue::try_from("attempt_ceiling_reached")
+                        {
+                            response
+                                .headers
+                                .push((HeaderName::from_static("x-proxy-retry-reason"), value));
+                        }
+                        let mut data = self.failure_data(
+                            &identity,
+                            upstream_protocol,
+                            &effects,
+                            Some(upstream.status),
+                            upstream.upstream_request_id,
+                            upstream.headers_elapsed,
+                            request_bytes,
+                            provider_bytes,
+                        );
+                        if !effects.retry && !upstream_fault {
+                            data.outcome = FinalizationOutcome::ClientError;
+                            data.release_reason = Some("capability_rejected".into());
+                            data.retry_category = Some("never".into());
+                            data.is_retry_outcome = false;
+                        }
+                        return Ok(self.pending_terminal(
+                            identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                    crate::wire::CompactResponseOutcome::Malformed { .. } => {
+                        let observation = self.observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::ProviderResponse,
+                            Some(upstream.status),
+                            Some(FailureCategory::Fatal),
+                            None,
+                            alternate_wire_available,
+                            "response_decode",
+                        );
+                        let (effects, first) = self.decide(&observation)?;
+                        if first {
+                            self.apply_effects(&published.claim, &effects);
+                        }
+                        // A 2xx compact body that fails replacement-history
+                        // validation is terminal and never replayed; a lossy
+                        // compact result must not break a long-running agent
+                        // later.
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "provider returned a malformed compact response",
+                        );
+                        let data = self.local_failure_data(
+                            &identity,
+                            &candidate.profile,
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "MalformedResponse",
+                            request_bytes,
+                        );
+                        let _ = effects;
+                        return Ok(self.pending_terminal(
+                            identity,
+                            Some(published.claim),
+                            response,
+                            data,
+                        ));
+                    }
+                }
+            }
             let decoded = match self.wire.decode_finite_response_for_request(
                 &body,
                 upstream.status.as_u16(),
@@ -980,13 +1345,24 @@ impl FiniteCoordinator {
     ) -> WireRuntimeContext {
         let mut context = WireRuntimeContext::new(
             client_surface,
-            profile,
+            profile.clone(),
             identity.model_id.clone(),
             identity.upstream_model_id.clone(),
         );
         context.provider_id = Some(identity.provider_id.clone());
         context.provider_kind = provider.kind.clone();
         context.max_provider_body_bytes = self.max_provider_body_bytes;
+        // Resolve remote-compaction capabilities from the provider-owned
+        // table so trigger validation and compact decoding observe the same
+        // operator facts as attempt preparation.
+        if let Some(surface) = provider
+            .wire_surfaces
+            .get(profile.definition.surface.as_str())
+        {
+            context = context.with_compaction(
+                crate::wire::CompactionCapabilities::from_surface_config(surface),
+            );
+        }
         context
     }
 

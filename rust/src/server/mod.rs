@@ -1,10 +1,10 @@
 //! Axum HTTP server for the native EggPool runtime.
 //!
 //! Health/readiness, dashboard reads, authentication, static resources, and
-//! the public inference endpoints (Chat Completions, Responses, Messages)
-//! through the thin coordinator boundary. Handlers invoke one
-//! coordinator entry point; routing/retry/finalization live in the
-//! coordinator, not here.
+//! the public inference endpoints (Chat Completions, Responses,
+//! Responses compact, Messages) through the thin coordinator boundary.
+//! Handlers invoke one coordinator entry point; routing/retry/finalization
+//! live in the coordinator, not here.
 
 mod dashboard;
 mod health;
@@ -18,7 +18,7 @@ use dashboard::{
     theme_css, timeseries_page, traces_page,
 };
 use health::{healthz, models_api, readyz, runtime_status, update_status};
-use inference::{chat_completions, messages, responses};
+use inference::{chat_completions, messages, responses, responses_compact};
 use middleware::{admit_inference_body, authenticate, map_generation_error, validate_server_key};
 
 use axum::{
@@ -943,6 +943,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
+        .route("/v1/responses/compact", post(responses_compact))
         .route("/static/dashboard.css", get(static_css))
         .route("/static/dashboard.js", get(static_js))
         .route("/static/chart.js", get(static_chart_js))

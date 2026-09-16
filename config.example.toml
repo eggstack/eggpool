@@ -507,6 +507,11 @@ enabled = false
 #
 # [providers.opencode-go.wire_surfaces.openai_responses]
 # path_template = "/responses"
+# # Opt-in historical remote-compaction support; both keys are required together.
+# # supports_remote_compaction_v1 = true
+# # compact_path_template = "/responses/compact"
+# # Current v2 compaction-trigger support; default false, Responses surfaces only.
+# # supports_remote_compaction_v2 = false
 # [providers.opencode-go.wire_surfaces.openai_responses.auth]
 # mode = "bearer"
 #

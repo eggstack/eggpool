@@ -27,6 +27,81 @@ pub(super) async fn responses(
     handle_inference(state, ClientSurface::Responses, headers, body, lease).await
 }
 
+/// Historical remote-compaction endpoint (`POST /v1/responses/compact`).
+///
+/// A thin adapter only: bounded compact admission, one compact coordinator
+/// operation, bounded compact result. No provider selection, summarization,
+/// retry, or JSON shape reconstruction happens here. The endpoint is
+/// finite-only and shares the stateless Responses contract; stateful
+/// continuation remains rejected.
+pub(super) async fn responses_compact(
+    State(state): State<AppState>,
+    Extension(lease): Extension<Arc<GenerationLease>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let session = headers
+        .get("x-eggpool-route-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let proxy_request_id = crate::coordinator::new_proxy_request_id();
+    handle_finite_compact(state, headers, body, session, proxy_request_id, lease).await
+}
+
+pub(super) async fn handle_finite_compact(
+    state: AppState,
+    headers: HeaderMap,
+    body: Bytes,
+    session: Option<String>,
+    proxy_request_id: String,
+    lease: Arc<GenerationLease>,
+) -> Response {
+    let surface = ClientSurface::Responses;
+    let incoming = filtered_incoming_headers(&headers);
+    match crate::coordinator::execute_compact_finite(
+        lease.generation().inference(),
+        body,
+        incoming,
+        session,
+        proxy_request_id.clone(),
+    )
+    .await
+    {
+        Ok((execution, _virtual)) => {
+            execution.mark_started();
+            let status = execution.response.status;
+            let mut outgoing = HeaderMap::new();
+            for (name, value) in &execution.response.headers {
+                outgoing.insert(name.clone(), value.clone());
+            }
+            let body = execution.response.body.clone();
+            if let Some(metrics) = state
+                .process
+                .as_ref()
+                .map(ProcessRuntime::metrics_coalescer)
+                && let Some(event) = execution.usage_metric_event()
+            {
+                let _ = metrics.record_usage_async(event).await;
+            }
+            match execution
+                .complete(crate::coordinator::DownstreamResult::Delivered)
+                .await
+            {
+                Ok(_) => (status, outgoing, body).into_response(),
+                Err(_) => {
+                    let detail = endpoint_error_body(surface, "Finalization failed");
+                    error_body_response(StatusCode::SERVICE_UNAVAILABLE, surface, detail)
+                }
+            }
+        }
+        Err(error) => {
+            let status = error.status();
+            let detail = endpoint_error_body(surface, &error.to_string());
+            error_body_response(status, surface, detail)
+        }
+    }
+}
+
 pub(super) async fn handle_inference(
     state: AppState,
     surface: ClientSurface,

@@ -75,7 +75,12 @@ Codex compatibility changes additionally run the deterministic
 `codex_responses_compat` target. It covers native request preservation,
 function/freeform wrapper round trips, interleaved parallel-call identity,
 malformed-wrapper rejection, and the current Codex `output_item.done`/terminal
-contract; no Codex runtime dependency or credential is required. The opt-in
+contract; no Codex runtime dependency or credential is required. Remote-compaction
+changes additionally run the deterministic `codex_compaction_compat` target. It
+covers compact admission, native alias rewriting, byte-exact native forwarding,
+bounded compact success/failure validation, explicit unsupported-target rejection,
+stateless/finite bounds, diagnostic redaction, and v2 trigger rejection-or-
+preservation by capability. The opt-in
 `scripts/smoke_codex_compat.sh` separately qualifies a current CLI with both a
 fixed text request and a random-marker read-only shell-tool loop, returning 77
 when live credentials are unavailable.

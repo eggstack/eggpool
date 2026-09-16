@@ -8,9 +8,10 @@ pub mod body;
 pub mod limits;
 
 pub use admission::{
-    AdmissionError, AdmissionOptions, AdmittedRequest, NativeFeatureSummary,
-    NativeRequestPreservation, StaticRoutingFacts, admit_request, affinity_identity_input,
-    canonical_request_from_value, routing_request_facts, validate_responses_stateless_policy,
+    AdmissionError, AdmissionOptions, AdmittedRequest, CompactAdmittedRequest,
+    NativeFeatureSummary, NativeRequestPreservation, StaticRoutingFacts, admit_compact_request,
+    admit_request, affinity_identity_input, canonical_request_from_value, has_compaction_trigger,
+    routing_request_facts, validate_responses_stateless_policy,
 };
 pub use body::{
     BodyEncodingError, EncodedJsonBody, encode_compact_json, encode_compact_json_bounded,

@@ -123,11 +123,12 @@ thin: `middleware.rs` (constant-time Bearer/`x-api-key` auth, generation-lease
 admission, `max_request_body_bytes` bounding, loopback exemption),
 `health.rs` (`GET /v1/healthz`, `GET /v1/readyz`, `GET /v1/models`,
 `GET /api/stats/runtime`, `GET /api/stats/update`), `inference.rs`
-(`chat_completions`, `messages`, `responses`; finite vs. stream dispatch on the
+(`chat_completions`, `messages`, `responses`, `responses_compact`; finite vs. stream dispatch on the
 `stream` flag; exactly one `coordinator::execute_finite`/`execute_stream` call
-per request), `dashboard.rs` (server-rendered pages plus static assets).
+per request, compact via finite-only `execute_compact_finite`), `dashboard.rs` (server-rendered pages plus static assets).
 Route topology: inference at `/v1/chat/completions`, `/v1/messages`,
-`/v1/responses`; dashboard at `/`, `/accounts`, `/models`,
+`/v1/responses`, `/v1/responses/compact` (bounded distinct compaction
+operation, not a Responses alias); dashboard at `/`, `/accounts`, `/models`,
 `/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
 `/pings`, `/reliability`, `/routing`, `/traces`, `/runtime`, `/cache`,
 `/api/stats/summary`; statics under `/static/`.
@@ -314,7 +315,8 @@ Deep dives: [Observability](deep-dive-observability.md),
 
 - Inference surfaces: `POST /v1/chat/completions`, `POST /v1/messages`,
   `POST /v1/responses` (finite + SSE streaming; Responses stateless contract
-  as above).
+  as above), `POST /v1/responses/compact` (finite-only bounded distinct
+  compaction operation; native compact-capable upstreams only).
 - Discovery/health: `GET /v1/models`, `GET /v1/healthz`, `GET /v1/readyz`,
   `GET /api/stats/runtime`, `GET /api/stats/update`.
 - Dashboard: pages listed in §3 plus `/api/stats/summary`; observational only.
@@ -356,7 +358,7 @@ pytest suite, `packaging/` release manifests. No Python runtime fallback; never
 `multimodal`), `operations_o002`–`o010`, `runtime_lifecycle_r002`–`r013`,
 `routing_*`, `quota`, `health`, `catalog_refresh`, `model_router`,
 `database_compatibility`, `provider_transport`, `canonical_request`,
-`codex_responses_compat`.
+`codex_responses_compat`, `codex_compaction_compat`.
 
 Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 

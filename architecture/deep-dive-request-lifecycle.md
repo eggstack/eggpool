@@ -31,6 +31,25 @@ adapter: `store` may be omitted or false, while `store: true`,
 `previous_response_id`, conversation references, and background execution are
 rejected locally.
 
+### Compaction as an explicit operation
+
+`POST /v1/responses/compact` is a bounded distinct operation owned by the
+same coordinator path, not an ordinary Responses alias. `InferenceOperation`
+(`Generate` vs `Compact`) selects compact admission (`admit_compact_request`:
+finite-only, history `input` required, trigger rejected, same stateless and
+body bounds), native compact preparation (source-native preservation plus
+EggPool-owned model rewrite over the provider-owned compact path), and
+compact result validation (bounded replacement-history object returned
+unchanged with opportunistic usage extraction; semantic failures are never
+success). Routing filters to natively compact-capable Responses surfaces
+before submission — accounts without a qualified target are skipped without
+upstream I/O — while retry budget, health effects, usage accounting,
+cancellation, and finalization ownership are shared with generation. There is
+no translated compaction fallback and no persisted conversation state. v2
+`compaction_trigger` items on `POST /v1/responses` require explicit native
+v2 capability and otherwise fail with `UnsupportedSemanticFeature`; they are
+never treated as user text.
+
 ### Streaming ownership
 
 The streaming coordinator is an internal package with an explicit handoff

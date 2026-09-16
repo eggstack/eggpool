@@ -10,7 +10,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 ## Features
 
-- Client endpoints for OpenAI Chat Completions (`/v1/chat/completions`), stateless OpenAI Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`)
+- Client endpoints for OpenAI Chat Completions (`/v1/chat/completions`), stateless OpenAI Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`), plus a bounded native-only remote-compaction operation (`/v1/responses/compact`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
 - Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination, with bounded native Responses request and stream preservation
 - Dynamic model discovery with load-based routing across multiple providers and accounts

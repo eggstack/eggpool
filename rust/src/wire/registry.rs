@@ -120,6 +120,39 @@ pub struct ConfiguredWireProfile {
     pub priority: u32,
 }
 
+/// Remote-compaction capability facts for one provider surface.
+///
+/// These facts are deliberately separate from [`ConfiguredWireProfile`] so
+/// the closed codec registry stays data-only: the coordinator resolves them
+/// from the provider-owned `wire_surfaces` table at dispatch time. Both
+/// flags default to unsupported so current custom providers keep the
+/// local-compaction contract until an operator opts in.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CompactionCapabilities {
+    /// Historical `POST /v1/responses/compact` support. Native forwarding
+    /// additionally requires `compact_path_template`.
+    pub supports_remote_compaction_v1: bool,
+    pub compact_path_template: Option<String>,
+    /// Current v2 `compaction_trigger` support over the normal Responses
+    /// endpoint. Must not be advertised until qualified end to end.
+    pub supports_remote_compaction_v2: bool,
+}
+
+impl CompactionCapabilities {
+    pub fn from_surface_config(config: &crate::config::ProviderWireSurfaceConfig) -> Self {
+        Self {
+            supports_remote_compaction_v1: config.supports_remote_compaction_v1,
+            compact_path_template: config.compact_path_template.clone(),
+            supports_remote_compaction_v2: config.supports_remote_compaction_v2,
+        }
+    }
+
+    /// Native v1 forwarding is legal only with both the flag and a path.
+    pub fn native_v1_supported(&self) -> bool {
+        self.supports_remote_compaction_v1 && self.compact_path_template.is_some()
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum WireRegistryError {
     #[error("wire profile registry TOML is invalid: {0}")]

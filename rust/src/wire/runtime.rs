@@ -24,8 +24,9 @@ use super::{
 };
 use crate::model_router::AffinityIdentityInput;
 use crate::request::{
-    AdmissionError, AdmissionOptions, AdmittedRequest, DEFAULT_MAX_REQUEST_BODY_BYTES,
-    StaticRoutingFacts, admit_request, affinity_identity_input, encode_compact_json_bounded,
+    AdmissionError, AdmissionOptions, AdmittedRequest, CompactAdmittedRequest,
+    DEFAULT_MAX_REQUEST_BODY_BYTES, StaticRoutingFacts, admit_request, affinity_identity_input,
+    encode_compact_json_bounded, has_compaction_trigger,
 };
 use crate::routing::RoutingRequestFacts;
 
@@ -78,6 +79,10 @@ pub struct WireRuntimeContext {
     pub max_request_body_bytes: usize,
     pub max_provider_body_bytes: usize,
     pub max_encoded_body_bytes: usize,
+    /// Remote-compaction capabilities for the selected provider surface.
+    /// Defaults to unsupported so current custom providers keep the
+    /// local-compaction contract until an operator opts in.
+    pub compaction: super::CompactionCapabilities,
 }
 
 impl WireRuntimeContext {
@@ -101,7 +106,15 @@ impl WireRuntimeContext {
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             max_provider_body_bytes: DEFAULT_MAX_PROVIDER_BODY_BYTES,
             max_encoded_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            compaction: super::CompactionCapabilities::default(),
         }
+    }
+
+    /// Attach remote-compaction capabilities resolved from the provider-owned
+    /// `wire_surfaces` table for the selected surface.
+    pub fn with_compaction(mut self, compaction: super::CompactionCapabilities) -> Self {
+        self.compaction = compaction;
+        self
     }
 }
 
@@ -123,6 +136,18 @@ impl fmt::Debug for WireRuntimeContext {
             .field("max_request_body_bytes", &self.max_request_body_bytes)
             .field("max_provider_body_bytes", &self.max_provider_body_bytes)
             .field("max_encoded_body_bytes", &self.max_encoded_body_bytes)
+            .field(
+                "supports_compaction_v1",
+                &self.compaction.supports_remote_compaction_v1,
+            )
+            .field(
+                "supports_compaction_v2",
+                &self.compaction.supports_remote_compaction_v2,
+            )
+            .field(
+                "compact_path_present",
+                &self.compaction.compact_path_template.is_some(),
+            )
             .finish()
     }
 }
@@ -304,6 +329,28 @@ pub struct FiniteResponse {
     pub bytes: WireByteFacts,
 }
 
+/// Compact-operation outcome. A semantic validation failure is a malformed
+/// result, never a successful provider response.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompactResponseOutcome {
+    Success,
+    ProviderError(ProviderErrorEvidence),
+    Malformed { error: CodecError },
+}
+
+/// Typed native compact upstream result. The successful client body carries
+/// the validated replacement-history payload unchanged; it is never
+/// canonicalized into an ordinary assistant completion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactResponse {
+    pub identity: WireRuntimeIdentity,
+    pub outcome: CompactResponseOutcome,
+    pub metadata: Option<SemanticContentMetadata>,
+    pub usage: Option<CanonicalUsage>,
+    pub client_body: Option<EncodedWireBody>,
+    pub bytes: WireByteFacts,
+}
+
 #[derive(Debug, Error)]
 pub enum ProfileMismatchReason {
     #[error("selected profile is not present in the immutable registry")]
@@ -403,6 +450,29 @@ impl WireRuntime {
         }
         if admission.canonical.stream && !context.profile_flags.supports_streaming {
             return Err(self.profile_error(context, ProfileMismatchReason::StreamingUnavailable));
+        }
+        // Current v2 `compaction_trigger` items over the normal Responses
+        // endpoint require explicit native v2 capability. The trigger is a
+        // native-only compaction signal: it is never treated as user text,
+        // never passed through a codec that cannot represent it, and never
+        // advertised until the complete path is qualified. The default
+        // (unsupported) fails before provider submission.
+        if context.client_surface == ClientSurface::Responses
+            && let Some(preservation) = admission.native_preservation.as_ref()
+            && let Some(object) = preservation.parsed.as_object()
+            && has_compaction_trigger(object)
+        {
+            let native_v2 = context.selected_profile.definition.surface
+                == WireSurface::OpenaiResponses
+                && context.compaction.supports_remote_compaction_v2;
+            if !native_v2 {
+                return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                    reason: CodecReasonCode::UnsupportedSemanticFeature,
+                    field: Some("input.compaction_trigger".into()),
+                    source_surface: Some(WireSurface::OpenaiResponses),
+                    target_surface: Some(context.selected_profile.definition.surface),
+                }));
+            }
         }
 
         let codec = self.request_codec(context)?;
@@ -532,6 +602,221 @@ impl WireRuntime {
             admission,
             body,
         })
+    }
+
+    /// Prepare one remote-compaction request for a natively compact-capable
+    /// upstream surface.
+    ///
+    /// Compaction is a distinct model-facing operation whose output replaces
+    /// retained history; it is not an ordinary assistant completion. Only
+    /// native same-surface forwarding is supported: the source-native compact
+    /// JSON is preserved exactly except for the EggPool-owned model rewrite
+    /// and dispatch-time auth. There is deliberately no translated fallback —
+    /// unsupported targets fail here, before provider submission, rather than
+    /// risk a lossy replacement history. The result is validated and bounded
+    /// by [`Self::decode_compact_response`] without canonicalizing it into an
+    /// ordinary completion.
+    pub fn prepare_compact_request(
+        &self,
+        admission: CompactAdmittedRequest,
+        raw_body: &[u8],
+        context: &WireRuntimeContext,
+    ) -> Result<PreparedRequest, WireRuntimeError> {
+        self.validate_context(context)?;
+        if context.client_surface != ClientSurface::Responses {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.client_surface".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if context.selected_profile.definition.surface != WireSurface::OpenaiResponses {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.upstream_surface".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if !context.compaction.native_v1_supported() {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.remote_compaction_v1".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if admission.canonical.model != context.canonical_model_id {
+            return Err(self.profile_error(context, ProfileMismatchReason::CanonicalModelMismatch));
+        }
+        let model_rewrite_required = context.upstream_model_id != admission.canonical.model;
+        let body = if !model_rewrite_required {
+            EncodedWireBody {
+                value: None,
+                bytes: Bytes::copy_from_slice(raw_body),
+            }
+        } else {
+            let mut value = admission.native_preservation.parsed.clone();
+            value
+                .as_object_mut()
+                .expect("compact admission only retains an object")
+                .insert(
+                    "model".into(),
+                    Value::String(context.upstream_model_id.clone()),
+                );
+            let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes)
+                .map_err(|error| match error {
+                    crate::request::BodyEncodingError::TooLarge { .. } => {
+                        WireRuntimeError::BodyTooLarge
+                    }
+                    crate::request::BodyEncodingError::Serialize(_) => {
+                        WireRuntimeError::BodySerialization
+                    }
+                })?;
+            EncodedWireBody {
+                value: Some(value),
+                bytes: encoded.bytes,
+            }
+        };
+        let adapter = stream_adapter(context.selected_profile.definition.stream_codec)
+            .map_err(|reason| self.profile_error(context, reason))?;
+        let identity = WireRuntimeIdentity::from_context(context);
+        let metadata = SemanticContentMetadata::request(&admission.canonical);
+        let admitted = AdmittedRequest {
+            canonical: admission.canonical.clone(),
+            native_preservation: Some(admission.native_preservation.clone()),
+            raw_body_bytes: admission.raw_body_bytes,
+            reservation_tokens: admission.reservation_tokens,
+            context_tokens: admission.context_tokens,
+        };
+        Ok(PreparedRequest {
+            identity,
+            canonical: admission.canonical.clone(),
+            metadata,
+            adaptation: AdaptationSummary::from_notices(&[]),
+            notices: Vec::new(),
+            bytes: WireByteFacts {
+                input_bytes: raw_body.len(),
+                output_bytes: body.bytes.len(),
+                bytes_observed: raw_body.len(),
+            },
+            stream: StreamIntent {
+                requested: false,
+                adapter,
+            },
+            admission: admitted,
+            body,
+        })
+    }
+
+    /// Validate and bound one native compact result without canonicalizing it
+    /// into an ordinary assistant completion.
+    ///
+    /// A 2xx body must be a bounded JSON object (the replacement-history
+    /// material); it is returned to the client unchanged. Usage is extracted
+    /// opportunistically from the standard Responses usage shape when present
+    /// so successful compaction still records provider/model/account usage.
+    /// Non-2xx bodies classify as provider errors through the selected
+    /// surface codec. A semantic compact-result validation error is never
+    /// treated as a successful provider response. No summary text,
+    /// replacement history, credential, or raw body enters diagnostics beyond
+    /// byte counts.
+    pub fn decode_compact_response(
+        &self,
+        body: &[u8],
+        status: u16,
+        context: &WireRuntimeContext,
+    ) -> Result<CompactResponse, WireRuntimeError> {
+        self.validate_context(context)?;
+        if body.len() > context.max_provider_body_bytes {
+            return Err(WireRuntimeError::BodyTooLarge);
+        }
+        let identity = WireRuntimeIdentity::from_context(context);
+        let bytes = WireByteFacts {
+            input_bytes: body.len(),
+            output_bytes: 0,
+            bytes_observed: body.len(),
+        };
+        if !(200..300).contains(&status) {
+            let evidence = self
+                .compact_error_evidence(body, status, context)
+                .unwrap_or(ProviderErrorEvidence {
+                    status,
+                    error_type: None,
+                    message: None,
+                });
+            return Ok(CompactResponse {
+                identity,
+                outcome: CompactResponseOutcome::ProviderError(evidence),
+                metadata: None,
+                usage: None,
+                client_body: None,
+                bytes,
+            });
+        }
+        let value: Value = match serde_json::from_slice(body) {
+            Ok(value) => value,
+            Err(_) => {
+                return Ok(CompactResponse {
+                    identity,
+                    outcome: CompactResponseOutcome::Malformed {
+                        error: provider_malformed_error(
+                            context.selected_profile.definition.surface,
+                        ),
+                    },
+                    metadata: None,
+                    usage: None,
+                    client_body: None,
+                    bytes,
+                });
+            }
+        };
+        if !value.is_object() {
+            return Ok(CompactResponse {
+                identity,
+                outcome: CompactResponseOutcome::Malformed {
+                    error: provider_malformed_error(context.selected_profile.definition.surface),
+                },
+                metadata: None,
+                usage: None,
+                client_body: None,
+                bytes,
+            });
+        }
+        let usage = compact_usage(&value);
+        let output_bytes = body.len();
+        Ok(CompactResponse {
+            identity,
+            outcome: CompactResponseOutcome::Success,
+            metadata: Some(SemanticContentMetadata::default()),
+            usage,
+            client_body: Some(EncodedWireBody {
+                value: Some(value),
+                bytes: Bytes::copy_from_slice(body),
+            }),
+            bytes: WireByteFacts {
+                input_bytes: body.len(),
+                output_bytes,
+                bytes_observed: body.len(),
+            },
+        })
+    }
+
+    /// Decode structured provider-error evidence for a non-2xx compact body,
+    /// returning `None` when the body carries no decodable error shape.
+    fn compact_error_evidence(
+        &self,
+        body: &[u8],
+        status: u16,
+        context: &WireRuntimeContext,
+    ) -> Option<ProviderErrorEvidence> {
+        let value: Value = serde_json::from_slice(body).ok()?;
+        let codec = self.response_codec(context).ok()?;
+        match codec.decode_response(&value, status).ok()?.value {
+            DecodedProviderPayload::Error(error) => Some(error),
+            DecodedProviderPayload::Response(_) => None,
+        }
     }
 
     pub fn routing_facts(
@@ -1035,6 +1320,27 @@ fn provider_malformed_error(surface: WireSurface) -> CodecError {
         source_surface: Some(surface),
         target_surface: None,
     }
+}
+
+/// Extract standard Responses usage from a native compact result when the
+/// upstream reports it, so successful compaction still records
+/// provider/model/account usage. Returns `None` when no usage shape is
+/// present rather than fabricating zero estimates.
+fn compact_usage(value: &Value) -> Option<CanonicalUsage> {
+    let usage = value.get("usage")?.as_object()?;
+    let number = |key: &str| usage.get(key).and_then(Value::as_u64);
+    let input = number("input_tokens");
+    let output = number("output_tokens");
+    let total = number("total_tokens");
+    if input.is_none() && output.is_none() && total.is_none() {
+        return None;
+    }
+    Some(CanonicalUsage {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: total,
+        ..CanonicalUsage::default()
+    })
 }
 
 fn map_admission_error(error: AdmissionError, context: &WireRuntimeContext) -> CodecError {

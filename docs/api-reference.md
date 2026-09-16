@@ -9,7 +9,20 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | `GET` | `/v1/models` | List available models |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
+| `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission |
 | `POST` | `/v1/messages` | Anthropic Messages-compatible requests |
+
+The compact endpoint is a distinct operation, not an ordinary Responses
+alias. It shares the stateless Responses contract (`store` may be omitted or
+false; `store: true`, continuation references, and background execution are
+rejected) and is always finite (`stream: true` is rejected). Only upstreams
+whose provider surface opts in with `supports_remote_compaction_v1 = true`
+plus a `compact_path_template` are eligible; without a qualified native
+target the request fails before upstream submission. There is no translated
+compaction fallback. Current Codex custom providers default to local
+compaction, so remote compaction is opt-in forward compatibility rather than
+a requirement for normal Codex operation. See
+[Stateless Responses](stateless-responses.md).
 
 `/v1/models` remains the standard OpenAI-compatible model-list contract. It is
 not a Codex-private remote catalog and does not claim Codex reasoning,

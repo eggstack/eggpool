@@ -118,12 +118,18 @@ failure and never emits a synthetic client terminal marker.
 `ProtocolName` values (`openai` and `anthropic`) describe compatibility
 families; they do not identify a concrete upstream endpoint. Providers may
 declare candidate wire surfaces with their own path, optional streaming path,
-priority, auth shape, and additive static headers:
+priority, auth shape, additive static headers, and opt-in remote-compaction
+capability:
 
 ```toml
 [providers.example.wire_surfaces.openai_responses]
 path_template = "/responses"
 priority = 90
+# Opt-in historical compact support only; both keys are required together.
+# supports_remote_compaction_v1 = true
+# compact_path_template = "/responses/compact"
+# Current v2 trigger support; default false, Responses surfaces only.
+# supports_remote_compaction_v2 = false
 
 [providers.example.wire_surfaces.openai_responses.auth]
 mode = "bearer"
@@ -495,7 +501,7 @@ eggpool --config config.toml accounts status
 
 ### xAI
 
-- Also documents Responses API and compaction endpoints; EggPool only supports chat completions.
+- Also documents Responses API and compaction endpoints; EggPool only uses its chat completions surface for xAI.
 - Use a chat-compatible probe model for verification.
 
 ### Mistral

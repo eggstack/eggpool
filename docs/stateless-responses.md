@@ -79,3 +79,34 @@ block with `wire_api = "responses"` and an `env_key = "EGGPOOL_API_KEY"`
 reference, with WebSockets disabled — see
 `eggpool configsetup codex --model <model>`. Codex model discovery is not
 provided by `/v1/models`; configure an explicit model or alias.
+
+## Remote compaction compatibility
+
+Compaction is a stateless operation and does not imply stored Responses.
+`POST /v1/responses/compact` accepts the history/checkpoint input required
+for that operation and returns replacement material in the same
+request/response transaction. EggPool persists no conversations, response
+IDs, or compacted history for future continuation; `previous_response_id`,
+stored conversations, and background Responses remain outside the stateless
+contract.
+
+The endpoint is a distinct model-facing operation, not an ordinary assistant
+completion: it participates in the normal provider selection, failure
+isolation, health effects, quota/accounting, bounded-body, retry-budget, and
+cancellation ownership, and compact failures are distinguishable in safe
+diagnostics without storing prompts or replacement history. Only native
+same-surface forwarding is supported today — the source-native compact JSON
+is preserved exactly except for the EggPool-owned model rewrite — and
+targets without explicit `supports_remote_compaction_v1` capability plus a
+`compact_path_template` fail before upstream submission. There is
+deliberately no translated compaction fallback: correct rejection is
+preferable to a lossy compact result that breaks a long-running agent later.
+
+Current v2 `compaction_trigger` items over the normal Responses endpoint
+require explicit native `supports_remote_compaction_v2` capability and are
+otherwise rejected with `UnsupportedSemanticFeature`; a trigger is never
+treated as user text or silently converted through a codec that cannot
+represent it. EggPool does not advertise v2 remote compaction until the
+complete request/result path is qualified end to end, and the generated
+Codex provider configuration continues to use Codex's local compaction path
+by default.

@@ -59,6 +59,32 @@ use super::{
 /// Maximum client error body (matches finite/streaming coordinator bound).
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
 
+/// Distinct model-facing operation for one inference request.
+///
+/// `Generate` is an ordinary assistant completion; `Compact` is a
+/// remote-compaction operation whose output replaces retained history. The
+/// distinction drives admission, wire preparation, upstream path selection,
+/// and result validation while reusing the normal provider selection,
+/// failure isolation, health effects, quota/accounting, bounded-body, and
+/// cancellation ownership. It carries no prompt, history, or summary content
+/// and never implies stored conversations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InferenceOperation {
+    #[default]
+    Generate,
+    Compact,
+}
+
+impl InferenceOperation {
+    /// Bounded, secret-free operation label for diagnostics and metrics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Generate => "generate",
+            Self::Compact => "compact",
+        }
+    }
+}
+
 /// Thin endpoint error mapped to a protocol-shaped HTTP response.
 #[derive(Debug, Error)]
 pub enum EndpointError {
@@ -670,6 +696,67 @@ pub async fn execute_finite(
     // Preserve an explicit provider qualifier (`model/provider`) as a routing
     // pin. Admission carries the stripped canonical model; the qualifier
     // survives only here, matching the Python `provider_id` context field.
+    request.routing_facts.provider_id = resolved.provider_id.clone();
+    let execution = state
+        .finite
+        .execute(request)
+        .await
+        .map_err(map_finite_error)?;
+    Ok((execution, resolved.virtual_resolution))
+}
+
+/// Execute one finite remote-compaction request through the thin endpoint
+/// path.
+///
+/// `POST /v1/responses/compact` is a bounded distinct operation, not an
+/// ordinary Responses alias: the result is replacement history/checkpoint
+/// material rather than a normal sampled assistant response. Admission,
+/// routing, retry, health, usage, cancellation, and finalization ownership
+/// are otherwise identical to normal generation. Only native compact-capable
+/// upstreams are eligible; without a qualified native target the request
+/// fails before upstream submission, and translated fallbacks are explicitly
+/// unsupported. Stateful continuation (`previous_response_id`, `store =
+/// true`, conversation references, `background = true`) remains rejected.
+pub async fn execute_compact_finite(
+    state: &InferenceState,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    session_header: Option<String>,
+    proxy_request_id: String,
+) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
+    const SURFACE: ClientSurface = ClientSurface::Responses;
+    if raw_body.len() > state.max_body_bytes {
+        return Err(EndpointError::BodyTooLarge);
+    }
+    let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
+    let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
+    if let Some(rejection) = validate_responses_stateless(&payload) {
+        return Err(EndpointError::StatelessViolation(rejection));
+    }
+    // The compact endpoint is finite-only; streaming compaction results are
+    // not part of the current contract.
+    if stream_flag(&payload)? {
+        return Err(EndpointError::Admission);
+    }
+    let resolved = resolve_concrete(
+        state,
+        SURFACE,
+        raw_body.clone(),
+        &payload,
+        session_header.as_deref(),
+        &proxy_request_id,
+    )
+    .await?;
+    let mut request = FiniteRequest::new_compact(
+        proxy_request_id,
+        resolved.concrete_body.clone(),
+        incoming_headers,
+        static_routing_facts(&state.known_providers, SURFACE),
+    )
+    .map_err(|_| EndpointError::Admission)?;
+    if request.admitted.canonical.model != resolved.concrete_model {
+        return Err(EndpointError::Admission);
+    }
     request.routing_facts.provider_id = resolved.provider_id.clone();
     let execution = state
         .finite

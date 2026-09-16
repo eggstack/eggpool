@@ -101,6 +101,16 @@ the qualified setup path, or select the model explicitly when invoking Codex;
 automatic Codex model-picker discovery is deferred. For a real current CLI
 check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
 
+EggPool relies on Codex local compaction by default and does not advertise
+remote v2 compaction: the generated provider keeps the current
+custom-provider `Unsupported` behavior until the complete trigger
+request/result path is qualified end to end. Operators whose upstream natively
+supports the historical compact contract may opt in per provider surface with
+`supports_remote_compaction_v1 = true` plus a `compact_path_template`; the
+bounded `POST /v1/responses/compact` operation then forwards natively with
+normal routing, accounting, and health ownership. See
+[Stateless Responses](stateless-responses.md).
+
 ## OpenCode Integration
 
 `eggpool configsetup opencode` generates an OpenCode-compatible JSON configuration. When thinking/reasoning capabilities are discovered for a model, the output includes `"thinking": "supported"` annotations so OpenCode's model picker can surface them.

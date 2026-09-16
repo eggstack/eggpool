@@ -35,3 +35,15 @@ and malformed-wrapper rejection. A successful live smoke qualifies the tested
 Codex CLI version and selected upstream path only; it does not imply support
 for every future Codex version, provider, or native server tool. Translated
 provider live qualification must be recorded separately when it is run.
+
+Remote-compaction qualification is covered deterministically by the
+`codex_compaction_compat` target: native compact admission and alias
+rewriting, byte-exact native forwarding, bounded compact success/failure
+validation, explicit unsupported-target rejection before submission,
+stateless/finite bounds, diagnostic redaction, and v2 `compaction_trigger`
+rejection-or-preservation by capability. Because current custom providers use
+local compaction, live remote-compaction qualification prefers a test-only
+Codex capability switch, a deterministic local fixture server accepting the
+compact contract, or a documented optional manual scenario; the tested Codex
+version/commit must be recorded. Network/credential-dependent
+remote-compaction qualification is not required for ordinary CI.

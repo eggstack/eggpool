@@ -525,6 +525,17 @@ pub struct ProviderWireSurfaceConfig {
     pub priority: u32,
     pub auth: Option<ProviderAuthConfig>,
     pub headers: Vec<ProviderStaticHeaderConfig>,
+    /// Historical `POST /v1/responses/compact` support on this surface.
+    /// `compact_path_template` selects the upstream compact path; the flag
+    /// must also be true before the coordinator forwards a compact operation
+    /// natively. Both default to unsupported so existing providers keep the
+    /// local-compaction contract until an operator opts in.
+    pub supports_remote_compaction_v1: bool,
+    pub compact_path_template: Option<String>,
+    /// Current Codex v2 `compaction_trigger` items over the normal Responses
+    /// endpoint. Never advertised until the complete request/result path is
+    /// qualified end to end; the custom-provider default remains unsupported.
+    pub supports_remote_compaction_v2: bool,
 }
 impl Default for ProviderWireSurfaceConfig {
     fn default() -> Self {
@@ -534,6 +545,9 @@ impl Default for ProviderWireSurfaceConfig {
             priority: 100,
             auth: None,
             headers: Vec::new(),
+            supports_remote_compaction_v1: false,
+            compact_path_template: None,
+            supports_remote_compaction_v2: false,
         }
     }
 }
@@ -1677,6 +1691,19 @@ fn validate_provider(
         validate_path(&candidate.path_template)?;
         if let Some(path) = &candidate.stream_path_template {
             validate_path(path)?;
+        }
+        if let Some(path) = &candidate.compact_path_template {
+            validate_path(path)?;
+        }
+        if candidate.supports_remote_compaction_v1 && candidate.compact_path_template.is_none() {
+            return Err(ConfigError::validation(format!(
+                "provider surface {surface:?} advertises supports_remote_compaction_v1 without a compact_path_template"
+            )));
+        }
+        if candidate.supports_remote_compaction_v2 && *surface != "openai_responses" {
+            return Err(ConfigError::validation(format!(
+                "provider surface {surface:?} advertises supports_remote_compaction_v2 on a non-Responses surface"
+            )));
         }
         if let Some(auth) = &candidate.auth {
             validate_auth(auth)?;

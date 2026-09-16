@@ -154,6 +154,15 @@ impl AttemptBuilder {
         );
         context.provider_id = Some(input.identity.provider_id.clone());
         context.provider_kind = input.provider.kind.clone();
+        if let Some(surface) = input
+            .provider
+            .wire_surfaces
+            .get(input.profile.definition.surface.as_str())
+        {
+            context = context.with_compaction(
+                crate::wire::CompactionCapabilities::from_surface_config(surface),
+            );
+        }
         let prepared = match admission {
             Some(admission) => {
                 self.wire
@@ -285,6 +294,132 @@ impl AttemptBuilder {
             .into_iter()
             .map(|profile| WireCandidate::new(profile, fingerprint.clone()))
             .collect()
+    }
+
+    /// Prepare one native remote-compaction attempt.
+    ///
+    /// The compact operation reuses the neutral HTTP transport and
+    /// dispatch-time auth/header ownership but selects the provider-owned
+    /// compact path and preserves the source-native compact JSON (with only
+    /// the EggPool-owned model rewrite). There is no translated fallback:
+    /// missing v1 capability or compact path fails here, before provider
+    /// submission, rather than risking a lossy replacement history. No
+    /// prompt, summary, or history content enters the error.
+    pub fn prepare_compact(
+        &self,
+        input: AttemptInput,
+        admission: &crate::request::CompactAdmittedRequest,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        validate_input(&input)?;
+        if input.stream {
+            return Err(AttemptError::InvalidInput(
+                "compact operations are finite-only".into(),
+            ));
+        }
+        if input.client_surface != ClientSurface::Responses {
+            return Err(AttemptError::InvalidInput(
+                "compact operations require the Responses surface".into(),
+            ));
+        }
+        if input.profile.definition.surface != crate::wire::WireSurface::OpenaiResponses {
+            return Err(AttemptError::Wire(
+                crate::wire::WireRuntimeError::RequestAdaptation(crate::wire::CodecError {
+                    reason: crate::wire::CodecReasonCode::UnsupportedSemanticFeature,
+                    field: Some("compact.upstream_surface".into()),
+                    source_surface: Some(crate::wire::WireSurface::OpenaiResponses),
+                    target_surface: Some(input.profile.definition.surface),
+                }),
+            ));
+        }
+        let surface_key = input.profile.definition.surface.as_str();
+        let capabilities = input
+            .provider
+            .wire_surfaces
+            .get(surface_key)
+            .map(crate::wire::CompactionCapabilities::from_surface_config)
+            .unwrap_or_default();
+        if !capabilities.native_v1_supported() {
+            return Err(AttemptError::Wire(
+                crate::wire::WireRuntimeError::RequestAdaptation(crate::wire::CodecError {
+                    reason: crate::wire::CodecReasonCode::UnsupportedSemanticFeature,
+                    field: Some("compact.remote_compaction_v1".into()),
+                    source_surface: Some(crate::wire::WireSurface::OpenaiResponses),
+                    target_surface: Some(input.profile.definition.surface),
+                }),
+            ));
+        }
+        let mut context = WireRuntimeContext::new(
+            input.client_surface,
+            input.profile.clone(),
+            input.identity.model_id.clone(),
+            input.identity.upstream_model_id.clone(),
+        );
+        context.provider_id = Some(input.identity.provider_id.clone());
+        context.provider_kind = input.provider.kind.clone();
+        context = context.with_compaction(capabilities.clone());
+        let prepared =
+            self.wire
+                .prepare_compact_request(admission.clone(), &input.raw_body, &context)?;
+        let compact_template = capabilities
+            .compact_path_template
+            .as_deref()
+            .unwrap_or(&input.profile.path_template);
+        let path = expand_path(compact_template, &input.identity.upstream_model_id)?;
+        let identity = input.identity.clone();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            http::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static(concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))),
+        );
+        add_forwarded_headers(&mut headers, &input.incoming_headers)?;
+        add_request_identity_headers(
+            &mut headers,
+            input.request_id.as_deref().or_else(|| {
+                (!input.identity.proxy_request_id.is_empty())
+                    .then_some(input.identity.proxy_request_id.as_str())
+            }),
+            input.correlation_id.as_deref(),
+        )?;
+        add_static_headers(&mut headers, &input.provider.headers)?;
+        if let Some(surface) = input
+            .provider
+            .wire_surfaces
+            .get(input.profile.definition.surface.as_str())
+        {
+            add_static_headers(&mut headers, &surface.headers)?;
+            add_auth_header(
+                &mut headers,
+                surface.auth.as_ref().unwrap_or(&input.provider.auth),
+                input.account_api_key.as_deref(),
+            )?;
+        } else {
+            add_auth_header(
+                &mut headers,
+                &input.provider.auth,
+                input.account_api_key.as_deref(),
+            )?;
+        }
+        Ok(PreparedUpstreamAttempt {
+            identity: identity.clone(),
+            provider_id: identity.provider_id.clone(),
+            account_name: identity.account_name.clone(),
+            upstream_model_id: identity.upstream_model_id.clone(),
+            profile: input.profile,
+            candidate_fingerprint: input.candidate_fingerprint,
+            method: Method::POST,
+            path,
+            headers,
+            body: prepared.body.bytes,
+            stream: false,
+        })
     }
 }
 

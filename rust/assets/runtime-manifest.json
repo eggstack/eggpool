@@ -26,7 +26,7 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "config.example.toml",
-      "sha256": "22ae1cf5fbbf5cf7f5debb1dffb372cac9733be2ddf8dcd41d9bb6f6ba16ba57",
+      "sha256": "055c4672db462d2eeac1b75fa034dcc75e43a963fbb5bbc882a9ed33510b5cee",
       "identity": "exact"
     },
     {

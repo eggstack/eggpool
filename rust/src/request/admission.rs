@@ -129,6 +129,40 @@ pub struct AdmittedRequest {
     pub context_tokens: u64,
 }
 
+/// Bounded facts for one remote-compaction operation.
+///
+/// Compaction is a distinct model-facing operation whose output replaces
+/// retained history; it is not an ordinary assistant completion. The struct
+/// carries only bounded semantic facts needed for routing/encoding, while the
+/// source-native compact JSON is preserved separately when same-surface
+/// forwarding is legal. No prompt, replacement history, or summary text is
+/// retained beyond the bounded request lifetime.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactAdmittedRequest {
+    pub canonical: CanonicalRequest,
+    pub native_preservation: NativeRequestPreservation,
+    pub raw_body_bytes: usize,
+    pub reservation_tokens: u64,
+    pub context_tokens: u64,
+}
+
+impl CompactAdmittedRequest {
+    pub fn routing_facts(&self, inputs: &StaticRoutingFacts) -> RoutingRequestFacts {
+        let admitted = AdmittedRequest {
+            canonical: self.canonical.clone(),
+            native_preservation: Some(self.native_preservation.clone()),
+            raw_body_bytes: self.raw_body_bytes,
+            reservation_tokens: self.reservation_tokens,
+            context_tokens: self.context_tokens,
+        };
+        routing_request_facts(&admitted, inputs)
+    }
+
+    pub fn affinity_identity(&self, explicit_session: Option<&str>) -> AffinityIdentityInput {
+        affinity_identity_input(&self.canonical, explicit_session)
+    }
+}
+
 impl AdmittedRequest {
     pub fn routing_facts(&self, inputs: &StaticRoutingFacts) -> RoutingRequestFacts {
         routing_request_facts(self, inputs)
@@ -197,6 +231,93 @@ pub fn canonical_request_from_value(
         .as_object()
         .ok_or(AdmissionError::TopLevelNotObject)
         .and_then(|object| canonical_request_from_object(object, surface))
+}
+
+/// Return true when a Responses `input` array contains a v2
+/// `compaction_trigger` item. The trigger is a native-only compaction signal;
+/// it must never be treated as user text or silently converted through a
+/// codec that cannot represent its semantics.
+pub fn has_compaction_trigger(object: &Map<String, Value>) -> bool {
+    object
+        .get("input")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.as_object()
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("compaction_trigger")
+            })
+        })
+}
+
+/// Admit one bounded remote-compaction request.
+///
+/// The compact endpoint shares the stateless Responses contract
+/// (`previous_response_id`, `store = true`, conversation references, and
+/// `background = true` remain rejected) and the same body size, depth, and
+/// collection limits as ordinary Responses admission. The operation requires
+/// an `input` history payload, is always finite (`stream = true` is
+/// rejected), and never accepts a `compaction_trigger` item: the trigger
+/// belongs on `POST /v1/responses`, while this endpoint *is* the compaction
+/// operation.
+pub fn admit_compact_request(
+    raw_body: &[u8],
+    options: AdmissionOptions,
+) -> Result<CompactAdmittedRequest, AdmissionError> {
+    if raw_body.len() > options.max_body_bytes {
+        return Err(AdmissionError::BodyTooLarge {
+            length: raw_body.len(),
+            limit: options.max_body_bytes,
+        });
+    }
+    let value = parse_once(raw_body)?;
+    let object = value.as_object().ok_or(AdmissionError::TopLevelNotObject)?;
+    validate_responses_stateless_policy(object)?;
+    if has_compaction_trigger(object) {
+        return Err(AdmissionError::InvalidField {
+            field: "input.compaction_trigger",
+        });
+    }
+    match object.get("stream") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => {
+            return Err(AdmissionError::InvalidField { field: "stream" });
+        }
+        Some(_) => {
+            return Err(AdmissionError::InvalidField { field: "stream" });
+        }
+    }
+    let has_input = match object.get("input") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(_) => {
+            return Err(AdmissionError::InvalidField { field: "input" });
+        }
+    };
+    if !has_input {
+        return Err(AdmissionError::InvalidField { field: "input" });
+    }
+    let canonical = canonical_request_from_object(object, ClientSurface::Responses)?;
+    if canonical.stream {
+        return Err(AdmissionError::InvalidField { field: "stream" });
+    }
+    let reservation_tokens = estimate_reservation_tokens(raw_body);
+    let context_tokens =
+        estimate_context_input_tokens(raw_body, &value, options.extra_context_tokens);
+    let summary = native_feature_summary(object);
+    Ok(CompactAdmittedRequest {
+        canonical,
+        native_preservation: NativeRequestPreservation {
+            source_surface: ClientSurface::Responses,
+            parsed: value,
+            summary,
+        },
+        raw_body_bytes: raw_body.len(),
+        reservation_tokens,
+        context_tokens,
+    })
 }
 
 pub fn routing_request_facts(

@@ -24,15 +24,15 @@ pub use codec::{
 };
 pub use codecs::{AnthropicMessagesCodec, OpenAiChatCodec, builtin_codec_instance};
 pub use registry::{
-    CodecFamily, ConfiguredWireProfile, WireHint, WireProfileDefinition, WireProfileId,
-    WireProfileRegistry, WireRegistryError, WireSurface, WireSurfaceName,
+    CodecFamily, CompactionCapabilities, ConfiguredWireProfile, WireHint, WireProfileDefinition,
+    WireProfileId, WireProfileRegistry, WireRegistryError, WireSurface, WireSurfaceName,
 };
 pub use runtime::{
-    AdaptationKind, AdaptationSummary, DEFAULT_MAX_PROVIDER_BODY_BYTES, EncodedWireBody,
-    FiniteResponse, FiniteResponseOutcome, PreparedRequest, ProfileMismatchReason,
-    SemanticContentMetadata, StreamFinalization, StreamIntent, StreamPushResult, WireByteFacts,
-    WireProfileFlags, WireRuntime, WireRuntimeContext, WireRuntimeError, WireRuntimeIdentity,
-    WireStream,
+    AdaptationKind, AdaptationSummary, CompactResponse, CompactResponseOutcome,
+    DEFAULT_MAX_PROVIDER_BODY_BYTES, EncodedWireBody, FiniteResponse, FiniteResponseOutcome,
+    PreparedRequest, ProfileMismatchReason, SemanticContentMetadata, StreamFinalization,
+    StreamIntent, StreamPushResult, WireByteFacts, WireProfileFlags, WireRuntime,
+    WireRuntimeContext, WireRuntimeError, WireRuntimeIdentity, WireStream,
 };
 pub use stream::{
     ClientStreamEncoder, MAX_SSE_FRAME_BYTES, SSEFrame, SseDecodeError, SseDecodeResult,

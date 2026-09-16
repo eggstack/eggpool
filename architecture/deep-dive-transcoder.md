@@ -32,6 +32,17 @@ as wrapper JSON text. Namespaces, tool-search, shell, image-generation, and
 other server-owned tools remain native-only unless a general canonical
 equivalent is added.
 
+Remote-compaction capabilities (`supports_remote_compaction_v1` plus an
+optional compact path, `supports_remote_compaction_v2`) live on the
+provider-owned `wire_surfaces` table and resolve into `CompactionCapabilities`
+at dispatch time; the closed codec registry stays data-only. The v1 compact
+operation preserves the source-native compact envelope exactly except for the
+EggPool-owned model rewrite, and its result is bounded and validated without
+canonicalizing it into an ordinary completion. A v2 `compaction_trigger`
+input item is a native-only signal: translated targets reject it as
+`UnsupportedSemanticFeature`, and native Responses targets preserve it only
+with explicit v2 capability. Neither form is ever converted to user text.
+
 Streaming adapters preserve native event grammar and require a native terminal
 event. Responses-to-Responses uses an observe-and-forward mode: the bounded
 SSE decoder observes terminal/usage evidence while the original valid provider
