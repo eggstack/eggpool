@@ -1,6 +1,8 @@
 # Plan 210: Portable client-config core and connection-profile contract
 
-> **Status:** ready for implementation
+> **Status:** complete
+>
+> **Completed:** 2026-09-16 — `rust/crates/eggpool-client-config/` lands as the portable boundary; `rust/src/operations/integrations.rs` is the thin EggPool adapter; focused + serial workspace suites green locally (see commit).
 >
 > **Baseline:** EggPool `main` at `6997cdbb4cee4ec69c71cab15b53b039c7e3309a` (2026-09-16)
 >

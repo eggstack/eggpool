@@ -1,8 +1,12 @@
 //! Agent integration context, renderers, and safe snippet delivery.
 //!
-//! The renderers are intentionally small and deterministic.  Catalog access,
-//! server-key resolution, and transcoder compatibility mutation are kept in
-//! this shared boundary so individual targets cannot grow divergent policy.
+//! Portable Codex/OpenCode policy (projection, rendering, catalog validation,
+//! TOML mutation, connection profiles, tokens) lives in the small
+//! `eggpool-client-config` crate. This module is the EggPool adapter: it
+//! converts `Config`/catalog/database facts into those portable types,
+//! resolves server keys/endpoints, owns local lifecycle paths, delivery, and
+//! server-only projection loading. It must not grow a second divergent
+//! Codex/OpenCode engine.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -14,13 +18,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use eggpool_client_config as client_config;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 
 use crate::{
     Config, ConfigError,
-    catalog::CapabilityStatus,
     db::{
         AccountRepository, CatalogModel, CatalogRepository, Database, DatabaseError,
         ProviderModelMetadata,
@@ -28,14 +32,15 @@ use crate::{
     operations::config_mutation::{self, MutationError},
 };
 
+pub use client_config::{
+    AgentModelCapabilities, AgentModelProjection, AgentReasoningCapabilities, IntegrationModel,
+    ModelLimits,
+};
+
 const MAX_SNIPPET_BYTES: usize = 4 * 1024 * 1024;
-const MAX_CODEX_CATALOG_MODELS: usize = 1000;
-const MAX_CODEX_CATALOG_BYTES: usize = 1024 * 1024;
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(5);
 const DEPRECATED_MODEL_ID: &str = "__deprecated__";
-const INTEGRATION_SCHEMA_VERSION: u32 = 1;
-const OPENCODE_RESPONSES_NPM: &str = "@ai-sdk/openai";
-const EGGPOOL_API_KEY_ENV: &str = "EGGPOOL_API_KEY";
+const INTEGRATION_SCHEMA_VERSION: u32 = client_config::OWNERSHIP_SCHEMA_VERSION;
 
 #[derive(Debug, Error)]
 pub enum IntegrationError {
@@ -47,6 +52,8 @@ pub enum IntegrationError {
     Database(#[from] DatabaseError),
     #[error("integration JSON serialization failed")]
     Json(#[from] serde_json::Error),
+    #[error("portable client configuration failed: {0}")]
+    ClientConfig(#[from] client_config::ClientConfigError),
     #[error("--base-url must be an absolute HTTP(S) URL")]
     InvalidBaseUrl,
     #[error(
@@ -69,333 +76,32 @@ pub enum IntegrationError {
     UnsupportedLifecycle { target: String },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ModelLimits {
-    pub context_tokens: Option<u64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct IntegrationModel {
-    pub model_id: String,
-    pub base_model_id: String,
-    pub provider_id: Option<String>,
-    pub display_name: String,
-    pub capabilities: Value,
-    pub source_metadata: Value,
-    pub limits: ModelLimits,
-}
-
-/// Normalized reasoning facts for coding-agent renderers.
-///
-/// Derived only from validated catalog/model-info facts. Unknown stays
-/// absent rather than optimistic.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AgentReasoningCapabilities {
-    pub efforts: Vec<String>,
-    pub default_effort: Option<String>,
-    pub summaries: bool,
-}
-
-/// Provider-neutral coding-agent projection derived from existing
-/// catalog/model-info/routing facts.
-///
-/// This is the single integration projection used by the Codex catalog and
-/// OpenCode renderers. It never infers capability from model-ID substrings,
-/// never leaks provider-private source metadata, and keeps `websockets`
-/// false until a real EggPool Responses WebSocket path exists.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentModelCapabilities {
-    pub context_tokens: Option<u64>,
-    pub max_output_tokens: Option<u64>,
-    pub input_text: bool,
-    pub input_images: Option<bool>,
-    pub reasoning: Option<AgentReasoningCapabilities>,
-    pub function_tools: Option<bool>,
-    pub freeform_tools: Option<bool>,
-    pub deferred_tool_search: Option<bool>,
-    pub responses: bool,
-    pub websockets: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentModelProjection {
-    pub public_id: String,
-    pub display_name: String,
-    pub capabilities: AgentModelCapabilities,
-}
-
-impl AgentModelCapabilities {
-    fn conservative() -> Self {
-        Self {
-            context_tokens: None,
-            max_output_tokens: None,
-            input_text: true,
-            input_images: None,
-            reasoning: None,
-            function_tools: None,
-            freeform_tools: None,
-            deferred_tool_search: None,
-            responses: true,
-            websockets: false,
-        }
-    }
-}
-
 /// Derive a provider-neutral projection from one validated integration model.
 ///
-/// Rules: unknown stays unknown (None), never inferred from the model ID,
-/// `websockets` stays false, remote compaction is not advertised here.
+/// Thin adapter over [`client_config::project_model`]; the portable crate is
+/// the single authoritative implementation.
 pub fn project_model(model: &IntegrationModel) -> AgentModelProjection {
-    let mut capabilities = AgentModelCapabilities::conservative();
-    capabilities.context_tokens = model.limits.context_tokens.filter(|value| *value > 0);
-    capabilities.max_output_tokens = model.limits.output_tokens.filter(|value| *value > 0);
-
-    if let Some(object) = model.capabilities.as_object() {
-        if let Some(vision) = object.get("supports_vision").and_then(Value::as_bool) {
-            capabilities.input_images = Some(vision);
-        }
-        if let Some(tools) = object.get("supports_tools").and_then(Value::as_bool) {
-            capabilities.function_tools = Some(tools);
-        }
-        // Freeform (`custom`) and deferred (`tool_search`) stay unknown
-        // unless the catalog explicitly proves them. Unknown is conservative:
-        // renderers must not advertise them optimistically.
-        if let Some(freeform) = object
-            .get("supports_freeform_tools")
-            .and_then(Value::as_bool)
-        {
-            capabilities.freeform_tools = Some(freeform);
-        }
-        if let Some(deferred) = object
-            .get("supports_deferred_tool_search")
-            .and_then(Value::as_bool)
-        {
-            capabilities.deferred_tool_search = Some(deferred);
-        }
-        if let Some(thinking) = object.get("thinking").and_then(Value::as_object)
-            && thinking.get("status").and_then(Value::as_str)
-                == Some(CapabilityStatus::Supported.as_str())
-        {
-            let mut efforts: Vec<String> = thinking
-                .get("supported_efforts")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect()
-                })
-                .unwrap_or_default();
-            efforts.sort();
-            // `supported_efforts` is advisory; an empty list still means
-            // reasoning is supported without enumerated efforts.
-            capabilities.reasoning = Some(AgentReasoningCapabilities {
-                efforts,
-                default_effort: None,
-                summaries: false,
-            });
-        }
-    }
-
-    AgentModelProjection {
-        public_id: model.model_id.clone(),
-        display_name: model.display_name.clone(),
-        capabilities,
-    }
+    client_config::project_model(model)
 }
 
 /// Collapse multiple projections for one public ID into conservative
 /// guaranteed capabilities.
 ///
-/// Aggregation: context/output are the minimum known guaranteed values,
-/// boolean required features and input modalities are intersections,
-/// reasoning efforts are set intersections, and unknown on any required
-/// candidate remains unknown/conservative. Never publishes the union of
-/// heterogeneous targets.
+/// Thin adapter over [`client_config::aggregate_projections`].
 pub fn aggregate_projections(
     public_id: &str,
     display_name: &str,
     projections: &[AgentModelCapabilities],
 ) -> AgentModelCapabilities {
-    if projections.is_empty() {
-        return AgentModelCapabilities::conservative();
-    }
-    if projections.len() == 1 {
-        return projections[0].clone();
-    }
-    let context_tokens = projections
-        .iter()
-        .filter_map(|capability| capability.context_tokens)
-        .min();
-    // If any candidate lacks a known context window, the guarantee is unknown.
-    let context_tokens = if projections
-        .iter()
-        .any(|capability| capability.context_tokens.is_none())
-    {
-        // Keep the minimum known value when at least one candidate knows it,
-        // but only if every candidate knows it. Otherwise the guarantee is
-        // unknown rather than optimistic.
-        if projections
-            .iter()
-            .all(|capability| capability.context_tokens.is_some())
-        {
-            context_tokens
-        } else {
-            None
-        }
-    } else {
-        context_tokens
-    };
-    let max_output_tokens = if projections
-        .iter()
-        .all(|capability| capability.max_output_tokens.is_some())
-    {
-        projections
-            .iter()
-            .filter_map(|capability| capability.max_output_tokens)
-            .min()
-    } else {
-        None
-    };
-    let input_images = {
-        let mut values = BTreeSet::new();
-        for capability in projections {
-            match capability.input_images {
-                Some(value) => {
-                    values.insert(value);
-                }
-                None => {
-                    values.insert(true);
-                    values.insert(false);
-                }
-            }
-        }
-        // Intersection: only advertise image input when every candidate
-        // guarantees it; only deny when every candidate denies it.
-        if values.len() == 1 {
-            Some(*values.iter().next().expect("single value"))
-        } else {
-            None
-        }
-    };
-    let function_tools = {
-        let mut values = BTreeSet::new();
-        for capability in projections {
-            match capability.function_tools {
-                Some(value) => {
-                    values.insert(value);
-                }
-                None => {
-                    values.insert(true);
-                    values.insert(false);
-                }
-            }
-        }
-        if values.len() == 1 {
-            Some(*values.iter().next().expect("single value"))
-        } else {
-            None
-        }
-    };
-    let intersect_optional_bool =
-        |select: fn(&AgentModelCapabilities) -> Option<bool>| -> Option<bool> {
-            let mut values = BTreeSet::new();
-            for capability in projections {
-                match select(capability) {
-                    Some(value) => {
-                        values.insert(value);
-                    }
-                    None => {
-                        values.insert(true);
-                        values.insert(false);
-                    }
-                }
-            }
-            if values.len() == 1 {
-                Some(*values.iter().next().expect("single value"))
-            } else {
-                None
-            }
-        };
-    let freeform_tools = intersect_optional_bool(|capability| capability.freeform_tools);
-    let deferred_tool_search =
-        intersect_optional_bool(|capability| capability.deferred_tool_search);
-    let reasoning = {
-        if projections
-            .iter()
-            .all(|capability| capability.reasoning.is_some())
-        {
-            let mut intersection: Option<BTreeSet<String>> = None;
-            for capability in projections {
-                let efforts = capability
-                    .reasoning
-                    .as_ref()
-                    .map(|reasoning| reasoning.efforts.iter().cloned().collect::<BTreeSet<_>>())
-                    .unwrap_or_default();
-                intersection = Some(match intersection {
-                    Some(current) => current.intersection(&efforts).cloned().collect(),
-                    None => efforts,
-                });
-            }
-            let mut efforts: Vec<String> = intersection.unwrap_or_default().into_iter().collect();
-            efforts.sort();
-            Some(AgentReasoningCapabilities {
-                efforts,
-                default_effort: None,
-                summaries: false,
-            })
-        } else {
-            None
-        }
-    };
-    let _ = (public_id, display_name);
-    AgentModelCapabilities {
-        context_tokens,
-        max_output_tokens,
-        input_text: true,
-        input_images,
-        reasoning,
-        function_tools,
-        freeform_tools,
-        deferred_tool_search,
-        responses: true,
-        websockets: false,
-    }
+    client_config::aggregate_projections(public_id, display_name, projections)
 }
 
 /// Project every public model/alias in deterministic order.
+///
+/// Thin adapter: converts the application context into the portable slice
+/// form and delegates to [`client_config::project_models`].
 pub fn project_context_models(context: &IntegrationContext) -> Vec<AgentModelProjection> {
-    let mut grouped: BTreeMap<&str, Vec<&IntegrationModel>> = BTreeMap::new();
-    for model in &context.models {
-        grouped
-            .entry(model.model_id.as_str())
-            .or_default()
-            .push(model);
-    }
-    let mut projections = Vec::new();
-    for (public_id, models) in grouped {
-        let display_name = models
-            .first()
-            .map(|model| model.display_name.as_str())
-            .unwrap_or(public_id);
-        let capabilities: Vec<AgentModelCapabilities> = models
-            .iter()
-            .map(|model| project_model(model).capabilities)
-            .collect();
-        let merged = aggregate_projections(public_id, display_name, &capabilities);
-        projections.push(AgentModelProjection {
-            public_id: public_id.to_owned(),
-            display_name: display_name.to_owned(),
-            capabilities: merged,
-        });
-    }
-    projections.sort_by(|left, right| left.public_id.cmp(&right.public_id));
-    projections
+    client_config::project_models(&context.models)
 }
 
 #[derive(Clone, PartialEq)]
@@ -780,7 +486,7 @@ pub fn build_codex_toml_snippet(
     context: &IntegrationContext,
     model: Option<&str>,
 ) -> Result<String, IntegrationError> {
-    build_codex_toml_snippet_with_catalog(context, model, None)
+    Ok(client_config::render_codex_toml(&context.base_url, model)?)
 }
 
 pub fn build_codex_toml_snippet_with_catalog(
@@ -788,280 +494,44 @@ pub fn build_codex_toml_snippet_with_catalog(
     model: Option<&str>,
     catalog_path: Option<&str>,
 ) -> Result<String, IntegrationError> {
-    let mut lines = vec!["model_provider = \"eggpool\"".to_owned()];
-    if let Some(model) = model {
-        lines.push(format!("model = {}", toml_string(model)?));
-    }
-    if let Some(catalog_path) = catalog_path {
-        lines.push(format!(
-            "model_catalog_json = {}",
-            toml_string(catalog_path)?
-        ));
-    }
-    lines.extend([
-        String::new(),
-        "[model_providers.eggpool]".to_owned(),
-        "name = \"EggPool\"".to_owned(),
-        format!("base_url = {}", toml_string(&context.base_url)?),
-        "wire_api = \"responses\"".to_owned(),
-        "supports_websockets = false".to_owned(),
-        format!("env_key = {}", toml_string(EGGPOOL_API_KEY_ENV)?),
-    ]);
-    Ok(lines.join("\n"))
+    Ok(client_config::render_codex_toml_with_catalog(
+        &context.base_url,
+        model,
+        catalog_path,
+    )?)
 }
 
 /// Render a current Codex model catalog from the provider-neutral projection.
 ///
-/// The renderer is owned by the integrations boundary and built from the
-/// implementation-time Codex model schema (audit baselines in Plan 200 plus
-/// live schema research 2026-09-16). It emits valid Codex catalog JSON with
-/// deterministic ordering, bounded size, no secrets, and no provider-private
-/// source metadata. Unknown facts stay absent rather than optimistic, and
-/// `websockets`/remote-compaction remain disabled.
+/// Thin adapter over [`client_config::build_codex_catalog_json`]; the
+/// portable crate owns deterministic ordering, bounds, sanitization, and the
+/// strict-parser contract. The catalog must never carry credentials.
 pub fn build_codex_catalog_json(context: &IntegrationContext) -> Result<String, IntegrationError> {
     let projections = project_context_models(context);
-    if projections.len() > MAX_CODEX_CATALOG_MODELS {
-        return Err(IntegrationError::CatalogTooLarge {
-            count: projections.len(),
-        });
-    }
-    let mut models = Vec::new();
-    for (index, projection) in projections.iter().enumerate() {
-        let _ = index;
-        models.push(codex_catalog_entry(projection));
-    }
-    let root = json!({ "models": models });
-    let rendered = serde_json::to_string_pretty(&root)?;
-    if rendered.len() > MAX_CODEX_CATALOG_BYTES {
-        return Err(IntegrationError::TooLarge);
-    }
+    let rendered =
+        client_config::build_codex_catalog_json(&projections).map_err(|error| match error {
+            client_config::ClientConfigError::CatalogTooLarge { count } => {
+                IntegrationError::CatalogTooLarge { count }
+            }
+            client_config::ClientConfigError::DocumentTooLarge => IntegrationError::TooLarge,
+            other => IntegrationError::ClientConfig(other),
+        })?;
     // The catalog must never carry credentials or raw source metadata.
     debug_assert!(!rendered.contains(&context.api_key));
     Ok(rendered)
 }
 
-fn codex_catalog_entry(projection: &AgentModelProjection) -> Value {
-    let capabilities = &projection.capabilities;
-    let mut entry = Map::new();
-    entry.insert(
-        "slug".to_owned(),
-        Value::String(projection.public_id.clone()),
-    );
-    entry.insert(
-        "display_name".to_owned(),
-        Value::String(projection.display_name.clone()),
-    );
-    entry.insert(
-        "description".to_owned(),
-        Value::String(format!(
-            "EggPool model {} via EggPool Responses gateway",
-            projection.public_id
-        )),
-    );
-    // Tool/shell capability: only advertise parallel tool calls when the
-    // projection guarantees function tools across the route. The shell type
-    // itself is the conservative `shell_command` used by current custom
-    // Codex catalogs; EggPool does not claim `unified_exec` semantics.
-    entry.insert(
-        "shell_type".to_owned(),
-        Value::String("shell_command".to_owned()),
-    );
-    entry.insert("visibility".to_owned(), Value::String("list".to_owned()));
-    entry.insert("supported_in_api".to_owned(), Value::Bool(true));
-    entry.insert("priority".to_owned(), json!(100));
-    entry.insert("prefer_websockets".to_owned(), Value::Bool(false));
-    entry.insert(
-        "supports_parallel_tool_calls".to_owned(),
-        Value::Bool(capabilities.function_tools == Some(true)),
-    );
-    entry.insert(
-        "experimental_supported_tools".to_owned(),
-        Value::Array(Vec::new()),
-    );
-    let mut modalities = vec![Value::String("text".to_owned())];
-    if capabilities.input_images == Some(true) {
-        modalities.push(Value::String("image".to_owned()));
-    }
-    entry.insert("input_modalities".to_owned(), Value::Array(modalities));
-    entry.insert(
-        "supports_image_detail_original".to_owned(),
-        Value::Bool(false),
-    );
-    if let Some(context_window) = capabilities.context_tokens {
-        entry.insert("context_window".to_owned(), json!(context_window));
-        entry.insert("max_context_window".to_owned(), json!(context_window));
-        // Current Codex derives its default auto-compaction threshold from
-        // the resolved context window (normally 90%). Advertise the same
-        // conservative threshold so local compaction matches routing reality.
-        let auto_compact = context_window * 90 / 100;
-        entry.insert("auto_compact_token_limit".to_owned(), json!(auto_compact));
-    } else {
-        entry.insert("auto_compact_token_limit".to_owned(), Value::Null);
-    }
-    entry.insert(
-        "truncation_policy".to_owned(),
-        json!({ "mode": "tokens", "limit": 10000 }),
-    );
-    if let Some(reasoning) = &capabilities.reasoning {
-        entry.insert(
-            "supports_reasoning_summaries".to_owned(),
-            Value::Bool(false),
-        );
-        entry.insert(
-            "default_reasoning_summary".to_owned(),
-            Value::String("none".to_owned()),
-        );
-        if reasoning.efforts.is_empty() {
-            // Current Codex (0.154.0, `codex debug models`) requires
-            // `supported_reasoning_levels` to be present even when the model
-            // has no reasoning support; an empty array is the conservative
-            // representation of "no guaranteed reasoning levels".
-            entry.insert(
-                "supported_reasoning_levels".to_owned(),
-                Value::Array(Vec::new()),
-            );
-        } else {
-            let levels: Vec<Value> = reasoning
-                .efforts
-                .iter()
-                .map(|effort| {
-                    json!({
-                        "effort": effort,
-                        "description": format!("EggPool reasoning effort {effort}"),
-                    })
-                })
-                .collect();
-            entry.insert(
-                "supported_reasoning_levels".to_owned(),
-                Value::Array(levels),
-            );
-            if let Some(default) = reasoning
-                .default_effort
-                .as_ref()
-                .filter(|default| reasoning.efforts.contains(default))
-            {
-                entry.insert(
-                    "default_reasoning_level".to_owned(),
-                    Value::String(default.clone()),
-                );
-            } else if let Some(first) = reasoning.efforts.first() {
-                // Conservative default: first enumerated effort in sorted
-                // order. The projection never invents efforts, only carries
-                // validated catalog facts.
-                entry.insert(
-                    "default_reasoning_level".to_owned(),
-                    Value::String(first.clone()),
-                );
-            }
-        }
-    } else {
-        entry.insert(
-            "supports_reasoning_summaries".to_owned(),
-            Value::Bool(false),
-        );
-        entry.insert(
-            "default_reasoning_summary".to_owned(),
-            Value::String("none".to_owned()),
-        );
-        // See above: current Codex requires the array even without reasoning.
-        entry.insert(
-            "supported_reasoning_levels".to_owned(),
-            Value::Array(Vec::new()),
-        );
-    }
-    entry.insert("support_verbosity".to_owned(), Value::Bool(false));
-    // Current Codex (0.154.0) rejects a catalog entry missing both
-    // `base_instructions` and `model_messages.instructions_template`.
-    // EggPool provides no custom base instructions; an empty string is the
-    // conservative "no EggPool override" value qualified via
-    // `codex debug models` (live qualification 2026-09-16). It must not be
-    // used to fabricate provider instructions.
-    entry.insert("base_instructions".to_owned(), Value::String(String::new()));
-    Value::Object(entry)
-}
-
 /// Validate that a generated catalog meets the strict-parser contract.
 ///
-/// Mirrors the required Codex fields without importing Codex: every entry
-/// must carry a slug/display name, must not advertise websockets, and must
-/// not contain credentials or raw source blobs.
+/// Thin adapter over [`client_config::validate_codex_catalog_json`].
 pub fn validate_codex_catalog_json(
     catalog_json: &str,
     api_key: &str,
 ) -> Result<usize, IntegrationError> {
-    let value: Value = serde_json::from_str(catalog_json)?;
-    let models = value
-        .get("models")
-        .and_then(Value::as_array)
-        .ok_or_else(|| IntegrationError::Drift {
-            detail: "Codex catalog is missing the models array".to_owned(),
-        })?;
-    for model in models {
-        let object = model.as_object().ok_or_else(|| IntegrationError::Drift {
-            detail: "Codex catalog entry is not an object".to_owned(),
-        })?;
-        if object
-            .get("slug")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            return Err(IntegrationError::Drift {
-                detail: "Codex catalog entry is missing slug".to_owned(),
-            });
-        }
-        if object
-            .get("display_name")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            return Err(IntegrationError::Drift {
-                detail: "Codex catalog entry is missing display_name".to_owned(),
-            });
-        }
-        if object.get("prefer_websockets").and_then(Value::as_bool) == Some(true) {
-            return Err(IntegrationError::Drift {
-                detail: "Codex catalog must not advertise websockets".to_owned(),
-            });
-        }
-        // Current Codex (0.154.0, qualified 2026-09-16 via
-        // `codex debug models`) rejects entries missing
-        // `supported_reasoning_levels` or both `base_instructions` and
-        // `model_messages.instructions_template`. The renderer always emits
-        // the conservative empty values; validation enforces the contract so
-        // future renderer regressions fail deterministically.
-        if object
-            .get("supported_reasoning_levels")
-            .and_then(Value::as_array)
-            .is_none()
-        {
-            return Err(IntegrationError::Drift {
-                detail: "Codex catalog entry is missing supported_reasoning_levels".to_owned(),
-            });
-        }
-        let has_base_instructions = object
-            .get("base_instructions")
-            .and_then(Value::as_str)
-            .is_some();
-        let has_template_instructions = object
-            .get("model_messages")
-            .and_then(|messages| messages.get("instructions_template"))
-            .and_then(Value::as_str)
-            .is_some();
-        if !has_base_instructions && !has_template_instructions {
-            return Err(IntegrationError::Drift {
-                detail: "Codex catalog entry is missing base_instructions".to_owned(),
-            });
-        }
-    }
-    let rendered = catalog_json;
-    if !api_key.is_empty() && rendered.contains(api_key) {
-        return Err(IntegrationError::Drift {
-            detail: "Codex catalog must not contain the server key".to_owned(),
-        });
-    }
-    Ok(models.len())
+    Ok(client_config::validate_codex_catalog_json(
+        catalog_json,
+        api_key,
+    )?)
 }
 
 fn build_claude_code_json(context: &IntegrationContext) -> Result<String, IntegrationError> {
@@ -1195,90 +665,10 @@ fn build_openhands_env_snippet(context: &IntegrationContext, model: Option<&str>
 
 fn build_opencode_config_json(context: &IntegrationContext) -> Result<String, IntegrationError> {
     let projections = project_context_models(context);
-    let mut models = BTreeMap::new();
-    for projection in &projections {
-        let mut entry = Map::new();
-        if projection.display_name != projection.public_id {
-            entry.insert(
-                "name".to_owned(),
-                Value::String(projection.display_name.clone()),
-            );
-        }
-        let mut limit = Map::new();
-        if let Some(value) = projection
-            .capabilities
-            .context_tokens
-            .filter(|value| *value > 0)
-        {
-            limit.insert("context".to_owned(), json!(value));
-        }
-        if let Some(value) = projection
-            .capabilities
-            .max_output_tokens
-            .filter(|value| *value > 0)
-        {
-            limit.insert("output".to_owned(), json!(value));
-        }
-        if !limit.is_empty() {
-            entry.insert("limit".to_owned(), Value::Object(limit));
-        }
-        let mut input_modalities = vec![Value::String("text".to_owned())];
-        if projection.capabilities.input_images == Some(true) {
-            input_modalities.push(Value::String("image".to_owned()));
-        }
-        entry.insert(
-            "modalities".to_owned(),
-            json!({
-                "input": input_modalities,
-                "output": ["text"],
-            }),
-        );
-        if let Some(reasoning) = &projection.capabilities.reasoning {
-            entry.insert("reasoning".to_owned(), Value::Bool(true));
-            if !reasoning.efforts.is_empty() {
-                let mut variants = Map::new();
-                for effort in &reasoning.efforts {
-                    variants.insert(effort.to_owned(), json!({"reasoningEffort": effort}));
-                }
-                entry.insert("variants".to_owned(), Value::Object(variants));
-            }
-        }
-        // Never claim image/tool capability the projection cannot guarantee.
-        // `function_tools == Some(true)` is the only case where parallel
-        // tool use is advertised; otherwise the entry simply omits the claim.
-        models.insert(projection.public_id.clone(), Value::Object(entry));
-    }
-    let options = Map::from_iter([
-        (
-            "baseURL".to_owned(),
-            Value::String(context.base_url.clone()),
-        ),
-        // Prefer OpenCode's supported environment-variable interpolation so
-        // the generated file carries no resolved secret. Operators set
-        // `EGGPOOL_API_KEY` in the environment that launches OpenCode.
-        (
-            "apiKey".to_owned(),
-            Value::String(format!("{{env:{EGGPOOL_API_KEY_ENV}}}")),
-        ),
-    ]);
-    let eggpool = Map::from_iter([
-        (
-            "npm".to_owned(),
-            Value::String(OPENCODE_RESPONSES_NPM.to_owned()),
-        ),
-        ("name".to_owned(), Value::String("EggPool".to_owned())),
-        ("options".to_owned(), Value::Object(options)),
-        ("models".to_owned(), serde_json::to_value(models)?),
-    ]);
-    let provider = Map::from_iter([("eggpool".to_owned(), Value::Object(eggpool))]);
-    let root = Map::from_iter([
-        (
-            "$schema".to_owned(),
-            Value::String("https://opencode.ai/config.json".to_owned()),
-        ),
-        ("provider".to_owned(), Value::Object(provider)),
-    ]);
-    Ok(serde_json::to_string_pretty(&root)?)
+    Ok(client_config::render_opencode_config(
+        &context.base_url,
+        &projections,
+    )?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,35 +732,10 @@ fn action_name(action: LifecycleAction) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct OwnershipManifest {
-    schema_version: u32,
-    eggpool_version: String,
-    target: String,
-    client_config_path: PathBuf,
-    pre_edit_hash: String,
-    post_edit_hash: String,
-    owned_fields: Vec<String>,
-    previous_values: Map<String, Value>,
-    generated_catalog_path: Option<PathBuf>,
-    generated_catalog_hash: Option<String>,
-    base_url: String,
-}
+type OwnershipManifest = client_config::OwnershipManifest;
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex_bytes(&hasher.finalize())
-}
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(char::from_digit(u32::from(byte >> 4), 16).expect("hex"));
-        output.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("hex"));
-    }
-    output
+    client_config::sha256_hex(bytes)
 }
 
 /// Resolve the EggPool-owned state directory for integration artifacts.
@@ -1440,133 +805,8 @@ fn save_manifest(path: &Path, manifest: &OwnershipManifest) -> Result<(), Integr
     Ok(())
 }
 
-fn toml_line_header(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    if let Some(value) = trimmed
-        .strip_prefix("[[")
-        .and_then(|value| value.strip_suffix("]]"))
-    {
-        return Some(value.trim().to_owned());
-    }
-    trimmed
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-        .map(|value| value.trim().to_owned())
-}
+type CodexPrevious = client_config::codex::CodexPrevious;
 
-fn toml_assignment_key(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with('#') || trimmed.starts_with('[') {
-        return None;
-    }
-    let (key, _) = trimmed.split_once('=')?;
-    let key = key.trim().trim_matches(['"', '\'']).trim().to_owned();
-    (!key.is_empty()
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-    .then_some(key)
-}
-
-fn toml_string_value(line: &str) -> Option<String> {
-    let (_, raw) = line.split_once('=')?;
-    let raw = raw.trim();
-    // Strip trailing comments that are not inside quotes (best-effort).
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut end = raw.len();
-    for (index, character) in raw.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && in_string {
-            escaped = true;
-            continue;
-        }
-        if character == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if character == '#' && !in_string {
-            end = index;
-            break;
-        }
-    }
-    let value = raw[..end].trim().trim_matches('"').trim().to_owned();
-    Some(value)
-}
-
-fn first_table_index(lines: &[String]) -> Option<usize> {
-    lines
-        .iter()
-        .position(|line| toml_line_header(line).is_some())
-}
-
-fn find_root_key(lines: &[String], key: &str) -> Option<usize> {
-    let end = first_table_index(lines).unwrap_or(lines.len());
-    lines[..end]
-        .iter()
-        .position(|line| toml_assignment_key(line).as_deref() == Some(key))
-}
-
-fn set_root_key(lines: &mut Vec<String>, key: &str, rendered: &str) {
-    let line = format!("{key} = {rendered}");
-    if let Some(index) = find_root_key(lines, key) {
-        lines[index] = line;
-        return;
-    }
-    match first_table_index(lines) {
-        Some(index) => lines.insert(index, line),
-        None => {
-            if !lines.is_empty() && !lines.last().is_some_and(String::is_empty) {
-                lines.push(String::new());
-            }
-            lines.push(line);
-        }
-    }
-}
-
-fn remove_root_key(lines: &mut Vec<String>, key: &str) -> Option<String> {
-    let index = find_root_key(lines, key)?;
-    let previous = toml_string_value(&lines[index]);
-    lines.remove(index);
-    previous
-}
-
-fn find_table(lines: &[String], header: &str) -> Option<(usize, usize)> {
-    let start = lines
-        .iter()
-        .position(|line| toml_line_header(line).as_deref() == Some(header))?;
-    let mut end = start + 1;
-    while end < lines.len() && toml_line_header(&lines[end]).is_none() {
-        end += 1;
-    }
-    Some((start, end))
-}
-
-fn table_value(lines: &[String], header: &str, key: &str) -> Option<String> {
-    let (start, end) = find_table(lines, header)?;
-    lines[start + 1..end]
-        .iter()
-        .find(|line| toml_assignment_key(line).as_deref() == Some(key))
-        .and_then(|line| toml_string_value(line))
-}
-
-#[derive(Debug, Clone, Default)]
-struct CodexPrevious {
-    model_provider: Option<String>,
-    model_catalog_json: Option<String>,
-    model: Option<String>,
-    provider_table: Option<Vec<String>>,
-}
-
-/// Apply the narrow EggPool-owned Codex mutation to TOML text.
-///
-/// Owns only root `model_provider`, root `model_catalog_json`, optional root
-/// `model` (when explicitly requested), and the `[model_providers.eggpool]`
-/// table. All other content, comments, and formatting are preserved. Root
-/// keys are placed before the first table so they remain root assignments.
 fn apply_codex_text_mutation(
     existing: &str,
     base_url: &str,
@@ -1574,134 +814,11 @@ fn apply_codex_text_mutation(
     model: Option<&str>,
     manage_model: bool,
 ) -> (String, CodexPrevious) {
-    let mut lines: Vec<String> = if existing.is_empty() {
-        Vec::new()
-    } else {
-        existing.lines().map(str::to_owned).collect()
-    };
-    let mut previous = CodexPrevious::default();
-    if let Some(index) = find_root_key(&lines, "model_provider") {
-        previous.model_provider = toml_string_value(&lines[index]);
-    }
-    if let Some(index) = find_root_key(&lines, "model_catalog_json") {
-        previous.model_catalog_json = toml_string_value(&lines[index]);
-    }
-    if let Some(index) = find_root_key(&lines, "model") {
-        previous.model = toml_string_value(&lines[index]);
-    }
-    if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        previous.provider_table = Some(lines[start..end].to_vec());
-    }
-
-    let catalog_rendered =
-        serde_json::to_string(catalog_path).unwrap_or_else(|_| "\"\"".to_owned());
-    set_root_key(&mut lines, "model_provider", "\"eggpool\"");
-    set_root_key(&mut lines, "model_catalog_json", &catalog_rendered);
-    if manage_model {
-        if let Some(model) = model {
-            let rendered = serde_json::to_string(model).unwrap_or_else(|_| "\"\"".to_owned());
-            set_root_key(&mut lines, "model", &rendered);
-        } else if find_root_key(&lines, "model").is_some() {
-            remove_root_key(&mut lines, "model");
-            // When EggPool manages the model slot and no model is requested,
-            // the rich catalog lets the user pick from the Codex UI/CLI.
-        }
-    }
-
-    let base_rendered = serde_json::to_string(base_url).unwrap_or_else(|_| "\"\"".to_owned());
-    let table_lines = vec![
-        "[model_providers.eggpool]".to_owned(),
-        "name = \"EggPool\"".to_owned(),
-        format!("base_url = {base_rendered}"),
-        "wire_api = \"responses\"".to_owned(),
-        "supports_websockets = false".to_owned(),
-        format!(
-            "env_key = {}",
-            serde_json::to_string(EGGPOOL_API_KEY_ENV).expect("env key")
-        ),
-    ];
-    if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        lines.splice(start..end, table_lines);
-    } else {
-        if !lines.is_empty() && !lines.last().is_some_and(String::is_empty) {
-            lines.push(String::new());
-        }
-        lines.extend(table_lines);
-    }
-
-    let mut text = lines.join("\n");
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    (text, previous)
+    client_config::apply_codex_text_mutation(existing, base_url, catalog_path, model, manage_model)
 }
 
 fn remove_codex_owned_text(existing: &str, previous: &CodexPrevious, owned_model: bool) -> String {
-    let mut lines: Vec<String> = if existing.is_empty() {
-        Vec::new()
-    } else {
-        existing.lines().map(str::to_owned).collect()
-    };
-    // Restore previous root values where safely possible; otherwise remove
-    // only the EggPool-owned assignment.
-    match &previous.model_provider {
-        Some(value) if !value.is_empty() && value != "eggpool" => {
-            set_root_key(
-                &mut lines,
-                "model_provider",
-                &serde_json::to_string(value).expect("toml"),
-            );
-        }
-        _ => {
-            remove_root_key(&mut lines, "model_provider");
-        }
-    }
-    match &previous.model_catalog_json {
-        Some(value) if !value.is_empty() => {
-            set_root_key(
-                &mut lines,
-                "model_catalog_json",
-                &serde_json::to_string(value).expect("toml"),
-            );
-        }
-        _ => {
-            remove_root_key(&mut lines, "model_catalog_json");
-        }
-    }
-    if owned_model {
-        match &previous.model {
-            Some(value) if !value.is_empty() => {
-                set_root_key(
-                    &mut lines,
-                    "model",
-                    &serde_json::to_string(value).expect("toml"),
-                );
-            }
-            _ => {
-                remove_root_key(&mut lines, "model");
-            }
-        }
-    }
-    if let Some(table) = &previous.provider_table {
-        if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-            lines.splice(start..end, table.clone());
-        }
-    } else if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        lines.drain(start..end);
-        // Trim a single orphan blank line left by table removal.
-        if start < lines.len()
-            && lines[start].trim().is_empty()
-            && start > 0
-            && lines[start - 1].trim().is_empty()
-        {
-            lines.remove(start);
-        }
-    }
-    let mut text = lines.join("\n");
-    if !text.is_empty() && !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
+    client_config::remove_codex_owned_text(existing, previous, owned_model)
 }
 
 fn codex_expected_snippet(
@@ -1720,67 +837,20 @@ fn check_codex_state(
     catalog_path: &Path,
     catalog_json: &str,
 ) -> Vec<String> {
-    let mut issues = Vec::new();
-    let lines: Vec<String> = if config_text.is_empty() {
-        Vec::new()
-    } else {
-        config_text.lines().map(str::to_owned).collect()
-    };
-    if find_root_key(&lines, "model_provider")
-        .and_then(|index| toml_string_value(&lines[index]))
-        .as_deref()
-        != Some("eggpool")
-    {
-        issues.push("root model_provider is not \"eggpool\"".to_owned());
-    }
-    let expected_catalog = catalog_path.to_string_lossy().into_owned();
-    if find_root_key(&lines, "model_catalog_json")
-        .and_then(|index| toml_string_value(&lines[index]))
-        .as_deref()
-        != Some(expected_catalog.as_str())
-    {
-        issues.push(format!(
-            "root model_catalog_json does not point at {}",
-            catalog_path.display()
-        ));
-    }
-    if manage_model {
-        let current =
-            find_root_key(&lines, "model").and_then(|index| toml_string_value(&lines[index]));
-        if current.as_deref() != model {
-            issues.push("root model selection differs from requested model".to_owned());
-        }
-    }
-    let table = "model_providers.eggpool";
-    if table_value(&lines, table, "name").as_deref() != Some("EggPool") {
-        issues.push("[model_providers.eggpool] name differs".to_owned());
-    }
-    if table_value(&lines, table, "base_url").as_deref() != Some(context.base_url.as_str()) {
-        issues.push("[model_providers.eggpool] base_url differs".to_owned());
-    }
-    if table_value(&lines, table, "wire_api").as_deref() != Some("responses") {
-        issues.push("[model_providers.eggpool] wire_api differs".to_owned());
-    }
-    if table_value(&lines, table, "supports_websockets").as_deref() != Some("false") {
-        issues.push("[model_providers.eggpool] supports_websockets differs".to_owned());
-    }
-    if table_value(&lines, table, "env_key").as_deref() != Some(EGGPOOL_API_KEY_ENV) {
-        issues.push("[model_providers.eggpool] env_key differs".to_owned());
-    }
-    if !catalog_path.exists() {
-        issues.push(format!(
-            "generated catalog {} is missing",
-            catalog_path.display()
-        ));
-    } else if let Ok(existing) = fs::read_to_string(catalog_path)
-        && existing != catalog_json
-    {
-        issues.push("generated catalog content is stale".to_owned());
-    }
-    if config_text.contains(&context.api_key) {
-        issues.push("client config embeds the resolved server key".to_owned());
-    }
-    issues
+    // Filesystem observations stay in the adapter; pure TOML policy lives in
+    // the portable crate.
+    let catalog_exists = catalog_path.exists();
+    let catalog_current = fs::read_to_string(catalog_path).ok().as_deref() == Some(catalog_json);
+    client_config::check_codex_state(client_config::CodexStateCheck {
+        config_text,
+        base_url: &context.base_url,
+        api_key: &context.api_key,
+        model,
+        manage_model,
+        catalog_path: &catalog_path.to_string_lossy(),
+        catalog_exists,
+        catalog_current,
+    })
 }
 
 /// Run the managed Codex lifecycle.
@@ -2052,53 +1122,15 @@ pub fn codex_lifecycle(
 }
 
 fn opencode_expected_provider(context: &IntegrationContext) -> Result<Value, IntegrationError> {
-    let rendered = build_opencode_config_json(context)?;
-    let value: Value = serde_json::from_str(&rendered)?;
-    value
-        .get("provider")
-        .and_then(|provider| provider.get("eggpool"))
-        .cloned()
-        .ok_or_else(|| IntegrationError::Drift {
-            detail: "OpenCode renderer is missing the eggpool provider".to_owned(),
-        })
+    let projections = project_context_models(context);
+    Ok(client_config::expected_opencode_provider(
+        &context.base_url,
+        &projections,
+    )?)
 }
 
 fn has_jsonc_comments(raw: &str) -> bool {
-    // Best-effort JSONC detection: look for `//` or `/*` outside strings.
-    let mut in_string = false;
-    let mut escaped = false;
-    let bytes = raw.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if escaped {
-            escaped = false;
-            index += 1;
-            continue;
-        }
-        if in_string {
-            if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'"' {
-            in_string = true;
-            index += 1;
-            continue;
-        }
-        if byte == b'/'
-            && index + 1 < bytes.len()
-            && (bytes[index + 1] == b'/' || bytes[index + 1] == b'*')
-        {
-            return true;
-        }
-        index += 1;
-    }
-    false
+    client_config::has_jsonc_comments(raw)
 }
 
 /// Run the managed OpenCode lifecycle.
@@ -2650,10 +1682,6 @@ fn detect_lan_ip() -> String {
         .unwrap_or_else(|_| "127.0.0.1".to_owned())
 }
 
-fn toml_string(value: &str) -> Result<String, IntegrationError> {
-    Ok(serde_json::to_string(value)?)
-}
-
 fn json_string(value: &str) -> Result<String, IntegrationError> {
     Ok(serde_json::to_string(value)?)
 }
@@ -2952,42 +1980,13 @@ mod tests {
         assert!(apply_overrides(context, None, Some("not a url")).is_err());
     }
 
-    #[test]
-    fn projection_derives_only_from_validated_facts() {
-        let model = IntegrationModel {
-            model_id: "alias".to_owned(),
-            base_model_id: "alias".to_owned(),
-            provider_id: None,
-            display_name: "Alias".to_owned(),
-            capabilities: json!({
-                "supports_tools": true,
-                "supports_vision": false,
-                "thinking": {
-                    "status": "supported",
-                    "supported_efforts": ["high", "low", "high"],
-                },
-            }),
-            source_metadata: json!({"secret": "must-not-leak"}),
-            limits: ModelLimits {
-                context_tokens: Some(200_000),
-                output_tokens: Some(16_000),
-                ..Default::default()
-            },
-        };
-        let projection = project_model(&model);
-        assert_eq!(projection.public_id, "alias");
-        assert_eq!(projection.capabilities.context_tokens, Some(200_000));
-        assert_eq!(projection.capabilities.max_output_tokens, Some(16_000));
-        assert_eq!(projection.capabilities.input_images, Some(false));
-        assert_eq!(projection.capabilities.function_tools, Some(true));
-        assert!(projection.capabilities.responses);
-        assert!(!projection.capabilities.websockets);
-        let reasoning = projection.capabilities.reasoning.expect("reasoning");
-        assert_eq!(reasoning.efforts, vec!["high".to_owned(), "low".to_owned()]);
-    }
+    // Portable projection/catalog semantics are owned and tested by
+    // `eggpool-client-config` (projection, codex, token, integration_profile
+    // modules). These adapter tests verify the EggPool thin wrappers preserve
+    // local `configsetup` behavior through that shared crate.
 
     #[test]
-    fn projection_leaves_unknown_absent_and_never_infers_from_name() {
+    fn adapter_projection_delegates_to_portable_crate() {
         let model = IntegrationModel {
             model_id: "gpt-4o-super-vision-tool-9000".to_owned(),
             base_model_id: "gpt-4o-super-vision-tool-9000".to_owned(),
@@ -2998,191 +1997,21 @@ mod tests {
             limits: ModelLimits::default(),
         };
         let projection = project_model(&model);
-        assert_eq!(projection.capabilities.context_tokens, None);
+        // Unknown stays unknown; no name inference; websockets false.
         assert_eq!(projection.capabilities.input_images, None);
-        assert_eq!(projection.capabilities.function_tools, None);
-        assert_eq!(projection.capabilities.reasoning, None);
         assert!(!projection.capabilities.websockets);
+        let context = context();
+        let projections = project_context_models(&context);
+        assert_eq!(projections.len(), 1);
     }
 
     #[test]
-    fn aggregation_uses_conservative_intersection_not_union() {
-        let left = AgentModelCapabilities {
-            context_tokens: Some(200_000),
-            max_output_tokens: Some(16_000),
-            input_text: true,
-            input_images: Some(true),
-            reasoning: Some(AgentReasoningCapabilities {
-                efforts: vec!["high".to_owned(), "low".to_owned(), "medium".to_owned()],
-                default_effort: None,
-                summaries: false,
-            }),
-            function_tools: Some(true),
-            freeform_tools: None,
-            deferred_tool_search: None,
-            responses: true,
-            websockets: false,
-        };
-        let right = AgentModelCapabilities {
-            context_tokens: Some(100_000),
-            max_output_tokens: None,
-            input_text: true,
-            input_images: Some(false),
-            reasoning: Some(AgentReasoningCapabilities {
-                efforts: vec!["low".to_owned(), "medium".to_owned()],
-                default_effort: None,
-                summaries: false,
-            }),
-            function_tools: Some(true),
-            freeform_tools: None,
-            deferred_tool_search: None,
-            responses: true,
-            websockets: false,
-        };
-        let merged = aggregate_projections("alias", "Alias", &[left, right]);
-        // Minimum known context, unknown output stays unknown, modalities and
-        // efforts intersect.
-        assert_eq!(merged.context_tokens, Some(100_000));
-        assert_eq!(merged.max_output_tokens, None);
-        assert_eq!(merged.input_images, None);
-        assert_eq!(merged.function_tools, Some(true));
-        let reasoning = merged.reasoning.expect("reasoning");
-        assert_eq!(
-            reasoning.efforts,
-            vec!["low".to_owned(), "medium".to_owned()]
-        );
-        assert!(!merged.websockets);
-    }
-
-    #[test]
-    fn codex_catalog_emits_current_required_fields_for_unknown_models() {
-        // Regression for live qualification 2026-09-16 against Codex CLI
-        // 0.154.0 (`codex debug models`): entries without reasoning support
-        // previously omitted `supported_reasoning_levels`, and all entries
-        // omitted `base_instructions`, both of which current Codex requires.
+    fn adapter_catalog_delegates_to_portable_crate() {
         let context = context();
         let catalog = build_codex_catalog_json(&context).expect("catalog");
         let count = validate_codex_catalog_json(&catalog, &context.api_key).expect("valid");
         assert_eq!(count, 1);
-        let value: Value = serde_json::from_str(&catalog).expect("json");
-        let entry = value
-            .get("models")
-            .and_then(Value::as_array)
-            .and_then(|models| models.first())
-            .expect("entry");
-        assert_eq!(
-            entry
-                .get("supported_reasoning_levels")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        assert_eq!(
-            entry.get("base_instructions").and_then(Value::as_str),
-            Some("")
-        );
-
-        // Validation must reject catalogs missing the current required fields
-        // so future renderer regressions fail deterministically.
-        let mut missing_levels: Value = serde_json::from_str(&catalog).expect("json");
-        for model in missing_levels
-            .get_mut("models")
-            .and_then(Value::as_array_mut)
-            .expect("models")
-        {
-            model
-                .as_object_mut()
-                .expect("object")
-                .remove("supported_reasoning_levels");
-        }
-        assert!(
-            validate_codex_catalog_json(&missing_levels.to_string(), &context.api_key).is_err()
-        );
-
-        let mut missing_instructions: Value = serde_json::from_str(&catalog).expect("json");
-        for model in missing_instructions
-            .get_mut("models")
-            .and_then(Value::as_array_mut)
-            .expect("models")
-        {
-            model
-                .as_object_mut()
-                .expect("object")
-                .remove("base_instructions");
-        }
-        assert!(
-            validate_codex_catalog_json(&missing_instructions.to_string(), &context.api_key)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn codex_catalog_is_deterministic_sanitized_and_bounded() {
-        let mut context = context();
-        context.models.push(IntegrationModel {
-            model_id: "claude-sonnet/anthropic".to_owned(),
-            base_model_id: "claude-sonnet".to_owned(),
-            provider_id: Some("anthropic".to_owned()),
-            display_name: "Claude Sonnet".to_owned(),
-            capabilities: json!({
-                "supports_vision": true,
-                "supports_tools": true,
-                "thinking": {"status": "supported", "supported_efforts": ["high"]},
-            }),
-            source_metadata: json!({"internal": "secret"}),
-            limits: ModelLimits {
-                context_tokens: Some(200_000),
-                output_tokens: Some(8_000),
-                ..Default::default()
-            },
-        });
-        let first = build_codex_catalog_json(&context).expect("catalog");
-        let second = build_codex_catalog_json(&context).expect("catalog");
-        assert_eq!(first, second);
-        let count = validate_codex_catalog_json(&first, &context.api_key).expect("valid");
-        assert_eq!(count, 2);
-        assert!(!first.contains(&context.api_key));
-        assert!(!first.contains("internal"));
-        assert!(!first.contains("secret"));
-        let value: Value = serde_json::from_str(&first).expect("json");
-        let models = value
-            .get("models")
-            .and_then(Value::as_array)
-            .expect("models");
-        assert_eq!(models.len(), 2);
-        // Deterministic ordering by public ID.
-        assert_eq!(
-            models[0].get("slug").and_then(Value::as_str),
-            Some("claude-sonnet/anthropic")
-        );
-        for model in models {
-            assert_eq!(
-                model.get("prefer_websockets").and_then(Value::as_bool),
-                Some(false)
-            );
-            assert_eq!(
-                model.get("visibility").and_then(Value::as_str),
-                Some("list")
-            );
-            assert!(
-                model
-                    .get("slug")
-                    .and_then(Value::as_str)
-                    .is_some_and(|slug| !slug.is_empty())
-            );
-        }
-        // Context/output limits survive parsing; auto-compact is 90%.
-        let first_entry = &models[0];
-        assert_eq!(
-            first_entry.get("context_window").and_then(Value::as_u64),
-            Some(200_000)
-        );
-        assert_eq!(
-            first_entry
-                .get("auto_compact_token_limit")
-                .and_then(Value::as_u64),
-            Some(180_000)
-        );
+        assert!(!catalog.contains(&context.api_key));
     }
 
     #[test]
@@ -3209,7 +2038,7 @@ mod tests {
         let context = context();
         let rendered = build_opencode_config_json(&context).expect("opencode");
         assert!(!rendered.contains(&context.api_key));
-        assert!(rendered.contains(OPENCODE_RESPONSES_NPM));
+        assert!(rendered.contains(client_config::OPENCODE_RESPONSES_NPM));
         assert!(!rendered.contains("@ai-sdk/openai-compatible"));
         assert!(rendered.contains("{env:EGGPOOL_API_KEY}"));
         let value: Value = serde_json::from_str(&rendered).expect("json");
@@ -3219,7 +2048,7 @@ mod tests {
             .expect("eggpool provider");
         assert_eq!(
             provider.get("npm").and_then(Value::as_str),
-            Some(OPENCODE_RESPONSES_NPM)
+            Some(client_config::OPENCODE_RESPONSES_NPM)
         );
         let models = provider
             .get("models")
@@ -3324,26 +2153,6 @@ mod tests {
         .expect("remove");
         assert!(remove.changed);
         assert!(!codex_catalog_path_for_state(&state_dir).exists());
-    }
-
-    #[test]
-    fn codex_mutation_preserves_comments_and_unrelated_tables() {
-        let existing = "# user comment\nmodel_provider = \"other\"\n\n[other_table]\nkey = 1\n";
-        let (proposed, previous) = apply_codex_text_mutation(
-            existing,
-            "http://127.0.0.1:11300/v1",
-            "/tmp/catalog.json",
-            None,
-            false,
-        );
-        assert!(proposed.contains("# user comment"));
-        assert!(proposed.contains("[other_table]"));
-        assert!(proposed.contains("model_provider = \"eggpool\""));
-        assert_eq!(previous.model_provider.as_deref(), Some("other"));
-        // Root keys are placed before the first table.
-        let provider_pos = proposed.find("model_provider").expect("provider");
-        let table_pos = proposed.find("[other_table]").expect("table");
-        assert!(provider_pos < table_pos);
     }
 
     #[test]

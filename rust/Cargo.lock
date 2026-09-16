@@ -936,6 +936,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "eggpool-client-config",
  "eggpool-model-routing",
  "eggress-config",
  "eggress-core",
@@ -971,6 +972,17 @@ dependencies = [
  "tracing-subscriber",
  "webpki-roots 1.0.9",
  "zip",
+]
+
+[[package]]
+name = "eggpool-client-config"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
 ]
 
 [[package]]

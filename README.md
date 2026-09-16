@@ -335,6 +335,12 @@ also available as the small Rust crate at
 selector execution, provider/account routing, and the process-local async
 affinity cache remain EggPool-owned.
 
+The portable Codex/OpenCode projection, connection profiles, `epc1` tokens,
+renderers, and mutation primitives are available as the small Rust crate at
+`rust/crates/eggpool-client-config/`. EggPool's `configsetup` adapter feeds
+that crate; `Config`/catalog/database loading, server key resolution,
+endpoint choice, CLI delivery, and local lifecycle paths remain EggPool-owned.
+
 See the copyable [Model routing guide](docs/model-routing.md) for the complete
 schema, fallback behavior, and troubleshooting guidance.
 

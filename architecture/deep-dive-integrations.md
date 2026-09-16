@@ -2,15 +2,43 @@
 
 Back to [Architecture](README.md)
 
-`rust/src/operations/integrations.rs` owns `eggpool configsetup` output for
-supported coding agents. It generates provider-neutral endpoint, model, and
-secret references for each target without performing provider calls or
-persisting credentials.
+`eggpool configsetup` output for supported coding agents is split across a
+portable boundary. `rust/crates/eggpool-client-config/` owns the
+provider-neutral projection, `ConnectionProfileV1`/`epc1` codecs,
+`AgentIntegrationProfileV1`, Codex/OpenCode renderers, TOML/JSONC mutation
+primitives, ownership types, hashing, and validation without EggPool runtime
+state. `rust/src/operations/integrations.rs` is the EggPool adapter: it
+converts `Config`/catalog/database facts into those portable types, resolves
+server keys/endpoints, owns local lifecycle paths, delivery, and server-only
+projection loading. It generates provider-neutral endpoint, model, and secret
+references for each target without performing provider calls or persisting
+credentials.
 
 Integration generation is a CLI operation over the resolved configuration.
 Generated files are written only when the operator requests an output path;
 stdout modes remain suitable for review and shell piping. The native runtime
 continues to serve all generated endpoints.
+
+## Boundary and ownership
+
+Portable policy (crate, no Axum/Tokio/SQLite/Eggress/provider transport):
+projection (`AgentModelProjection`, conservative aggregation), Codex TOML +
+catalog + strict validation, OpenCode Responses rendering, `ConnectionProfileV1`
+(`eggpool.connection/v1`, closed `codex`/`opencode` targets, absolute
+HTTP(S) base URL, `responses` wire fact, `bearer_env` auth reference only,
+`/api/integrations/v1/profile` reference, optional issuer version),
+`epc1.<base64url(canonical JSON)>` tokens (no compression; `epc1`
+unambiguously fixes the algorithm), `AgentIntegrationProfileV1` with
+deterministic revision, closed `ClientTarget` + `ClientAdapter`
+(render/inspect/plan/verify/remove without subprocesses), TOML/JSONC
+primitives, ownership manifests, and hashing.
+
+Application-owned (EggPool adapter): `Config`/catalog/database reads,
+conservative projection from authoritative server state, server key policy,
+advertised endpoint choice, `CODEX_HOME`/`OPENCODE_CONFIG`/XDG/EggPool
+state-dir resolution, clipboard/process delivery, HTTP serving, transcoder
+mutation, and runtime paths. Receiving-machine paths/commands never come
+from a profile; the desktop decides local paths from its adapter.
 
 ## Shared generation and delivery contract
 

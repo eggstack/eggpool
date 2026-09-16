@@ -16,9 +16,10 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-t
 cargo build --manifest-path rust/Cargo.toml --locked
 cargo build --manifest-path rust/Cargo.toml --locked --release
 
-# Shared semantic model-routing crate (Rust 1.81-compatible boundary)
+# Shared reusable crates (Rust 1.81-compatible boundaries)
 cargo check --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
 cargo test --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
+cargo test --manifest-path rust/crates/eggpool-client-config/Cargo.toml
 ```
 
 Strict Clippy is a repository invariant across all Rust targets. Do not add a
@@ -43,12 +44,14 @@ coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
 `status_command` (Plan 202 provider/proxy health aggregation, `/api/status`,
 CLI offline behavior).
 
-For `configsetup` integration changes, run the focused O005 contract target
-alongside the integration unit tests:
+For `configsetup` integration changes, run the portable crate plus the
+focused O005 contract target alongside the integration unit tests:
 
 ```bash
+cargo test --manifest-path rust/crates/eggpool-client-config/Cargo.toml
 cargo test --manifest-path rust/Cargo.toml --test operations_o005 -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --lib operations::integrations
+cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
 ```
 
 For streaming coordinator changes, run the focused C008 publication, boundary,

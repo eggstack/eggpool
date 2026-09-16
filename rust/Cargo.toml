@@ -7,7 +7,7 @@ publish = false
 description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 
 [workspace]
-members = ["crates/eggpool-model-routing"]
+members = ["crates/eggpool-model-routing", "crates/eggpool-client-config"]
 
 [features]
 default = ["eggress-ssh-fallback"]
@@ -51,6 +51,7 @@ eggress-server = { version = "=1.0.6", default-features = false, optional = true
 eggress-uri = { version = "=1.0.6", optional = true }
 eggress-transport-ssh = { version = "=1.0.6", optional = true }
 getrandom = "0.3.4"
+eggpool-client-config = { path = "crates/eggpool-client-config" }
 eggpool-model-routing = { path = "crates/eggpool-model-routing" }
 http = "1"
 http-body-util = "0.1"

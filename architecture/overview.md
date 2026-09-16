@@ -291,13 +291,15 @@ installable-releases catalog), `provenance.rs` (install-provenance detection),
 operator services), `status.rs` (compact proxy/provider health aggregation:
 typed snapshot, shared readiness evaluation, bounded reason codes; no outbound
 probes, no secret/raw-error output), `metrics.rs` (bounded scalar-only coalescer),
-`integrations.rs` (`eggpool configsetup` renderers for opencode/claude-code/
-aider/codex and others; Codex emits HTTP/SSE Responses TOML with
-`env_key = "EGGPOOL_API_KEY"`, printable by default, no embedded secret;
-OpenCode uses `{env:EGGPOOL_API_KEY}` with the Responses-capable
-`@ai-sdk/openai` runtime; Codex/OpenCode share one conservative
-provider-neutral projection plus managed `--apply`/`--sync`/`--check`/
-`--remove`/`--dry-run` lifecycle with ownership manifests and drift refusal).
+`integrations.rs` (EggPool adapter over the portable
+`eggpool-client-config` crate for `eggpool configsetup`; Codex emits
+HTTP/SSE Responses TOML with `env_key = "EGGPOOL_API_KEY"`, printable by
+default, no embedded secret; OpenCode uses `{env:EGGPOOL_API_KEY}` with the
+Responses-capable `@ai-sdk/openai` runtime; Codex/OpenCode share one
+conservative provider-neutral projection plus managed
+`--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle with ownership
+manifests and drift refusal; `Config`/catalog/DB/key/endpoint/CLI/file IO
+stays here, portable projection/profiles/tokens/renderers stay in the crate).
 
 Deep dives: [Control plane](deep-dive-control.md),
 [Deployment](deep-dive-deployment.md), [Backup/restore](deep-dive-lifecycle.md),
@@ -348,9 +350,10 @@ Deep dives: [Observability](deep-dive-observability.md),
 ### 14. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
-Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, `tokio-rusqlite` (bundled/backup),
-Nix, Zip, Tracing, Eggress 1.0.6 (optional SSH compat), plus the path crate
-`eggpool-model-routing`. Default `eggress-ssh-fallback` supports SSH upstreams;
+Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
+`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.6
+(optional SSH compat), plus the path crates `eggpool-model-routing` and
+`eggpool-client-config`. Default `eggress-ssh-fallback` supports SSH upstreams;
 `--no-default-features` still compiles/tests, keeps direct/non-SSH proxy, and
 rejects SSH proxy config pre-dial. Test-only `test-support` adds deterministic
 local TLS peers; protocol fixture crates stay dev-only.
@@ -391,11 +394,12 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Routing/quota/health/accounts | `rust/src/routing/`, `quota/`, `health/`, `accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
+| Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
 | Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
-| Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
+| Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
 | Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
 | Tooling/tests | `scripts/`, `tests/tooling/`, `rust/tests/`, `packaging/` | [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md) |
 

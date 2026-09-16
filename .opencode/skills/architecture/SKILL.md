@@ -70,6 +70,10 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Routing/accounting: `rust/src/routing/` (`router.rs`, `eligibility.rs`, `fairness.rs`, `claim.rs`), `rust/src/accounts/registry.rs`, `rust/src/catalog/` (`cache.rs`, `refresh.rs`), `rust/src/quota/` (`state.rs`, `estimator.rs`, `scorer.rs`), `rust/src/health/` (`health_manager.rs`, `backoff.rs`, `circuit_breaker.rs`, `effects.rs`, `quarantine.rs`, `repository.rs`)
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
+- Portable client config: `rust/crates/eggpool-client-config/` (projection,
+  profiles, `epc1` tokens, renderers, mutation primitives; no Config/catalog/
+  DB/key/endpoint/CLI/file IO), `rust/src/operations/integrations.rs`
+  (EggPool adapter)
 - Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
