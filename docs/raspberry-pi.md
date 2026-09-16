@@ -152,6 +152,28 @@ loads are expected.
 3. Dashboard: `http://<pi-ip>:11300/`
 4. Point OpenCode at `http://<pi-ip>:11300`
 
+## Headless Pi + Desktop Clients
+
+On the Pi, advertise one stable URL once (live-reloadable; never the bind
+address):
+
+```toml
+[integrations]
+advertise_base_url = "http://<pi-lan-ip>:11300/v1"
+```
+
+Then export a secret-free profile without touching a desktop filesystem:
+
+```bash
+eggpool configremote codex
+eggpool configremote opencode --format token
+```
+
+Copy the `epc1` token to each desktop that can reach the Pi. Desktops fetch
+current models from authenticated `GET /api/integrations/v1/profile` during
+install; the token itself carries no credential. See
+[Agent Configuration](agent-configuration.md#remote-setup-configremote).
+
 ## Troubleshooting
 
 | Symptom | Check |

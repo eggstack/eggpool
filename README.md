@@ -95,6 +95,10 @@ eggpool configsetup opencode
 # OpenCode — managed install with drift detection
 eggpool configsetup opencode --apply
 
+# Headless host — secret-free remote profile for desktops
+eggpool configremote codex
+eggpool configremote opencode --format token
+
 # Claude Code
 eggpool configsetup claude-code
 
@@ -114,7 +118,7 @@ The generated Codex TOML uses the HTTP/SSE Responses API and references
 Codex. OpenCode likewise references `{env:EGGPOOL_API_KEY}` through the
 Responses-capable `@ai-sdk/openai` runtime.
 
-See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, and options.
+See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, remote `configremote` profiles, and options.
 
 For Codex, the deterministic Responses conformance target and the opt-in
 two-phase text/tool-loop check are documented in
@@ -129,7 +133,9 @@ By default, EggPool binds to localhost. To expose it on your LAN:
 
 1. Set a server API key first: `eggpool onboard` (or set `[server].api_key` in config)
 2. Change the bind address: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
-3. Restart: `eggpool restart`
+3. Advertise the desktop URL: `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`
+4. Restart: `eggpool restart`
+5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token)
 
 See [Firewall](docs/firewall.md) for restricting access to your LAN.
 
@@ -180,6 +186,7 @@ See [Firewall](docs/firewall.md) for restricting access to your LAN.
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
 | `eggpool configsetup` | Generate config snippets for coding agents (see [Agent Configuration](docs/agent-configuration.md)) |
+| `eggpool configremote <target>` | Export a secret-free `epc1` remote profile for Codex/OpenCode on other machines (`--format command\|token\|json`, `--base-url` override) |
 | `eggpool update [VERSION]` | Install the latest or one exact catalogued release (`v` prefix accepted) |
 | `eggpool install-provenance` | Show the package manager or standalone update authority |
 | `eggpool uninstall` | Uninstall EggPool from this machine |

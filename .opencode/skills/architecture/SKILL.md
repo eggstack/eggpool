@@ -59,6 +59,13 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   projection (minimum limits, intersected capabilities, unknown stays
   unknown, no name inference, no WebSocket advertisement); `/v1/models`
   remains the standard OpenAI schema.
+- Keep bind and advertisement separate: `[server].host`/`port` is the listen
+  socket; `[integrations].advertise_base_url` is the only client-facing URL
+  (live-reloadable profile output, never the socket). `eggpool configremote`
+  is a read-only exporter (no key creation, no config/transcoder mutation, no
+  catalog refresh); `GET /api/integrations/v1/profile` is the authenticated,
+  versioned, bounded, deterministic, sanitized projection with revision/ETag
+  and must never inherit a dashboard-public exemption.
 
 ## Verification pointers
 

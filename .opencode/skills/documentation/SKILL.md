@@ -64,6 +64,12 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   OpenCode, document the Responses-capable `@ai-sdk/openai` runtime with
   `{env:EGGPOOL_API_KEY}` interpolation and per-model limits from the same
   projection. `/v1/models` remains the standard OpenAI schema.
+- For remote setup docs, distinguish the listen socket (`[server].host`/`port`)
+  from the advertised client URL (`[integrations].advertise_base_url`, `.../v1`,
+  live-reloadable). Document `eggpool configremote codex|opencode` token/JSON
+  output as secret-free and read-only, and `GET /api/integrations/v1/profile`
+  as the authenticated versioned projection. Do not document bootstrap
+  installers until their exact release artifacts exist.
 
 ## Checks
 

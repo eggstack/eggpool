@@ -124,9 +124,74 @@ array present, base-instructions or template instructions present, no
 WebSocket advertisement, no embedded secret).
 
 The standard EggPool `/v1/models` endpoint remains the OpenAI-compatible
-model-list contract and is never overloaded as a Codex-private schema. No
-remote projection endpoint is served; local `configsetup` renders from local
-config/database.
+model-list contract and is never overloaded as a Codex-private schema. Rich
+remote facts use the separately versioned authenticated
+`GET /api/integrations/v1/profile` endpoint (see below); local `configsetup`
+renders from local config/database.
+
+## Advertised integration endpoint
+
+`[server].host`/`port` describe the local listen socket. Remote clients need a
+separate advertised fact (DNS, reverse proxy, Tailscale/WireGuard, LAN
+interface). `rust/src/config.rs::IntegrationsConfig::advertise_base_url`
+(`[integrations].advertise_base_url`) owns that contract:
+
+```toml
+[integrations]
+advertise_base_url = "https://pool.example.internal/v1"
+```
+
+Validation (`normalize_advertise_base_url`): absolute `http://`/`https://`,
+authority/host required, no userinfo/fragment/query, no whitespace/control,
+bounded length, trailing slash stripped, normalized to the EggPool API root
+(`.../v1`). A bare host normalizes to `.../v1`; arbitrary paths are rejected
+rather than silently rewritten. The transition
+`integrations.advertise_base_url` is `Live` in
+`rust/src/config_reload_policy.rs` (profile output only; no socket or runtime
+change).
+
+Resolution (`resolve_advertised_base_url`): explicit `--base-url` wins,
+configured advertisement is next, detected LAN is offered only when
+structurally compatible with the listen config (wildcard binds via LAN
+detection, explicit non-loopback binds via their own host), and loopback-only
+without an explicit advertisement fails with guidance rather than emitting a
+misleading shareable command.
+
+## Remote export (`eggpool configremote`)
+
+`rust/src/cli.rs::ConfigremoteArgs` (`eggpool configremote codex|opencode
+[--base-url URL] [--format command|token|json] [--shell auto|posix|powershell|all]
+[--no-bootstrap]`) is a read-only exporter. `build_remote_context()` reads
+validated config, reads persisted catalog facts best-effort (missing DB yields
+static models only and never creates the database file), merges
+static/overrides through the authoritative projection path, resolves the
+advertised URL, and reports `EGGPOOL_API_KEY` plus `auth_configured` without
+creating/rotating keys, mutating config/transcoding, refreshing catalogs, or
+sending upstream requests. `remote_connection_token()` builds the portable
+`ConnectionProfileV1` + `epc1` token; `--format json` emits the stable bounded
+`eggpool.configremote/v1` object; default human output shows target, endpoint,
+auth reference, and token with an explicit “bootstrap not yet available (Plan
+214)” note rather than inventing a mutable installer URL. `runtime.rs` remains
+the presentation adapter; reusable construction lives in
+`operations/integrations.rs`.
+
+## Integration-profile API
+
+`GET /api/integrations/v1/profile` (`rust/src/server/health.rs::
+integration_profile`, route in `rust/src/server/mod.rs`) serves the portable
+`AgentIntegrationProfileV1` from the same conservative projection as local
+setup. It is authenticated through the existing middleware contract
+(`requires_auth()` returns true for `/api/integrations/*` even when the
+dashboard is public) and performs no catalog refresh, upstream request, or
+health mutation. Response: deterministic schema version, normalized advertised
+`base_url`, deterministic `revision` (canonical sanitized-content SHA-256, not
+timestamps/row IDs), models in deterministic public-ID order, conservative
+capabilities/limits only, bounded bytes/model count, no keys, no
+provider-private source metadata, no paths/prompts/user data. Headers:
+`Content-Type: application/json`, `Cache-Control: private, max-age=0,
+must-revalidate`, `ETag: "<revision>"` with `If-None-Match` → `304`.
+Errors are bounded and generic (`401`/`403` auth, `503` unavailable with no
+internal body).
 
 ## OpenCode provider contract
 

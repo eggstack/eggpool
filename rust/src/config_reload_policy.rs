@@ -540,6 +540,7 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         "database.worker_threads",
         ReloadDisposition::RestartRequired,
     ),
+    ("integrations.advertise_base_url", ReloadDisposition::Live),
     (
         "limits.five_hour_microdollars",
         ReloadDisposition::RestartRequired,

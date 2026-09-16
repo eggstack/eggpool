@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plan": "O001",
-  "command_count": 64,
+  "command_count": 65,
   "commands": [
     {"path": "accounts", "owner": "O007", "options": []},
     {"path": "accounts explain", "owner": "O007", "options": ["--model", "--provider", "--protocol", "--scores", "--gates"]},
@@ -21,6 +21,7 @@
     {"path": "configsetup openhands", "owner": "O005", "options": ["--print-secret", "--no-clipboard", "--force", "--output", "--write", "--model", "--base-url", "--host"]},
     {"path": "configsetup qwen-code", "owner": "O005", "options": ["--print-secret", "--no-clipboard", "--force", "--output", "--write", "--model", "--base-url", "--host"]},
     {"path": "configsetup roo-code", "owner": "O005", "options": ["--print-secret", "--no-clipboard", "--force", "--output", "--write", "--model", "--base-url", "--host"]},
+    {"path": "configremote", "owner": "O005", "options": ["--base-url", "--format", "--shell", "--no-bootstrap"]},
     {"path": "connect", "owner": "O004", "options": ["--providers"]},
     {"path": "connect list", "owner": "O004", "options": []},
     {"path": "croncheck", "owner": "O003", "options": []},

@@ -1,6 +1,8 @@
 # Plan 211: `configremote`, advertised endpoint, and integration-profile API
 
-> **Status:** ready for implementation
+> **Status:** complete
+>
+> **Completed:** 2026-09-16 — advertised `[integrations].advertise_base_url` (live), read-only `eggpool configremote codex|opencode`, and authenticated `GET /api/integrations/v1/profile` land with deterministic revision/ETag; focused + serial workspace suites green locally (see commit).
 >
 > **Baseline:** EggPool `main` at `6997cdbb4cee4ec69c71cab15b53b039c7e3309a` (2026-09-16)
 >

@@ -44,7 +44,7 @@ coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
 `status_command` (Plan 202 provider/proxy health aggregation, `/api/status`,
 CLI offline behavior).
 
-For `configsetup` integration changes, run the portable crate plus the
+For `configsetup`/`configremote`/integration-profile changes, run the portable crate plus the
 focused O005 contract target alongside the integration unit tests:
 
 ```bash
@@ -52,6 +52,8 @@ cargo test --manifest-path rust/crates/eggpool-client-config/Cargo.toml
 cargo test --manifest-path rust/Cargo.toml --test operations_o005 -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --lib operations::integrations
 cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r005 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
 ```
 
 For streaming coordinator changes, run the focused C008 publication, boundary,

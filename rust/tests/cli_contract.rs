@@ -60,7 +60,7 @@ fn rust_command_options(root: &mut Command, path: &str) -> Vec<String> {
 #[test]
 fn rust_parser_has_one_entry_for_every_frozen_python_command() {
     let expected = fixture_commands();
-    assert_eq!(expected.len(), 64);
+    assert_eq!(expected.len(), 65);
     let mut root = Cli::command();
     for (path, options) in expected {
         assert_eq!(rust_command_options(&mut root, &path), options, "{path}");
@@ -98,4 +98,33 @@ fn mutually_exclusive_current_flags_fail_closed() {
         ])
         .is_err()
     );
+}
+
+#[test]
+fn configremote_parses_targets_and_options() {
+    let codex = Cli::try_parse_from(["eggpool", "configremote", "codex"])
+        .expect("configremote codex parses");
+    assert!(matches!(
+        codex.command,
+        Some(EggpoolCommand::Configremote(_))
+    ));
+    let opencode = Cli::try_parse_from([
+        "eggpool",
+        "configremote",
+        "opencode",
+        "--base-url",
+        "https://pool.example.internal/v1",
+        "--format",
+        "json",
+        "--shell",
+        "posix",
+        "--no-bootstrap",
+    ])
+    .expect("configremote opencode with options parses");
+    assert!(matches!(
+        opencode.command,
+        Some(EggpoolCommand::Configremote(_))
+    ));
+    // Missing target fails closed.
+    assert!(Cli::try_parse_from(["eggpool", "configremote"]).is_err());
 }

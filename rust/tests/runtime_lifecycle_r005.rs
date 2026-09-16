@@ -86,13 +86,13 @@ fn exact_r001_field_dispositions_are_ported() {
         .map(|(path, disposition)| ((*path).to_owned(), disposition.to_string()))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 153);
+    assert_eq!(actual.len(), 154);
     assert_eq!(
         actual
             .iter()
             .filter(|(_, disposition)| disposition == "live")
             .count(),
-        59
+        60
     );
     assert_eq!(
         actual
@@ -173,6 +173,27 @@ fn live_restart_and_mixed_mutations_are_classified_without_partial_semantics() {
         transition.restart_required_paths(),
         vec!["server.port".to_owned()]
     );
+}
+
+#[test]
+fn advertised_endpoint_change_is_live_and_noop_is_empty() {
+    let old = Config::default();
+    assert!(diff(&old, &old).is_noop());
+    let mut live = old.clone();
+    live.integrations.advertise_base_url = Some("https://pool.example.internal/v1".to_owned());
+    let transition = diff(&old, &live);
+    assert_eq!(
+        transition
+            .changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["integrations.advertise_base_url"]
+    );
+    assert_eq!(transition.live().len(), 1);
+    assert!(transition.restart_required().is_empty());
+    assert!(!transition.has_restart_required());
+    assert_eq!(transition.changed_sections(), vec!["integrations"]);
 }
 
 #[test]

@@ -28,6 +28,16 @@ a requirement for normal Codex operation. See
 not a Codex-private remote catalog and does not claim Codex reasoning,
 context, shell, or tool metadata.
 
+`GET /api/integrations/v1/profile` is the separately versioned EggPool-specific
+surface for remote setup. It returns the same conservative provider-neutral
+projection as local `configsetup` with a normalized advertised `base_url`,
+deterministic public-ID ordering, and a canonical-content `revision`
+fingerprint (not timestamps). It is authenticated even when the dashboard is
+public, sends `Cache-Control: private, max-age=0, must-revalidate` plus
+`ETag: "<revision>"` (`If-None-Match` → `304`), performs no catalog refresh or
+upstream request, and uses bounded generic errors (`401`/`403` auth, `503`
+unavailable with no internal body).
+
 Configured virtual model routers are included in `/v1/models` as compact,
 capability-free entries with `owned_by = "eggpool"` and
 `eggpool.virtual = true`. They do not expose selector prompts, route
@@ -49,6 +59,7 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
 | `GET` | `/api/status` | Authenticated compact proxy/provider health snapshot (`schema_version: 1`; no outbound provider probes) |
+| `GET` | `/api/integrations/v1/profile` | Authenticated versioned sanitized integration profile (`schema_version: 1`, deterministic `revision`/ETag, bounded, no credentials) |
 
 ## Upstream Diagnostics
 

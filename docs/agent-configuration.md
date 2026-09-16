@@ -4,6 +4,8 @@
 
 Codex and OpenCode additionally support a managed lifecycle that installs a generated model catalog/provider block with ownership, drift detection, and safe removal. All other targets keep the snippet/clipboard/output workflow.
 
+`eggpool configremote` is the headless companion: on the EggPool host it exports a small secret-free `epc1` connection profile for Codex/OpenCode running on other machines. Local `configsetup` writes the local filesystem; `configremote` never touches a desktop filesystem and never mutates EggPool config to manufacture a setup.
+
 ## Supported Targets
 
 | Target | Command | Output Format | `--write` Default | Model |
@@ -60,6 +62,30 @@ Lifecycle semantics:
 Repeated `--apply`/`--sync` is idempotent. Drift in a user-edited client config causes a safe refusal rather than silent clobbering; re-run with `--force` to converge deliberately. `--output`/`--write` cannot be combined with lifecycle flags; the snippet workflow remains for users who do not want automatic changes.
 
 Ownership manifests live under the EggPool state directory (`~/.local/state/eggpool/integrations/<target>/manifest.json`) and record the client config path, pre/post hashes, owned fields, previous values, catalog path/hash, and schema version. No secrets are stored.
+
+## Remote Setup (`configremote`)
+
+Bind (`[server].host`/`port`) is where EggPool listens; advertisement (`[integrations].advertise_base_url`) is the URL desktop clients should use. Configure the latter once on a headless host:
+
+```toml
+[integrations]
+advertise_base_url = "https://pool.example.internal/v1"
+```
+
+The value must be an absolute `http://`/`https://` URL ending in `/v1` (a bare host normalizes to `.../v1`), with no credentials, fragment, or query. It is live-reloadable via `eggpool rehash` and never changes the listen socket.
+
+```sh
+eggpool configremote codex
+eggpool configremote opencode --format token
+eggpool configremote codex --format json
+eggpool configremote opencode --base-url https://pool.example.internal/v1
+```
+
+Precedence: explicit `--base-url` wins, configured advertisement is next, and a detected LAN address is offered only when compatible with the listen config (wildcard binds via LAN detection; explicit non-loopback binds via their own host). Loopback-only without an advertisement fails with guidance rather than emitting a misleading command.
+
+`configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output notes that version-pinned bootstrap installers arrive in a later release; use token/JSON today.
+
+The token references `GET /api/integrations/v1/profile` (authenticated, revisioned) rather than embedding a model inventory, so it stays reusable as models change.
 
 ## Examples
 

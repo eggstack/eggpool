@@ -30,6 +30,12 @@ pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path == "/v1/healthz" || path == "/v1/readyz" || path.starts_with("/static/") {
         return false;
     }
+    // EggPool-specific integration profile is always authenticated. It must
+    // never inherit a dashboard/public exemption even when the dashboard is
+    // public; the returned object is sanitized but the endpoint is not public.
+    if path.starts_with("/api/integrations/") {
+        return true;
+    }
     if path == "/api/stats/runtime" {
         return true;
     }

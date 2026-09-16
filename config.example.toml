@@ -1016,3 +1016,12 @@ protocol = "anthropic"
 
 [model_overrides."claude-sonnet-4"]
 protocol = "anthropic"
+
+# ─── Advertised Integration Endpoint ────────────────────────────────
+# Bind ([server].host/port) is where EggPool listens; advertisement is the
+# URL desktop Codex/OpenCode clients should use (DNS, reverse proxy,
+# Tailscale/WireGuard, LAN interface). It never changes the listen socket and
+# is live-reloadable. Required for `eggpool configremote` on headless hosts;
+# leave unset for loopback-only development.
+# [integrations]
+# advertise_base_url = "https://pool.example.internal/v1"

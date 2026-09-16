@@ -5,9 +5,10 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 use eggpool::operations::integrations::{
     IntegrationContext, IntegrationModel, LifecycleAction, LifecycleOptions, ModelLimits,
     SnippetOptions, Target, aggregate_projections, apply_overrides, build_codex_catalog_json,
-    build_integration_context, codex_lifecycle, deliver, opencode_lifecycle, paste_hint,
-    project_context_models, project_model, render_target, resolve_model,
-    validate_codex_catalog_json,
+    build_integration_context, build_remote_context, codex_lifecycle, deliver, opencode_lifecycle,
+    parse_remote_target, paste_hint, project_context_models, project_model,
+    remote_connection_token, render_remote_json, render_target, resolve_advertised_base_url,
+    resolve_model, validate_codex_catalog_json,
 };
 use serde_json::{Map, Value, json};
 use tempfile::tempdir;
@@ -542,4 +543,63 @@ fn opencode_managed_lifecycle_preserves_existing_config_safely() {
     let report =
         opencode_lifecycle(&ctx, &dry, Some(&state_dir), Some(&config_path)).expect("dry-run");
     assert!(report.diff.is_some());
+}
+
+#[tokio::test]
+async fn configremote_is_read_only_deterministic_and_secret_free() {
+    let directory = tempdir().expect("temporary directory");
+    let config_path = directory.path().join("config.toml");
+    let db_path = directory.path().join("usage.sqlite3");
+    fs::write(
+        &config_path,
+        format!(
+            "[server]\nhost = \"0.0.0.0\"\nport = 11300\napi_key = \"test-server-key-12345678\"\n\n[database]\npath = \"{}\"\n\n[integrations]\nadvertise_base_url = \"https://pool.example.internal/v1/\"\n",
+            db_path.display()
+        ),
+    )
+    .expect("config");
+    let before = fs::read_to_string(&config_path).expect("before");
+
+    // Explicit --base-url wins over configured advertisement.
+    let config = eggpool::Config::from_toml(&config_path).expect("config parses");
+    let resolved = resolve_advertised_base_url(&config, Some("https://override.example/v1/"))
+        .expect("override wins");
+    assert_eq!(resolved, "https://override.example/v1");
+
+    let remote = build_remote_context(&config_path, None)
+        .await
+        .expect("remote context");
+    assert_eq!(remote.base_url, "https://pool.example.internal/v1");
+    assert!(remote.auth_configured);
+
+    // Unknown targets are rejected without side effects.
+    assert!(parse_remote_target("vscode").is_err());
+
+    for target_name in ["codex", "opencode"] {
+        let target = parse_remote_target(target_name).expect("target");
+        let (_profile, first) = remote_connection_token(&remote, target).expect("token");
+        let (_profile, second) = remote_connection_token(&remote, target).expect("token");
+        assert_eq!(first, second);
+        assert!(first.starts_with("epc1."));
+        let json = render_remote_json(target_name, &remote, &first).expect("json");
+        let value: Value = serde_json::from_str(&json).expect("json parses");
+        assert_eq!(value["target"], target_name);
+        assert_eq!(value["base_url"], "https://pool.example.internal/v1");
+        assert_eq!(value["profile"], first);
+        assert!(!json.contains("test-server-key"));
+    }
+
+    // Read-only: config file unchanged, no database file created.
+    let after = fs::read_to_string(&config_path).expect("after");
+    assert_eq!(before, after);
+    assert!(!db_path.exists());
+
+    // Loopback-only without advertisement fails closed.
+    let loopback_path = directory.path().join("loopback.toml");
+    fs::write(
+        &loopback_path,
+        "[server]\nhost = \"127.0.0.1\"\nport = 11300\napi_key = \"test-server-key-12345678\"\n",
+    )
+    .expect("loopback config");
+    assert!(build_remote_context(&loopback_path, None).await.is_err());
 }

@@ -41,6 +41,12 @@ const MAX_SNIPPET_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(5);
 const DEPRECATED_MODEL_ID: &str = "__deprecated__";
 const INTEGRATION_SCHEMA_VERSION: u32 = client_config::OWNERSHIP_SCHEMA_VERSION;
+/// Stable EggPool-specific integration-profile endpoint (Plan 211).
+pub const REMOTE_PROFILE_ENDPOINT: &str = "/api/integrations/v1/profile";
+/// Stable `configremote --format json` schema identifier.
+pub const CONFIGREMOTE_SCHEMA: &str = "eggpool.configremote/v1";
+/// Auth environment reference carried by remote profiles (never a secret).
+pub const REMOTE_AUTH_ENV: &str = client_config::EGGPOOL_API_KEY_ENV;
 
 #[derive(Debug, Error)]
 pub enum IntegrationError {
@@ -74,6 +80,18 @@ pub enum IntegrationError {
     UnsafeRewrite { path: PathBuf, detail: String },
     #[error("lifecycle flag is not supported for {target}")]
     UnsupportedLifecycle { target: String },
+    #[error("no shareable remote endpoint is available: {detail}")]
+    MissingAdvertisedEndpoint { detail: String },
+    #[error("unsupported remote target: {target}")]
+    UnsupportedRemoteTarget { target: String },
+    #[error("integration profile is unavailable: {detail}")]
+    ProfileUnavailable { detail: String },
+    #[error("bootstrap artifact is not yet available")]
+    BootstrapUnavailable,
+    #[error("unsupported output format: {value}")]
+    InvalidFormat { value: String },
+    #[error("unsupported shell: {value}")]
+    InvalidShell { value: String },
 }
 
 /// Derive a provider-neutral projection from one validated integration model.
@@ -295,6 +313,316 @@ async fn build_context(
         config_mutated,
         transcoder_mutated,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Remote (`configremote`) read-only export (Plan 211)
+// ---------------------------------------------------------------------------
+
+/// Secret-free remote export context.
+///
+/// Unlike [`IntegrationContext`], this never carries the resolved server key.
+/// It reports the auth reference (`EGGPOOL_API_KEY`) and whether server auth
+/// is currently configured, without creating or rotating keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteIntegrationContext {
+    pub config_path: PathBuf,
+    pub base_url: String,
+    pub base_url_root: String,
+    pub port: u16,
+    pub models: Vec<IntegrationModel>,
+    pub collapse_models: bool,
+    pub auth_env: String,
+    pub auth_configured: bool,
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let normalized = host.trim().trim_matches(['[', ']']);
+    normalized.eq_ignore_ascii_case("localhost")
+        || normalized == "127.0.0.1"
+        || normalized == "::1"
+        || normalized == "0:0:0:0:0:0:0:1"
+}
+
+fn is_wildcard_host(host: &str) -> bool {
+    let normalized = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    normalized == "0.0.0.0" || normalized == "::" || normalized == "*"
+}
+
+/// Normalize an explicit `--base-url` override with the same strict contract
+/// as `integrations.advertise_base_url`.
+fn normalize_remote_override(raw: &str) -> Result<String, IntegrationError> {
+    crate::config::normalize_advertise_base_url(raw).map_err(|_| IntegrationError::InvalidBaseUrl)
+}
+
+/// Resolve the advertised integration base URL with explicit precedence:
+///
+/// 1. explicit `--base-url` wins;
+/// 2. configured `integrations.advertise_base_url` is next;
+/// 3. detected LAN address only when structurally compatible with the listen
+///    configuration (non-loopback bind; wildcard binds resolve via LAN
+///    detection; explicit non-loopback binds use their own host);
+/// 4. otherwise fail with guidance rather than emitting a misleading command.
+pub fn resolve_advertised_base_url(
+    config: &Config,
+    base_url_override: Option<&str>,
+) -> Result<String, IntegrationError> {
+    if let Some(raw) = base_url_override {
+        return normalize_remote_override(raw);
+    }
+    if let Some(configured) = config.integrations.advertise_base_url.as_deref() {
+        return normalize_remote_override(configured);
+    }
+    let host = config.server.host.trim();
+    if is_loopback_host(host) {
+        return Err(IntegrationError::MissingAdvertisedEndpoint {
+            detail: "server binds loopback-only; set [integrations].advertise_base_url or pass --base-url with a reachable http(s) URL ending in /v1".to_owned(),
+        });
+    }
+    if is_wildcard_host(host) {
+        let lan = detect_lan_ip();
+        if is_loopback_host(&lan) {
+            return Err(IntegrationError::MissingAdvertisedEndpoint {
+                detail: "could not determine a reachable LAN address; set [integrations].advertise_base_url or pass --base-url".to_owned(),
+            });
+        }
+        let candidate = format!("http://{}:{}/v1", lan, config.server.port);
+        return normalize_remote_override(&candidate);
+    }
+    if host.is_empty() {
+        return Err(IntegrationError::MissingAdvertisedEndpoint {
+            detail:
+                "server host is empty; set [integrations].advertise_base_url or pass --base-url"
+                    .to_owned(),
+        });
+    }
+    let candidate = format!("http://{host}:{}/v1", config.server.port);
+    normalize_remote_override(&candidate)
+}
+
+/// Parse a `configremote` target (`codex`/`opencode` only).
+pub fn parse_remote_target(raw: &str) -> Result<client_config::ClientTarget, IntegrationError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "codex" => Ok(client_config::ClientTarget::Codex),
+        "opencode" => Ok(client_config::ClientTarget::Opencode),
+        _ => Err(IntegrationError::UnsupportedRemoteTarget {
+            target: raw.to_owned(),
+        }),
+    }
+}
+
+/// Validate `--format command|token|json`.
+pub fn validate_remote_format(raw: &str) -> Result<String, IntegrationError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "command" | "token" | "json" => Ok(normalized),
+        _ => Err(IntegrationError::InvalidFormat {
+            value: raw.to_owned(),
+        }),
+    }
+}
+
+/// Validate `--shell auto|posix|powershell|all`.
+pub fn validate_remote_shell(raw: &str) -> Result<String, IntegrationError> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "auto" | "posix" | "powershell" | "all" => Ok(normalized),
+        _ => Err(IntegrationError::InvalidShell {
+            value: raw.to_owned(),
+        }),
+    }
+}
+
+/// Build a read-only remote context from a config file.
+///
+/// - reads validated config;
+/// - reads persisted catalog facts best-effort (missing DB yields static
+///   models only; never creates the database file);
+/// - merges static models/overrides through the authoritative projection path;
+/// - resolves the advertised base URL;
+/// - reports auth configuration without creating keys.
+///
+/// Performs no key creation/rotation, config mutation, transcoder mutation,
+/// catalog refresh, upstream request, or routing/health/quota mutation.
+pub async fn build_remote_context(
+    config_path: &Path,
+    base_url_override: Option<&str>,
+) -> Result<RemoteIntegrationContext, IntegrationError> {
+    let config = Config::from_toml(config_path)?;
+    build_remote_context_from_config(&config, config_path, base_url_override, true).await
+}
+
+async fn build_remote_context_from_config(
+    config: &Config,
+    config_path: &Path,
+    base_url_override: Option<&str>,
+    read_catalog: bool,
+) -> Result<RemoteIntegrationContext, IntegrationError> {
+    let base_url = resolve_advertised_base_url(config, base_url_override)?;
+    let base_url_root = base_url.strip_suffix("/v1").unwrap_or(&base_url).to_owned();
+    let auth_env = REMOTE_AUTH_ENV.to_owned();
+    let auth_configured = config.resolved_server_api_key().is_some();
+    if !auth_configured {
+        return Err(IntegrationError::ProfileUnavailable {
+            detail: "server API key is not configured; run `eggpool newkey` or set [server].api_key before sharing a remote profile".to_owned(),
+        });
+    }
+    let mut models = if read_catalog {
+        match load_remote_catalog_models(config).await {
+            Ok(models) => models,
+            Err(error) => {
+                tracing::warn!(error = %error, "catalog unavailable while building remote profile");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    merge_static_models(&mut models, config);
+    apply_model_overrides(&mut models, config);
+    models.sort_by(|left, right| left.model_id.cmp(&right.model_id));
+    Ok(RemoteIntegrationContext {
+        config_path: config_path.to_owned(),
+        base_url,
+        base_url_root,
+        port: config.server.port,
+        models,
+        collapse_models: config.models.collapse_models,
+        auth_env,
+        auth_configured,
+    })
+}
+
+async fn load_remote_catalog_models(
+    config: &Config,
+) -> Result<Vec<IntegrationModel>, IntegrationError> {
+    // Never create the database file for a read-only export.
+    if config.database.path != ":memory:" {
+        let path = Config::runtime_path(&config.database.path);
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+    }
+    load_catalog_models(config).await
+}
+
+/// Build the portable connection profile + `epc1` token for one remote target.
+pub fn remote_connection_token(
+    remote: &RemoteIntegrationContext,
+    target: client_config::ClientTarget,
+) -> Result<(client_config::ConnectionProfileV1, String), IntegrationError> {
+    let profile = client_config::ConnectionProfileV1::new(
+        vec![target],
+        &remote.base_url,
+        &remote.auth_env,
+        REMOTE_PROFILE_ENDPOINT,
+        client_config::INTEGRATION_PROFILE_SCHEMA_VERSION,
+        Some(crate::version::PACKAGE_VERSION),
+    )?;
+    let token = client_config::encode_profile(&profile)?;
+    // Secret-free by construction; defend the exporter boundary explicitly.
+    debug_assert!(!token.contains("ep_test"));
+    Ok((profile, token))
+}
+
+/// Build the served integration profile from authoritative server state.
+///
+/// Uses the same conservative projection as local `configsetup` (persisted
+/// catalog + static models + overrides, deterministic ordering, bounded
+/// revision). Performs no catalog refresh, upstream request, or health
+/// mutation. Returns `ProfileUnavailable` when the projection cannot be
+/// built rather than leaking internal diagnostics.
+pub async fn build_integration_profile(
+    config: &Config,
+    database: &Database,
+    base_url: &str,
+) -> Result<client_config::AgentIntegrationProfileV1, IntegrationError> {
+    let normalized = normalize_remote_override(base_url)?;
+    let mut models = read_catalog_models(database, config).await.map_err(|_| {
+        IntegrationError::ProfileUnavailable {
+            detail: "integration projection is unavailable".to_owned(),
+        }
+    })?;
+    merge_static_models(&mut models, config);
+    apply_model_overrides(&mut models, config);
+    models.sort_by(|left, right| left.model_id.cmp(&right.model_id));
+    let projections = client_config::project_models(&models);
+    client_config::AgentIntegrationProfileV1::new(
+        &normalized,
+        projections,
+        client_config::IntegrationCapabilities::default(),
+    )
+    .map_err(|_| IntegrationError::ProfileUnavailable {
+        detail: "integration projection is unavailable".to_owned(),
+    })
+}
+
+/// Render stable `configremote --format json` (bounded, secret-free).
+pub fn render_remote_json(
+    target_name: &str,
+    remote: &RemoteIntegrationContext,
+    token: &str,
+) -> Result<String, IntegrationError> {
+    let value = serde_json::json!({
+        "schema": CONFIGREMOTE_SCHEMA,
+        "target": target_name,
+        "base_url": remote.base_url,
+        "profile": token,
+        "auth": {
+            "mode": "bearer_env",
+            "env": remote.auth_env,
+            "configured": remote.auth_configured,
+        },
+        "integration_profile": {
+            "endpoint": REMOTE_PROFILE_ENDPOINT,
+            "schema": client_config::INTEGRATION_PROFILE_SCHEMA_VERSION,
+        },
+        "issuer": {
+            "eggpool_version": crate::version::PACKAGE_VERSION,
+        },
+        "bootstrap": {
+            "available": false,
+            "note": "bootstrap artifact not yet published (Plan 214); use --format token/json",
+        },
+    });
+    let rendered = serde_json::to_string_pretty(&value)?;
+    if rendered.len() > 16 * 1024 {
+        return Err(IntegrationError::TooLarge);
+    }
+    Ok(rendered)
+}
+
+/// Render default human `configremote` output (secret-free, no mutable URLs).
+pub fn render_remote_human(
+    target_name: &str,
+    remote: &RemoteIntegrationContext,
+    token: &str,
+    no_bootstrap: bool,
+) -> String {
+    let display_target = match target_name {
+        "codex" => "Codex",
+        "opencode" => "OpenCode",
+        other => other,
+    };
+    let mut lines = vec![
+        "EggPool remote configuration".to_owned(),
+        format!("Target:   {display_target}"),
+        format!("Endpoint: {}", remote.base_url),
+        format!("Auth:     {} (credential not included)", remote.auth_env),
+        format!("Profile:  {token}"),
+        String::new(),
+        "This profile contains no credential and may be shared with authorized users".to_owned(),
+        "who can reach this EggPool instance.".to_owned(),
+    ];
+    if !no_bootstrap {
+        lines.push(String::new());
+        lines.push("Bootstrap: not yet available (Plan 214 will publish version-pinned".to_owned());
+        lines.push(
+            "verified POSIX/PowerShell installers; use --format token/json today).".to_owned(),
+        );
+    }
+    lines.join("\n")
 }
 
 /// Apply the shared `--host`/`--base-url` endpoint overrides.
@@ -2189,5 +2517,108 @@ mod tests {
         assert!(
             opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path)).is_err()
         );
+    }
+
+    #[test]
+    fn remote_targets_parse_and_reject_unknown() {
+        assert!(parse_remote_target("codex").is_ok());
+        assert!(parse_remote_target("Codex").is_ok());
+        assert!(parse_remote_target("opencode").is_ok());
+        assert!(parse_remote_target("OPENCODE").is_ok());
+        assert!(parse_remote_target("vscode").is_err());
+        assert!(parse_remote_target("").is_err());
+        assert!(validate_remote_format("command").is_ok());
+        assert!(validate_remote_format("token").is_ok());
+        assert!(validate_remote_format("json").is_ok());
+        assert!(validate_remote_format("yaml").is_err());
+        assert!(validate_remote_shell("auto").is_ok());
+        assert!(validate_remote_shell("posix").is_ok());
+        assert!(validate_remote_shell("powershell").is_ok());
+        assert!(validate_remote_shell("all").is_ok());
+        assert!(validate_remote_shell("bash").is_err());
+    }
+
+    #[test]
+    fn advertised_resolution_prefers_override_then_config_then_compatible_lan() {
+        let mut config = Config::default();
+        config.server.host = "0.0.0.0".to_owned();
+        config.server.port = 11300;
+        config.integrations.advertise_base_url =
+            Some("https://pool.example.internal/v1".to_owned());
+        // Explicit override wins over configured value.
+        let resolved = resolve_advertised_base_url(&config, Some("https://override.example/v1/"))
+            .expect("override wins");
+        assert_eq!(resolved, "https://override.example/v1");
+        // Configured value is next.
+        let resolved = resolve_advertised_base_url(&config, None).expect("configured");
+        assert_eq!(resolved, "https://pool.example.internal/v1");
+        // Loopback-only without configured/override fails closed.
+        let mut loopback = Config::default();
+        loopback.server.host = "127.0.0.1".to_owned();
+        assert!(resolve_advertised_base_url(&loopback, None).is_err());
+        // Explicit non-loopback host falls back to its own host.
+        let mut explicit = Config::default();
+        explicit.server.host = "192.168.1.20".to_owned();
+        explicit.server.port = 11300;
+        let resolved = resolve_advertised_base_url(&explicit, None).expect("explicit host");
+        assert_eq!(resolved, "http://192.168.1.20:11300/v1");
+    }
+
+    #[test]
+    fn remote_token_is_deterministic_and_secret_free() {
+        let remote = RemoteIntegrationContext {
+            config_path: PathBuf::from("/dev/null"),
+            base_url: "https://pool.example.internal/v1".to_owned(),
+            base_url_root: "https://pool.example.internal".to_owned(),
+            port: 443,
+            models: Vec::new(),
+            collapse_models: false,
+            auth_env: REMOTE_AUTH_ENV.to_owned(),
+            auth_configured: true,
+        };
+        let target = parse_remote_target("codex").expect("codex");
+        let (_profile, first) = remote_connection_token(&remote, target).expect("token");
+        let (_profile, second) = remote_connection_token(&remote, target).expect("token");
+        assert_eq!(first, second);
+        assert!(first.starts_with("epc1."));
+        assert!(!first.contains(' '));
+        let decoded = client_config::decode_profile(&first).expect("decode");
+        assert_eq!(decoded.proxy.base_url, remote.base_url);
+        // Auth is a reference only; no credential material appears.
+        let json = render_remote_json("codex", &remote, &first).expect("json");
+        assert!(json.contains("eggpool.configremote/v1"));
+        assert!(json.contains("EGGPOOL_API_KEY"));
+        assert!(!json.contains("ep_test_key"));
+        let human = render_remote_human("codex", &remote, &first, false);
+        assert!(human.contains("https://pool.example.internal/v1"));
+        assert!(human.contains("EGGPOOL_API_KEY"));
+        assert!(human.contains("not yet available"));
+        assert!(!human.contains("http://user:"));
+        let debug = format!("{remote:?} {first:?}");
+        assert!(!debug.contains("ep_test_key_123"));
+    }
+
+    #[tokio::test]
+    async fn remote_context_is_read_only_and_never_creates_keys() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let db_path = directory.path().join("usage.sqlite3");
+        // No [server].api_key and no env: read-only export must fail rather
+        // than manufacturing a key file mutation.
+        std::fs::write(
+            &config_path,
+            format!(
+                "[server]\nhost = \"0.0.0.0\"\nport = 11301\n\n[database]\npath = \"{}\"\n\n[integrations]\nadvertise_base_url = \"https://pool.example.internal/v1\"\n",
+                db_path.display()
+            ),
+        )
+        .expect("config");
+        let before = std::fs::read_to_string(&config_path).expect("before");
+        let result = build_remote_context(&config_path, None).await;
+        assert!(result.is_err());
+        let after = std::fs::read_to_string(&config_path).expect("after");
+        assert_eq!(before, after);
+        assert!(!after.contains("api_key"));
+        assert!(!db_path.exists());
     }
 }

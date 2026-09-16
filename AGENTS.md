@@ -17,7 +17,7 @@ deep-dive detail into `AGENTS.md`.
 ## Layout
 
 - Runtime (authority): `rust/src/` (`main.rs`/`cli.rs`/`lib.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` + `coordinator/streaming/` request lifecycle, `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` + `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity, `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` + `task_supervisor.rs`, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/` v1–v54).
-- Reusable policy crates: `rust/crates/eggpool-model-routing/` (`policy.rs`, `identity.rs`; neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`) and `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, renderers, mutation primitives; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`).
+- Reusable policy crates: `rust/crates/eggpool-model-routing/` (`policy.rs`, `identity.rs`; neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`) and `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, renderers, mutation primitives; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`, including read-only `configremote` export and authenticated `GET /api/integrations/v1/profile`).
 - Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. Native runtime tests live in `rust/tests/` (note: `coordinator_c012` does not exist; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
 - Config examples: `config.example.toml`, `config.sbc.example.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`; API keys from environment/`.env`, never committed.
 - Plans: `plans/` is append-only history (~200 files, mostly closed). See the `plan` skill before adding one. `.agents/` holds no custom agent definitions.
@@ -63,7 +63,9 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `rust/src/config_reload_policy.rs::classify_transition` is the only
   reload-vs-restart authority. Mutation paths classify before atomic replace;
   server `rehash` reclassifies before publication. Mixed changes are wholly
-  restart-required; diagnostics stay secret-free.
+  restart-required; diagnostics stay secret-free. `[integrations].advertise_base_url`
+  is live-reloadable profile output only and never changes the listen socket;
+  do not overload `[server].host` for client advertisement.
 - `rust/src/error.rs` owns HTTP/status mappings — read it before adding variants,
   keep context explicit, retain causes.
 - `runtime.rs` adapts CLI to operations; reusable lifecycle lives in

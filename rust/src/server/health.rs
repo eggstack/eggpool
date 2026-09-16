@@ -28,6 +28,99 @@ pub(super) async fn models_api(State(state): State<AppState>) -> Response {
     json_response(StatusCode::OK, json!({"object": "list", "data": data}))
 }
 
+/// Authenticated EggPool-specific integration profile (Plan 211).
+///
+/// Returns the portable `AgentIntegrationProfileV1` built from the same
+/// conservative projection as local `configsetup`. Deterministic,
+/// bounded, sanitized, and versioned. Performs no catalog refresh, upstream
+/// request, or health mutation. Standard `/v1/models` is unchanged.
+pub(super) async fn integration_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(_) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": "integration profile unavailable"}),
+            );
+        }
+    };
+    let config = lease.generation().config().clone();
+    let base_url = config
+        .integrations
+        .advertise_base_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}:{}/v1", config.server.host, config.server.port));
+    let profile = match crate::operations::integrations::build_integration_profile(
+        &config,
+        &state.database,
+        &base_url,
+    )
+    .await
+    {
+        Ok(profile) => profile,
+        Err(_) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": "integration profile unavailable"}),
+            );
+        }
+    };
+    let body = match profile.canonical_json() {
+        Ok(body) => body,
+        Err(_) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": "integration profile unavailable"}),
+            );
+        }
+    };
+    if body.len() > eggpool_client_config::MAX_INTEGRATION_PROFILE_BYTES {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"detail": "integration profile unavailable"}),
+        );
+    }
+    let etag = format!("\"{}\"", profile.revision);
+    if let Some(if_none) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
+        let matched = if_none.split(',').any(|candidate| {
+            let candidate = candidate.trim().trim_start_matches("W/").trim_matches('"');
+            candidate == profile.revision
+        });
+        if matched {
+            return (
+                StatusCode::NOT_MODIFIED,
+                [
+                    (header::ETAG, etag.clone()),
+                    (
+                        header::CACHE_CONTROL,
+                        "private, max-age=0, must-revalidate".to_owned(),
+                    ),
+                ],
+            )
+                .into_response();
+        }
+    }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json".to_owned()),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=0, must-revalidate".to_owned(),
+            ),
+            (header::ETAG, etag),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
     let diagnostics = state
         .process

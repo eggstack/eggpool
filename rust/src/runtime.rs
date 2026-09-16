@@ -86,6 +86,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         }
         Some(Command::Onboard(args)) => onboard(&config_path, args).await?,
         Some(Command::Configsetup(command)) => configsetup(&config_path, command).await?,
+        Some(Command::Configremote(args)) => configremote(&config_path, args).await?,
         Some(Command::Migrate) => migrate(&config_path).await?,
         Some(Command::Db(crate::cli::DbCommand::Vacuum)) => vacuum(&config_path).await?,
         Some(Command::Backup { output_dir }) => backup(&config_path, output_dir).await?,
@@ -1726,6 +1727,47 @@ async fn restart_after_integration_mutation(
             eprintln!("Start or restart the server to apply generated config.")
         }
         outcome => render_apply(outcome),
+    }
+    Ok(())
+}
+
+/// Read-only remote setup export (`eggpool configremote <target>`).
+///
+/// Generates a secret-free `epc1` connection profile from static config +
+/// available stored projection. Never creates keys, mutates config, enables
+/// transcoding, refreshes catalogs, or requires the service to be running.
+/// The desktop detects reachability/auth during install.
+async fn configremote(
+    path: &Path,
+    args: crate::cli::ConfigremoteArgs,
+) -> Result<(), BootstrapError> {
+    use crate::operations::integrations;
+    let target = integrations::parse_remote_target(&args.target)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let format = integrations::validate_remote_format(&args.format)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let _shell = integrations::validate_remote_shell(&args.shell)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let target_name = args.target.trim().to_ascii_lowercase();
+    let remote = integrations::build_remote_context(path, args.base_url.as_deref())
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    let (_profile, token) = integrations::remote_connection_token(&remote, target)
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    match format.as_str() {
+        "token" => {
+            println!("{token}");
+        }
+        "json" => {
+            let rendered = integrations::render_remote_json(&target_name, &remote, &token)
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!("{rendered}");
+        }
+        _ => {
+            let human =
+                integrations::render_remote_human(&target_name, &remote, &token, args.no_bootstrap);
+            println!("{human}");
+        }
     }
     Ok(())
 }

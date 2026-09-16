@@ -12,7 +12,7 @@ use axum::{body::Body, http::Request};
 use clap::Parser;
 use eggpool::{
     Cli, Command as EggpoolCommand, Config,
-    db::{Database, DatabaseConfig, MigrationRunner, PingRepository},
+    db::{AccountRepository, Database, DatabaseConfig, MigrationRunner, PingRepository},
     health::{AccountHealthSnapshot, BackoffReason, CircuitState, CircuitStats},
     operations::status as status_service,
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
@@ -399,5 +399,259 @@ async fn status_endpoint_is_authenticated_bounded_and_secret_free() {
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     assert_eq!(ids, sorted);
+    database.close().await.expect("database closes");
+}
+
+#[tokio::test]
+async fn integration_profile_is_authenticated_deterministic_and_secret_free() {
+    use eggpool::config::{ProviderConfig, ProviderStaticModelConfig};
+
+    let root = tempfile::tempdir().expect("temp root");
+    let database = Database::open(DatabaseConfig {
+        path: root.path().join("usage.sqlite3").display().to_string(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let process = ProcessRuntime::new(database.clone());
+    let mut config = Config::default();
+    config.server.api_key = Some("integration-endpoint-key".to_owned());
+    config.server.host = "0.0.0.0".to_owned();
+    config.integrations.advertise_base_url = Some("https://pool.example.internal/v1".to_owned());
+    config.database.path = root.path().join("usage.sqlite3").display().to_string();
+    // Two static models out of order; the served projection must sort them.
+    config.providers.insert(
+        "test-provider".to_owned(),
+        ProviderConfig {
+            id: "test-provider".to_owned(),
+            base_url: "https://example.invalid/v1".to_owned(),
+            protocols: vec!["openai".to_owned()],
+            accounts: vec![eggpool::config::AccountConfig {
+                name: "default".to_owned(),
+                api_key: Some("provider-secret-sentinel".to_owned()),
+                api_key_env: String::new(),
+                enabled: true,
+                ..Default::default()
+            }],
+            static_models: vec![
+                ProviderStaticModelConfig {
+                    id: "b-model".to_owned(),
+                    display_name: Some("B".to_owned()),
+                    max_context_tokens: Some(50_000),
+                    ..Default::default()
+                },
+                ProviderStaticModelConfig {
+                    id: "a-model".to_owned(),
+                    display_name: Some("A".to_owned()),
+                    max_context_tokens: Some(100_000),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+    );
+    config.validate().expect("test config validates");
+    let durable: Vec<eggpool::db::AccountConfig> = config
+        .providers
+        .iter()
+        .flat_map(|(provider_id, provider)| {
+            provider
+                .accounts
+                .iter()
+                .map(|account| eggpool::db::AccountConfig {
+                    name: account.name.clone(),
+                    api_key_env: account.api_key_env.clone(),
+                    enabled: account.enabled,
+                    weight: account.weight,
+                    provider_id: provider_id.clone(),
+                })
+        })
+        .collect();
+    AccountRepository::new(&database)
+        .sync_from_config(durable)
+        .await
+        .expect("accounts sync");
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "integration-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    let app = build_router(AppState::from_runtime(config, database.clone(), manager));
+
+    // Unauthenticated is rejected even though the payload is sanitized.
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/integrations/v1/profile")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(unauthorized.status(), 401);
+
+    let fetch = |app: axum::Router| async move {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/integrations/v1/profile")
+                    .header("authorization", "Bearer integration-endpoint-key")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request completes");
+        assert_eq!(response.status(), 200);
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let cache = response
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body collects")
+            .to_bytes();
+        (bytes, etag, cache, content_type)
+    };
+
+    let (first_bytes, first_etag, cache, content_type) = fetch(app.clone()).await;
+    assert!(content_type.contains("application/json"));
+    assert!(cache.contains("private"));
+    assert!(!first_etag.is_empty());
+    assert!(first_bytes.len() < 1024 * 1024);
+    let first: serde_json::Value = serde_json::from_slice(&first_bytes).expect("valid profile");
+    assert_eq!(first["schema_version"], 1);
+    assert_eq!(first["base_url"], "https://pool.example.internal/v1");
+    assert!(first["revision"].as_str().is_some_and(|r| r.len() == 64));
+    let ids: Vec<&str> = first["models"]
+        .as_array()
+        .expect("models array")
+        .iter()
+        .filter_map(|m| m["public_id"].as_str())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted);
+
+    // Second fetch is byte-identical (deterministic revision, no refresh).
+    let (second_bytes, second_etag, _, _) = fetch(app.clone()).await;
+    assert_eq!(first_bytes, second_bytes);
+    assert_eq!(first_etag, second_etag);
+
+    // Secret-free: no provider key, source metadata, paths, or prompts.
+    let rendered = String::from_utf8_lossy(&first_bytes);
+    assert!(!rendered.contains("provider-secret-sentinel"));
+    assert!(!rendered.contains("integration-endpoint-key"));
+    assert!(!rendered.contains("source_metadata"));
+    assert!(!rendered.contains("usage.sqlite3"));
+
+    // Conditional GET with the revision returns 304.
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/integrations/v1/profile")
+                .header("authorization", "Bearer integration-endpoint-key")
+                .header("if-none-match", first_etag)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(not_modified.status(), 304);
+
+    // Standard /v1/models keeps its OpenAI-compatible shape.
+    let models = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .header("authorization", "Bearer integration-endpoint-key")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(models.status(), 200);
+    let bytes = models
+        .into_body()
+        .collect()
+        .await
+        .expect("body collects")
+        .to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("valid models");
+    assert_eq!(value["object"], "list");
+    assert!(value["data"].is_array());
+    for entry in value["data"].as_array().expect("data array") {
+        assert!(entry.get("id").and_then(|v| v.as_str()).is_some());
+        assert_eq!(entry.get("object").and_then(|v| v.as_str()), Some("model"));
+        assert!(entry.get("capabilities").is_none());
+    }
+    database.close().await.expect("database closes");
+}
+
+#[tokio::test]
+async fn integration_profile_does_not_inherit_dashboard_public_exemption() {
+    let root = tempfile::tempdir().expect("temp root");
+    let database = Database::open(DatabaseConfig {
+        path: root.path().join("usage.sqlite3").display().to_string(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let process = ProcessRuntime::new(database.clone());
+    let mut config = Config::default();
+    config.server.api_key = Some("dashboard-public-key".to_owned());
+    config.dashboard.public = true;
+    config.integrations.advertise_base_url = Some("https://pool.example.internal/v1".to_owned());
+    config.database.path = root.path().join("usage.sqlite3").display().to_string();
+    let candidate =
+        RuntimeGenerationFactory::prepare(&process, config.clone(), "public-test".to_owned(), 1)
+            .await
+            .expect("generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    let app = build_router(AppState::from_runtime(config, database.clone(), manager));
+    let unauthorized = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/integrations/v1/profile")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(unauthorized.status(), 401);
     database.close().await.expect("database closes");
 }

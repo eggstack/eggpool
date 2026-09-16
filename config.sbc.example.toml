@@ -84,3 +84,9 @@ enabled = false # Full snapshots are opt-in to minimize SBC storage wear.
 interval_s = 86400
 retain_count = 7
 # Enable deliberately when local recovery copies are required.
+
+# ─── Advertised Integration Endpoint ────────────────────────────────
+# Uncomment for headless Pi + desktop clients. This is the URL desktops use,
+# not the listen socket. Live-reloadable via `eggpool rehash`.
+# [integrations]
+# advertise_base_url = "http://<pi-lan-ip>:11300/v1"

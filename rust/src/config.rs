@@ -842,6 +842,103 @@ pub struct UpdateCheckerConfig {
     pub enabled: bool,
 }
 
+/// Explicit advertised integration endpoint for remote clients.
+///
+/// `[server].host`/`port` describe the local listen socket. This section
+/// describes the URL desktop clients should place in provider configuration
+/// (DNS, reverse proxy, Tailscale/WireGuard, LAN interface). It never changes
+/// the listening socket or request runtime.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct IntegrationsConfig {
+    pub advertise_base_url: Option<String>,
+}
+
+/// Maximum advertised integration URL bytes (matches portable profile bound).
+pub const MAX_ADVERTISE_BASE_URL_BYTES: usize = 2048;
+
+/// Validate and deterministically normalize an advertised integration URL.
+///
+/// Rules: absolute `http://`/`https://`, authority/host required, no userinfo
+/// (`@`), no fragment (`#`), no query (`?`), no whitespace/control, bounded
+/// length, trailing slash stripped, and normalized to the EggPool API root
+/// (`.../v1`). A bare host (`https://pool.example`) normalizes to
+/// `https://pool.example/v1`; a `.../v1` path (including reverse-proxy
+/// prefixes like `/prefix/v1`) is preserved; arbitrary paths are rejected
+/// rather than silently rewritten.
+pub fn normalize_advertise_base_url(raw: &str) -> Result<String, ConfigError> {
+    if raw.is_empty() || raw.len() > MAX_ADVERTISE_BASE_URL_BYTES {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url has invalid length",
+        ));
+    }
+    if raw.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must not contain whitespace or control characters",
+        ));
+    }
+    if raw.contains('#') {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must not contain a fragment",
+        ));
+    }
+    if raw.contains('?') {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must not contain a query",
+        ));
+    }
+    let lower = raw.to_ascii_lowercase();
+    let scheme_len = if lower.starts_with("https://") {
+        8
+    } else if lower.starts_with("http://") {
+        7
+    } else {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must be an absolute http:// or https:// URL",
+        ));
+    };
+    // Normalize scheme to lowercase; preserve authority/path case.
+    let scheme = lower[..scheme_len].to_owned();
+    let trimmed = raw.trim_end_matches('/');
+    if trimmed.len() <= scheme_len {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must contain an authority/host",
+        ));
+    }
+    let rest_original = &trimmed[scheme_len..];
+    if rest_original.is_empty() {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must contain an authority/host",
+        ));
+    }
+    // Authority is up to the first '/'; remainder is the path (query/fragment
+    // already rejected above).
+    let authority_end = rest_original.find('/').unwrap_or(rest_original.len());
+    let authority = &rest_original[..authority_end];
+    let path = &rest_original[authority_end..];
+    if authority.is_empty() || authority.starts_with(':') || authority.starts_with('/') {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must contain an authority/host",
+        ));
+    }
+    if authority.contains('@') {
+        return Err(ConfigError::validation(
+            "integrations.advertise_base_url must not contain userinfo credentials",
+        ));
+    }
+    // Recombine with lowercased scheme for determinism.
+    let normalized_base = format!("{scheme}{rest_original}");
+    if path.is_empty() {
+        return Ok(format!("{normalized_base}/v1"));
+    }
+    if path == "/v1" || path.ends_with("/v1") {
+        return Ok(normalized_base);
+    }
+    Err(ConfigError::validation(
+        "integrations.advertise_base_url must be a bare host or end with /v1",
+    ))
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoSourceConfig {
@@ -1180,6 +1277,7 @@ pub struct Config {
     pub transcoder: TranscoderPolicy,
     pub model_info: ModelInfoConfig,
     pub update_checker: UpdateCheckerConfig,
+    pub integrations: IntegrationsConfig,
 }
 
 pub type AppConfig = Config;
@@ -1457,6 +1555,10 @@ impl Config {
             || self.limits.monthly_microdollars == 0
         {
             return Err(ConfigError::validation("limits must be greater than zero"));
+        }
+        if let Some(raw) = self.integrations.advertise_base_url.clone() {
+            let normalized = normalize_advertise_base_url(&raw)?;
+            self.integrations.advertise_base_url = Some(normalized);
         }
         Ok(())
     }
@@ -2215,5 +2317,75 @@ mod tests {
                 .expect_err("invalid proxy environment value");
             assert!(error.to_string().contains(expected));
         }
+    }
+
+    #[test]
+    fn advertise_base_url_validates_and_normalizes_deterministically() {
+        assert_eq!(
+            normalize_advertise_base_url("https://pool.example.internal/v1").expect("valid https"),
+            "https://pool.example.internal/v1"
+        );
+        assert_eq!(
+            normalize_advertise_base_url("http://192.168.1.10:11300/v1").expect("valid http"),
+            "http://192.168.1.10:11300/v1"
+        );
+        // Trailing slash is stripped deterministically.
+        assert_eq!(
+            normalize_advertise_base_url("https://pool.example.internal/v1/")
+                .expect("trailing slash"),
+            "https://pool.example.internal/v1"
+        );
+        // Bare host normalizes to the API root.
+        assert_eq!(
+            normalize_advertise_base_url("https://pool.example.internal").expect("bare host"),
+            "https://pool.example.internal/v1"
+        );
+        assert_eq!(
+            normalize_advertise_base_url("https://pool.example.internal/").expect("bare slash"),
+            "https://pool.example.internal/v1"
+        );
+        // Reverse-proxy prefix ending in /v1 is preserved.
+        assert_eq!(
+            normalize_advertise_base_url("https://example.com/prefix/v1").expect("prefix"),
+            "https://example.com/prefix/v1"
+        );
+        // Invalid shapes fail closed without secrets in the message.
+        for raw in [
+            "ftp://pool.example/v1",
+            "file:///v1",
+            "ssh://pool.example/v1",
+            "data:text/plain,hi",
+            "pool.example/v1",
+            "https://user:pass@pool.example/v1",
+            "https://pool.example/v1#frag",
+            "https://pool.example/v1?x=1",
+            "https://pool.example/v1 with space",
+            "https://pool.example/v1\n",
+            "https://pool.example/custom",
+            "https://pool.example/v1/extra",
+            "https://",
+            "",
+        ] {
+            assert!(
+                normalize_advertise_base_url(raw).is_err(),
+                "must reject {raw:?}"
+            );
+        }
+        // Oversize is bounded.
+        let oversize = format!("https://example.com/{}", "a".repeat(3000));
+        assert!(normalize_advertise_base_url(&oversize).is_err());
+
+        // Config validation normalizes in place.
+        let mut config = Config::default();
+        config.integrations.advertise_base_url =
+            Some("https://pool.example.internal/v1/".to_owned());
+        config.validate().expect("advertise validates");
+        assert_eq!(
+            config.integrations.advertise_base_url.as_deref(),
+            Some("https://pool.example.internal/v1")
+        );
+        let mut bad = Config::default();
+        bad.integrations.advertise_base_url = Some("https://pool.example/custom".to_owned());
+        assert!(bad.validate().is_err());
     }
 }

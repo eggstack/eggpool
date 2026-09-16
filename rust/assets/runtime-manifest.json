@@ -26,14 +26,14 @@
       "path": "config/config.example.toml",
       "category": "configuration-template",
       "source": "config.example.toml",
-      "sha256": "055c4672db462d2eeac1b75fa034dcc75e43a963fbb5bbc882a9ed33510b5cee",
+      "sha256": "a9545ae801cbbdbedc4419b0fd83e803947c50b4b5106dcbc7a60ab2bbe0fbe2",
       "identity": "exact"
     },
     {
       "path": "config/config.sbc.example.toml",
       "category": "configuration-template",
       "source": "config.sbc.example.toml",
-      "sha256": "d7cce7ae31e7dcdd3146840017cbc080e1fe1fbaeafb4407117952fc68325931",
+      "sha256": "d568abd610610a3efd21aaa2127fd7cfabf7a812a83bc481d036c58b1fe6ef61",
       "identity": "exact"
     },
     {

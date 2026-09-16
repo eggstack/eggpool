@@ -75,7 +75,7 @@ fail closed on validation, commit, or ownership ambiguity.
 `AppError` to `ExitCode`. `rust/src/lib.rs` declares the module tree and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
 command tree (`serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
-`newkey`, `configsetup`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
+`newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
 `modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `status`, `runtime-status`, `backup`, `version`).
@@ -93,7 +93,8 @@ Deep dive: [Core](deep-dive-core.md).
 `rust/src/config.rs` is the typed TOML contract (`Config`, `ServerConfig`,
 `UpstreamConfig`, `DatabaseConfig`, `RoutingConfig`, `ModelsConfig`,
 `ProviderConfig`, `DashboardConfig`, `SecurityConfig`, `MetricsConfig`,
-`BackupConfig`, `ModelRouterConfig`, transcoder/model-info policies) with
+`BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`),
+transcoder/model-info policies) with
 `from_toml`/`validate` and proxy/model-router compilation. Resolution order is
 explicit `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` >
 `./config.toml`; API keys come from the environment or the adjacent `.env`
@@ -120,9 +121,10 @@ Deep dives: [Core](deep-dive-core.md), [Control plane and rehash](deep-dive-cont
 `Database`, `RuntimeManager`, body-task tracker), and owns foreground
 lifespan, signal handling, and quiesce/drain/close shutdown. Siblings stay
 thin: `middleware.rs` (constant-time Bearer/`x-api-key` auth, generation-lease
-admission, `max_request_body_bytes` bounding, loopback exemption),
+admission, `max_request_body_bytes` bounding, loopback exemption; `/api/integrations/*`
+is always authenticated and never inherits a dashboard-public exemption),
 `health.rs` (`GET /v1/healthz`, `GET /v1/readyz`, `GET /v1/models`,
-`GET /api/stats/runtime`, `GET /api/stats/update`, `GET /api/status`), `inference.rs`
+`GET /api/integrations/v1/profile`, `GET /api/stats/runtime`, `GET /api/stats/update`, `GET /api/status`), `inference.rs`
 (`chat_completions`, `messages`, `responses`, `responses_compact`; finite vs. stream dispatch on the
 `stream` flag; exactly one `coordinator::execute_finite`/`execute_stream` call
 per request, compact via finite-only `execute_compact_finite`), `dashboard.rs` (server-rendered pages plus static assets).
@@ -292,13 +294,18 @@ operator services), `status.rs` (compact proxy/provider health aggregation:
 typed snapshot, shared readiness evaluation, bounded reason codes; no outbound
 probes, no secret/raw-error output), `metrics.rs` (bounded scalar-only coalescer),
 `integrations.rs` (EggPool adapter over the portable
-`eggpool-client-config` crate for `eggpool configsetup`; Codex emits
+`eggpool-client-config` crate for `eggpool configsetup` and read-only
+`eggpool configremote`; Codex emits
 HTTP/SSE Responses TOML with `env_key = "EGGPOOL_API_KEY"`, printable by
 default, no embedded secret; OpenCode uses `{env:EGGPOOL_API_KEY}` with the
 Responses-capable `@ai-sdk/openai` runtime; Codex/OpenCode share one
 conservative provider-neutral projection plus managed
 `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle with ownership
-manifests and drift refusal; `Config`/catalog/DB/key/endpoint/CLI/file IO
+manifests and drift refusal; `configremote` exports secret-free `epc1` tokens
+and `eggpool.configremote/v1` JSON from the advertised `[integrations].advertise_base_url`
+without key creation or config mutation; the authenticated
+`GET /api/integrations/v1/profile` serves the same projection with
+deterministic revision/ETag; `Config`/catalog/DB/key/endpoint/CLI/file IO
 stays here, portable projection/profiles/tokens/renderers stay in the crate).
 
 Deep dives: [Control plane](deep-dive-control.md),
@@ -330,10 +337,13 @@ Deep dives: [Observability](deep-dive-observability.md),
   compaction operation; native compact-capable upstreams only).
 - Discovery/health: `GET /v1/models`, `GET /v1/healthz`, `GET /v1/readyz`,
   `GET /api/status` (authenticated compact snapshot), `GET /api/stats/runtime`,
-  `GET /api/stats/update`.
+  `GET /api/stats/update`, `GET /api/integrations/v1/profile` (authenticated
+  versioned sanitized projection with deterministic revision/ETag; `/v1/models`
+  unchanged).
 - Dashboard: pages listed in §3 plus `/api/stats/summary`; observational only.
 - CLI: full command tree in §1 (`status` is the concise provider health
-  summary, `runtime-status` the detailed diagnostics); `runtime.rs` keeps
+  summary, `runtime-status` the detailed diagnostics; `configremote codex|opencode`
+  is the read-only remote exporter); `runtime.rs` keeps
   prompts/presentation/exit codes, `operations/lifecycle.rs` keeps reusable
   workflows, `operations/status.rs` keeps health aggregation,
   `server/*` stays thin.

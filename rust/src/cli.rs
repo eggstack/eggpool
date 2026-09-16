@@ -34,6 +34,8 @@ pub enum Command {
     Newkey(NewkeyArgs),
     #[command(subcommand)]
     Configsetup(ConfigsetupCommand),
+    #[command(name = "configremote")]
+    Configremote(ConfigremoteArgs),
     Deploy(DeployArgs),
     #[command(subcommand)]
     Accounts(AccountsCommand),
@@ -319,6 +321,26 @@ pub struct DeploySystemdArgs {
     pub as_root: bool,
 }
 
+#[derive(Debug, clap::Args)]
+pub struct ConfigremoteArgs {
+    /// Remote client target (`codex` or `opencode`).
+    pub target: String,
+    /// Override the advertised URL for this profile only.
+    #[arg(long = "base-url")]
+    pub base_url: Option<String>,
+    /// Output shape: `command` (human), `token`, or `json`.
+    #[arg(long, default_value = "command")]
+    pub format: String,
+    /// Bootstrap shell rendering: `auto`, `posix`, `powershell`, or `all`.
+    /// Bootstrap artifacts are not yet published (Plan 214); this currently
+    /// only validates the value and documents availability.
+    #[arg(long, default_value = "auto")]
+    pub shell: String,
+    /// Print token/profile only without bootstrap guidance.
+    #[arg(long = "no-bootstrap")]
+    pub no_bootstrap: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ConfigsetupCommand {
     Opencode(ConfigsetupLifecycleArgs),
@@ -415,6 +437,7 @@ impl Command {
             Self::Getkey => "getkey",
             Self::Newkey(_) => "newkey",
             Self::Configsetup(_) => "configsetup",
+            Self::Configremote(_) => "configremote",
             Self::Deploy(_) => "deploy",
             Self::Accounts(_) => "accounts",
             Self::Dashboard(_) => "dashboard",

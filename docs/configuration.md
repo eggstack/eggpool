@@ -50,3 +50,10 @@ remain available.
 
 See [Semantic Model Routing](model-routing.md) for examples and operator
 guidance.
+
+## Advertised integration endpoint
+
+Remote `configremote` profiles use `[integrations].advertise_base_url`, not
+`[server].host`. See [Agent Configuration](agent-configuration.md#remote-setup-configremote)
+for the bind-vs-advertised contract, validation (`http(s)://.../v1`, no
+credentials/fragment/query), live-reload behavior, and LAN-fallback rules.
