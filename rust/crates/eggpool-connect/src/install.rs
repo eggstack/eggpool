@@ -15,7 +15,7 @@ use crate::backup::{
     BackupInput, BackupManifest, BackupRecord, create_backup, fingerprint_profile, list_backups,
     load_backup, read_snapshot,
 };
-use crate::detect::{Detection, classify_opencode_variant, variant_supports_auto_mutation};
+use crate::detect::{Detection, variant_supports_auto_mutation};
 use crate::fetch::ProfileFetcher;
 use crate::outcome::{ConnectError, redact};
 use crate::paths::helper_codex_catalog_path_for;
@@ -144,26 +144,50 @@ pub fn build_mutation(
             })
         }
         ClientTarget::Opencode => {
-            // Fail closed on JSONC until the preserving editor lands.
-            if eggpool_client_config::text::has_jsonc_comments(&existing_text) {
-                return Err(ConnectError::UnsafeConfig {
-                    detail: "existing OpenCode config uses JSONC comments; automatic mutation would discard comments. Use `plan` output and edit manually until the preserving editor is available".to_owned(),
-                });
-            }
-            if detection.schema_variant == eggpool_client_config::ClientSchemaVariant::OpencodeV2
-                || classify_opencode_variant(&existing_text)
-                    == eggpool_client_config::ClientSchemaVariant::OpencodeV2
-            {
-                return Err(ConnectError::UnsupportedClient {
-                    detail: "OpenCode V2 schema detected; automatic mutation is deferred until the qualified V2 adapter lands. Use `plan` output and edit manually".to_owned(),
-                });
-            }
-            let expected =
-                eggpool_client_config::expected_opencode_provider(&remote.base_url, &remote.models)
-                    .map_err(|error| ConnectError::InvalidProfile {
-                        detail: format!("cannot render OpenCode provider: {error}"),
+            // Shape-first variant selection (V1 `provider` vs V2
+            // `providers`); ambiguous or unparseable documents fail closed
+            // with a bounded location. JSONC comments and trailing commas
+            // are preserved by the portable editor.
+            let variant = eggpool_client_config::select_opencode_variant(
+                &existing_text,
+                detection.version_raw.as_deref(),
+            )
+            .map_err(|error| match error {
+                eggpool_client_config::ClientConfigError::UnsupportedSchema { detail } => {
+                    ConnectError::UnsupportedClient {
+                        detail: format!(
+                            "{detail} Update eggpool-connect to the latest release, or run `eggpool-connect plan` and apply the manual output."
+                        ),
+                    }
+                }
+                eggpool_client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                    ConnectError::UnsafeConfig { detail }
+                }
+                other => ConnectError::InvalidProfile {
+                    detail: other.to_string(),
+                },
+            })?;
+            let expected = eggpool_client_config::expected_opencode_provider_for(
+                variant,
+                &remote.base_url,
+                &remote.models,
+            )
+            .map_err(|error| ConnectError::InvalidProfile {
+                detail: format!("cannot render OpenCode provider: {error}"),
+            })?;
+            let mutation =
+                eggpool_client_config::apply_opencode_document(&existing_text, variant, &expected)
+                    .map_err(|error| match error {
+                        eggpool_client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                            ConnectError::UnsafeConfig { detail }
+                        }
+                        other => ConnectError::InvalidProfile {
+                            detail: other.to_string(),
+                        },
                     })?;
-            let proposed_text = merge_opencode_provider(&existing_text, &expected)?;
+            // Authoritative selection wins over the detection-time shape
+            // probe (the probe is heuristic; selection parses fully).
+            let proposed_text = mutation.text;
             let proposed_config = proposed_text.into_bytes();
             let no_op = existing_config.as_ref() == Some(&proposed_config);
             let mut diff_summary = Vec::new();
@@ -199,39 +223,6 @@ pub fn build_mutation(
             })
         }
     }
-}
-
-/// Merge only `provider.eggpool`, preserving all other JSON keys.
-fn merge_opencode_provider(
-    existing_text: &str,
-    expected: &serde_json::Value,
-) -> Result<String, ConnectError> {
-    let mut root = if existing_text.trim().is_empty() {
-        serde_json::Map::new()
-    } else {
-        let value: serde_json::Value =
-            serde_json::from_str(existing_text).map_err(|error| ConnectError::UnsafeConfig {
-                detail: format!("existing OpenCode config is not valid JSON: {error}"),
-            })?;
-        value.as_object().cloned().unwrap_or_default()
-    };
-    let provider = root
-        .entry("provider".to_owned())
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-    let object = provider
-        .as_object_mut()
-        .ok_or_else(|| ConnectError::UnsafeConfig {
-            detail: "existing OpenCode config has a non-object provider key".to_owned(),
-        })?;
-    object.insert("eggpool".to_owned(), expected.clone());
-    let mut rendered =
-        serde_json::to_string_pretty(&serde_json::Value::Object(root)).map_err(|_| {
-            ConnectError::InvalidProfile {
-                detail: "cannot render OpenCode config".to_owned(),
-            }
-        })?;
-    rendered.push('\n');
-    Ok(rendered)
 }
 
 /// Check owned-field drift. Revision-only model/catalog refreshes with the
@@ -330,31 +321,27 @@ fn is_opencode_revision_only_update(
     planned: &PlannedMutation,
     remote: &AgentIntegrationProfileV1,
 ) -> bool {
-    let current: serde_json::Value = match serde_json::from_str(existing) {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    let current_provider = current
-        .get("provider")
-        .and_then(|provider| provider.get("eggpool"));
-    let Some(current_provider) = current_provider else {
-        return false;
-    };
-    let expected =
-        match eggpool_client_config::expected_opencode_provider(&remote.base_url, &remote.models) {
-            Ok(value) => value,
-            Err(_) => return false,
-        };
     let _ = planned;
-    let (Some(expected_object), Some(current_object)) =
-        (expected.as_object(), current_provider.as_object())
-    else {
+    // JSONC-aware: comments and trailing commas never count as drift.
+    let Ok(variant) = eggpool_client_config::select_opencode_variant(existing, None) else {
         return false;
     };
-    // Same runtime/auth/baseURL: only models/limits changed.
-    expected_object.get("npm") == current_object.get("npm")
-        && expected_object.get("options") == current_object.get("options")
-        && expected_object.get("name") == current_object.get("name")
+    let Ok(document) = eggpool_client_config::jsonc::parse_value(existing) else {
+        return false;
+    };
+    let Some(current) = eggpool_client_config::current_owned_entry(&document, variant) else {
+        return false;
+    };
+    let Ok(expected) = eggpool_client_config::expected_opencode_provider_for(
+        variant,
+        &remote.base_url,
+        &remote.models,
+    ) else {
+        return false;
+    };
+    // Same runtime/auth/endpoint identity: only models/limits changed.
+    current == &expected
+        || eggpool_client_config::owned_entry_allows_sync(current, &expected, variant)
 }
 
 /// Capture previous EggPool-owned values for ownership-aware `remove`.
@@ -376,22 +363,21 @@ pub fn capture_previous(target: ClientTarget, existing_text: &str) -> BTreeMap<S
             {
                 previous.insert("model_catalog_json".to_owned(), value);
             }
-            if let Some((start, end)) =
-                eggpool_client_config::text::find_table(&lines, "model_providers.eggpool")
-            {
-                previous.insert(
-                    "model_providers.eggpool".to_owned(),
-                    lines[start..end].join("\n"),
-                );
+            // Head only: trailing footer comments/blanks survive mutations
+            // independently and are not restoration evidence.
+            if let Some(head) = eggpool_client_config::current_provider_table_head(existing_text) {
+                previous.insert("model_providers.eggpool".to_owned(), head);
             }
         }
         ClientTarget::Opencode => {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(existing_text)
-                && let Some(provider) = value
-                    .get("provider")
-                    .and_then(|provider| provider.get("eggpool"))
+            // Exact raw capture (comments included) for byte-for-byte
+            // restoration on remove. Variant defaults to V1 without version
+            // evidence; callers that know the version select first.
+            if let Ok(variant) = eggpool_client_config::select_opencode_variant(existing_text, None)
+                && let Ok(Some((path, raw))) =
+                    eggpool_client_config::capture_owned_raw(existing_text, variant)
             {
-                previous.insert("provider.eggpool".to_owned(), provider.to_string());
+                previous.insert(path, raw);
             }
         }
     }
@@ -857,9 +843,9 @@ pub fn restore_backup(
                 .map_err(|error| ConnectError::Validation {
                     detail: format!("restored Codex config does not parse: {error}"),
                 })?;
-        } else if !text.trim().is_empty() && !eggpool_client_config::text::has_jsonc_comments(&text)
-        {
-            serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
+        } else if !text.trim().is_empty() {
+            // JSONC-aware: comments and trailing commas are valid.
+            eggpool_client_config::jsonc::parse_value(&text).map_err(|error| {
                 ConnectError::Validation {
                     detail: format!("restored OpenCode config does not parse: {error}"),
                 }
@@ -923,63 +909,73 @@ pub fn remove_owned(
             eggpool_client_config::remove_codex_owned_text(&existing_text, &previous, false)
         }
         ClientTarget::Opencode => {
-            if eggpool_client_config::text::has_jsonc_comments(&existing_text) {
-                return Err(ConnectError::UnsafeConfig {
-                    detail:
-                        "existing OpenCode config uses JSONC comments; refusing automatic remove"
-                            .to_owned(),
-                });
-            }
-            let value: serde_json::Value =
-                serde_json::from_str(&existing_text).map_err(|_| ConnectError::UnsafeConfig {
-                    detail: "existing OpenCode config is not valid JSON".to_owned(),
-                })?;
-            let current_provider = value
-                .get("provider")
-                .and_then(|provider| provider.get("eggpool"))
-                .cloned();
-            if current_provider.is_none() {
-                return Err(ConnectError::Drift {
-                    detail: "no EggPool provider entry to remove".to_owned(),
-                });
-            }
-            // If a previous provider value was captured, restore it exactly;
-            // otherwise remove only our entry.
-            let mut root = value.as_object().cloned().unwrap_or_default();
-            if let Some(previous_json) = previous_map.get("provider.eggpool")
-                && let Ok(previous_value) = serde_json::from_str::<serde_json::Value>(previous_json)
-            {
-                if !force && current_provider.as_ref() != Some(&previous_value) {
-                    // Current differs from both previous and... we cannot
-                    // distinguish our install from drift without more history,
-                    // so require --force when the entry looks hand-edited.
-                    // A simple heuristic: if the entry still has our npm
-                    // runtime and env interpolation, treat as ours.
-                    if !looks_like_eggpool_provider(current_provider.as_ref()) {
+            // Variant-aware, JSONC-preserving removal. A captured previous
+            // entry is restored byte-for-byte; otherwise only the owned
+            // entry goes (with safe empty-parent cleanup).
+            let variant = eggpool_client_config::select_opencode_variant(
+                &existing_text,
+                detection.version_raw.as_deref(),
+            )
+            .map_err(|error| match error {
+                eggpool_client_config::ClientConfigError::UnsupportedSchema { detail } => {
+                    ConnectError::UnsupportedClient { detail }
+                }
+                eggpool_client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                    ConnectError::UnsafeConfig { detail }
+                }
+                other => ConnectError::InvalidProfile {
+                    detail: other.to_string(),
+                },
+            })?;
+            let owned_path = eggpool_client_config::owned_path_for(variant).to_owned();
+            let previous_raw = previous_map.get(&owned_path).map(String::as_str);
+            if !force {
+                let document =
+                    eggpool_client_config::jsonc::parse_value(&existing_text).map_err(|_| {
+                        ConnectError::UnsafeConfig {
+                            detail: "existing OpenCode config is not valid JSONC".to_owned(),
+                        }
+                    })?;
+                let current =
+                    eggpool_client_config::current_owned_entry(&document, variant).cloned();
+                match (current, previous_raw) {
+                    (None, _) => {
                         return Err(ConnectError::Drift {
-                            detail: "EggPool-owned OpenCode entry changed externally; refusing automatic remove. Use `restore` or --force".to_owned(),
+                            detail: "no EggPool provider entry to remove".to_owned(),
                         });
                     }
-                }
-                if let Some(provider) = root.get_mut("provider").and_then(|v| v.as_object_mut()) {
-                    provider.insert("eggpool".to_owned(), previous_value);
-                }
-            } else {
-                if !force && !looks_like_eggpool_provider(current_provider.as_ref()) {
-                    return Err(ConnectError::Drift {
-                        detail: "EggPool-owned OpenCode entry changed externally; refusing automatic remove. Use `restore` or --force".to_owned(),
-                    });
-                }
-                if let Some(provider) = root.get_mut("provider").and_then(|v| v.as_object_mut()) {
-                    provider.remove("eggpool");
+                    (Some(entry), Some(previous)) => {
+                        let previous_value =
+                            eggpool_client_config::jsonc::parse_value(previous).ok();
+                        if Some(&entry) != previous_value.as_ref()
+                            && !eggpool_client_config::looks_like_eggpool_entry(&entry, variant)
+                        {
+                            return Err(ConnectError::Drift {
+                                detail: "EggPool-owned OpenCode entry changed externally; refusing automatic remove. Use `restore` or --force".to_owned(),
+                            });
+                        }
+                    }
+                    (Some(entry), None) => {
+                        if !eggpool_client_config::looks_like_eggpool_entry(&entry, variant) {
+                            return Err(ConnectError::Drift {
+                                detail: "EggPool-owned OpenCode entry changed externally; refusing automatic remove. Use `restore` or --force".to_owned(),
+                            });
+                        }
+                    }
                 }
             }
-            let mut rendered = serde_json::to_string_pretty(&serde_json::Value::Object(root))
-                .map_err(|_| ConnectError::Mutation {
-                    detail: "cannot render OpenCode config".to_owned(),
-                })?;
-            rendered.push('\n');
-            rendered
+            eggpool_client_config::remove_opencode_document(&existing_text, variant, previous_raw)
+                .map_err(|error| match error {
+                eggpool_client_config::ClientConfigError::Drift { detail } => {
+                    ConnectError::Drift { detail }
+                }
+                eggpool_client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                    ConnectError::UnsafeConfig { detail }
+                }
+                other => ConnectError::Mutation {
+                    detail: other.to_string(),
+                },
+            })?
         }
     };
 
@@ -1034,18 +1030,6 @@ fn owned_codex_drifted(existing: &str, previous: &eggpool_client_config::CodexPr
         return false;
     }
     true
-}
-
-fn looks_like_eggpool_provider(provider: Option<&serde_json::Value>) -> bool {
-    let Some(provider) = provider else {
-        return false;
-    };
-    let npm_matches = provider
-        .get("npm")
-        .and_then(|value| value.as_str())
-        .is_some_and(|npm| npm.contains("openai"));
-    let env_matches = provider.to_string().contains("EGGPOOL_API_KEY");
-    npm_matches && env_matches
 }
 
 #[cfg(test)]
@@ -1109,11 +1093,68 @@ mod tests {
     }
 
     #[test]
-    fn opencode_jsonc_fails_closed() {
+    fn opencode_jsonc_is_preserved_through_mutation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = dir.path().join("state");
         let config = dir.path().join("opencode.json");
-        std::fs::write(&config, "{\n// comment\n\"provider\": {}\n}\n").expect("write");
+        std::fs::write(
+            &config,
+            "{\n// user comment\n\"provider\": {\n\"other\": {},\n},\n}\n",
+        )
+        .expect("write");
+        let detection = Detection {
+            target: ClientTarget::Opencode,
+            executable: None,
+            version: None,
+            version_raw: Some("1.18.30".to_owned()),
+            config_path: config,
+            schema_variant: ClientSchemaVariant::OpencodeV1,
+            config_exists: true,
+            parseable: true,
+            parse_issue: None,
+            native_verification_available: false,
+        };
+        let remote = remote("https://pool.example/v1");
+        let planned = build_mutation(&remote, &detection, &state).expect("plan");
+        let text = String::from_utf8(planned.proposed_config).expect("utf8");
+        assert!(text.contains("// user comment"));
+        assert!(text.contains("\"other\""));
+        assert!(text.contains("\"eggpool\""));
+        assert!(!planned.no_op);
+    }
+
+    #[test]
+    fn opencode_v2_shape_selects_v2_provider() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = dir.path().join("state");
+        let config = dir.path().join("opencode.jsonc");
+        std::fs::write(&config, "{\n\"providers\": {\n\"other\": {}\n}\n}\n").expect("write");
+        let detection = Detection {
+            target: ClientTarget::Opencode,
+            executable: None,
+            version: None,
+            version_raw: None,
+            config_path: config,
+            schema_variant: ClientSchemaVariant::OpencodeV2,
+            config_exists: true,
+            parseable: true,
+            parse_issue: None,
+            native_verification_available: false,
+        };
+        let remote = remote("https://pool.example/v1");
+        let planned = build_mutation(&remote, &detection, &state).expect("plan");
+        let text = String::from_utf8(planned.proposed_config).expect("utf8");
+        assert!(text.contains("\"providers\""));
+        assert!(text.contains(eggpool_client_config::OPENCODE_V2_RESPONSES_PACKAGE));
+        assert!(!text.contains("\"provider\":"));
+    }
+
+    #[test]
+    fn opencode_malformed_jsonc_fails_closed_with_location() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = dir.path().join("state");
+        let config = dir.path().join("opencode.json");
+        std::fs::write(&config, "{\"provider\": }").expect("write");
         let detection = Detection {
             target: ClientTarget::Opencode,
             executable: None,
@@ -1123,11 +1164,12 @@ mod tests {
             schema_variant: ClientSchemaVariant::OpencodeV1,
             config_exists: true,
             parseable: false,
-            parse_issue: Some("jsonc".to_owned()),
+            parse_issue: Some("invalid".to_owned()),
             native_verification_available: false,
         };
         let remote = remote("https://pool.example/v1");
-        assert!(build_mutation(&remote, &detection, &state).is_err());
+        let error = build_mutation(&remote, &detection, &state).expect_err("must fail");
+        assert!(error.to_string().contains("line"));
     }
 
     #[test]

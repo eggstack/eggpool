@@ -61,9 +61,13 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   actual server default port, and the `EGGPOOL_API_KEY` environment contract.
   The generated TOML references `EGGPOOL_API_KEY` and never embeds the
   resolved key; `--print-secret` does not change that Codex behavior. For
-  OpenCode, document the Responses-capable `@ai-sdk/openai` runtime with
+  OpenCode V1, document the Responses-capable `@ai-sdk/openai` runtime with
   `{env:EGGPOOL_API_KEY}` interpolation and per-model limits from the same
-  projection. `/v1/models` remains the standard OpenAI schema.
+  projection; for V2, document
+  `@opencode/ai/providers/openai-compatible/responses` with
+  `env: ["EGGPOOL_API_KEY"]`, shape-first variant selection, JSONC
+  preservation, and previous-entry restoration on remove.
+  `/v1/models` remains the standard OpenAI schema.
 - For remote setup docs, distinguish the listen socket (`[server].host`/`port`)
   from the advertised client URL (`[integrations].advertise_base_url`, `.../v1`,
   live-reloadable). Document `eggpool configremote codex|opencode` token/JSON

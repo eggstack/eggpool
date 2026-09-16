@@ -24,8 +24,8 @@ pub enum ExitCode {
     AuthNetwork = 3,
     /// Unsupported client, version, or schema variant.
     UnsupportedClient = 4,
-    /// Unsafe existing config (symlink/special file, unparseable, drift
-    /// without `--force`, JSONC requiring a preserving mutator).
+    /// Unsafe existing config (symlink/special file, unparseable JSONC,
+    /// ambiguous schema, drift without `--force`).
     UnsafeConfig = 5,
     /// Byte-exact backup could not be committed.
     BackupFailure = 6,

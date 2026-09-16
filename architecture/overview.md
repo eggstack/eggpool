@@ -301,16 +301,20 @@ probes, no secret/raw-error output), `metrics.rs` (bounded scalar-only coalescer
 `eggpool-client-config` crate for `eggpool configsetup` and read-only
 `eggpool configremote`; Codex emits
 HTTP/SSE Responses TOML with `env_key = "EGGPOOL_API_KEY"`, printable by
-default, no embedded secret; OpenCode uses `{env:EGGPOOL_API_KEY}` with the
-Responses-capable `@ai-sdk/openai` runtime; Codex/OpenCode share one
+default, no embedded secret; OpenCode V1 uses `{env:EGGPOOL_API_KEY}` with the
+Responses-capable `@ai-sdk/openai` runtime while V2 uses
+`env: ["EGGPOOL_API_KEY"]` with
+`@opencode/ai/providers/openai-compatible/responses`; Codex/OpenCode share one
 conservative provider-neutral projection plus managed
 `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle with ownership
-manifests and drift refusal; `configremote` exports secret-free `epc1` tokens
+manifests, previous-entry captures, and owned-field (not whole-file) drift
+refusal; `configremote` exports secret-free `epc1` tokens
 and `eggpool.configremote/v1` JSON from the advertised `[integrations].advertise_base_url`
 without key creation or config mutation; the authenticated
 `GET /api/integrations/v1/profile` serves the same projection with
 deterministic revision/ETag; `Config`/catalog/DB/key/endpoint/CLI/file IO
-stays here, portable projection/profiles/tokens/renderers stay in the crate;
+stays here, portable projection/profiles/tokens/V1/V2 renderers/JSONC
+mutation stay in the crate;
 `rust/crates/eggpool-connect/` is the transactional desktop counterpart with
 an explicit state machine, byte-exact backups, atomic writes, and automatic
 rollback).
@@ -363,8 +367,11 @@ Deep dives: [Observability](deep-dive-observability.md),
 - Codex contract: `[model_providers.eggpool]` Responses shape with
   `wire_api = "responses"`, `supports_websockets = false`, generated
   `model_catalog_json` picker discovery, optional explicit model/alias,
-  server `base_url`, and `EGGPOOL_API_KEY` env contract; OpenCode uses the
-  Responses-capable `@ai-sdk/openai` runtime with `{env:EGGPOOL_API_KEY}`;
+  server `base_url`, and `EGGPOOL_API_KEY` env contract (pre-existing
+  tables restored exactly on remove); OpenCode V1 uses the
+  Responses-capable `@ai-sdk/openai` runtime with `{env:EGGPOOL_API_KEY}`
+  and V2 uses `@opencode/ai/providers/openai-compatible/responses` with
+  `env: ["EGGPOOL_API_KEY"]`, both with JSONC-preserving mutation;
   see [Integrations](deep-dive-integrations.md).
 
 ### 14. Native dependencies and feature gates

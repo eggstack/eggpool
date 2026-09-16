@@ -47,18 +47,39 @@ pub fn validate_local(
                 .map_err(|error| ConnectError::Validation {
                     detail: format!("installed Codex config does not parse: {error}"),
                 })?;
-            // Owned fields must resolve to the remote base URL.
+            // Owned fields must resolve to the remote base URL with the
+            // Responses contract: intended wire API, no WebSocket
+            // advertisement, and the environment-key reference.
             let lines: Vec<String> = config_text.lines().map(str::to_owned).collect();
-            let base = eggpool_client_config::text::table_value(
-                &lines,
-                "model_providers.eggpool",
-                "base_url",
-            );
+            let table = "model_providers.eggpool";
+            let base = eggpool_client_config::text::table_value(&lines, table, "base_url");
             if base.as_deref() != Some(remote.base_url.trim_end_matches('/'))
                 && base.as_deref() != Some(remote.base_url.as_str())
             {
                 return Err(ConnectError::Validation {
                     detail: "installed Codex provider base_url differs".to_owned(),
+                });
+            }
+            if eggpool_client_config::text::table_value(&lines, table, "wire_api").as_deref()
+                != Some("responses")
+            {
+                return Err(ConnectError::Validation {
+                    detail: "installed Codex provider wire_api is not responses".to_owned(),
+                });
+            }
+            if eggpool_client_config::text::table_value(&lines, table, "supports_websockets")
+                .as_deref()
+                != Some("false")
+            {
+                return Err(ConnectError::Validation {
+                    detail: "installed Codex provider must not advertise websockets".to_owned(),
+                });
+            }
+            if eggpool_client_config::text::table_value(&lines, table, "env_key").as_deref()
+                != Some("EGGPOOL_API_KEY")
+            {
+                return Err(ConnectError::Validation {
+                    detail: "installed Codex provider env_key differs".to_owned(),
                 });
             }
             if let Some(catalog) = catalog_json {
@@ -80,23 +101,26 @@ pub fn validate_local(
                     detail: "installed OpenCode config embeds the EggPool key".to_owned(),
                 });
             }
-            if eggpool_client_config::text::has_jsonc_comments(config_text) {
-                return Err(ConnectError::Validation {
-                    detail: "installed OpenCode config uses JSONC comments".to_owned(),
-                });
-            }
-            let value: serde_json::Value =
-                serde_json::from_str(config_text).map_err(|error| ConnectError::Validation {
-                    detail: format!("installed OpenCode config does not parse: {error}"),
+            // JSONC (comments, trailing commas) is valid OpenCode config and
+            // is preserved by the editor; only truly invalid documents fail.
+            let variant = eggpool_client_config::select_opencode_variant(config_text, None)
+                .map_err(|error| ConnectError::Validation {
+                    detail: format!("installed OpenCode config variant: {error}"),
                 })?;
-            let expected =
-                eggpool_client_config::expected_opencode_provider(&remote.base_url, &remote.models)
-                    .map_err(|error| ConnectError::Validation {
-                        detail: format!("cannot render expected OpenCode provider: {error}"),
-                    })?;
-            let current = value
-                .get("provider")
-                .and_then(|provider| provider.get("eggpool"));
+            let value = eggpool_client_config::jsonc::parse_value(config_text).map_err(|_| {
+                ConnectError::Validation {
+                    detail: "installed OpenCode config does not parse".to_owned(),
+                }
+            })?;
+            let expected = eggpool_client_config::expected_opencode_provider_for(
+                variant,
+                &remote.base_url,
+                &remote.models,
+            )
+            .map_err(|error| ConnectError::Validation {
+                detail: format!("cannot render expected OpenCode provider: {error}"),
+            })?;
+            let current = eggpool_client_config::current_owned_entry(&value, variant);
             if current != Some(&expected) {
                 return Err(ConnectError::Validation {
                     detail: "installed OpenCode eggpool provider differs".to_owned(),

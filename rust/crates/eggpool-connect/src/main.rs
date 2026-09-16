@@ -416,17 +416,23 @@ async fn verify(
                     == Some("EGGPOOL_API_KEY")
         }
         ClientTarget::Opencode => {
-            !text.trim().is_empty()
-                && !eggpool_client_config::text::has_jsonc_comments(&text)
-                && serde_json::from_str::<serde_json::Value>(&text)
+            // JSONC-aware shape check for either variant: the owned entry
+            // must exist with the Responses contract. No remote profile is
+            // needed for this local probe.
+            if text.trim().is_empty() {
+                false
+            } else {
+                eggpool_client_config::select_opencode_variant(&text, None)
                     .ok()
-                    .and_then(|value| {
-                        value
-                            .get("provider")
-                            .and_then(|provider| provider.get("eggpool"))
-                            .cloned()
+                    .and_then(|variant| {
+                        eggpool_client_config::jsonc::parse_value(&text)
+                            .ok()
+                            .and_then(|value| {
+                                eggpool_client_config::current_owned_entry(&value, variant).cloned()
+                            })
                     })
                     .is_some()
+            }
         }
     };
     let native = if detection.native_verification_available {

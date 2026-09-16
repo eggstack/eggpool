@@ -1100,23 +1100,46 @@ pub fn codex_config_path() -> PathBuf {
 
 /// Resolve the OpenCode client config path.
 ///
-/// Uses `OPENCODE_CONFIG` when set, otherwise the global
-/// `~/.config/opencode/opencode.json` location.
+/// Uses `OPENCODE_CONFIG` when set, otherwise platform conventions: Windows
+/// uses `%APPDATA%` (never Unix-only `$HOME/.config` assumptions); other
+/// systems honor `XDG_CONFIG_HOME` with a `~/.config` fallback. Mirrors the
+/// receiving-machine resolver in `eggpool-connect` (`paths.rs`).
 pub fn opencode_config_path() -> PathBuf {
-    if let Some(custom) = env::var_os("OPENCODE_CONFIG")
-        && !custom.is_empty()
+    let custom = env::var_os("OPENCODE_CONFIG").map(PathBuf::from);
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let xdg = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+    let appdata = env::var_os("APPDATA").map(PathBuf::from);
+    resolve_opencode_config_path(cfg!(windows), custom, home, xdg, appdata)
+}
+
+/// Pure OpenCode path resolver for deterministic cross-platform tests.
+fn resolve_opencode_config_path(
+    is_windows: bool,
+    custom: Option<PathBuf>,
+    home: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    appdata: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(custom) = custom
+        && !custom.as_os_str().is_empty()
     {
-        return PathBuf::from(custom);
+        return custom;
     }
-    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME")
-        && !xdg.is_empty()
+    if is_windows {
+        if let Some(dir) = appdata
+            && !dir.as_os_str().is_empty()
+        {
+            return dir.join("opencode").join("opencode.json");
+        }
+    } else if let Some(dir) = xdg
+        && !dir.as_os_str().is_empty()
     {
-        return PathBuf::from(xdg).join("opencode").join("opencode.json");
+        return dir.join("opencode").join("opencode.json");
     }
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".config").join("opencode").join("opencode.json")
+    home.unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("opencode")
+        .join("opencode.json")
 }
 
 fn load_manifest(path: &Path) -> Option<OwnershipManifest> {
@@ -1155,6 +1178,50 @@ fn codex_expected_snippet(
     catalog_path: &Path,
 ) -> Result<String, IntegrationError> {
     build_codex_toml_snippet_with_catalog(context, model, Some(&catalog_path.to_string_lossy()))
+}
+
+/// Semantic owned-field drift decision for Codex.
+///
+/// Returns true when a config that changed since EggPool's last write is
+/// still safe to converge: either the owned fields match the last-written
+/// snapshot (only unrelated settings changed) or they already match the
+/// desired state (idempotent re-run). Anything else is owned drift.
+fn codex_semantic_current(
+    existing_text: &str,
+    manifest: &OwnershipManifest,
+    desired_base_url: &str,
+    catalog_path: &Path,
+    options_model: Option<&str>,
+) -> bool {
+    let catalog_str = catalog_path.to_string_lossy();
+    let owns_model = manifest.owned_fields.contains(&"model".to_owned());
+    // Last-written snapshot. Legacy manifests predate `applied_model`, so the
+    // model check is skipped for them (provider fields still decide).
+    let last_model = if owns_model {
+        match &manifest.applied_model {
+            Some(applied) => client_config::CodexModelExpectation::Managed(Some(applied)),
+            None => client_config::CodexModelExpectation::ManagedUnknown,
+        }
+    } else {
+        client_config::CodexModelExpectation::UserOwned
+    };
+    if client_config::codex_owned_matches(
+        existing_text,
+        &manifest.base_url,
+        &catalog_str,
+        last_model,
+    ) {
+        return true;
+    }
+    // Already converged to the desired state. The mutator only touches root
+    // `model` when this run explicitly manages one, so unmanaged runs skip
+    // the model check (preservation is safe).
+    let desired_model = if options_model.is_some() {
+        client_config::CodexModelExpectation::Managed(options_model)
+    } else {
+        client_config::CodexModelExpectation::UserOwned
+    };
+    client_config::codex_owned_matches(existing_text, desired_base_url, &catalog_str, desired_model)
 }
 
 fn check_codex_state(
@@ -1210,7 +1277,9 @@ pub fn codex_lifecycle(
     let mut report = LifecycleReport::new("codex", options.action, options.dry_run);
 
     // Drift detection: if EggPool previously wrote this config and the file
-    // changed unexpectedly since, refuse to clobber user edits.
+    // changed since, compare EggPool-owned fields semantically. Edits to
+    // unrelated settings are safe to preserve; only owned-field drift (or an
+    // unreadable state) refuses without --force.
     if matches!(
         options.action,
         LifecycleAction::Apply | LifecycleAction::Sync | LifecycleAction::Remove
@@ -1219,10 +1288,19 @@ pub fn codex_lifecycle(
         && manifest.client_config_path == config_path
     {
         let current_hash = sha256_hex(existing_text.as_bytes());
-        if current_hash != manifest.post_edit_hash && !options.force {
+        if current_hash != manifest.post_edit_hash
+            && !options.force
+            && !codex_semantic_current(
+                &existing_text,
+                manifest,
+                &context.base_url,
+                &catalog_path,
+                options.model.as_deref(),
+            )
+        {
             return Err(IntegrationError::Drift {
                 detail: format!(
-                    "Codex config {} changed since EggPool's last write; refusing to overwrite without --force",
+                    "EggPool-owned Codex fields in {} changed since EggPool's last write; refusing to overwrite without --force",
                     config_path.display()
                 ),
             });
@@ -1337,6 +1415,14 @@ pub fn codex_lifecycle(
                 if let Some(value) = previous.model {
                     previous_values.insert("model".to_owned(), Value::String(value));
                 }
+                // A pre-existing provider table is restored exactly on
+                // remove rather than blindly deleted.
+                if let Some(table) = previous.provider_table {
+                    previous_values.insert(
+                        "model_providers.eggpool".to_owned(),
+                        Value::String(table.join("\n")),
+                    );
+                }
             }
             let manifest = OwnershipManifest {
                 schema_version: INTEGRATION_SCHEMA_VERSION,
@@ -1350,6 +1436,11 @@ pub fn codex_lifecycle(
                 post_edit_hash: sha256_hex(proposed.as_bytes()),
                 owned_fields,
                 previous_values,
+                applied_model: options.model.clone().or_else(|| {
+                    manifest
+                        .as_ref()
+                        .and_then(|manifest| manifest.applied_model.clone())
+                }),
                 generated_catalog_path: Some(catalog_path.clone()),
                 generated_catalog_hash: Some(sha256_hex(catalog_json.as_bytes())),
                 base_url: context.base_url.clone(),
@@ -1413,7 +1504,11 @@ pub fn codex_lifecycle(
                     .get("model")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                provider_table: None,
+                provider_table: manifest
+                    .previous_values
+                    .get("model_providers.eggpool")
+                    .and_then(Value::as_str)
+                    .map(|table| table.lines().map(str::to_owned).collect()),
             };
             let owned_model = manifest.owned_fields.contains(&"model".to_owned());
             let restored = remove_codex_owned_text(&existing_text, &previous, owned_model);
@@ -1449,25 +1544,54 @@ pub fn codex_lifecycle(
     }
 }
 
-fn opencode_expected_provider(context: &IntegrationContext) -> Result<Value, IntegrationError> {
+/// Expected owned OpenCode provider value for an explicit variant.
+fn opencode_expected_provider_for(
+    variant: client_config::ClientSchemaVariant,
+    context: &IntegrationContext,
+) -> Result<Value, IntegrationError> {
     let projections = project_context_models(context);
-    Ok(client_config::expected_opencode_provider(
+    Ok(client_config::expected_opencode_provider_for(
+        variant,
         &context.base_url,
         &projections,
     )?)
 }
 
-fn has_jsonc_comments(raw: &str) -> bool {
-    client_config::has_jsonc_comments(raw)
+/// Semantic owned-entry drift decision for OpenCode.
+///
+/// Returns true when a config that changed since EggPool's last write is
+/// still safe to converge: the owned entry is absent (fresh provider),
+/// already equals the desired value, or differs only by model revision
+/// (same runtime/auth/endpoint identity). Anything else is owned drift.
+fn opencode_semantic_current(
+    existing: &Value,
+    variant: client_config::ClientSchemaVariant,
+    expected: &Value,
+) -> bool {
+    match client_config::current_owned_entry(existing, variant) {
+        None => true,
+        Some(current) => {
+            current == expected
+                || client_config::owned_entry_allows_sync(current, expected, variant)
+        }
+    }
+}
+
+fn opencode_variant_label(variant: client_config::ClientSchemaVariant) -> &'static str {
+    match variant {
+        client_config::ClientSchemaVariant::OpencodeV2 => "providers.eggpool (V2)",
+        _ => "provider.eggpool (V1)",
+    }
 }
 
 /// Run the managed OpenCode lifecycle.
 ///
-/// OpenCode configs support JSONC (JSON with comments). A normal serde JSON
-/// round trip would destroy comments, so existing files with comments are
-/// never silently rewritten: `--apply` is limited to absent/new files in that
-/// case and existing-file users stay on generated output until a safe
-/// preserving mutator is available.
+/// OpenCode configs are JSONC (comments plus trailing commas). All mutations
+/// go through the portable trivia-preserving editor: comments, indentation,
+/// ordering, unrelated providers, and nested settings survive apply/sync and
+/// remove. Both schema variants are supported — V1 (`provider`) and V2
+/// (`providers`) — selected shape-first from the existing document (V1
+/// default for empty files, preserving historical behavior).
 pub fn opencode_lifecycle(
     context: &IntegrationContext,
     options: &LifecycleOptions,
@@ -1480,10 +1604,25 @@ pub fn opencode_lifecycle(
     let config_path = config_path_override.unwrap_or(&default_config);
     let manifest_path = opencode_manifest_path_for_state(state_dir);
 
-    let expected_provider = opencode_expected_provider(context)?;
     let mut report = LifecycleReport::new("opencode", options.action, options.dry_run);
     let existing_raw = fs::read_to_string(config_path).unwrap_or_default();
     let manifest = load_manifest(&manifest_path);
+
+    // Same-host lifecycle has no client-version probe, so variant selection
+    // is shape-first with the qualified V1 default (see
+    // `select_opencode_variant`). Ambiguous or unparseable documents fail
+    // closed with a bounded location before any mutation.
+    let select_variant = |existing: &str| {
+        client_config::select_opencode_variant(existing, None).map_err(|error| match error {
+            client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                IntegrationError::UnsafeRewrite {
+                    path: config_path.to_owned(),
+                    detail,
+                }
+            }
+            other => IntegrationError::ClientConfig(other),
+        })
+    };
 
     if matches!(
         options.action,
@@ -1494,18 +1633,28 @@ pub fn opencode_lifecycle(
     {
         let current_hash = sha256_hex(existing_raw.as_bytes());
         if current_hash != manifest.post_edit_hash && !options.force {
-            return Err(IntegrationError::Drift {
-                detail: format!(
-                    "OpenCode config {} changed since EggPool's last write; refusing to overwrite without --force",
-                    config_path.display()
-                ),
-            });
+            let variant = select_variant(&existing_raw)?;
+            let expected = opencode_expected_provider_for(variant, context)?;
+            let existing = client_config::jsonc::parse_value(&existing_raw).map_err(|error| {
+                IntegrationError::UnsafeRewrite {
+                    path: config_path.to_owned(),
+                    detail: error.detail(),
+                }
+            })?;
+            if !opencode_semantic_current(&existing, variant, &expected) {
+                return Err(IntegrationError::Drift {
+                    detail: format!(
+                        "EggPool-owned OpenCode entry in {} changed since EggPool's last write; refusing to overwrite without --force",
+                        config_path.display()
+                    ),
+                });
+            }
         }
     }
 
     match options.action {
         LifecycleAction::Check => {
-            if existing_raw.is_empty() {
+            if existing_raw.trim().is_empty() {
                 report.up_to_date = false;
                 report.messages.push(format!(
                     "OpenCode config {} is missing; apply would create it.",
@@ -1513,80 +1662,59 @@ pub fn opencode_lifecycle(
                 ));
                 return Ok(report);
             }
-            if has_jsonc_comments(&existing_raw) {
-                report.up_to_date = false;
-                report.messages.push(
-                    "OpenCode config uses JSONC comments; managed rewrite is deferred to generated output.".to_owned(),
-                );
-                return Ok(report);
-            }
-            let value: Value =
-                serde_json::from_str(&existing_raw).map_err(|_| IntegrationError::Drift {
-                    detail: "OpenCode config is not valid JSON".to_owned(),
-                })?;
-            let current = value
-                .get("provider")
-                .and_then(|provider| provider.get("eggpool"));
-            if current == Some(&expected_provider) {
+            let variant = select_variant(&existing_raw)?;
+            let expected = opencode_expected_provider_for(variant, context)?;
+            let existing = client_config::jsonc::parse_value(&existing_raw).map_err(|_| {
+                IntegrationError::Drift {
+                    detail: "OpenCode config is not valid JSONC".to_owned(),
+                }
+            })?;
+            let current = client_config::current_owned_entry(&existing, variant);
+            if current == Some(&expected) {
                 report.messages.push(format!(
-                    "OpenCode config {} is current.",
-                    config_path.display()
+                    "OpenCode config {} is current ({}).",
+                    config_path.display(),
+                    opencode_variant_label(variant)
                 ));
             } else {
                 report.up_to_date = false;
-                report
-                    .messages
-                    .push("OpenCode eggpool provider differs.".to_owned());
-                report.diff = Some(serde_json::to_string_pretty(&expected_provider)?);
+                report.messages.push(format!(
+                    "OpenCode {} entry differs.",
+                    opencode_variant_label(variant)
+                ));
+                report.diff = Some(serde_json::to_string_pretty(&expected)?);
             }
             Ok(report)
         }
         LifecycleAction::DryRun => {
-            report.diff = Some(serde_json::to_string_pretty(&expected_provider)?);
+            let variant = select_variant(&existing_raw)?;
+            let expected = opencode_expected_provider_for(variant, context)?;
+            let mutation =
+                client_config::apply_opencode_document(&existing_raw, variant, &expected)?;
+            report.diff = Some(mutation.text);
             report.messages.push(format!(
-                "Would converge OpenCode provider eggpool in {}.",
+                "Would converge OpenCode {} entry in {}.",
+                opencode_variant_label(variant),
                 config_path.display()
             ));
             Ok(report)
         }
         LifecycleAction::Apply | LifecycleAction::Sync => {
-            if !existing_raw.is_empty() && has_jsonc_comments(&existing_raw) {
-                return Err(IntegrationError::UnsafeRewrite {
-                    path: config_path.to_owned(),
-                    detail: "existing OpenCode config uses JSONC comments; refusing to rewrite (use --dry-run to review generated output)".to_owned(),
-                });
-            }
-            let mut root = if existing_raw.trim().is_empty() {
-                Map::new()
-            } else {
-                serde_json::from_str::<Value>(&existing_raw)
-                    .map_err(|_| IntegrationError::UnsafeRewrite {
-                        path: config_path.to_owned(),
-                        detail: "existing OpenCode config is not valid JSON; refusing to rewrite"
-                            .to_owned(),
-                    })?
-                    .as_object()
-                    .cloned()
-                    .ok_or_else(|| IntegrationError::UnsafeRewrite {
-                        path: config_path.to_owned(),
-                        detail: "existing OpenCode config root is not an object".to_owned(),
-                    })?
-            };
-            if !root.contains_key("$schema") {
-                root.insert(
-                    "$schema".to_owned(),
-                    Value::String("https://opencode.ai/config.json".to_owned()),
-                );
-            }
-            let mut provider = root
-                .get("provider")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            let changed = provider.get("eggpool") != Some(&expected_provider);
-            provider.insert("eggpool".to_owned(), expected_provider.clone());
-            root.insert("provider".to_owned(), Value::Object(provider));
-            let proposed = serde_json::to_string_pretty(&Value::Object(root))? + "\n";
+            let variant = select_variant(&existing_raw)?;
+            let expected = opencode_expected_provider_for(variant, context)?;
+            let mutation =
+                client_config::apply_opencode_document(&existing_raw, variant, &expected).map_err(
+                    |error| match error {
+                        client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                            IntegrationError::UnsafeRewrite {
+                                path: config_path.to_owned(),
+                                detail,
+                            }
+                        }
+                        other => IntegrationError::ClientConfig(other),
+                    },
+                )?;
+            let proposed = mutation.text;
             if options.dry_run {
                 report.diff = Some(proposed);
                 report
@@ -1605,6 +1733,18 @@ pub fn opencode_lifecycle(
                 fs::create_dir_all(parent).map_err(IntegrationError::Io)?;
             }
             atomic_write(config_path, proposed.as_bytes(), None)?;
+            let owned_path = client_config::owned_path_for(variant).to_owned();
+            // Only capture pre-EggPool values on first ownership; later
+            // syncs preserve the original restoration evidence.
+            let mut previous_values = manifest
+                .as_ref()
+                .map(|manifest| manifest.previous_values.clone())
+                .unwrap_or_default();
+            if manifest.is_none()
+                && let Some(raw) = mutation.previous_raw
+            {
+                previous_values.insert(owned_path.clone(), Value::String(raw));
+            }
             let manifest = OwnershipManifest {
                 schema_version: INTEGRATION_SCHEMA_VERSION,
                 eggpool_version: crate::version::PACKAGE_VERSION.to_owned(),
@@ -1615,14 +1755,15 @@ pub fn opencode_lifecycle(
                     .map(|manifest| manifest.pre_edit_hash.clone())
                     .unwrap_or_else(|| sha256_hex(existing_raw.as_bytes())),
                 post_edit_hash: sha256_hex(proposed.as_bytes()),
-                owned_fields: vec!["provider.eggpool".to_owned()],
-                previous_values: Map::new(),
+                owned_fields: vec![owned_path],
+                previous_values,
+                applied_model: None,
                 generated_catalog_path: None,
                 generated_catalog_hash: None,
                 base_url: context.base_url.clone(),
             };
             save_manifest(&manifest_path, &manifest)?;
-            report.changed = changed || existing_raw.is_empty();
+            report.changed = true;
             report.up_to_date = true;
             report.messages.push(format!(
                 "Updated OpenCode config {}.",
@@ -1646,7 +1787,7 @@ pub fn opencode_lifecycle(
                         .to_owned(),
                 });
             }
-            if existing_raw.is_empty() {
+            if existing_raw.trim().is_empty() {
                 if manifest_path.exists() {
                     fs::remove_file(&manifest_path).map_err(IntegrationError::Io)?;
                 }
@@ -1655,33 +1796,46 @@ pub fn opencode_lifecycle(
                     .push("OpenCode config already absent.".to_owned());
                 return Ok(report);
             }
-            if has_jsonc_comments(&existing_raw) {
-                return Err(IntegrationError::UnsafeRewrite {
-                    path: config_path.to_owned(),
-                    detail: "existing OpenCode config uses JSONC comments; refusing to remove"
-                        .to_owned(),
+            let variant = select_variant(&existing_raw)?;
+            let owned_path = client_config::owned_path_for(variant);
+            let previous_raw = manifest
+                .previous_values
+                .get(owned_path)
+                .and_then(Value::as_str);
+            // Without a capture, only remove an entry that still looks like
+            // ours (or a safe revision refresh of it); otherwise refuse.
+            if previous_raw.is_none() && !options.force {
+                let expected = opencode_expected_provider_for(variant, context)?;
+                let existing =
+                    client_config::jsonc::parse_value(&existing_raw).map_err(|error| {
+                        IntegrationError::UnsafeRewrite {
+                            path: config_path.to_owned(),
+                            detail: error.detail(),
+                        }
+                    })?;
+                let current = client_config::current_owned_entry(&existing, variant);
+                let ours = current.is_some_and(|entry| {
+                    client_config::looks_like_eggpool_entry(entry, variant)
+                        && (entry == &expected
+                            || client_config::owned_entry_allows_sync(entry, &expected, variant))
                 });
-            }
-            let value: Value = serde_json::from_str(&existing_raw).map_err(|_| {
-                IntegrationError::UnsafeRewrite {
-                    path: config_path.to_owned(),
-                    detail: "existing OpenCode config is not valid JSON".to_owned(),
+                if !ours {
+                    return Err(IntegrationError::Drift {
+                        detail: "EggPool-owned OpenCode entry changed externally; refusing automatic remove. Use `restore` or --force".to_owned(),
+                    });
                 }
-            })?;
-            let mut root = value.as_object().cloned().unwrap_or_default();
-            if let Some(provider) = root.get_mut("provider").and_then(Value::as_object_mut) {
-                provider.remove("eggpool");
             }
-            let proposed = if root
-                .get("provider")
-                .and_then(Value::as_object)
-                .is_some_and(Map::is_empty)
-            {
-                root.remove("provider");
-                serde_json::to_string_pretty(&Value::Object(root))? + "\n"
-            } else {
-                serde_json::to_string_pretty(&Value::Object(root))? + "\n"
-            };
+            let proposed =
+                client_config::remove_opencode_document(&existing_raw, variant, previous_raw)
+                    .map_err(|error| match error {
+                        client_config::ClientConfigError::UnsafeRewrite { detail } => {
+                            IntegrationError::UnsafeRewrite {
+                                path: config_path.to_owned(),
+                                detail,
+                            }
+                        }
+                        other => IntegrationError::ClientConfig(other),
+                    })?;
             if options.dry_run {
                 report.diff = Some(proposed);
                 return Ok(report);
@@ -2437,7 +2591,7 @@ mod tests {
         .expect("check");
         assert!(check.up_to_date);
 
-        // External user edit after apply must cause a safe refusal.
+        // Unrelated user edits after apply are preserved, not refused.
         let mut tampered = fs::read_to_string(&config_path).expect("config");
         tampered.push_str("\n[user_custom]\nvalue = 1\n");
         fs::write(&config_path, tampered).expect("tamper");
@@ -2447,6 +2601,19 @@ mod tests {
             force: false,
             model: None,
         };
+        codex_lifecycle(
+            &context,
+            &sync_options,
+            Some(&state_dir),
+            Some(&config_path),
+        )
+        .expect("unrelated edits converge");
+        let converged = fs::read_to_string(&config_path).expect("config");
+        assert!(converged.contains("[user_custom]"));
+
+        // Owned-field drift still refuses without --force.
+        let drifted = converged.replace("wire_api = \"responses\"", "wire_api = \"chat\"");
+        fs::write(&config_path, drifted).expect("drift");
         assert!(
             codex_lifecycle(
                 &context,
@@ -2484,7 +2651,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_lifecycle_creates_merges_and_refuses_jsonc_rewrite() {
+    fn opencode_lifecycle_creates_merges_and_preserves_jsonc() {
         let directory = tempfile::tempdir().expect("tempdir");
         let state_dir = directory.path().join("state");
         let config_path = directory.path().join("opencode.json");
@@ -2503,8 +2670,180 @@ mod tests {
         assert!(!raw.contains(&context.api_key));
         assert!(raw.contains("{env:EGGPOOL_API_KEY}"));
 
-        // Existing JSONC with comments must never be silently rewritten.
-        fs::write(&config_path, "{\n// user comment\n\"provider\": {}\n}\n").expect("jsonc");
+        // Existing non-EggPool content is preserved across merges.
+        let mut value: Value = serde_json::from_str(&raw).expect("json");
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("custom".to_owned(), json!({"kept": true}));
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write");
+        // Unrelated edits no longer refuse: sync converges owned state only.
+        let sync = LifecycleOptions {
+            action: LifecycleAction::Sync,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        opencode_lifecycle(&context, &sync, Some(&state_dir), Some(&config_path)).expect("sync");
+        let merged: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("json");
+        assert_eq!(
+            merged
+                .get("custom")
+                .and_then(|custom| custom.get("kept"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        // JSONC with comments is preserved, not refused: apply converges the
+        // owned entry and keeps every comment byte.
+        fs::write(
+            &config_path,
+            "{\n// operator comment\n\"provider\": {}\n}\n",
+        )
+        .expect("jsonc");
+        opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path))
+            .expect("jsonc apply");
+        let preserved = fs::read_to_string(&config_path).expect("config");
+        assert!(preserved.contains("// operator comment"));
+        assert!(preserved.contains("\"eggpool\""));
+        assert!(!preserved.contains(&context.api_key));
+        // A second apply is a clean no-op.
+        let again = opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path))
+            .expect("re-apply");
+        assert!(!again.changed);
+
+        let dry = LifecycleOptions {
+            action: LifecycleAction::DryRun,
+            dry_run: true,
+            force: false,
+            model: None,
+        };
+        let report = opencode_lifecycle(&context, &dry, Some(&state_dir), Some(&config_path))
+            .expect("dry-run");
+        assert!(report.diff.is_some());
+    }
+
+    #[test]
+    fn opencode_lifecycle_refuses_owned_drift_and_restores_previous() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let state_dir = directory.path().join("state");
+        let config_path = directory.path().join("opencode.json");
+        let context = context();
+
+        // Pre-existing provider entry is captured, not discarded.
+        fs::write(
+            &config_path,
+            "{\n\"provider\": {\n\"eggpool\": {\"npm\": \"@old/pkg\"}\n}\n}\n",
+        )
+        .expect("write");
+        let apply = LifecycleOptions {
+            action: LifecycleAction::Apply,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path)).expect("apply");
+        let manifest_path = opencode_manifest_path_for_state(&state_dir);
+        let manifest = load_manifest(&manifest_path).expect("manifest");
+        assert_eq!(
+            manifest
+                .previous_values
+                .get("provider.eggpool")
+                .and_then(Value::as_str),
+            Some("{\"npm\": \"@old/pkg\"}")
+        );
+
+        // Hand edits to the owned entry refuse without --force ...
+        let mut value: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("json");
+        value.as_object_mut().expect("object")["provider"]
+            .as_object_mut()
+            .expect("provider")["eggpool"]
+            .as_object_mut()
+            .expect("eggpool")
+            .insert("npm".to_owned(), json!("@evil/pkg"));
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&value).expect("json"),
+        )
+        .expect("write");
+        let sync = LifecycleOptions {
+            action: LifecycleAction::Sync,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        assert!(opencode_lifecycle(&context, &sync, Some(&state_dir), Some(&config_path)).is_err());
+        // ... converge deliberately with --force ...
+        let forced = LifecycleOptions {
+            action: LifecycleAction::Sync,
+            dry_run: false,
+            force: true,
+            model: None,
+        };
+        opencode_lifecycle(&context, &forced, Some(&state_dir), Some(&config_path))
+            .expect("forced");
+        // ... and remove restores the captured previous entry byte-for-byte.
+        let remove = LifecycleOptions {
+            action: LifecycleAction::Remove,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        opencode_lifecycle(&context, &remove, Some(&state_dir), Some(&config_path))
+            .expect("remove");
+        let restored: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("json");
+        assert_eq!(
+            restored
+                .get("provider")
+                .and_then(|provider| provider.get("eggpool"))
+                .and_then(|entry| entry.get("npm"))
+                .and_then(Value::as_str),
+            Some("@old/pkg")
+        );
+    }
+
+    #[test]
+    fn opencode_lifecycle_supports_v2_shape_end_to_end() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let state_dir = directory.path().join("state");
+        let config_path = directory.path().join("opencode.jsonc");
+        let context = context();
+
+        // Existing V2 shape selects the V2 adapter, never a mixed document.
+        fs::write(
+            &config_path,
+            "{\n// v2 user comment\n\"providers\": {\n\"other\": {}\n}\n}\n",
+        )
+        .expect("write");
+        let apply = LifecycleOptions {
+            action: LifecycleAction::Apply,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path)).expect("apply");
+        let raw = fs::read_to_string(&config_path).expect("config");
+        assert!(raw.contains("// v2 user comment"));
+        assert!(raw.contains("\"providers\""));
+        assert!(raw.contains(client_config::OPENCODE_V2_RESPONSES_PACKAGE));
+        assert!(raw.contains("\"env\""));
+        assert!(!raw.contains("\"provider\":"));
+        assert!(!raw.contains(&context.api_key));
+        let value: Value = client_config::jsonc::parse_value(&raw).expect("parses");
+        assert!(
+            value
+                .get("providers")
+                .and_then(|providers| providers.get("eggpool"))
+                .is_some()
+        );
+
         let check = LifecycleOptions {
             action: LifecycleAction::Check,
             dry_run: false,
@@ -2512,11 +2851,133 @@ mod tests {
             model: None,
         };
         let report = opencode_lifecycle(&context, &check, Some(&state_dir), Some(&config_path))
-            .expect("check jsonc");
-        assert!(!report.up_to_date);
-        assert!(
-            opencode_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path)).is_err()
+            .expect("check");
+        assert!(report.up_to_date);
+
+        // Remove drops only the owned V2 entry and restores nothing else.
+        let remove = LifecycleOptions {
+            action: LifecycleAction::Remove,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        opencode_lifecycle(&context, &remove, Some(&state_dir), Some(&config_path))
+            .expect("remove");
+        let removed = fs::read_to_string(&config_path).expect("config");
+        assert!(!removed.contains("eggpool"));
+        assert!(removed.contains("\"other\""));
+    }
+
+    #[test]
+    fn opencode_config_path_prefers_appdata_on_windows() {
+        let appdata = PathBuf::from("/appdata");
+        let home = PathBuf::from("/home/alice");
+        let xdg = PathBuf::from("/home/alice/.config");
+        // Windows never uses Unix XDG assumptions.
+        assert_eq!(
+            resolve_opencode_config_path(true, None, Some(home.clone()), Some(xdg), Some(appdata)),
+            PathBuf::from("/appdata/opencode/opencode.json")
         );
+        // POSIX honors XDG, then ~/.config.
+        assert_eq!(
+            resolve_opencode_config_path(
+                false,
+                None,
+                Some(home.clone()),
+                Some(PathBuf::from("/xdg")),
+                None
+            ),
+            PathBuf::from("/xdg/opencode/opencode.json")
+        );
+        assert_eq!(
+            resolve_opencode_config_path(false, None, Some(home), None, None),
+            PathBuf::from("/home/alice/.config/opencode/opencode.json")
+        );
+        // Explicit override always wins.
+        assert_eq!(
+            resolve_opencode_config_path(
+                true,
+                Some(PathBuf::from("/custom/opencode.json")),
+                None,
+                None,
+                None
+            ),
+            PathBuf::from("/custom/opencode.json")
+        );
+    }
+
+    #[test]
+    fn codex_lifecycle_captures_previous_table_and_allows_unrelated_edits() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let state_dir = directory.path().join("state");
+        let config_path = directory.path().join("codex").join("config.toml");
+        let context = context();
+
+        // Pre-existing provider table plus an unrelated user model choice.
+        fs::create_dir_all(config_path.parent().expect("parent")).expect("mkdir");
+        fs::write(
+            &config_path,
+            "# user comment\nmodel = \"user-model\"\nmodel_provider = \"other\"\n\n[model_providers.eggpool]\nname = \"Old\"\nbase_url = \"https://old.example/v1\"\n",
+        )
+        .expect("write");
+        let apply = LifecycleOptions {
+            action: LifecycleAction::Apply,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        codex_lifecycle(&context, &apply, Some(&state_dir), Some(&config_path)).expect("apply");
+        let applied = fs::read_to_string(&config_path).expect("config");
+        assert!(applied.contains("# user comment"));
+        // Unmanaged root model is the user's and stays untouched.
+        assert!(applied.contains("model = \"user-model\""));
+        let manifest = load_manifest(&codex_manifest_path_for_state(&state_dir)).expect("manifest");
+        assert!(
+            manifest
+                .previous_values
+                .get("model_providers.eggpool")
+                .and_then(Value::as_str)
+                .is_some_and(|table| table.contains("Old"))
+        );
+
+        // Unrelated edits after install no longer refuse sync.
+        let mut tampered = fs::read_to_string(&config_path).expect("config");
+        tampered.push_str("\n[user_custom]\nvalue = 1\n");
+        fs::write(&config_path, tampered).expect("tamper");
+        let sync = LifecycleOptions {
+            action: LifecycleAction::Sync,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        codex_lifecycle(&context, &sync, Some(&state_dir), Some(&config_path)).expect("sync");
+        let converged = fs::read_to_string(&config_path).expect("config");
+        assert!(converged.contains("[user_custom]"));
+        assert!(converged.contains("model = \"user-model\""));
+
+        // Owned-field drift still refuses without --force ...
+        let drifted = converged.replace("wire_api = \"responses\"", "wire_api = \"chat\"");
+        fs::write(&config_path, drifted).expect("drift");
+        assert!(codex_lifecycle(&context, &sync, Some(&state_dir), Some(&config_path)).is_err());
+        // ... and remove restores the captured previous table byte-for-byte.
+        let forced = LifecycleOptions {
+            action: LifecycleAction::Sync,
+            dry_run: false,
+            force: true,
+            model: None,
+        };
+        codex_lifecycle(&context, &forced, Some(&state_dir), Some(&config_path)).expect("forced");
+        let remove = LifecycleOptions {
+            action: LifecycleAction::Remove,
+            dry_run: false,
+            force: false,
+            model: None,
+        };
+        codex_lifecycle(&context, &remove, Some(&state_dir), Some(&config_path)).expect("remove");
+        let restored = fs::read_to_string(&config_path).expect("config");
+        assert!(restored.contains("name = \"Old\""));
+        assert!(restored.contains("model_provider = \"other\""));
+        assert!(!restored.contains("model_catalog_json"));
     }
 
     #[test]

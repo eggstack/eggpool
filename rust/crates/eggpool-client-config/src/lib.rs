@@ -26,6 +26,7 @@ pub mod codex;
 pub mod error;
 pub mod hash;
 pub mod integration_profile;
+pub mod jsonc;
 pub mod opencode;
 pub mod ownership;
 pub mod profile;
@@ -35,13 +36,14 @@ pub mod token;
 
 pub use adapter::{
     ClientAdapter, ClientDetection, ClientSchemaVariant, ClientTarget, ClientVersion, CodexAdapter,
-    MutationPlan, OpencodeAdapter, VerificationPlan,
+    MutationPlan, OpencodeAdapter, PlanOptions, RemovalPrevious, VerificationPlan,
 };
 pub use codex::{
-    apply_codex_text_mutation, build_codex_catalog_json, check_codex_state,
-    remove_codex_owned_text, render_codex_toml, render_codex_toml_with_catalog,
-    validate_codex_catalog_json, CodexPrevious, CodexStateCheck, EGGPOOL_API_KEY_ENV,
-    MAX_CODEX_CATALOG_BYTES, MAX_CODEX_CATALOG_MODELS,
+    apply_codex_text_mutation, build_codex_catalog_json, check_codex_state, codex_owned_matches,
+    current_provider_table_head, remove_codex_owned_text, render_codex_toml,
+    render_codex_toml_with_catalog, validate_codex_catalog_json, CodexModelExpectation,
+    CodexPrevious, CodexStateCheck, EGGPOOL_API_KEY_ENV, MAX_CODEX_CATALOG_BYTES,
+    MAX_CODEX_CATALOG_MODELS,
 };
 pub use error::ClientConfigError;
 pub use hash::{hex_bytes, sha256_hex};
@@ -49,7 +51,16 @@ pub use integration_profile::{
     AgentIntegrationProfileV1, IntegrationCapabilities, INTEGRATION_PROFILE_SCHEMA_VERSION,
     MAX_INTEGRATION_MODELS, MAX_INTEGRATION_PROFILE_BYTES,
 };
-pub use opencode::{expected_opencode_provider, render_opencode_config, OPENCODE_RESPONSES_NPM};
+pub use jsonc::{line_indent, JsoncError};
+pub use opencode::{
+    apply_opencode_document, capture_owned_raw, current_owned_entry, default_variant_for_version,
+    expected_opencode_provider, expected_opencode_provider_for, expected_opencode_provider_v1,
+    expected_opencode_provider_v2, looks_like_eggpool_entry, owned_entry_allows_sync,
+    owned_path_for, parent_key_for, remove_opencode_document, render_opencode_config,
+    render_opencode_config_v2, render_opencode_document, select_opencode_variant, OpencodeMutation,
+    OPENCODE_OWNED_ENTRY, OPENCODE_RESPONSES_NPM, OPENCODE_V1_PARENT, OPENCODE_V2_PARENT,
+    OPENCODE_V2_RESPONSES_PACKAGE,
+};
 pub use ownership::{
     OwnershipManifest, OWNED_CODEX_FIELDS, OWNED_OPENCODE_FIELDS, OWNERSHIP_SCHEMA_VERSION,
 };

@@ -59,9 +59,9 @@ Lifecycle semantics:
 - `--remove`: remove only EggPool-owned generated files/fields when current state still matches ownership evidence; restores previously captured values where safely possible.
 - `--dry-run`: render the exact proposed diff/actions without writing. Can be combined with `--apply`/`--sync`/`--remove`/`--check` or used alone.
 
-Repeated `--apply`/`--sync` is idempotent. Drift in a user-edited client config causes a safe refusal rather than silent clobbering; re-run with `--force` to converge deliberately. `--output`/`--write` cannot be combined with lifecycle flags; the snippet workflow remains for users who do not want automatic changes.
+Repeated `--apply`/`--sync` is idempotent. Drift is decided on EggPool-owned fields, not whole-file hashes: edits to unrelated settings are preserved and never block a sync, while edits to owned fields (provider tables/entries, managed model selection, catalog pointers) refuse safely; re-run with `--force` to converge deliberately. `--output`/`--write` cannot be combined with lifecycle flags; the snippet workflow remains for users who do not want automatic changes.
 
-Ownership manifests live under the EggPool state directory (`~/.local/state/eggpool/integrations/<target>/manifest.json`) and record the client config path, pre/post hashes, owned fields, previous values, catalog path/hash, and schema version. No secrets are stored.
+Ownership manifests live under the EggPool state directory (`~/.local/state/eggpool/integrations/<target>/manifest.json`) and record the client config path, pre/post hashes, owned fields, previous values (including a pre-existing `[model_providers.eggpool]` table or `provider.eggpool`/`providers.eggpool` entry captured for byte-exact restoration), catalog path/hash, and schema version. No secrets are stored.
 
 ## Remote Setup (`configremote`)
 
@@ -117,13 +117,18 @@ Behavior:
   restores automatically, with a distinct rollback-failure error pinning the
   backup ID/path when recovery itself fails.
 - `restore` takes a pre-restore backup first, so restore is reversible.
-- `remove` deletes only EggPool-owned fields/artifacts and refuses on drift
-  without `--force`.
+- `remove` deletes only EggPool-owned fields/artifacts (restoring captured
+  previous values where valid) and refuses on drift without `--force`.
 - Repeated installs are idempotent no-ops after validation; remote revision
   changes update only owned artifacts.
-- OpenCode files with JSONC comments and OpenCode V2 (`providers` plural)
-  shapes fail closed with manual guidance until the preserving V2 adapter
-  lands; Codex preserves comments/unrelated TOML today.
+- OpenCode JSONC comments, trailing commas, and unrelated settings are
+  preserved in both schema variants; only the owned `eggpool` entry (and its
+  narrowly scoped parent key, when EggPool creates it) is touched. V1
+  (`provider`) and V2 (`providers`) shapes are selected from the existing
+  document, never mixed into one file; ambiguous or unparseable documents
+  fail closed with a bounded location and manual guidance. Codex preserves
+  comments/unrelated TOML, including file footers appended after the managed
+  table.
 - Default setup never modifies shell profiles or persistent environment
   variables; each desktop still needs `EGGPOOL_API_KEY` in the environment
   that launches the client.
@@ -197,20 +202,23 @@ The default server port is `11300`; use `--base-url` when the server is configur
 eggpool configsetup codex --model <eggpool-model-or-alias>
 ```
 
-The generated TOML contains `env_key = "EGGPOOL_API_KEY"`, never the resolved server key, so Codex output is printed normally without `--print-secret`. Passing `--print-secret` does not embed the key in Codex TOML. When `CODEX_HOME` is set, managed commands respect it for locating `config.toml`; the generated catalog itself stays under EggPool state unless the Codex contract requires otherwise. Codex config mutation owns only root `model_provider`, root `model_catalog_json`, optional root `model` (only when explicitly requested), and the `[model_providers.eggpool]` table, preserving comments and unrelated content with atomic writes and drift refusal. For a real current CLI check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
+The generated TOML contains `env_key = "EGGPOOL_API_KEY"`, never the resolved server key, so Codex output is printed normally without `--print-secret`. Passing `--print-secret` does not embed the key in Codex TOML. When `CODEX_HOME` is set, managed commands respect it for locating `config.toml`; the generated catalog itself stays under EggPool state unless the Codex contract requires otherwise. Codex config mutation owns only root `model_provider`, root `model_catalog_json`, optional root `model` (only when explicitly requested), and the `[model_providers.eggpool]` table, preserving comments (including file footers) and unrelated content with atomic writes and owned-field drift refusal. A pre-existing `[model_providers.eggpool]` table is captured on first ownership and restored exactly on `--remove`. For a real current CLI check, see [Codex compatibility smoke](codex-compatibility-smoke.md).
 
 EggPool relies on Codex local compaction by default and does not advertise remote v2 compaction: the generated provider keeps the current custom-provider `Unsupported` behavior until the complete trigger request/result path is qualified end to end. The catalog advertises a conservative 90% auto-compaction threshold derived from each model's guaranteed context window. Operators whose upstream natively supports the historical compact contract may opt in per provider surface with `supports_remote_compaction_v1 = true` plus a `compact_path_template`; the bounded `POST /v1/responses/compact` operation then forwards natively with normal routing, accounting, and health ownership. See [Stateless Responses](stateless-responses.md).
 
 ## OpenCode Integration
 
-`eggpool configsetup opencode` generates an OpenCode-compatible JSON configuration from the same provider-neutral projection. The provider uses the Responses-capable `@ai-sdk/openai` runtime with `baseURL` ending at `/v1`, per-model `limit.context`/`limit.output` where known, `modalities` (text plus image only when guaranteed), and `reasoning`/`variants` only where the projection guarantees reasoning. Image/tool capability is never claimed across a heterogeneous alias route.
+`eggpool configsetup opencode` generates an OpenCode-compatible JSON configuration from the same provider-neutral projection. Two explicit schema variants are supported, selected shape-first from the existing document (never mixed into one file):
 
-The generated file references `EGGPOOL_API_KEY` through OpenCode's `{env:EGGPOOL_API_KEY}` interpolation and never embeds the resolved server key, so OpenCode output prints by default like Codex. Set the variable in the environment that launches OpenCode:
+- V1 (`provider` / `npm` / `options`, qualified against OpenCode 1.18.30): the Responses-capable `@ai-sdk/openai` runtime with `baseURL` ending at `/v1`, `apiKey` as `{env:EGGPOOL_API_KEY}`, per-model `limit.context`/`limit.output` where known, `modalities` (text plus image only when guaranteed), and `reasoning`/`variants` only where the projection guarantees reasoning.
+- V2 (`providers` / `package` / `settings`, current V2 docs): the Responses-capable `@opencode/ai/providers/openai-compatible/responses` package with `settings.baseURL`, an `env: ["EGGPOOL_API_KEY"]` credential list, and per-model `limit` plus `capabilities` (tool support only when exactly known; unknown stays omitted). No WebSocket transport is advertised, and V2 reasoning-effort variants are omitted until a proven package mapping exists.
+
+Image/tool capability is never claimed across a heterogeneous alias route. Neither variant embeds the resolved server key, so OpenCode output prints by default like Codex. Set the variable in the environment that launches OpenCode:
 
 ```bash
 export EGGPOOL_API_KEY="$(eggpool getkey)"
 ```
 
-Managed OpenCode installation merges only the `provider.eggpool` key, preserving all other config content. Existing files with JSONC comments are never silently rewritten: `--apply` refuses with guidance to use `--dry-run`/generated output until a safe preserving mutator is available. Global config lives at `~/.config/opencode/opencode.json` (`OPENCODE_CONFIG` overrides).
+Managed OpenCode installation touches only the owned `eggpool` entry (plus its narrowly scoped parent key when EggPool creates it), preserving JSONC comments, trailing commas, indentation, ordering, unrelated providers, and nested settings byte-for-byte. A pre-existing `eggpool` entry is captured on first apply and restored exactly on `--remove`; an emptied parent key is removed only when it holds no comments. Global config lives at `~/.config/opencode/opencode.json` (`OPENCODE_CONFIG` overrides; Windows uses `%APPDATA%\opencode\opencode.json`). Ambiguous documents (both `provider` and `providers` present) and invalid JSONC fail closed with a bounded line/column location instead of a lossy rewrite.
 
 Provider-scoped model IDs are used when `models.collapse_models = false` (the default), so OpenCode can disambiguate providers serving the same upstream model.

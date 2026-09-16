@@ -21,14 +21,15 @@ use crate::process::{DEFAULT_PROCESS_TIMEOUT, ProcessRunner, find_executable};
 pub const QUALIFIED_CODEX_VERSION: &str = "0.154.0";
 pub const QUALIFIED_OPENCODE_VERSION: &str = "1.18.30";
 
-/// Supported schema variants for automatic mutation in this plan.
+/// Supported schema variants for automatic mutation.
 ///
-/// Codex TOML and OpenCode V1 (`provider` shape) are supported. OpenCode V2
-/// (`providers` plural shape) is detected and reported but refuses automatic
-/// mutation until Plan 213 qualifies a preserving V2 renderer.
+/// Codex TOML, OpenCode V1 (`provider` shape), and OpenCode V2 (`providers`
+/// plural shape) are supported through the portable JSONC-preserving editor
+/// qualified by Plan 213.
 pub const SUPPORTED_VARIANTS: &[ClientSchemaVariant] = &[
     ClientSchemaVariant::CodexToml,
     ClientSchemaVariant::OpencodeV1,
+    ClientSchemaVariant::OpencodeV2,
 ];
 
 /// Local client detection facts owned by the desktop.
@@ -110,7 +111,7 @@ async fn detect_opencode<R: ProcessRunner>(
     let executable = find_executable("opencode");
     let (version, version_raw) = probe_version(runner, "opencode", &["--version"]).await;
     let (config_exists, parseable, parse_issue, schema_variant) =
-        inspect_opencode_file(&config_path);
+        inspect_opencode_file(&config_path, version_raw.as_deref());
     let native_verification_available = executable.is_some();
     Ok(Detection {
         target: ClientTarget::Opencode,
@@ -188,11 +189,17 @@ fn inspect_codex_file(path: &Path) -> (bool, bool, Option<String>) {
     }
 }
 
-fn inspect_opencode_file(path: &Path) -> (bool, bool, Option<String>, ClientSchemaVariant) {
+fn inspect_opencode_file(
+    path: &Path,
+    version_raw: Option<&str>,
+) -> (bool, bool, Option<String>, ClientSchemaVariant) {
     match std::fs::read_to_string(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            (false, true, None, ClientSchemaVariant::OpencodeV1)
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
+            false,
+            true,
+            None,
+            eggpool_client_config::default_variant_for_version(version_raw),
+        ),
         Err(error) => (
             true,
             false,
@@ -201,28 +208,23 @@ fn inspect_opencode_file(path: &Path) -> (bool, bool, Option<String>, ClientSche
         ),
         Ok(text) => {
             if text.trim().is_empty() {
-                return (true, true, None, ClientSchemaVariant::OpencodeV1);
-            }
-            if eggpool_client_config::text::has_jsonc_comments(&text) {
-                // JSONC comments require the preserving mutator from Plan 213.
-                // Fail closed with a parse location hint, never a lossy
-                // whole-file replacement.
                 return (
                     true,
-                    false,
-                    Some(
-                        "OpenCode config uses JSONC comments; automatic mutation needs the preserving editor (see plan output)".to_owned(),
-                    ),
-                    classify_opencode_variant(&text),
+                    true,
+                    None,
+                    eggpool_client_config::default_variant_for_version(version_raw),
                 );
             }
-            match serde_json::from_str::<serde_json::Value>(&text) {
-                Ok(_) => (true, true, None, classify_opencode_variant(&text)),
+            // JSONC (comments, trailing commas) parses through the portable
+            // preserving editor; only truly invalid documents refuse, with a
+            // bounded line/column location.
+            match eggpool_client_config::select_opencode_variant(&text, version_raw) {
+                Ok(variant) => (true, true, None, variant),
                 Err(error) => (
                     true,
                     false,
-                    Some(format!("OpenCode config is not valid JSON: {error}")),
-                    ClientSchemaVariant::OpencodeV1,
+                    Some(error.to_string()),
+                    classify_opencode_variant(&text),
                 ),
             }
         }
@@ -244,12 +246,17 @@ pub fn classify_opencode_variant(document: &str) -> ClientSchemaVariant {
     }
 }
 
-/// Check whether a schema variant supports automatic mutation in this plan.
+/// Check whether a schema variant supports automatic mutation.
+///
+/// All qualified variants (Codex TOML, OpenCode V1, OpenCode V2) mutate
+/// through preserving editors. Unknown future variants fail closed at
+/// selection time before this gate is reached.
 #[must_use]
 pub const fn variant_supports_auto_mutation(variant: ClientSchemaVariant) -> bool {
     match variant {
-        ClientSchemaVariant::CodexToml | ClientSchemaVariant::OpencodeV1 => true,
-        ClientSchemaVariant::OpencodeV2 => false,
+        ClientSchemaVariant::CodexToml
+        | ClientSchemaVariant::OpencodeV1
+        | ClientSchemaVariant::OpencodeV2 => true,
     }
 }
 
@@ -279,7 +286,7 @@ mod tests {
             classify_opencode_variant(r#"{"providers": {"eggpool": {}}}"#),
             ClientSchemaVariant::OpencodeV2
         );
-        assert!(!variant_supports_auto_mutation(
+        assert!(variant_supports_auto_mutation(
             ClientSchemaVariant::OpencodeV2
         ));
         assert!(variant_supports_auto_mutation(
@@ -302,16 +309,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opencode_jsonc_is_unparseable_for_auto_mutation() {
+    async fn opencode_jsonc_is_parseable_and_selects_v1() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = dir.path().join("opencode.json");
-        std::fs::write(&config, "{\n// user comment\n\"provider\": {}\n}\n").expect("write");
+        std::fs::write(&config, "{\n// user comment\n\"provider\": {},\n}\n").expect("write");
+        let runner = FakeProcessRunner::new();
+        let detection = detect_opencode(&runner, Some(&config))
+            .await
+            .expect("detect");
+        assert!(detection.parseable);
+        assert!(detection.parse_issue.is_none());
+        assert_eq!(detection.schema_variant, ClientSchemaVariant::OpencodeV1);
+    }
+
+    #[tokio::test]
+    async fn opencode_v2_shape_selects_v2_variant() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("opencode.jsonc");
+        std::fs::write(&config, "{\n\"providers\": {},\n}\n").expect("write");
+        let runner = FakeProcessRunner::new();
+        let detection = detect_opencode(&runner, Some(&config))
+            .await
+            .expect("detect");
+        assert!(detection.parseable);
+        assert_eq!(detection.schema_variant, ClientSchemaVariant::OpencodeV2);
+    }
+
+    #[tokio::test]
+    async fn opencode_invalid_jsonc_reports_location() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("opencode.json");
+        std::fs::write(&config, "{\"provider\": }").expect("write");
         let runner = FakeProcessRunner::new();
         let detection = detect_opencode(&runner, Some(&config))
             .await
             .expect("detect");
         assert!(!detection.parseable);
-        assert!(detection.parse_issue.is_some());
+        let issue = detection.parse_issue.expect("issue");
+        assert!(issue.contains("line"));
     }
 
     #[test]

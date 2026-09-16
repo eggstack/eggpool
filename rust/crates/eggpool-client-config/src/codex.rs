@@ -291,7 +291,35 @@ pub struct CodexPrevious {
     pub model_provider: Option<String>,
     pub model_catalog_json: Option<String>,
     pub model: Option<String>,
+    /// Exact pre-EggPool `[model_providers.eggpool]` head lines (header plus
+    /// assignments; trailing blank/comment lines are excluded so they
+    /// survive mutations independently).
     pub provider_table: Option<Vec<String>>,
+}
+
+/// End offset of a table span's head: the header plus assignments. Trailing
+/// blank lines and `#` comments form the trailer, which mutations preserve
+/// verbatim instead of replacing (a file footer appended after the last
+/// table must never be destroyed by converging the table above it).
+fn table_head_end(lines: &[String], start: usize, end: usize) -> usize {
+    let mut cursor = end;
+    while cursor > start + 1 {
+        let trimmed = lines[cursor - 1].trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            cursor -= 1;
+        } else {
+            break;
+        }
+    }
+    cursor
+}
+
+/// Exact head text of the current `[model_providers.eggpool]` table, if any.
+pub fn current_provider_table_head(existing: &str) -> Option<String> {
+    let lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+    let (start, end) = find_table(&lines, "model_providers.eggpool")?;
+    let head_end = table_head_end(&lines, start, end);
+    Some(lines[start..head_end].join("\n"))
 }
 
 /// Apply the narrow EggPool-owned Codex mutation to TOML text.
@@ -323,7 +351,8 @@ pub fn apply_codex_text_mutation(
         previous.model = toml_string_value(&lines[index]);
     }
     if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        previous.provider_table = Some(lines[start..end].to_vec());
+        let head_end = table_head_end(&lines, start, end);
+        previous.provider_table = Some(lines[start..head_end].to_vec());
     }
 
     let catalog_rendered =
@@ -352,7 +381,10 @@ pub fn apply_codex_text_mutation(
         ),
     ];
     if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        lines.splice(start..end, table_lines);
+        // Replace the head only; the trailer (file footer comments/blanks)
+        // stays after the converged table.
+        let head_end = table_head_end(&lines, start, end);
+        lines.splice(start..head_end, table_lines);
     } else {
         if !lines.is_empty() && !lines.last().is_some_and(String::is_empty) {
             lines.push(String::new());
@@ -418,10 +450,13 @@ pub fn remove_codex_owned_text(
     }
     if let Some(table) = &previous.provider_table {
         if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-            lines.splice(start..end, table.clone());
+            let head_end = table_head_end(&lines, start, end);
+            lines.splice(start..head_end, table.clone());
         }
     } else if let Some((start, end)) = find_table(&lines, "model_providers.eggpool") {
-        lines.drain(start..end);
+        // Drain the head only so a file footer survives removal.
+        let head_end = table_head_end(&lines, start, end);
+        lines.drain(start..head_end);
         if start < lines.len()
             && lines[start].trim().is_empty()
             && start > 0
@@ -435,6 +470,79 @@ pub fn remove_codex_owned_text(
         text.push('\n');
     }
     text
+}
+
+/// Expected value of the user-visible root `model` key for ownership checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexModelExpectation<'a> {
+    /// `model` is user-owned; any value (or absence) is acceptable and the
+    /// mutator will not touch it.
+    UserOwned,
+    /// EggPool manages `model`; it must equal the given value (`None` means
+    /// the key must be absent).
+    Managed(Option<&'a str>),
+    /// A legacy ownership manifest owns `model` but the applied value was
+    /// never recorded; the model check is skipped (provider fields decide).
+    ManagedUnknown,
+}
+
+/// True when the EggPool-owned Codex fields in `text` match expectations.
+///
+/// Checks root `model_provider == "eggpool"`, root `model_catalog_json`, the
+/// `[model_providers.eggpool]` Responses contract (`EggPool` name, base URL,
+/// `wire_api = "responses"`, `supports_websockets = false`,
+/// `env_key = "EGGPOOL_API_KEY"`), and the root `model` key per
+/// `model_expectation`. Unrelated tables, comments, and formatting are
+/// ignored: this is the semantic owned-field comparison behind drift
+/// decisions, so user edits to unrelated settings never count as drift.
+pub fn codex_owned_matches(
+    text: &str,
+    base_url: &str,
+    catalog_path: &str,
+    model_expectation: CodexModelExpectation<'_>,
+) -> bool {
+    let lines: Vec<String> = if text.is_empty() {
+        Vec::new()
+    } else {
+        text.lines().map(str::to_owned).collect()
+    };
+    let provider_is_eggpool = find_root_key(&lines, "model_provider")
+        .and_then(|index| toml_string_value(&lines[index]))
+        .as_deref()
+        == Some("eggpool");
+    if !provider_is_eggpool {
+        return false;
+    }
+    let catalog_matches = find_root_key(&lines, "model_catalog_json")
+        .and_then(|index| toml_string_value(&lines[index]))
+        .as_deref()
+        == Some(catalog_path);
+    if !catalog_matches {
+        return false;
+    }
+    let table = "model_providers.eggpool";
+    if table_value(&lines, table, "name").as_deref() != Some("EggPool") {
+        return false;
+    }
+    let base_matches = table_value(&lines, table, "base_url").as_deref() == Some(base_url);
+    if !base_matches {
+        return false;
+    }
+    if table_value(&lines, table, "wire_api").as_deref() != Some("responses") {
+        return false;
+    }
+    if table_value(&lines, table, "supports_websockets").as_deref() != Some("false") {
+        return false;
+    }
+    if table_value(&lines, table, "env_key").as_deref() != Some(EGGPOOL_API_KEY_ENV) {
+        return false;
+    }
+    let current_model =
+        find_root_key(&lines, "model").and_then(|index| toml_string_value(&lines[index]));
+    match model_expectation {
+        CodexModelExpectation::UserOwned | CodexModelExpectation::ManagedUnknown => true,
+        CodexModelExpectation::Managed(expected) => current_model.as_deref() == expected,
+    }
 }
 
 /// Inputs for [`check_codex_state`] without filesystem access.
@@ -626,6 +734,47 @@ mod tests {
         assert!(proposed.contains("[other_table]"));
         assert!(proposed.contains("model_provider = \"eggpool\""));
         assert_eq!(previous.model_provider.as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn codex_mutation_preserves_file_footer_after_replaced_table() {
+        let existing = "model_provider = \"eggpool\"\nmodel_catalog_json = \"/tmp/c.json\"\n\n[model_providers.eggpool]\nname = \"EggPool\"\nbase_url = \"https://old.example/v1\"\nwire_api = \"responses\"\nsupports_websockets = false\nenv_key = \"EGGPOOL_API_KEY\"\n# operator footer\n";
+        let (proposed, _) = apply_codex_text_mutation(
+            existing,
+            "https://pool.example/v1",
+            "/tmp/c.json",
+            None,
+            false,
+        );
+        assert!(proposed.contains("# operator footer"));
+        assert!(proposed.contains("base_url = \"https://pool.example/v1\""));
+        // Footer stays after the converged table, not inside the capture.
+        let footer_pos = proposed.find("# operator footer").expect("footer");
+        let table_pos = proposed.find("[model_providers.eggpool]").expect("table");
+        assert!(footer_pos > table_pos);
+    }
+
+    #[test]
+    fn codex_owned_matches_ignores_unrelated_edits() {
+        let text = "# c\nmodel_provider = \"eggpool\"\nmodel_catalog_json = \"/tmp/c.json\"\n\n[model_providers.eggpool]\nname = \"EggPool\"\nbase_url = \"https://pool.example/v1\"\nwire_api = \"responses\"\nsupports_websockets = false\nenv_key = \"EGGPOOL_API_KEY\"\n\n[user]\ntheme = \"dark\"\n";
+        assert!(codex_owned_matches(
+            text,
+            "https://pool.example/v1",
+            "/tmp/c.json",
+            CodexModelExpectation::UserOwned,
+        ));
+        assert!(!codex_owned_matches(
+            text,
+            "https://other.example/v1",
+            "/tmp/c.json",
+            CodexModelExpectation::UserOwned,
+        ));
+        assert!(codex_owned_matches(
+            text,
+            "https://pool.example/v1",
+            "/tmp/c.json",
+            CodexModelExpectation::Managed(None),
+        ));
     }
 
     #[test]

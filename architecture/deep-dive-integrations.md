@@ -5,11 +5,13 @@ Back to [Architecture](README.md)
 `eggpool configsetup` output for supported coding agents is split across a
 portable boundary. `rust/crates/eggpool-client-config/` owns the
 provider-neutral projection, `ConnectionProfileV1`/`epc1` codecs,
-`AgentIntegrationProfileV1`, Codex/OpenCode renderers, TOML/JSONC mutation
-primitives, ownership types, hashing, and validation without EggPool runtime
-state. `rust/src/operations/integrations.rs` is the EggPool adapter: it
-converts `Config`/catalog/database facts into those portable types, resolves
-server keys/endpoints, owns local lifecycle paths, delivery, and server-only
+`AgentIntegrationProfileV1`, Codex/OpenCode V1/V2 renderers, the narrow
+TOML mutator (`text.rs`/`codex.rs`), the trivia-preserving JSONC scanner and
+structural editor (`jsonc.rs`/`opencode.rs`), variant selection, ownership
+types, hashing, and validation without EggPool runtime state.
+`rust/src/operations/integrations.rs` is the EggPool adapter: it converts
+`Config`/catalog/database facts into those portable types, resolves server
+keys/endpoints, owns local lifecycle paths, delivery, and server-only
 projection loading. It generates provider-neutral endpoint, model, and secret
 references for each target without performing provider calls or persisting
 credentials.
@@ -23,15 +25,19 @@ continues to serve all generated endpoints.
 
 Portable policy (crate, no Axum/Tokio/SQLite/Eggress/provider transport):
 projection (`AgentModelProjection`, conservative aggregation), Codex TOML +
-catalog + strict validation, OpenCode Responses rendering, `ConnectionProfileV1`
+catalog + strict validation + semantic owned-field matching, OpenCode V1/V2
+Responses rendering with shape-first variant selection, `ConnectionProfileV1`
 (`eggpool.connection/v1`, closed `codex`/`opencode` targets, absolute
 HTTP(S) base URL, `responses` wire fact, `bearer_env` auth reference only,
 `/api/integrations/v1/profile` reference, optional issuer version),
 `epc1.<base64url(canonical JSON)>` tokens (no compression; `epc1`
 unambiguously fixes the algorithm), `AgentIntegrationProfileV1` with
 deterministic revision, closed `ClientTarget` + `ClientAdapter`
-(render/inspect/plan/verify/remove without subprocesses), TOML/JSONC
-primitives, ownership manifests, and hashing.
+(render/inspect/plan/verify/remove without subprocesses), the narrow TOML
+mutator plus the token-offset JSONC editor (comment/trailing-comma
+preserving splices with bounded parse locations), V1/V2 sync/remove policy
+helpers, ownership manifests (including applied-model and previous-entry
+captures), and hashing.
 
 Application-owned (EggPool adapter): `Config`/catalog/database reads,
 conservative projection from authoritative server state, server key policy,
@@ -193,13 +199,33 @@ must-revalidate`, `ETag: "<revision>"` with `If-None-Match` → `304`.
 Errors are bounded and generic (`401`/`403` auth, `503` unavailable with no
 internal body).
 
-## OpenCode provider contract
+## OpenCode provider contracts
 
-`build_opencode_config_json()` renders from the same projection using the
-Responses-capable `@ai-sdk/openai` runtime, `baseURL` ending at `/v1`,
-`apiKey` as `{env:EGGPOOL_API_KEY}`, per-model `limit.context`/`limit.output`
-where known, `modalities`, and `reasoning`/`variants` only where guaranteed.
-It never claims image/tool capability across a heterogeneous alias route.
+Both variants render from the same conservative projection and never claim
+image/tool capability across a heterogeneous alias route:
+
+- V1 (`provider` / `npm` / `options`, qualified against OpenCode 1.18.30):
+  the Responses-capable `@ai-sdk/openai` runtime, `baseURL` ending at `/v1`,
+  `apiKey` as `{env:EGGPOOL_API_KEY}`, per-model `limit.context`/
+  `limit.output` where known, `modalities`, and `reasoning`/`variants` only
+  where guaranteed.
+- V2 (`providers` / `package` / `settings`, current V2 docs): the
+  Responses-capable `@opencode/ai/providers/openai-compatible/responses`
+  package, `settings.baseURL`, `env: ["EGGPOOL_API_KEY"]`, per-model `limit`
+  and `capabilities` (tool support only when exactly known), no WebSocket
+  transport, and no reasoning-effort variants until a proven package mapping
+  exists.
+
+Variant selection is shape-first (`providers` selects V2, `provider` selects
+V1, both present refuses, empty defaults to V1 with newer-major versions
+selecting V2); both key families are never written into one file. All
+mutations go through the token-offset JSONC editor: only the owned `eggpool`
+entry (plus its parent key when EggPool creates it) is spliced, so comments,
+trailing commas, indentation, ordering, and unrelated providers survive
+`--apply`/`--sync`/`--remove`. A pre-existing `eggpool` entry is captured
+exactly on first ownership and restored byte-for-byte on remove; an emptied
+parent is removed only when comment-free. Invalid JSONC and ambiguous shapes
+fail closed with bounded line/column locations.
 
 ## Managed lifecycle
 
@@ -208,10 +234,28 @@ It never claims image/tool capability across a heterogeneous alias route.
 ownership manifests under EggPool state. Codex mutation owns only root
 `model_provider`, root `model_catalog_json`, optional root `model` (only
 when explicitly requested), and `[model_providers.eggpool]`, preserving
-comments and unrelated TOML with atomic writes. OpenCode merges only
-`provider.eggpool` and refuses to rewrite JSONC-comment files silently.
-Both refuse on drift without `--force` and remove only EggPool-owned state.
+comments (including file footers appended after the managed table) and
+unrelated TOML with atomic writes; a pre-existing provider table is captured
+on first ownership and restored exactly on remove. Drift is decided on
+EggPool-owned fields rather than whole-file hashes: unrelated edits are
+preserved and converge, while owned-field changes (including model-list-only
+vs identity changes distinguished by the revision-only sync policy) refuse
+without `--force`. Both lifecycles remove only EggPool-owned state.
 See `docs/agent-configuration.md` for the operator contract.
+
+## Format-preserving dependency gate
+
+Plan 213 evaluated `toml_edit` (TOML) and `jsonc-parser` (JSONC) at
+implementation time and adopted neither. The qualified narrow line-oriented
+TOML mutator plus the crate-local JSONC token scanner cover the full
+fixture matrix (empty files, comments before/inside/after owned blocks,
+line + block comments, trailing commas, unrelated providers/settings,
+pre-existing `eggpool` entries, external edits, malformed input) with zero
+new audit surface, zero release-binary impact, and no MSRV pressure on the
+Rust 1.81-compatible portable crate. `cargo deny`, `cargo tree -e features`,
+and `cargo tree --duplicates` therefore report no new third-party
+dependencies for this plan. Revisit only if client schemas require
+structural operations the narrow editors cannot express.
 
 ## Transactional desktop helper (`eggpool-connect`)
 

@@ -21,8 +21,9 @@ pub const OWNED_CODEX_FIELDS: &[&str] = &[
     "model_providers.eggpool",
 ];
 
-/// EggPool-owned OpenCode fields.
-pub const OWNED_OPENCODE_FIELDS: &[&str] = &["provider.eggpool"];
+/// EggPool-owned OpenCode fields (one per schema variant; a manifest carries
+/// exactly one of these).
+pub const OWNED_OPENCODE_FIELDS: &[&str] = &["provider.eggpool", "providers.eggpool"];
 
 /// Portable ownership manifest (local lifecycle state, not a shared profile).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,7 +36,18 @@ pub struct OwnershipManifest {
     pub pre_edit_hash: String,
     pub post_edit_hash: String,
     pub owned_fields: Vec<String>,
+    /// Previously captured values for ownership-aware removal:
+    ///
+    /// - Codex: root `model_provider` / `model_catalog_json` / `model` values
+    ///   plus the exact pre-EggPool `[model_providers.eggpool]` table text
+    ///   under `model_providers.eggpool` when one existed.
+    /// - OpenCode: exact previous provider entry text under
+    ///   `provider.eggpool` (V1) or `providers.eggpool` (V2).
     pub previous_values: Map<String, Value>,
+    /// Root `model` value applied by the last Codex manage-model run, if any.
+    /// Additive (older manifests omit it); used for semantic drift decisions.
+    #[serde(default)]
+    pub applied_model: Option<String>,
     pub generated_catalog_path: Option<PathBuf>,
     pub generated_catalog_hash: Option<String>,
     pub base_url: String,
@@ -111,6 +123,7 @@ mod tests {
                 "model_providers.eggpool".to_owned(),
             ],
             previous_values: Map::new(),
+            applied_model: None,
             generated_catalog_path: None,
             generated_catalog_hash: None,
             base_url: "http://127.0.0.1:11300/v1".to_owned(),

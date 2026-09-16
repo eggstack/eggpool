@@ -52,13 +52,17 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Treat `configsetup` renderers as format-specific delivery boundaries: a
   target is secret-bearing only when its rendered artifact embeds the resolved
   key. Codex emits an HTTP/SSE Responses TOML block with
-  `env_key = "EGGPOOL_API_KEY"` and OpenCode uses `{env:EGGPOOL_API_KEY}`
-  with the Responses-capable `@ai-sdk/openai` runtime, so both are printable
-  by default. Codex picker discovery uses an EggPool-owned generated
+  `env_key = "EGGPOOL_API_KEY"` and OpenCode V1 uses `{env:EGGPOOL_API_KEY}`
+  with the Responses-capable `@ai-sdk/openai` runtime (V2 uses
+  `env: ["EGGPOOL_API_KEY"]` with
+  `@opencode/ai/providers/openai-compatible/responses`), so all variants are
+  printable by default. Codex picker discovery uses an EggPool-owned generated
   `model_catalog_json` built from the conservative provider-neutral
   projection (minimum limits, intersected capabilities, unknown stays
   unknown, no name inference, no WebSocket advertisement); `/v1/models`
-  remains the standard OpenAI schema.
+  remains the standard OpenAI schema. OpenCode V1/V2 selection is
+  shape-first and never mixes both key families; mutations preserve JSONC
+  trivia and restore captured previous entries on remove.
 - Keep bind and advertisement separate: `[server].host`/`port` is the listen
   socket; `[integrations].advertise_base_url` is the only client-facing URL
   (live-reloadable profile output, never the socket). `eggpool configremote`
@@ -87,8 +91,10 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Semantic model routing: `rust/crates/eggpool-model-routing/` (neutral policy
   and identity), `rust/src/model_router.rs` (EggPool async affinity)
 - Portable client config: `rust/crates/eggpool-client-config/` (projection,
-  profiles, `epc1` tokens, renderers, mutation primitives; no Config/catalog/
-  DB/key/endpoint/CLI/file IO), `rust/src/operations/integrations.rs`
+  profiles, `epc1` tokens, V1/V2 renderers, narrow TOML + trivia-preserving
+  JSONC mutation (`jsonc.rs`), variant selection, ownership captures; no
+  Config/catalog/DB/key/endpoint/CLI/file IO),
+  `rust/src/operations/integrations.rs`
   (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop
   helper: plan/install/verify/backups/restore/remove)
 - Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)

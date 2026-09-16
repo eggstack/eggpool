@@ -446,10 +446,17 @@ fn codex_managed_lifecycle_is_idempotent_and_refuses_drift() {
         codex_lifecycle(&updated, &sync, Some(&state_dir), Some(&config_path)).expect("sync");
     assert!(synced.changed);
 
-    // External edit causes safe refusal.
+    // Unrelated external edits are preserved, not refused.
     let mut tampered = fs::read_to_string(&config_path).expect("config");
     tampered.push_str("# operator edit\n");
     fs::write(&config_path, &tampered).expect("tamper");
+    codex_lifecycle(&updated, &sync, Some(&state_dir), Some(&config_path)).expect("sync");
+    let converged = fs::read_to_string(&config_path).expect("config");
+    assert!(converged.contains("# operator edit"));
+
+    // Owned-field drift still refuses without --force.
+    let drifted = converged.replace("wire_api = \"responses\"", "wire_api = \"chat\"");
+    fs::write(&config_path, &drifted).expect("drift");
     assert!(codex_lifecycle(&updated, &sync, Some(&state_dir), Some(&config_path)).is_err());
 
     // --remove restores only owned fields and deletes the catalog.
@@ -502,21 +509,14 @@ fn opencode_managed_lifecycle_preserves_existing_config_safely() {
         serde_json::to_string_pretty(&value).expect("json"),
     )
     .expect("write");
-    // Drift without --force refuses (manifest tracks the previous write).
+    // Unrelated edits no longer refuse: sync converges owned state only.
     let sync = LifecycleOptions {
         action: LifecycleAction::Sync,
         dry_run: false,
         force: false,
         model: None,
     };
-    assert!(opencode_lifecycle(&ctx, &sync, Some(&state_dir), Some(&config_path)).is_err());
-    let forced = LifecycleOptions {
-        action: LifecycleAction::Sync,
-        dry_run: false,
-        force: true,
-        model: None,
-    };
-    opencode_lifecycle(&ctx, &forced, Some(&state_dir), Some(&config_path)).expect("forced");
+    opencode_lifecycle(&ctx, &sync, Some(&state_dir), Some(&config_path)).expect("sync");
     let merged: Value =
         serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("json");
     assert_eq!(
@@ -527,13 +527,34 @@ fn opencode_managed_lifecycle_preserves_existing_config_safely() {
         Some(true)
     );
 
-    // JSONC with comments is never silently rewritten.
+    // Owned-entry drift still refuses without --force.
+    let mut drifted: Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).expect("config")).expect("json");
+    drifted["provider"]["eggpool"]["npm"] = json!("@evil/pkg");
     fs::write(
         &config_path,
-        "{\n// operator comment\n\"provider\": {}\n}\n",
+        serde_json::to_string_pretty(&drifted).expect("json"),
+    )
+    .expect("drift");
+    assert!(opencode_lifecycle(&ctx, &sync, Some(&state_dir), Some(&config_path)).is_err());
+    let forced = LifecycleOptions {
+        action: LifecycleAction::Sync,
+        dry_run: false,
+        force: true,
+        model: None,
+    };
+    opencode_lifecycle(&ctx, &forced, Some(&state_dir), Some(&config_path)).expect("forced");
+
+    // JSONC with comments is preserved through managed mutation.
+    fs::write(
+        &config_path,
+        "{\n// operator comment\n\"provider\": {},\n}\n",
     )
     .expect("jsonc");
-    assert!(opencode_lifecycle(&ctx, &apply, Some(&state_dir), Some(&config_path)).is_err());
+    opencode_lifecycle(&ctx, &apply, Some(&state_dir), Some(&config_path)).expect("jsonc apply");
+    let preserved = fs::read_to_string(&config_path).expect("config");
+    assert!(preserved.contains("// operator comment"));
+    assert!(preserved.contains("\"eggpool\""));
     let dry = LifecycleOptions {
         action: LifecycleAction::DryRun,
         dry_run: true,

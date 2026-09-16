@@ -119,8 +119,12 @@ eggpool configsetup codex --apply
 The generated Codex TOML uses the HTTP/SSE Responses API and references
 `EGGPOOL_API_KEY` without embedding the server key. Set it with
 `export EGGPOOL_API_KEY="$(eggpool getkey)"` in the environment that launches
-Codex. OpenCode likewise references `{env:EGGPOOL_API_KEY}` through the
-Responses-capable `@ai-sdk/openai` runtime.
+Codex. OpenCode references the same variable: V1 configs use
+`{env:EGGPOOL_API_KEY}` through the Responses-capable `@ai-sdk/openai`
+runtime, while V2 configs use an `env: ["EGGPOOL_API_KEY"]` list with the
+Responses-capable `@opencode/ai/providers/openai-compatible/responses`
+package. Managed OpenCode edits preserve JSONC comments and unrelated
+settings in both variants.
 
 See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, remote `configremote` profiles, and the transactional `eggpool-connect` desktop helper (`plan`/`install`/`verify`/`backups`/`restore`/`remove` with byte-exact backups and automatic rollback).
 
@@ -348,15 +352,15 @@ selector execution, provider/account routing, and the process-local async
 affinity cache remain EggPool-owned.
 
 The portable Codex/OpenCode projection, connection profiles, `epc1` tokens,
-renderers, and mutation primitives are available as the small Rust crate at
-`rust/crates/eggpool-client-config/`. EggPool's `configsetup`/`configremote`
-adapter feeds that crate; `Config`/catalog/database loading, server key
-resolution, endpoint choice, CLI delivery, and local lifecycle paths remain
-EggPool-owned. The transactional desktop helper at
-`rust/crates/eggpool-connect/` links the same crate to `plan`/`install`/
-`verify`/`backups`/`restore`/`remove` Codex/OpenCode clients with byte-exact
-backups and automatic rollback; it contains no proxy server, agent loop,
-daemon, or tool execution.
+V1/V2 renderers, and trivia-preserving TOML/JSONC mutation are available as
+the small Rust crate at `rust/crates/eggpool-client-config/`. EggPool's
+`configsetup`/`configremote` adapter feeds that crate;
+`Config`/catalog/database loading, server key resolution, endpoint choice,
+CLI delivery, and local lifecycle paths remain EggPool-owned. The
+transactional desktop helper at `rust/crates/eggpool-connect/` links the same
+crate to `plan`/`install`/`verify`/`backups`/`restore`/`remove` Codex/OpenCode
+clients with byte-exact backups and automatic rollback; it contains no proxy
+server, agent loop, daemon, or tool execution.
 
 See the copyable [Model routing guide](docs/model-routing.md) for the complete
 schema, fallback behavior, and troubleshooting guidance.

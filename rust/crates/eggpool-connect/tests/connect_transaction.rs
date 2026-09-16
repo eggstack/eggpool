@@ -428,6 +428,114 @@ fn opencode_install_preserves_unrelated_providers() {
     assert!(!text.contains(API_KEY));
 }
 
+#[tokio::test]
+async fn opencode_jsonc_install_preserves_comments_end_to_end() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = dir.path().join("state");
+    let config = dir.path().join("opencode.json");
+    std::fs::write(
+        &config,
+        "{\n// user comment\n\"provider\": {\n\"other\": {\"npm\": \"@other/pkg\"},\n},\n/* trailing */\n}\n",
+    )
+    .expect("write");
+
+    let connection = connection(vec![ClientTarget::Opencode]);
+    let remote = remote("https://pool.example/v1");
+    let detection = opencode_detection(&config);
+    let runner = fake_runner();
+    let fetcher = FakeProfileFetcher::ok(remote.clone());
+
+    let outcome = eggpool_connect::install::install(
+        &runner,
+        &fetcher,
+        &connection,
+        Some(remote.clone()),
+        &detection,
+        &state,
+        API_KEY,
+        false,
+        false,
+        FailureInjector::default(),
+    )
+    .await
+    .expect("install");
+    assert!(!outcome.no_op);
+    let installed = std::fs::read_to_string(&config).expect("read");
+    // Every comment byte and unrelated provider survives.
+    assert!(installed.contains("// user comment"));
+    assert!(installed.contains("/* trailing */"));
+    assert!(installed.contains("\"other\""));
+    assert!(installed.contains("\"eggpool\""));
+    assert!(installed.contains("{env:EGGPOOL_API_KEY}"));
+    assert!(!installed.contains(API_KEY));
+
+    // Repeated install is a no-op (comment-preserving idempotence).
+    let second = eggpool_connect::install::install(
+        &runner,
+        &fetcher,
+        &connection,
+        Some(remote),
+        &detection,
+        &state,
+        API_KEY,
+        false,
+        false,
+        FailureInjector::default(),
+    )
+    .await
+    .expect("second install");
+    assert!(second.no_op);
+    assert_eq!(std::fs::read_to_string(&config).expect("read"), installed);
+}
+
+#[tokio::test]
+async fn opencode_v2_install_and_remove_restore_previous() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = dir.path().join("state");
+    let config = dir.path().join("opencode.jsonc");
+    std::fs::write(
+        &config,
+        "{\n\"providers\": {\n\"eggpool\": {\"package\": \"@old/pkg\"},\n\"other\": {}\n}\n}\n",
+    )
+    .expect("write");
+
+    let connection = connection(vec![ClientTarget::Opencode]);
+    let remote = remote("https://pool.example/v1");
+    let mut detection = opencode_detection(&config);
+    detection.schema_variant = ClientSchemaVariant::OpencodeV2;
+    let runner = fake_runner();
+    let fetcher = FakeProfileFetcher::ok(remote.clone());
+
+    // A pre-existing foreign `eggpool` entry is owned drift: deliberate
+    // converge with force captures it for later restoration.
+    let outcome = eggpool_connect::install::install(
+        &runner,
+        &fetcher,
+        &connection,
+        Some(remote),
+        &detection,
+        &state,
+        API_KEY,
+        true,
+        false,
+        FailureInjector::default(),
+    )
+    .await
+    .expect("install");
+    assert!(!outcome.no_op);
+    let installed = std::fs::read_to_string(&config).expect("read");
+    assert!(installed.contains(eggpool_client_config::OPENCODE_V2_RESPONSES_PACKAGE));
+    assert!(installed.contains("\"other\""));
+    assert!(!installed.contains("\"provider\":"));
+
+    // Remove restores the captured V2 previous entry byte-for-byte.
+    let record = eggpool_connect::install::remove_owned(&detection, &state, false).expect("remove");
+    assert!(!record.id.is_empty());
+    let removed = std::fs::read_to_string(&config).expect("read");
+    assert!(removed.contains("@old/pkg"));
+    assert!(removed.contains("\"other\""));
+}
+
 #[test]
 fn malformed_and_oversize_profiles_fail_closed() {
     assert!(eggpool_client_config::decode_profile("not-a-token").is_err());

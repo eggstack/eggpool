@@ -66,10 +66,10 @@ impl FromStr for ClientTarget {
 pub enum ClientSchemaVariant {
     /// Current Codex TOML provider shape.
     CodexToml,
-    /// OpenCode V1 `provider` / `npm` shape.
+    /// OpenCode V1 `provider` / `npm` / `options` shape.
     OpencodeV1,
-    /// OpenCode V2 plural `providers` shape (selected only after local
-    /// qualification; rendering stays V1 until Plan 213 qualifies V2).
+    /// OpenCode V2 plural `providers` / `package` / `settings` shape with an
+    /// `env` credential list (qualified by Plan 213 against current V2 docs).
     OpencodeV2,
 }
 
@@ -123,8 +123,37 @@ pub struct ClientInspection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutationPlan {
     pub target: ClientTarget,
+    pub schema_variant: ClientSchemaVariant,
     pub proposed_document: String,
     pub diff_summary: Vec<String>,
+    /// Exact previous raw text of the owned entry, if one existed (Codex:
+    /// previous provider table/root values are summarized in `diff_summary`
+    /// while full values travel with the ownership manifest; OpenCode: raw
+    /// previous provider JSON for byte-exact restoration).
+    pub previous_raw: Option<String>,
+}
+
+/// Options for [`ClientAdapter::plan_mutation`].
+///
+/// `catalog_path` is required for Codex (the generated catalog artifact the
+/// config must point at); `client_version` seeds OpenCode variant selection
+/// for empty configs (shape always wins when present).
+#[derive(Debug, Clone, Default)]
+pub struct PlanOptions<'a> {
+    pub catalog_path: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub manage_model: bool,
+    pub client_version: Option<&'a str>,
+}
+
+/// Previous owned values for [`ClientAdapter::remove_owned`].
+#[derive(Debug, Clone)]
+pub enum RemovalPrevious {
+    Codex(crate::codex::CodexPrevious),
+    Opencode {
+        variant: ClientSchemaVariant,
+        raw: Option<String>,
+    },
 }
 
 /// Verification plan returned instead of executing subprocesses.
@@ -158,6 +187,7 @@ pub trait ClientAdapter {
         &self,
         existing: &str,
         profile: &AgentIntegrationProfileV1,
+        options: &PlanOptions<'_>,
     ) -> Result<MutationPlan, ClientConfigError>;
 
     /// Verify a document against portable expectations (secret-free).
@@ -167,8 +197,13 @@ pub trait ClientAdapter {
         profile: &AgentIntegrationProfileV1,
     ) -> Result<(), ClientConfigError>;
 
-    /// Remove only EggPool-owned fields from an existing document.
-    fn remove_owned(&self, existing: &str) -> Result<String, ClientConfigError>;
+    /// Remove only EggPool-owned fields from an existing document,
+    /// restoring `previous` captures where present.
+    fn remove_owned(
+        &self,
+        existing: &str,
+        previous: &RemovalPrevious,
+    ) -> Result<String, ClientConfigError>;
 
     /// Return the verification plan (commands are data, never executed here).
     fn verification_plan(&self) -> VerificationPlan;
@@ -208,13 +243,45 @@ impl ClientAdapter for CodexAdapter {
         &self,
         existing: &str,
         profile: &AgentIntegrationProfileV1,
+        options: &PlanOptions<'_>,
     ) -> Result<MutationPlan, ClientConfigError> {
-        let (proposed, _) = (existing.to_owned(), ());
-        let _ = profile;
+        let catalog_path = options
+            .catalog_path
+            .ok_or_else(|| ClientConfigError::InvalidField {
+                field: "catalog_path".to_owned(),
+                detail: "Codex mutation requires the generated catalog path".to_owned(),
+            })?;
+        let (proposed, previous) = crate::codex::apply_codex_text_mutation(
+            existing,
+            &profile.base_url,
+            catalog_path,
+            options.model,
+            options.manage_model,
+        );
+        let mut diff_summary = vec![
+            format!("update Codex provider (base_url {})", profile.base_url),
+            format!("point model_catalog_json at {catalog_path}"),
+        ];
+        if previous
+            .model_provider
+            .as_deref()
+            .is_some_and(|value| !value.is_empty() && value != "eggpool")
+        {
+            diff_summary
+                .push("capture previous model_provider for ownership-aware remove".to_owned());
+        }
+        if previous.provider_table.is_some() {
+            diff_summary.push(
+                "capture previous [model_providers.eggpool] table for ownership-aware remove"
+                    .to_owned(),
+            );
+        }
         Ok(MutationPlan {
             target: ClientTarget::Codex,
+            schema_variant: ClientSchemaVariant::CodexToml,
             proposed_document: proposed,
-            diff_summary: vec!["codex mutation planned".to_owned()],
+            diff_summary,
+            previous_raw: None,
         })
     }
 
@@ -233,16 +300,28 @@ impl ClientAdapter for CodexAdapter {
         }
     }
 
-    fn remove_owned(&self, existing: &str) -> Result<String, ClientConfigError> {
-        let previous = crate::codex::CodexPrevious::default();
-        Ok(crate::codex::remove_codex_owned_text(
-            existing, &previous, false,
-        ))
+    fn remove_owned(
+        &self,
+        existing: &str,
+        previous: &RemovalPrevious,
+    ) -> Result<String, ClientConfigError> {
+        match previous {
+            RemovalPrevious::Codex(previous) => Ok(crate::codex::remove_codex_owned_text(
+                existing, previous, false,
+            )),
+            RemovalPrevious::Opencode { .. } => Err(ClientConfigError::InvalidField {
+                field: "previous".to_owned(),
+                detail: "Codex adapter cannot consume OpenCode removal state".to_owned(),
+            }),
+        }
     }
 
     fn verification_plan(&self) -> VerificationPlan {
         VerificationPlan {
-            checks: vec!["codex debug models".to_owned(), "codex doctor".to_owned()],
+            checks: vec![
+                "codex debug models".to_owned(),
+                "codex doctor --json".to_owned(),
+            ],
             expected_artifacts: Vec::new(),
         }
     }
@@ -262,37 +341,38 @@ impl ClientAdapter for OpencodeAdapter {
     }
 
     fn inspect(&self, document: &str, profile: &AgentIntegrationProfileV1) -> ClientInspection {
-        let expected =
-            match crate::opencode::expected_opencode_provider(&profile.base_url, &profile.models) {
-                Ok(value) => value,
-                Err(error) => {
-                    return ClientInspection {
-                        up_to_date: false,
-                        issues: vec![error.to_string()],
-                    };
-                }
-            };
         if document.trim().is_empty() {
             return ClientInspection {
                 up_to_date: false,
                 issues: vec!["OpenCode config is missing".to_owned()],
             };
         }
-        if crate::text::has_jsonc_comments(document) {
-            return ClientInspection {
-                up_to_date: false,
-                issues: vec![
-                    "OpenCode config uses JSONC comments; managed rewrite is deferred".to_owned(),
-                ],
-            };
-        }
-        let current: Result<serde_json::Value, _> = serde_json::from_str(document);
-        match current {
+        let variant = match crate::opencode::select_opencode_variant(document, None) {
+            Ok(variant) => variant,
+            Err(error) => {
+                return ClientInspection {
+                    up_to_date: false,
+                    issues: vec![error.to_string()],
+                };
+            }
+        };
+        let expected = match crate::opencode::expected_opencode_provider_for(
+            variant,
+            &profile.base_url,
+            &profile.models,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return ClientInspection {
+                    up_to_date: false,
+                    issues: vec![error.to_string()],
+                };
+            }
+        };
+        match crate::jsonc::parse_value(document) {
             Ok(value) => {
-                let current_provider = value
-                    .get("provider")
-                    .and_then(|provider| provider.get("eggpool"));
-                if current_provider == Some(&expected) {
+                let current = crate::opencode::current_owned_entry(&value, variant);
+                if current == Some(&expected) {
                     ClientInspection {
                         up_to_date: true,
                         issues: Vec::new(),
@@ -300,13 +380,16 @@ impl ClientAdapter for OpencodeAdapter {
                 } else {
                     ClientInspection {
                         up_to_date: false,
-                        issues: vec!["OpenCode eggpool provider differs".to_owned()],
+                        issues: vec![format!(
+                            "OpenCode {} provider differs",
+                            crate::opencode::owned_path_for(variant)
+                        )],
                     }
                 }
             }
-            Err(_) => ClientInspection {
+            Err(error) => ClientInspection {
                 up_to_date: false,
-                issues: vec!["OpenCode config is not valid JSON".to_owned()],
+                issues: vec![error.detail()],
             },
         }
     }
@@ -315,16 +398,37 @@ impl ClientAdapter for OpencodeAdapter {
         &self,
         existing: &str,
         profile: &AgentIntegrationProfileV1,
+        options: &PlanOptions<'_>,
     ) -> Result<MutationPlan, ClientConfigError> {
-        let desired = self.render(profile)?;
+        let variant = crate::opencode::select_opencode_variant(existing, options.client_version)?;
+        let expected = crate::opencode::expected_opencode_provider_for(
+            variant,
+            &profile.base_url,
+            &profile.models,
+        )?;
+        let mutation = crate::opencode::apply_opencode_document(existing, variant, &expected)?;
+        let summary = if existing.trim().is_empty() {
+            format!(
+                "create OpenCode {} provider",
+                crate::opencode::owned_path_for(variant)
+            )
+        } else if mutation.previous_raw.is_some() {
+            format!(
+                "converge OpenCode {} provider (previous captured)",
+                crate::opencode::owned_path_for(variant)
+            )
+        } else {
+            format!(
+                "converge OpenCode {} provider",
+                crate::opencode::owned_path_for(variant)
+            )
+        };
         Ok(MutationPlan {
             target: ClientTarget::Opencode,
-            proposed_document: desired,
-            diff_summary: if existing.trim().is_empty() {
-                vec!["create OpenCode eggpool provider".to_owned()]
-            } else {
-                vec!["converge OpenCode eggpool provider".to_owned()]
-            },
+            schema_variant: variant,
+            proposed_document: mutation.text,
+            diff_summary: vec![summary],
+            previous_raw: mutation.previous_raw,
         })
     }
 
@@ -343,27 +447,20 @@ impl ClientAdapter for OpencodeAdapter {
         }
     }
 
-    fn remove_owned(&self, existing: &str) -> Result<String, ClientConfigError> {
-        if existing.trim().is_empty() {
-            return Ok(String::new());
+    fn remove_owned(
+        &self,
+        existing: &str,
+        previous: &RemovalPrevious,
+    ) -> Result<String, ClientConfigError> {
+        match previous {
+            RemovalPrevious::Opencode { variant, raw } => {
+                crate::opencode::remove_opencode_document(existing, *variant, raw.as_deref())
+            }
+            RemovalPrevious::Codex(_) => Err(ClientConfigError::InvalidField {
+                field: "previous".to_owned(),
+                detail: "OpenCode adapter cannot consume Codex removal state".to_owned(),
+            }),
         }
-        if crate::text::has_jsonc_comments(existing) {
-            return Err(ClientConfigError::UnsafeRewrite {
-                detail: "existing OpenCode config uses JSONC comments; refusing to remove"
-                    .to_owned(),
-            });
-        }
-        let value: serde_json::Value =
-            serde_json::from_str(existing).map_err(|_| ClientConfigError::UnsafeRewrite {
-                detail: "existing OpenCode config is not valid JSON".to_owned(),
-            })?;
-        let mut root = value.as_object().cloned().unwrap_or_default();
-        if let Some(provider) = root.get_mut("provider").and_then(|v| v.as_object_mut()) {
-            provider.remove("eggpool");
-        }
-        let mut rendered = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
-        rendered.push('\n');
-        Ok(rendered)
     }
 
     fn verification_plan(&self) -> VerificationPlan {
