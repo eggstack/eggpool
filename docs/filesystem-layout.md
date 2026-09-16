@@ -103,6 +103,11 @@ fingerprint (never credentials), artifact hashes, and parent backup.
 Retention keeps the newest 10 per target and never deletes the only recovery
 point. `restore` takes a pre-restore backup first.
 
+The reviewed desktop bootstraps (`packaging/connect/`) keep downloads in a
+private temporary directory (`mktemp -d` on POSIX, a GUID directory under
+`$env:TEMP` on Windows) removed after the verified helper exits; they leave
+no state behind on success or on pre-execution failure.
+
 ## Notes
 
 - The `env` file must be readable by the `eggpool` user but not world-readable.

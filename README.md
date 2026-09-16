@@ -99,7 +99,12 @@ eggpool configsetup opencode --apply
 eggpool configremote codex
 eggpool configremote opencode --format token
 
-# Desktop — transactional install from a profile token
+# Desktop — verified one-shot bootstrap (downloads pinned helper + SHA256SUMS,
+# verifies SHA-256, then runs eggpool-connect install from a temp dir)
+# macOS/Linux: paste the block from `eggpool configremote codex --shell posix`
+# Windows PowerShell: paste the block from `eggpool configremote codex --shell powershell`
+
+# Desktop — transactional install from a profile token (what the bootstrap runs)
 eggpool-connect plan --profile 'epc1.…'
 eggpool-connect install --profile 'epc1.…'
 
@@ -143,8 +148,8 @@ By default, EggPool binds to localhost. To expose it on your LAN:
 2. Change the bind address: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
 3. Advertise the desktop URL: `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`
 4. Restart: `eggpool restart`
-5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token)
-6. On each desktop: `eggpool-connect install --profile 'epc1.…'` (confirms plan, backs up byte-exact, verifies, rolls back on failure)
+5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token plus version-pinned verified bootstrap commands)
+6. On each desktop: paste the `configremote` bootstrap block (verifies SHA-256, then `eggpool-connect install --profile 'epc1.…'` confirms plan, backs up byte-exact, verifies, rolls back on failure)
 
 See [Firewall](docs/firewall.md) for restricting access to your LAN.
 

@@ -13,6 +13,14 @@ import zipfile
 from pathlib import Path
 from typing import Any, cast
 
+from inspect_connect_artifact import (
+    CONNECT_BOOTSTRAPS,
+    CONNECT_TARGETS,
+    ConnectInspectionError,
+    connect_filename,
+    inspect_connect_artifact,
+    inspect_connect_bootstrap,
+)
 from inspect_release_raw import TARGETS, RawInspectionError, inspect_raw
 from inspect_release_wheel import WheelInspectionError, inspect_wheel
 
@@ -112,8 +120,108 @@ def macos_portability_evidence(binary: Path) -> dict[str, Any]:
     return {"tool": "otool", "deployment_target": f"{major}.{minor}"}
 
 
+def validate_connect_artifacts(
+    manifest: dict[str, Any], connect_dir: Path | None
+) -> list[dict[str, Any]]:
+    """Validate the optional helper section without touching the proxy set.
+
+    An absent or empty `connect_artifacts` list is valid (proxy-only bundle).
+    A present list must contain every helper binary plus both bootstraps with
+    matching digests, and the files must live in the helper artifact
+    directory so helper outputs can never masquerade as proxy raw assets.
+    """
+    raw_value = manifest.get("connect_artifacts", [])
+    if not isinstance(raw_value, list):
+        raise ValidationError("helper artifact section must be a list")
+    records = cast("list[object]", raw_value)
+    if not records:
+        return []
+    if connect_dir is None:
+        raise ValidationError("manifest lists helper artifacts but none were provided")
+    validated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_record in records:
+        if not isinstance(raw_record, dict):
+            raise ValidationError("helper artifact record must be an object")
+        record = cast("dict[str, Any]", raw_record)
+        kind = _require(record.get("kind"), "connect.kind")
+        filename = _require(record.get("filename"), "connect.filename")
+        if kind == "eggpool-connect":
+            target_class = _require(record.get("product_target"), "product_target")
+            if target_class not in CONNECT_TARGETS or target_class in seen:
+                raise ValidationError("helper target set is invalid")
+            seen.add(target_class)
+            if (
+                record.get("rust_target")
+                != CONNECT_TARGETS[target_class]["rust_target"]
+            ):
+                raise ValidationError("helper Rust target disagrees with target matrix")
+            if filename != connect_filename(
+                _require(manifest.get("release_version"), "release_version"),
+                target_class,
+            ):
+                raise ValidationError("helper filename disagrees with target matrix")
+            if record.get("executable") is not True:
+                raise ValidationError("helper executable expectation is invalid")
+            helper_path = _artifact_path(connect_dir, filename)
+            try:
+                inspection = inspect_connect_artifact(
+                    helper_path,
+                    expected_version=_require(
+                        manifest.get("release_version"), "release_version"
+                    ),
+                    target_class=target_class,
+                )
+            except ConnectInspectionError as error:
+                raise ValidationError(
+                    f"helper validation failed for {target_class}"
+                ) from error
+            if (
+                record.get("sha256") != inspection.sha256
+                or record.get("size") != inspection.size
+            ):
+                raise ValidationError(f"helper digest/size mismatch for {target_class}")
+        elif kind == "connect-bootstrap":
+            if filename not in CONNECT_BOOTSTRAPS or filename in seen:
+                raise ValidationError("helper bootstrap set is invalid")
+            seen.add(filename)
+            if record.get("executable") is not False:
+                raise ValidationError("bootstrap executable expectation is invalid")
+            bootstrap_path = _artifact_path(connect_dir, filename)
+            try:
+                inspection_record = inspect_connect_bootstrap(bootstrap_path)
+            except ConnectInspectionError as error:
+                raise ValidationError(
+                    f"bootstrap validation failed: {filename}"
+                ) from error
+            if (
+                record.get("sha256") != inspection_record["sha256"]
+                or record.get("size") != inspection_record["size"]
+            ):
+                raise ValidationError(f"bootstrap digest/size mismatch: {filename}")
+        else:
+            raise ValidationError(f"helper artifact kind is invalid: {kind}")
+        validated.append(record)
+    expected_targets = {f"binary:{name}" for name in CONNECT_TARGETS} | {
+        f"bootstrap:{name}" for name in CONNECT_BOOTSTRAPS
+    }
+    observed = {
+        f"binary:{record['product_target']}"
+        if record["kind"] == "eggpool-connect"
+        else f"bootstrap:{record['filename']}"
+        for record in validated
+    }
+    if observed != expected_targets:
+        raise ValidationError("helper artifact set is incomplete")
+    return validated
+
+
 def validate_manifest(
-    manifest_path: Path, artifact_dir: Path, *, portability: bool = False
+    manifest_path: Path,
+    artifact_dir: Path,
+    *,
+    portability: bool = False,
+    connect_artifact_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Validate all manifest records, payload correlations, and target absence."""
     try:
@@ -147,6 +255,8 @@ def validate_manifest(
         target_class = _require(record.get("product_target"), "product_target")
         if target_class not in TARGETS or target_class in seen:
             raise ValidationError("manifest target set is invalid")
+        if record.get("kind", "eggpool") != "eggpool":
+            raise ValidationError("proxy artifact kind is invalid")
         seen.add(target_class)
         if record.get("rust_target") != TARGETS[target_class]["rust_target"]:
             raise ValidationError("Rust target disagrees with target matrix")
@@ -199,6 +309,11 @@ def validate_manifest(
             record["portability"] = evidence
     if seen != set(TARGETS):
         raise ValidationError("manifest target set is incomplete")
+    connect_records = validate_connect_artifacts(manifest, connect_artifact_dir)
+    if connect_artifact_dir is not None:
+        for record in connect_records:
+            expected_files.add(str(record["filename"]))
+        _check_no_unsupported_files(connect_artifact_dir, expected_files)
     _check_no_unsupported_files(artifact_dir, expected_files)
     if manifest.get("qualification_result") not in {"pending", "pass"}:
         raise ValidationError("manifest qualification result is invalid")
@@ -210,19 +325,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--portability", action="store_true")
+    parser.add_argument(
+        "--connect-artifact-dir", type=Path, required=False, default=None
+    )
     args = parser.parse_args(argv)
     try:
         value = validate_manifest(
             args.manifest.resolve(),
             args.artifact_dir.resolve(),
             portability=args.portability,
+            connect_artifact_dir=(
+                args.connect_artifact_dir.resolve()
+                if args.connect_artifact_dir is not None
+                else None
+            ),
         )
     except (ValidationError, OSError, subprocess.SubprocessError) as error:
         print(f"release artifact set invalid: {error}", file=sys.stderr)
         return 1
     print(
         json.dumps(
-            {"status": "pass", "targets": len(value["artifacts"])}, sort_keys=True
+            {
+                "status": "pass",
+                "targets": len(value["artifacts"]),
+                "connect_artifacts": len(value.get("connect_artifacts", [])),
+            },
+            sort_keys=True,
         )
     )
     return 0

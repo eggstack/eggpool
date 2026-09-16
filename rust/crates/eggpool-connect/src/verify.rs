@@ -134,8 +134,16 @@ pub fn validate_local(
 /// Layer 2: run the client-native inspection without inference.
 ///
 /// Codex runs `codex debug models` and `codex doctor --json`; OpenCode runs
-/// `opencode models`. Bounded stdout/stderr is captured for diagnostics and
-/// redacted before display. Child processes are time-bound.
+/// `opencode models eggpool`. Bounded stdout/stderr is captured for
+/// diagnostics and redacted before display. Child processes are time-bound.
+///
+/// `expected_models` carries remote public IDs for the OpenCode slug check.
+/// `OPENCODE_CONFIG` is only a merge layer in current OpenCode, so the probe
+/// sets it to the installed path explicitly and requires every expected
+/// `eggpool/<public_id>` slug in the filtered listing; a global config that
+/// merely names an `eggpool` provider cannot satisfy the slug check. An
+/// empty list keeps the provider-presence check (used by `verify`, which has
+/// no remote profile).
 pub async fn validate_native<R: ProcessRunner>(
     runner: &R,
     target: ClientTarget,
@@ -143,6 +151,7 @@ pub async fn validate_native<R: ProcessRunner>(
     state_root: &Path,
     api_key: &str,
     timeout: Duration,
+    expected_models: &[String],
 ) -> Result<String, ConnectError> {
     match target {
         ClientTarget::Codex => {
@@ -153,14 +162,24 @@ pub async fn validate_native<R: ProcessRunner>(
             })?;
             let _ = codex_bin;
             // Effective config environment: forward the key only for the
-            // child probe (never logged; redacted before display).
+            // child probe (never logged; redacted before display), and
+            // forward ambient `CODEX_HOME` explicitly so the probe observes
+            // the same home the helper detected rather than depending on
+            // implicit inheritance.
             let key_pair;
-            let env_slice: &[(&str, &str)] = if api_key.is_empty() {
-                &[]
-            } else {
+            let home_value: Option<String> =
+                std::env::var_os("CODEX_HOME").map(|value| value.to_string_lossy().into_owned());
+            let home_pair;
+            let mut env_vec: Vec<(&str, &str)> = Vec::new();
+            if !api_key.is_empty() {
                 key_pair = ("EGGPOOL_API_KEY", api_key);
-                std::slice::from_ref(&key_pair)
-            };
+                env_vec.push(key_pair);
+            }
+            if let Some(home) = home_value.as_deref() {
+                home_pair = ("CODEX_HOME", home);
+                env_vec.push(home_pair);
+            }
+            let env_slice: &[(&str, &str)] = &env_vec;
             let models = runner
                 .run("codex", &["debug", "models"], env_slice, timeout)
                 .await
@@ -222,12 +241,17 @@ pub async fn validate_native<R: ProcessRunner>(
                     detail: "opencode executable is not available for native validation".to_owned(),
                 }
             })?;
-            // Pass the effective config path only when the client honors a
-            // config env/flag; otherwise the child uses its default lookup,
-            // which matches what the user will run. `OPENCODE_CONFIG` is set
-            // only when the resolved path differs from default lookup.
+            // `OPENCODE_CONFIG` is a merge layer, not isolation: point it at
+            // the installed file explicitly so the probe always observes the
+            // installed provider entry rather than ambient global state.
+            let config_value = config_path.to_string_lossy().into_owned();
+            let config_pair;
+            let env_slice: &[(&str, &str)] = {
+                config_pair = ("OPENCODE_CONFIG", config_value.as_str());
+                std::slice::from_ref(&config_pair)
+            };
             let output = runner
-                .run("opencode", &["models"], &[], timeout)
+                .run("opencode", &["models", "eggpool"], env_slice, timeout)
                 .await
                 .map_err(|error| ConnectError::Validation {
                     detail: format!("opencode models failed: {error}"),
@@ -250,6 +274,21 @@ pub async fn validate_native<R: ProcessRunner>(
                     detail: "opencode models does not list the EggPool provider".to_owned(),
                 });
             }
+            // Precise slug check: every expected remote model must appear as
+            // `eggpool/<public_id>`. A same-named provider from another layer
+            // cannot satisfy this.
+            let missing: Vec<&String> = expected_models
+                .iter()
+                .filter(|id| !combined.contains(&format!("eggpool/{id}")))
+                .collect();
+            if !missing.is_empty() {
+                return Err(ConnectError::Validation {
+                    detail: format!(
+                        "opencode models does not list {} EggPool model(s)",
+                        missing.len()
+                    ),
+                });
+            }
             Ok("opencode models lists EggPool".to_owned())
         }
     }
@@ -260,6 +299,7 @@ pub const _NATIVE_TIMEOUT_ALIAS: Duration = NATIVE_VERIFY_TIMEOUT;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::ProcessOutput;
     use eggpool_client_config::{
         AgentModelCapabilities, AgentModelProjection, IntegrationCapabilities,
     };
@@ -350,9 +390,97 @@ mod tests {
                 dir.path(),
                 "",
                 Duration::from_secs(1),
+                &[],
             )
             .await;
             assert!(result.is_err());
         }
+    }
+
+    /// Capturing runner: records env extras and serves canned output.
+    struct EnvRunner {
+        output: ProcessOutput,
+        seen_env: std::sync::Mutex<Vec<(String, String)>>,
+        seen_args: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::process::ProcessRunner for EnvRunner {
+        async fn run(
+            &self,
+            _program: &str,
+            args: &[&str],
+            env_extra: &[(&str, &str)],
+            _timeout: Duration,
+        ) -> Result<ProcessOutput, crate::outcome::ConnectError> {
+            *self.seen_args.lock().expect("args") =
+                args.iter().map(|arg| (*arg).to_owned()).collect();
+            *self.seen_env.lock().expect("env") = env_extra
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect();
+            Ok(self.output.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn native_opencode_pins_config_path_and_model_slugs() {
+        let runner = EnvRunner {
+            output: ProcessOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: "eggpool/qual-probe-model/qual-probe\neggpool/other\n".to_owned(),
+                stderr: String::new(),
+            },
+            seen_env: std::sync::Mutex::new(Vec::new()),
+            seen_args: std::sync::Mutex::new(Vec::new()),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("opencode.json");
+        let expected = vec!["qual-probe-model/qual-probe".to_owned()];
+        let detail = validate_native(
+            &runner,
+            ClientTarget::Opencode,
+            &config,
+            dir.path(),
+            "",
+            Duration::from_secs(1),
+            &expected,
+        )
+        .await
+        .expect("precise probe passes");
+        assert!(detail.contains("EggPool"));
+        assert_eq!(
+            runner.seen_args.lock().expect("args").as_slice(),
+            &["models".to_owned(), "eggpool".to_owned()]
+        );
+        let env = runner.seen_env.lock().expect("env").clone();
+        assert!(
+            env.iter().any(|(key, value)| key == "OPENCODE_CONFIG"
+                && std::path::Path::new(value) == config.as_path()),
+            "probe must observe the installed file, not ambient global state"
+        );
+        // Same-named provider without our model slug fails closed.
+        let thin = EnvRunner {
+            output: ProcessOutput {
+                success: true,
+                exit_code: Some(0),
+                stdout: "eggpool/unrelated-model\n".to_owned(),
+                stderr: String::new(),
+            },
+            seen_env: std::sync::Mutex::new(Vec::new()),
+            seen_args: std::sync::Mutex::new(Vec::new()),
+        };
+        let error = validate_native(
+            &thin,
+            ClientTarget::Opencode,
+            &config,
+            dir.path(),
+            "",
+            Duration::from_secs(1),
+            &expected,
+        )
+        .await
+        .expect_err("missing slug must fail");
+        assert!(error.to_string().contains("does not list"));
     }
 }

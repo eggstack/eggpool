@@ -131,14 +131,42 @@ def verify_publication(
             item = cast("JsonObject", value)
             assets[cast("str", item["name"])] = item
     expected_raw = {cast("JsonObject", record["raw"])["filename"] for record in records}
-    expected_release_files = expected_raw | {
-        "SHA256SUMS",
-        f"eggpool-{version}-release-manifest.json",
-    }
+    connect_entries: dict[str, str] = {}
+    connect_value = manifest.get("connect_artifacts", [])
+    if not isinstance(connect_value, list):
+        raise PublicationVerificationError("helper artifact section is invalid")
+    for value in cast("list[Any]", connect_value):
+        if not isinstance(value, dict):
+            raise PublicationVerificationError("helper artifact record is invalid")
+        entry = cast("JsonObject", value)
+        kind = entry.get("kind")
+        filename = entry.get("filename")
+        sha256 = entry.get("sha256")
+        if kind not in {"eggpool-connect", "connect-bootstrap"} or not isinstance(
+            filename, str
+        ):
+            raise PublicationVerificationError("helper artifact record is invalid")
+        if not isinstance(sha256, str) or len(sha256) != 64:
+            raise PublicationVerificationError(
+                f"helper artifact digest is invalid: {filename}"
+            )
+        if filename in connect_entries:
+            raise PublicationVerificationError("helper artifact set is duplicated")
+        connect_entries[filename] = sha256
+    expected_release_files = (
+        expected_raw
+        | set(connect_entries)
+        | {
+            "SHA256SUMS",
+            f"eggpool-{version}-release-manifest.json",
+        }
+    )
     if not expected_raw.issubset(assets):
         raise PublicationVerificationError(
             "GitHub release is missing a raw target asset"
         )
+    if not set(connect_entries).issubset(assets):
+        raise PublicationVerificationError("GitHub release is missing a helper asset")
     for name in expected_raw:
         digest = assets[name].get("digest")
         expected = next(
@@ -150,6 +178,11 @@ def verify_publication(
             raise PublicationVerificationError(
                 f"GitHub asset digest missing or mismatched: {name}"
             )
+    for name, expected in connect_entries.items():
+        if assets[name].get("digest") != f"sha256:{expected}":
+            raise PublicationVerificationError(
+                f"GitHub helper digest missing or mismatched: {name}"
+            )
     unexpected = sorted(set(assets) - expected_release_files)
     if unexpected:
         raise PublicationVerificationError(
@@ -160,6 +193,7 @@ def verify_publication(
         "version": version,
         "wheels": len(expected_wheels),
         "raw_assets": len(expected_raw),
+        "connect_assets": len(connect_entries),
     }
 
 

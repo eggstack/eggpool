@@ -332,8 +332,9 @@ pub struct ConfigremoteArgs {
     #[arg(long, default_value = "command")]
     pub format: String,
     /// Bootstrap shell rendering: `auto`, `posix`, `powershell`, or `all`.
-    /// Bootstrap artifacts are not yet published (Plan 214); this currently
-    /// only validates the value and documents availability.
+    /// `auto`/`all` print both the POSIX and PowerShell invocations; the
+    /// commands are pinned to this EggPool release and verify SHA-256
+    /// against the release SHA256SUMS before executing anything.
     #[arg(long, default_value = "auto")]
     pub shell: String,
     /// Print token/profile only without bootstrap guidance.

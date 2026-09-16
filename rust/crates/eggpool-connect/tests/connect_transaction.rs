@@ -89,7 +89,7 @@ fn fake_runner() -> FakeProcessRunner {
     );
     runner.insert(
         "opencode",
-        &["models"],
+        &["models", "eggpool"],
         ProcessOutput {
             success: true,
             exit_code: Some(0),
@@ -405,6 +405,69 @@ fn remove_is_ownership_aware_and_preserves_unrelated() {
     assert!(removed.contains("[other]"));
     assert!(!removed.contains("[model_providers.eggpool]"));
     assert!(!removed.contains("model_provider = \"eggpool\""));
+}
+
+#[tokio::test]
+async fn remove_restores_first_ownership_capture_not_later_drift() {
+    // Live-qualification regression: install, externally drift an owned
+    // field, force-converge, then remove. Remove must delete owned fields
+    // (first-ownership capture was empty) rather than resurrect the drifted
+    // values captured by the later force install.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = dir.path().join("state");
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "# keep\n").expect("write");
+
+    let connection = connection(vec![ClientTarget::Codex]);
+    let remote = remote("https://pool.example/v1");
+    let detection = codex_detection(&config);
+    let runner = fake_runner();
+    let fetcher = FakeProfileFetcher::ok(remote.clone());
+
+    for force in [false, true] {
+        eggpool_connect::install::install(
+            &runner,
+            &fetcher,
+            &connection,
+            Some(remote.clone()),
+            &detection,
+            &state,
+            API_KEY,
+            force,
+            false,
+            FailureInjector::default(),
+        )
+        .await
+        .expect("install");
+        if !force {
+            // Externally drift one owned field between installs.
+            let drifted = std::fs::read_to_string(&config)
+                .expect("read")
+                .replace("https://pool.example/v1", "http://evil.example/v1");
+            assert_ne!(
+                drifted,
+                std::fs::read_to_string(&config).expect("read"),
+                "fixture must contain the owned base URL"
+            );
+            std::fs::write(&config, drifted).expect("drift");
+        }
+    }
+    assert!(
+        !std::fs::read_to_string(&config)
+            .expect("read")
+            .contains("evil.example"),
+        "force install converges drift"
+    );
+
+    eggpool_connect::install::remove_owned(&detection, &state, false).expect("remove");
+    let removed = std::fs::read_to_string(&config).expect("read");
+    assert!(removed.contains("# keep"), "unrelated content survives");
+    assert!(
+        !removed.contains("[model_providers.eggpool]"),
+        "owned table is removed, not restored from later drift"
+    );
+    assert!(!removed.contains("model_provider = \"eggpool\""));
+    assert!(!removed.contains("evil.example"));
 }
 
 #[test]

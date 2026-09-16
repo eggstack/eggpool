@@ -32,8 +32,43 @@ The release set is exactly:
 - Linux aarch64 wheel/raw executable;
 - macOS arm64 wheel/raw executable.
 
-There is no Rust sdist, universal wheel, Windows asset, or source-build
-fallback.
+There is no Rust sdist, universal wheel, Windows proxy asset, or
+source-build fallback. (Windows appears only as an `eggpool-connect` helper
+asset below.)
+
+## Desktop helper release assets (`eggpool-connect`)
+
+The same release workflow additionally publishes the `eggpool-connect`
+desktop configurator as GitHub release assets (never PyPI wheels):
+
+- `eggpool-connect-<version>-linux-x86_64`;
+- `eggpool-connect-<version>-linux-aarch64`;
+- `eggpool-connect-<version>-macos-arm64`;
+- `eggpool-connect-<version>-windows-x86_64.exe`;
+- `eggpool-connect.sh` (POSIX bootstrap) and `eggpool-connect.ps1`
+  (PowerShell bootstrap), both reviewed static files with no client
+  mutation logic.
+
+Helper identity is distinct from proxy identity: the release manifest keeps
+the exact three proxy wheel/raw records under `artifacts` (kind
+`eggpool`) and lists helper outputs separately under `connect_artifacts`
+(kinds `eggpool-connect` / `connect-bootstrap`, each with version, target
+class, filename, SHA-256, size, and executable expectation). Validators
+check the proxy set independently, so helper additions cannot look like
+extra server binaries. Helper executables are built with plain Cargo from
+the same clean release commit (`scripts/build_connect_artifacts.py`),
+aggregated into the exact release bundle without rebuilding, hashed into
+the manifest (`--connect-artifact-dir`), and attached to the GitHub
+release alongside `SHA256SUMS`. The post-publication verifier
+(`scripts/verify_published_release.py`) checks helper digests the same way
+it checks raw assets.
+
+Publishing a Windows `eggpool-connect` binary does not imply Windows
+proxy/server support. The proxy matrix above is unchanged; only the helper
+(a small client-side configurator with no Axum/SQLite/Eggress/server
+dependencies) ships for Windows desktops. `eggpool configremote` renders
+bootstrap commands pinned to these immutable asset URLs; see
+[Agent Configuration](agent-configuration.md).
 
 ## Staged rehearsal
 

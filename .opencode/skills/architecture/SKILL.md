@@ -79,6 +79,13 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   rollback with distinct rollback-failure evidence, reversible restore, and
   ownership-aware remove. Credentials come from `EGGPOOL_API_KEY`/TTY/
   `--api-key-stdin` (never argv) and never reach logs/manifests/configs.
+  Desktops arrive via version-pinned reviewed bootstraps
+  (`packaging/connect/eggpool-connect.sh` + `eggpool-connect.ps1`, SHA-256
+  against the release SHA256SUMS, no mutation logic); `configremote`
+  renders their invocations from `operations/integrations.rs`. Helper
+  release identity (`connect_artifacts`, `connect-*` targets) stays distinct
+  from the proxy `artifacts` triple; a Windows helper never implies Windows
+  proxy support.
 
 ## Verification pointers
 

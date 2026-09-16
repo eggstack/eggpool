@@ -503,6 +503,11 @@ where
                     });
                 }
                 (true, false) => {
+                    let expected: Vec<String> = remote
+                        .models
+                        .iter()
+                        .map(|model| model.public_id.clone())
+                        .collect();
                     let detail = validate_native(
                         runner,
                         planned.target,
@@ -510,6 +515,7 @@ where
                         state_root,
                         api_key,
                         crate::detect::NATIVE_VERIFY_TIMEOUT,
+                        &expected,
                     )
                     .await?;
                     (true, detail)
@@ -660,6 +666,11 @@ where
         if !native_possible {
             return Ok("client-native verification unavailable (executable absent)".to_owned());
         }
+        let expected: Vec<String> = remote
+            .models
+            .iter()
+            .map(|model| model.public_id.clone())
+            .collect();
         validate_native(
             runner,
             planned.target,
@@ -667,6 +678,7 @@ where
             state_root,
             api_key,
             crate::detect::NATIVE_VERIFY_TIMEOUT,
+            &expected,
         )
         .await
     })()
@@ -878,11 +890,18 @@ pub fn remove_owned(
             detail: "nothing to remove: client config is absent or empty".to_owned(),
         });
     }
-    // Find the newest backup carrying previous owned values for this target.
+    // Restore source is the oldest backup's capture: first-ownership evidence
+    // is the true pre-existing state, while later installs capture our own
+    // (or externally drifted) values, which remove must never resurrect.
+    // `list_backups` returns newest-first, so take the last entry. An empty
+    // capture means nothing pre-existed and remove purely deletes owned
+    // fields. Later pre-restore/pre-remove backups never precede the first
+    // install, so the oldest entry always carries first-ownership evidence
+    // (subject to the newest-10 retention bound).
     let backups = list_backups(state_root, Some(detection.target))?;
     let previous_map = backups
         .iter()
-        .find(|manifest| !manifest.previous_values.is_empty())
+        .next_back()
         .map(|manifest| manifest.previous_values.clone())
         .unwrap_or_default();
 

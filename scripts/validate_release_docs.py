@@ -11,6 +11,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+from validate_release_workflow import job_blocks, without_helper_blocks
 from validate_runtime_package_boundary import (
     PackageBoundaryError,
     validate_package_boundary,
@@ -178,6 +179,23 @@ def validate_release_docs() -> dict[str, object]:
     ):
         _require(upgrading, phrase, "upgrade/rollback guide")
     _require(releasing, "validate_release_docs.py", "release guard documentation")
+    _require(releasing, "eggpool-connect", "helper release documentation")
+    _require(
+        releasing,
+        "does not imply",
+        "helper/proxy Windows support distinction",
+    )
+    agent_configuration = (ROOT / "docs/agent-configuration.md").read_text(
+        encoding="utf-8"
+    )
+    _check_local_links(ROOT / "docs/agent-configuration.md", agent_configuration)
+    for needle in (
+        "eggpool-connect.sh",
+        "eggpool-connect.ps1",
+        "SHA256SUMS",
+        "--shell",
+    ):
+        _require(agent_configuration, needle, "desktop bootstrap documentation")
     _require(changelog, f"## [{version}]", "changelog release heading")
     if (
         publication_status == "published"
@@ -207,11 +225,17 @@ def validate_release_docs() -> dict[str, object]:
         raise ReleaseDocsError("installer contains a hidden repository fallback")
 
     _require(workflow, "build_release_artifacts.py", "Rust artifact workflow")
+    _require(workflow, "build_connect_artifacts.py", "helper artifact workflow")
     if re.search(r"(?im)\buv\s+(build|publish)\b", workflow):
         raise ReleaseDocsError(
             "production workflow can select the root Hatchling artifact"
         )
-    if "py3-none-any" in workflow or "windows" in workflow.lower():
+    try:
+        workflow_blocks = job_blocks(workflow)
+    except ValueError as error:
+        raise ReleaseDocsError(f"release workflow has no jobs: {error}") from error
+    proxy_workflow = without_helper_blocks(workflow, workflow_blocks)
+    if "py3-none-any" in workflow or "windows" in proxy_workflow.lower():
         raise ReleaseDocsError("release workflow contains an unsupported artifact path")
 
     update_examples = VERSION_RE.findall(readme + deployment + upgrading)

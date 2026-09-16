@@ -175,11 +175,29 @@ advertised URL, and reports `EGGPOOL_API_KEY` plus `auth_configured` without
 creating/rotating keys, mutating config/transcoding, refreshing catalogs, or
 sending upstream requests. `remote_connection_token()` builds the portable
 `ConnectionProfileV1` + `epc1` token; `--format json` emits the stable bounded
-`eggpool.configremote/v1` object; default human output shows target, endpoint,
-auth reference, and token with an explicit “bootstrap not yet available (Plan
-214)” note rather than inventing a mutable installer URL. `runtime.rs` remains
+`eggpool.configremote/v1` object (now with a `bootstrap` section carrying the
+pinned version/tag, per-shell asset URLs, helper asset names, and both shell
+commands); default human output shows target, endpoint, auth reference, token,
+and the `--shell`-selected bootstrap block. `runtime.rs` remains
 the presentation adapter; reusable construction lives in
 `operations/integrations.rs`.
+
+## Desktop bootstrap rendering
+
+`render_connect_posix()` / `render_connect_powershell()` (selected via
+`render_connect_bootstrap()` for `--shell auto|posix|powershell|all`) emit
+copy/paste blocks pinned to the running EggPool version
+(`RELEASE_REPOSITORY = "eggstack/eggpool"`, immutable
+`/releases/download/vX.Y.Z/` URLs, no `latest`). Each block downloads the
+reviewed bootstrap plus the release SHA256SUMS over HTTPS, verifies the
+bootstrap hash, then runs the bootstrap with the token single-quoted as a
+data argument (`posix_shell_quote()` / `powershell_quote()`, hostile-token
+tested; no `eval`/`Invoke-Expression`, no credential assignment). Blocks stay
+within `MAX_BOOTSTRAP_COMMAND_LEN`. The bootstraps themselves
+(`packaging/connect/eggpool-connect.sh`, `eggpool-connect.ps1`) only
+select/download/verify/execute the matching helper binary and own no client
+mutation logic; helper binaries are the `eggpool-connect-*` release assets
+with `SHA256SUMS` as the integrity contract (see the deployment deep dive).
 
 ## Integration-profile API
 

@@ -15,7 +15,9 @@ and standalone replacement without `--adopt-standalone`. It preserves config,
 database, and `.env` files and never clones the repository for a normal install.
 
 Supported release targets are Linux x86_64, Linux aarch64, and macOS arm64.
-The native executable owns update, deployment, backup, restore, recovery,
+The `eggpool-connect` desktop helper additionally ships for Windows x86_64;
+a Windows helper never implies Windows proxy support. The native executable
+owns update, deployment, backup, restore, recovery,
 uninstall, runtime paths, and control-socket behavior. Historical Python
 packages remain immutable external artifacts selected only by explicit,
 catalogued compatible exact version.

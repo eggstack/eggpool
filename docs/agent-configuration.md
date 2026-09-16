@@ -76,6 +76,8 @@ The value must be an absolute `http://`/`https://` URL ending in `/v1` (a bare h
 
 ```sh
 eggpool configremote codex
+eggpool configremote codex --shell posix
+eggpool configremote opencode --shell powershell
 eggpool configremote opencode --format token
 eggpool configremote codex --format json
 eggpool configremote opencode --base-url https://pool.example.internal/v1
@@ -83,9 +85,17 @@ eggpool configremote opencode --base-url https://pool.example.internal/v1
 
 Precedence: explicit `--base-url` wins, configured advertisement is next, and a detected LAN address is offered only when compatible with the listen config (wildcard binds via LAN detection; explicit non-loopback binds via their own host). Loopback-only without an advertisement fails with guidance rather than emitting a misleading command.
 
-`configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output notes that version-pinned bootstrap installers arrive in a later release; use token/JSON with `eggpool-connect` today.
+`configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output prints version-pinned desktop bootstrap commands (see below); `--shell posix|powershell|all` selects the rendered shell (`auto` prints both), and `--no-bootstrap` prints the profile only.
 
 The token references `GET /api/integrations/v1/profile` (authenticated, revisioned) rather than embedding a model inventory, so it stays reusable as models change.
+
+## Desktop Bootstrap
+
+`eggpool configremote` prints one copy/paste block per desktop shell, pinned to the running EggPool release. Each block downloads the reviewed bootstrap (`eggpool-connect.sh` for macOS/Linux, `eggpool-connect.ps1` for Windows PowerShell) plus the release SHA256SUMS over HTTPS, verifies the bootstrap SHA-256, then runs it with the profile token as a data argument. The bootstrap in turn downloads the matching `eggpool-connect` helper binary, verifies its SHA-256 against the same SHA256SUMS, and executes `eggpool-connect install` once from a private temporary directory that is removed afterwards. No step evaluates the token, prints credentials, installs anything globally, or clones the EggPool repository.
+
+The advertised URL must be reachable from the desktop (a LAN/VPN address, not `localhost`, unless the desktop is the EggPool host itself). Desktops need no Python, Rust, or EggPool checkout — only `curl` plus `sha256sum`/`shasum` (POSIX) or built-in PowerShell/.NET facilities (Windows).
+
+Windows support covers the `eggpool-connect` helper only and does not imply Windows proxy/server support: the EggPool proxy release matrix stays Linux x86_64/aarch64 plus macOS arm64 (see [Current Rust release procedure](releasing.md)). `configremote` does not install clients; it only exports the profile. Backup/restore commands live in the helper section below.
 
 ## Desktop Helper (`eggpool-connect`)
 
@@ -93,7 +103,9 @@ The narrow `eggpool-connect` binary receives a secret-free `epc1` token and
 configures Codex/OpenCode transactionally on Linux, macOS, and Windows. It is
 not an agent harness or proxy: it only detects the local client, fetches the
 current integration projection, backs up byte-exact, mutates EggPool-owned
-fields atomically, validates, and rolls back automatically on failure.
+fields atomically, validates, and rolls back automatically on failure. Most
+desktops should arrive here through the `configremote` bootstrap above rather
+than installing this binary by hand.
 
 ```sh
 eggpool-connect plan --profile 'epc1.…'

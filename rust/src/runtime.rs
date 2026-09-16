@@ -1746,7 +1746,7 @@ async fn configremote(
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
     let format = integrations::validate_remote_format(&args.format)
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-    let _shell = integrations::validate_remote_shell(&args.shell)
+    let shell = integrations::validate_remote_shell(&args.shell)
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
     let target_name = args.target.trim().to_ascii_lowercase();
     let remote = integrations::build_remote_context(path, args.base_url.as_deref())
@@ -1764,8 +1764,13 @@ async fn configremote(
             println!("{rendered}");
         }
         _ => {
-            let human =
-                integrations::render_remote_human(&target_name, &remote, &token, args.no_bootstrap);
+            let human = integrations::render_remote_human(
+                &target_name,
+                &remote,
+                &token,
+                &shell,
+                args.no_bootstrap,
+            );
             println!("{human}");
         }
     }

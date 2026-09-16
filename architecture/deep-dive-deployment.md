@@ -43,7 +43,29 @@ The `scripts/` directory contains release, package-boundary, installer,
 portability, and qualification tooling. The most relevant commands are
 `qualify_quick_installer.py`, `validate_runtime_package_boundary.py`,
 `validate_release_workflow.py`, `build_release_artifacts.py`,
+`build_connect_artifacts.py`, `create_release_manifest.py`,
 `validate_release_artifacts.py`, and `verify_published_release.py`.
+
+## Desktop helper release pipeline
+
+The release workflow builds the proxy wheel/raw pairs (Linux x86_64/aarch64,
+macOS arm64) plus four `eggpool-connect` helper binaries (same three targets
+plus Windows x86_64) from the same clean tag commit. Helpers build with plain
+Cargo (`scripts/build_connect_artifacts.py`, never Maturin) and upload as
+`connect-*` CI artifacts so they cannot mix with the wheel pipeline; the
+aggregate job stages the reviewed `packaging/connect/` bootstraps next to
+them, binds everything into the manifest `connect_artifacts` section
+(`scripts/create_release_manifest.py --connect-artifact-dir`), validates
+digests (`scripts/validate_release_artifacts.py --connect-artifact-dir`),
+and publishes the exact bytes under `dist/publish/connect/` with
+`SHA256SUMS`. Nothing is rebuilt in a publish job. The Windows helper is a
+desktop-only asset; the proxy matrix and its validators are unchanged, and
+`validate_release_workflow.py` scopes the word “windows” to the single
+helper build job so a helper binary can never read as proxy support.
+macOS x86_64 was evaluated and deferred: no Intel runner exists to
+execute-qualify that binary, and publishing an unexecuted binary would
+violate the per-target qualification rule (Intel Mac operators build the
+helper from source with `cargo build --bin eggpool-connect --release`).
 
 ## Systemd Integration
 

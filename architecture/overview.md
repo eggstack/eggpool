@@ -309,8 +309,10 @@ conservative provider-neutral projection plus managed
 `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle with ownership
 manifests, previous-entry captures, and owned-field (not whole-file) drift
 refusal; `configremote` exports secret-free `epc1` tokens
-and `eggpool.configremote/v1` JSON from the advertised `[integrations].advertise_base_url`
-without key creation or config mutation; the authenticated
+and `eggpool.configremote/v1` JSON (with a version-pinned verified-bootstrap
+section) from the advertised `[integrations].advertise_base_url`
+without key creation or config mutation; `--shell posix|powershell|all`
+selects the rendered desktop bootstrap invocation; the authenticated
 `GET /api/integrations/v1/profile` serves the same projection with
 deterministic revision/ETag; `Config`/catalog/DB/key/endpoint/CLI/file IO
 stays here, portable projection/profiles/tokens/V1/V2 renderers/JSONC
@@ -360,7 +362,10 @@ Deep dives: [Observability](deep-dive-observability.md),
   `server/*` stays thin. Desktop: `eggpool-connect plan|install|verify|
   backups|restore|remove` (secret-free `epc1` input, credential via
   `EGGPOOL_API_KEY`/TTY/`--api-key-stdin`, byte-exact backups, atomic writes,
-  automatic rollback, stable exit codes).
+  automatic rollback, stable exit codes) reached via version-pinned reviewed
+  bootstraps (`packaging/connect/`, SHA-256 against the release SHA256SUMS);
+  helper release assets (`connect_artifacts`, Windows x86_64 included) are
+  typed separately from the proxy triple and never imply Windows proxy support.
 - Config profiles: full `config.example.toml` plus low-wear
   `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
   model-info/backup disabled; request/accounting durability preserved).

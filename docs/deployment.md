@@ -820,6 +820,28 @@ The copyable SBC profile stays on loopback by default. Shared startup and
 `check-config` validation reject LAN or wildcard binding without the existing
 simple server API key; loopback-only development may remain unauthenticated.
 
+### Headless server + desktop workgroup
+
+For one EggPool host (SBC or server) serving Codex/OpenCode desktops,
+advertise a single desktop-reachable URL once, then export profiles:
+
+```toml
+[integrations]
+advertise_base_url = "http://<lan-ip>:11300/v1"
+```
+
+```bash
+eggpool configremote codex
+eggpool configremote opencode --shell powershell
+```
+
+Paste each desktop's bootstrap block on that desktop: it verifies SHA-256
+before executing anything and needs no checkout or toolchain there. The
+Windows helper covers Windows desktops only and does not change the
+supported proxy targets. See
+[Desktop Bootstrap](agent-configuration.md#desktop-bootstrap) and
+[Raspberry Pi](raspberry-pi.md#headless-pi--desktop-clients).
+
 ### Leaked request detection
 
 If the proxy starts returning 503s after running successfully for

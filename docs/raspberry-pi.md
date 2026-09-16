@@ -169,10 +169,18 @@ eggpool configremote codex
 eggpool configremote opencode --format token
 ```
 
-Copy the `epc1` token to each desktop that can reach the Pi. Desktops fetch
-current models from authenticated `GET /api/integrations/v1/profile` during
-install; the token itself carries no credential. See
-[Agent Configuration](agent-configuration.md#remote-setup-configremote).
+Copy the printed bootstrap block (or the `epc1` token) to each desktop that
+can reach the Pi. The bootstrap verifies SHA-256 before executing anything,
+so desktops need no EggPool checkout, Rust toolchain, or Python — only the
+`configremote` block for their shell (`--shell posix` for macOS/Linux,
+`--shell powershell` for Windows). Each desktop still provisions its own
+authorized EggPool key (`EGGPOOL_API_KEY`) in the environment that launches
+the client. Desktops fetch current models from authenticated
+`GET /api/integrations/v1/profile` during install; the token itself carries
+no credential. The Windows helper does not imply Windows proxy support —
+the Pi remains the only server in this topology. See
+[Agent Configuration](agent-configuration.md#remote-setup-configremote) and
+[Desktop Bootstrap](agent-configuration.md#desktop-bootstrap).
 
 ## Troubleshooting
 

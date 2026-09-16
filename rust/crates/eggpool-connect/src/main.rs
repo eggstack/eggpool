@@ -443,6 +443,7 @@ async fn verify(
             state_root,
             "",
             eggpool_connect::detect::NATIVE_VERIFY_TIMEOUT,
+            &[],
         )
         .await
         {

@@ -75,8 +75,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   as the authenticated versioned projection. Document `eggpool-connect`
   `plan`/`install`/`verify`/`backups`/`restore`/`remove` with byte-exact
   backups, atomic writes, automatic rollback, and the helper state layout in
-  `docs/filesystem-layout.md`. Do not document version-pinned bootstrap
-  scripts until their exact release artifacts exist (Plan 214).
+  `docs/filesystem-layout.md`. Document the version-pinned desktop bootstrap
+  (`eggpool configremote --shell posix|powershell`, `packaging/connect/`
+  scripts, SHA-256 against the release SHA256SUMS, `docs/releasing.md`
+  helper assets) and always state that a Windows helper does not imply
+  Windows proxy support.
 
 ## Checks
 

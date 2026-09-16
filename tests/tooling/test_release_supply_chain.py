@@ -65,7 +65,13 @@ def test_workflow_has_immutable_jobs_and_separate_publish_authority() -> None:
     summary = validate_workflow(WORKFLOW)
     assert summary["status"] == "pass"
     assert summary["targets"] == ["linux-x86_64", "linux-aarch64", "macos-arm64"]
-    assert len(summary["jobs"]) == 9
+    assert sorted(summary["connect_targets"]) == [
+        "connect-linux-aarch64",
+        "connect-linux-x86_64",
+        "connect-macos-arm64",
+        "connect-windows-x86_64",
+    ]
+    assert len(summary["jobs"]) == 13
 
 
 def test_workflow_has_fail_closed_exact_bundle_pypi_recovery() -> None:
@@ -100,7 +106,7 @@ def test_workflow_has_fail_closed_exact_bundle_pypi_recovery() -> None:
             lambda text: text.replace(
                 "--target-class macos-arm64", "--target-class windows-x86_64", 1
             ),
-            "unsupported/universal",
+            "outside the desktop-helper",
         ),
         (
             lambda text: text.replace(
@@ -135,6 +141,7 @@ def test_publication_verifier_accepts_exact_manifest_bytes() -> None:
         "version": "0.8.0",
         "wheels": 3,
         "raw_assets": 3,
+        "connect_assets": 0,
     }
 
 

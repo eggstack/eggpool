@@ -10,6 +10,34 @@ from pathlib import Path
 
 ACTION_SHA = re.compile(r"^[0-9a-f]{40}$")
 TARGETS = ("linux-x86_64", "linux-aarch64", "macos-arm64")
+CONNECT_TARGETS = (
+    "connect-linux-x86_64",
+    "connect-linux-aarch64",
+    "connect-macos-arm64",
+    "connect-windows-x86_64",
+)
+CONNECT_JOBS = {
+    "build-connect-linux-x86-64": (
+        "connect-linux-x86_64",
+        "ubuntu-",
+        "x86_64-unknown-linux-gnu",
+    ),
+    "build-connect-linux-aarch64": (
+        "connect-linux-aarch64",
+        "ubuntu-",
+        "aarch64-unknown-linux-gnu",
+    ),
+    "build-connect-macos-arm64": (
+        "connect-macos-arm64",
+        "macos-",
+        "aarch64-apple-darwin",
+    ),
+    "build-connect-windows-x86-64": (
+        "connect-windows-x86_64",
+        "windows-",
+        "x86_64-pc-windows-msvc",
+    ),
+}
 FORBIDDEN_SECRET_MARKERS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -24,7 +52,7 @@ class WorkflowValidationError(ValueError):
     """A release workflow violates the release workflow supply-chain contract."""
 
 
-def _job_blocks(text: str) -> dict[str, str]:
+def job_blocks(text: str) -> dict[str, str]:
     lines = text.splitlines(keepends=True)
     try:
         jobs_index = next(
@@ -47,6 +75,25 @@ def _job_blocks(text: str) -> dict[str, str]:
         end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
         blocks[name] = "".join(lines[start:end])
     return blocks
+
+
+def without_helper_blocks(text: str, blocks: dict[str, str]) -> str:
+    """Return workflow text with helper `build-connect-*` jobs removed.
+
+    The Windows helper is a desktop-only asset: the word "windows" may appear
+    solely inside its own helper build job. Every other job (wheels, manifest,
+    publish, verify) must stay free of Windows/universal artifact paths so a
+    helper binary can never be mistaken for proxy support.
+    """
+    remaining = text
+    for job in CONNECT_JOBS:
+        block = blocks.get(job)
+        if block is not None and block in remaining:
+            remaining = remaining.replace(block, "", 1)
+    # Aggregate `needs` entries reference the helper jobs by name; those
+    # references are part of the helper contract, not proxy support.
+    remaining = re.sub(r"(?m)^\s+- build-connect-[a-z0-9-]+\s*\n", "", remaining)
+    return remaining
 
 
 def _require(text: str, pattern: str, message: str) -> None:
@@ -123,12 +170,16 @@ def validate_workflow_text(text: str) -> dict[str, object]:
             "the normal release path must not build or publish an sdist"
         )
 
-    blocks = _job_blocks(text)
+    blocks = job_blocks(text)
     required_jobs = {
         "validate-release",
         "build-wheel-linux-x86-64",
         "build-wheel-linux-aarch64",
         "build-wheel-macos-arm64",
+        "build-connect-linux-x86-64",
+        "build-connect-linux-aarch64",
+        "build-connect-macos-arm64",
+        "build-connect-windows-x86-64",
         "aggregate-release-manifest",
         "publish-testpypi",
         "publish-pypi",
@@ -224,10 +275,62 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     for target in TARGETS:
         if text.count(target) < 2:
             raise WorkflowValidationError(f"target matrix is incomplete: {target}")
-    if "windows" in text.lower() or "py3-none-any" in text:
+    proxy_text = without_helper_blocks(text, blocks)
+    if "windows" in proxy_text.lower():
+        raise WorkflowValidationError(
+            "Windows appears outside the desktop-helper build job"
+        )
+    if "py3-none-any" in text:
         raise WorkflowValidationError(
             "unsupported/universal target appears in release workflow"
         )
+    for job, (target, runner_prefix, rust_target) in CONNECT_JOBS.items():
+        _require_in_block(
+            blocks,
+            job,
+            r"needs:\s+validate-release",
+            f"helper build is not gated: {target}",
+        )
+        _require_in_block(
+            blocks,
+            job,
+            rf"--target-class\s+{re.escape(target)}",
+            f"helper build is missing: {target}",
+        )
+        _require_in_block(
+            blocks,
+            job,
+            r"build_connect_artifacts\.py",
+            f"helper builder is missing: {target}",
+        )
+        _require_in_block(
+            blocks,
+            job,
+            r"upload-artifact",
+            f"helper artifact upload is missing: {target}",
+        )
+        _require_in_block(
+            blocks,
+            job,
+            rf"runs-on:\s+{re.escape(runner_prefix)}",
+            f"helper runner is wrong for {target}",
+        )
+        _require_in_block(
+            blocks,
+            job,
+            rf"targets:\s+{re.escape(rust_target)}",
+            f"helper toolchain target is missing: {target}",
+        )
+        block = blocks[job]
+        if re.search(r"maturin|build_release_artifacts\.py|\.whl", block):
+            raise WorkflowValidationError(f"helper job must not build wheels: {job}")
+        if re.search(r"(?m)^\s*uses:\s*pypa/gh-action-pypi-publish@", block):
+            raise WorkflowValidationError(f"helper job must not publish to PyPI: {job}")
+    for target in CONNECT_TARGETS:
+        if text.count(target) < 2:
+            raise WorkflowValidationError(
+                f"helper target matrix is incomplete: {target}"
+            )
 
     aggregate = blocks["aggregate-release-manifest"]
     _require(
@@ -235,6 +338,12 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         r"needs:\s*\n(?:\s+- .*\n){3}",
         "manifest job must depend on every target build",
     )
+    for helper_job in CONNECT_JOBS:
+        _require(
+            aggregate,
+            rf"^\s+- {re.escape(helper_job)}\s*$",
+            f"manifest job must depend on helper build: {helper_job}",
+        )
     _require(
         aggregate,
         r"validate_release_artifacts\.py",
@@ -244,6 +353,11 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         aggregate,
         r"create_release_manifest\.py",
         "release manifest creation is missing",
+    )
+    _require(
+        aggregate,
+        r"build_connect_artifacts|connect-artifact-dir|dist/connect",
+        "helper bundle aggregation is missing",
     )
     _require(aggregate, r"SHA256SUMS", "raw/wheel checksum sidecar is missing")
     _require(
@@ -369,6 +483,11 @@ def validate_workflow_text(text: str) -> dict[str, object]:
     _require(github_release, r"SHA256SUMS", "GitHub release must carry checksums")
     _require(
         github_release,
+        r"connect",
+        "GitHub release must attach helper assets",
+    )
+    _require(
+        github_release,
         r"aggregate-release-manifest",
         "GitHub release must consume validated artifacts",
     )
@@ -394,6 +513,7 @@ def validate_workflow_text(text: str) -> dict[str, object]:
         "actions": len(re.findall(r"^\s*-?\s*uses:", text, re.MULTILINE)),
         "jobs": sorted(blocks),
         "targets": list(TARGETS),
+        "connect_targets": list(CONNECT_TARGETS),
     }
 
 

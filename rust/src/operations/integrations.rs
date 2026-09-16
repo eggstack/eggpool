@@ -45,6 +45,14 @@ const INTEGRATION_SCHEMA_VERSION: u32 = client_config::OWNERSHIP_SCHEMA_VERSION;
 pub const REMOTE_PROFILE_ENDPOINT: &str = "/api/integrations/v1/profile";
 /// Stable `configremote --format json` schema identifier.
 pub const CONFIGREMOTE_SCHEMA: &str = "eggpool.configremote/v1";
+/// GitHub repository that publishes immutable EggPool release assets.
+pub const RELEASE_REPOSITORY: &str = "eggstack/eggpool";
+/// Reviewed POSIX desktop bootstrap published with each release.
+pub const CONNECT_BOOTSTRAP_POSIX: &str = "eggpool-connect.sh";
+/// Reviewed PowerShell desktop bootstrap published with each release.
+pub const CONNECT_BOOTSTRAP_POWERSHELL: &str = "eggpool-connect.ps1";
+/// Copy/paste bound for one rendered bootstrap command block.
+pub const MAX_BOOTSTRAP_COMMAND_LEN: usize = 2048;
 /// Auth environment reference carried by remote profiles (never a secret).
 pub const REMOTE_AUTH_ENV: &str = client_config::EGGPOOL_API_KEY_ENV;
 
@@ -86,8 +94,6 @@ pub enum IntegrationError {
     UnsupportedRemoteTarget { target: String },
     #[error("integration profile is unavailable: {detail}")]
     ProfileUnavailable { detail: String },
-    #[error("bootstrap artifact is not yet available")]
-    BootstrapUnavailable,
     #[error("unsupported output format: {value}")]
     InvalidFormat { value: String },
     #[error("unsupported shell: {value}")]
@@ -564,6 +570,12 @@ pub fn render_remote_json(
     remote: &RemoteIntegrationContext,
     token: &str,
 ) -> Result<String, IntegrationError> {
+    let version = crate::version::PACKAGE_VERSION;
+    let posix = render_connect_posix(token, version);
+    let powershell = render_connect_powershell(token, version);
+    if posix.len() > MAX_BOOTSTRAP_COMMAND_LEN || powershell.len() > MAX_BOOTSTRAP_COMMAND_LEN {
+        return Err(IntegrationError::TooLarge);
+    }
     let value = serde_json::json!({
         "schema": CONFIGREMOTE_SCHEMA,
         "target": target_name,
@@ -579,11 +591,26 @@ pub fn render_remote_json(
             "schema": client_config::INTEGRATION_PROFILE_SCHEMA_VERSION,
         },
         "issuer": {
-            "eggpool_version": crate::version::PACKAGE_VERSION,
+            "eggpool_version": version,
         },
         "bootstrap": {
-            "available": false,
-            "note": "bootstrap artifact not yet published (Plan 214); use --format token/json",
+            "available": true,
+            "version": version,
+            "tag": connect_release_tag(version),
+            "repository": RELEASE_REPOSITORY,
+            "posix": {
+                "file": CONNECT_BOOTSTRAP_POSIX,
+                "url": connect_asset_url(version, CONNECT_BOOTSTRAP_POSIX),
+                "command": posix,
+            },
+            "powershell": {
+                "file": CONNECT_BOOTSTRAP_POWERSHELL,
+                "url": connect_asset_url(version, CONNECT_BOOTSTRAP_POWERSHELL),
+                "command": powershell,
+            },
+            "helper_assets": connect_helper_assets(version),
+            "verify": "verify SHA-256 against the release SHA256SUMS before executing anything",
+            "note": "helper binaries ship with EggPool releases carrying desktop-bootstrap support; a Windows helper does not imply Windows proxy support",
         },
     });
     let rendered = serde_json::to_string_pretty(&value)?;
@@ -593,11 +620,116 @@ pub fn render_remote_json(
     Ok(rendered)
 }
 
+/// Release tag (`vX.Y.Z`) for immutable helper/bootstrap asset URLs.
+pub fn connect_release_tag(version: &str) -> String {
+    format!("v{version}")
+}
+
+/// Immutable URL for one version-pinned helper/bootstrap release asset.
+pub fn connect_asset_url(version: &str, filename: &str) -> String {
+    format!(
+        "https://github.com/{RELEASE_REPOSITORY}/releases/download/{}/{}",
+        connect_release_tag(version),
+        filename
+    )
+}
+
+/// Helper binary asset filenames published for `version`.
+///
+/// Desktop-only matrix: Linux x86_64/aarch64, macOS arm64, Windows x86_64.
+/// Publishing the Windows helper never implies Windows proxy support; the
+/// proxy release matrix is unchanged.
+pub fn connect_helper_assets(version: &str) -> [String; 4] {
+    [
+        format!("eggpool-connect-{version}-linux-x86_64"),
+        format!("eggpool-connect-{version}-linux-aarch64"),
+        format!("eggpool-connect-{version}-macos-arm64"),
+        format!("eggpool-connect-{version}-windows-x86_64.exe"),
+    ]
+}
+
+/// Quote a profile token for POSIX `sh` (single-quote with `'\''` escapes).
+pub fn posix_shell_quote(token: &str) -> String {
+    let mut quoted = String::with_capacity(token.len() + 2);
+    quoted.push('\'');
+    for (index, part) in token.split('\'').enumerate() {
+        if index > 0 {
+            quoted.push_str("'\\''");
+        }
+        quoted.push_str(part);
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// Quote a profile token for PowerShell (single-quote with `''` escapes).
+pub fn powershell_quote(token: &str) -> String {
+    format!("'{}'", token.replace('\'', "''"))
+}
+
+/// Render the verified POSIX bootstrap invocation pinned to `version`.
+///
+/// The block downloads the reviewed bootstrap plus the release SHA256SUMS
+/// over HTTPS, verifies the bootstrap hash, then runs it with the token as
+/// a data argument. It never evaluates the token and stays within
+/// [`MAX_BOOTSTRAP_COMMAND_LEN`].
+pub fn render_connect_posix(token: &str, version: &str) -> String {
+    let tag = connect_release_tag(version);
+    let base = format!("https://github.com/{RELEASE_REPOSITORY}/releases/download/{tag}");
+    let quoted = posix_shell_quote(token);
+    format!(
+        "macOS/Linux (verified bootstrap, EggPool {version}):\n\
+         tmp=/tmp/eggpool-connect-{version}.sh; sums=/tmp/eggpool-connect-{version}.SHA256SUMS\n\
+         curl --fail --silent --show-error --location --proto '=https' --output \"$tmp\" \"{base}/eggpool-connect.sh\"\n\
+         curl --fail --silent --show-error --location --proto '=https' --output \"$sums\" \"{base}/SHA256SUMS\"\n\
+         test -n \"$(grep 'connect/eggpool-connect.sh$' \"$sums\" | cut -d ' ' -f 1)\" && test \"$(grep 'connect/eggpool-connect.sh$' \"$sums\" | cut -d ' ' -f 1)\" = \"$(sha256sum \"$tmp\" 2>/dev/null || shasum -a 256 \"$tmp\" | cut -d ' ' -f 1)\" || {{ echo 'bootstrap SHA-256 mismatch' >&2; exit 1; }}\n\
+         sh \"$tmp\" --version {version} --profile {quoted}\n\
+         rm -f \"$tmp\" \"$sums\""
+    )
+}
+
+/// Render the verified PowerShell bootstrap invocation pinned to `version`.
+pub fn render_connect_powershell(token: &str, version: &str) -> String {
+    let tag = connect_release_tag(version);
+    let base = format!("https://github.com/{RELEASE_REPOSITORY}/releases/download/{tag}");
+    let quoted = powershell_quote(token);
+    format!(
+        "Windows PowerShell (verified bootstrap, EggPool {version}):\n\
+         $V='{version}'; $T=\"$env:TEMP\\eggpool-connect-$V.ps1\"; $S=\"$env:TEMP\\eggpool-connect-$V.SHA256SUMS\"\n\
+         Invoke-WebRequest -Uri \"{base}/eggpool-connect.ps1\" -OutFile $T\n\
+         Invoke-WebRequest -Uri \"{base}/SHA256SUMS\" -OutFile $S\n\
+         if (((Select-String -Path $S -Pattern 'connect/eggpool-connect.ps1$').Line.Split(' ')[0].ToLower()) -ne ((Get-FileHash -Path $T -Algorithm SHA256).Hash.ToLower())) {{ throw 'bootstrap SHA-256 mismatch' }}\n\
+         & $T -Version $V -Profile {quoted}\n\
+         Remove-Item -Force $T, $S"
+    )
+}
+
+/// Render bootstrap commands for `--shell auto|posix|powershell|all`.
+pub fn render_connect_bootstrap(
+    shell: &str,
+    token: &str,
+    version: &str,
+) -> Result<String, IntegrationError> {
+    match shell {
+        "posix" => Ok(render_connect_posix(token, version)),
+        "powershell" => Ok(render_connect_powershell(token, version)),
+        "auto" | "all" => Ok(format!(
+            "{}\n\n{}",
+            render_connect_posix(token, version),
+            render_connect_powershell(token, version)
+        )),
+        _ => Err(IntegrationError::InvalidShell {
+            value: shell.to_owned(),
+        }),
+    }
+}
+
 /// Render default human `configremote` output (secret-free, no mutable URLs).
 pub fn render_remote_human(
     target_name: &str,
     remote: &RemoteIntegrationContext,
     token: &str,
+    shell: &str,
     no_bootstrap: bool,
 ) -> String {
     let display_target = match target_name {
@@ -605,6 +737,7 @@ pub fn render_remote_human(
         "opencode" => "OpenCode",
         other => other,
     };
+    let version = crate::version::PACKAGE_VERSION;
     let mut lines = vec![
         "EggPool remote configuration".to_owned(),
         format!("Target:   {display_target}"),
@@ -617,10 +750,23 @@ pub fn render_remote_human(
     ];
     if !no_bootstrap {
         lines.push(String::new());
-        lines.push("Bootstrap: not yet available (Plan 214 will publish version-pinned".to_owned());
-        lines.push(
-            "verified POSIX/PowerShell installers; use --format token/json today).".to_owned(),
-        );
+        match render_connect_bootstrap(shell, token, version) {
+            Ok(commands) => {
+                lines.push(
+                    "Desktop bootstrap (version-pinned, SHA-256 verified before execution):"
+                        .to_owned(),
+                );
+                lines.push(commands);
+                lines.push(String::new());
+                lines.push("Each desktop still needs its own authorized EggPool key".to_owned());
+                lines.push(
+                    "in the environment that launches the client (EGGPOOL_API_KEY).".to_owned(),
+                );
+            }
+            Err(_) => {
+                lines.push("Bootstrap: unsupported --shell selection.".to_owned());
+            }
+        }
     }
     lines.join("\n")
 }
@@ -3050,13 +3196,82 @@ mod tests {
         assert!(json.contains("eggpool.configremote/v1"));
         assert!(json.contains("EGGPOOL_API_KEY"));
         assert!(!json.contains("ep_test_key"));
-        let human = render_remote_human("codex", &remote, &first, false);
+        let human = render_remote_human("codex", &remote, &first, "auto", false);
         assert!(human.contains("https://pool.example.internal/v1"));
         assert!(human.contains("EGGPOOL_API_KEY"));
-        assert!(human.contains("not yet available"));
+        assert!(human.contains("eggpool-connect.sh"));
+        assert!(human.contains("eggpool-connect.ps1"));
         assert!(!human.contains("http://user:"));
         let debug = format!("{remote:?} {first:?}");
         assert!(!debug.contains("ep_test_key_123"));
+    }
+
+    #[test]
+    fn bootstrap_commands_are_pinned_quoted_bounded_and_shell_selected() {
+        let token = "epc1.test-token-value";
+        let version = crate::version::PACKAGE_VERSION;
+        let tag = connect_release_tag(version);
+        for shell in ["posix", "powershell", "auto", "all"] {
+            let rendered = render_connect_bootstrap(shell, token, version).expect("bootstrap");
+            assert!(
+                rendered.len() <= 2 * MAX_BOOTSTRAP_COMMAND_LEN,
+                "bootstrap block exceeds the copy/paste bound"
+            );
+            assert!(
+                rendered.contains(&tag),
+                "bootstrap must pin the release tag"
+            );
+            assert!(
+                rendered.contains("SHA256SUMS"),
+                "bootstrap must verify hashes"
+            );
+            assert!(
+                !rendered.contains("latest"),
+                "bootstrap must not track latest"
+            );
+            assert!(
+                rendered.contains(token),
+                "bootstrap must carry the profile token"
+            );
+        }
+        let posix = render_connect_posix(token, version);
+        assert!(posix.contains("eggpool-connect.sh"));
+        assert!(posix.contains(&format!("--version {version}")));
+        assert!(!posix.contains("Invoke-WebRequest"));
+        assert!(!posix.contains("powershell"));
+        let powershell = render_connect_powershell(token, version);
+        assert!(powershell.contains("eggpool-connect.ps1"));
+        assert!(powershell.contains(&format!("$V='{version}'")));
+        assert!(powershell.contains("-Version $V"));
+        assert!(!powershell.contains("curl"));
+        assert!(!powershell.contains("eggpool-connect.sh"));
+        assert!(render_connect_bootstrap("bash", token, version).is_err());
+        // Helper asset identity is distinct from proxy assets and covers the
+        // desktop matrix including Windows (which never implies proxy support).
+        let assets = connect_helper_assets(version);
+        assert_eq!(assets.len(), 4);
+        assert!(assets[0].starts_with("eggpool-connect-"));
+        assert!(assets[3].ends_with(".exe"));
+        for asset in &assets {
+            let url = connect_asset_url(version, asset);
+            assert!(url.contains(&tag));
+            assert!(url.starts_with("https://github.com/eggstack/eggpool/releases/download/"));
+        }
+    }
+
+    #[test]
+    fn bootstrap_token_quoting_survives_hostile_characters() {
+        let hostile = "epc1.a'b\\c\"d$e`f!g";
+        let posix = render_connect_posix(hostile, crate::version::PACKAGE_VERSION);
+        assert!(posix.contains("'epc1.a'\\''b\\c\"d$e`f!g'"));
+        let powershell = render_connect_powershell(hostile, crate::version::PACKAGE_VERSION);
+        assert!(powershell.contains("'epc1.a''b\\c\"d$e`f!g'"));
+        // No evaluation primitives may appear in rendered commands.
+        for rendered in [posix, powershell] {
+            assert!(!rendered.contains("eval "));
+            assert!(!rendered.contains("Invoke-Expression"));
+            assert!(!rendered.contains("EGGPOOL_API_KEY="));
+        }
     }
 
     #[tokio::test]

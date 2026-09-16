@@ -13,12 +13,21 @@ import zipfile
 from pathlib import Path
 from typing import Any, cast
 
+from inspect_connect_artifact import (
+    CONNECT_BOOTSTRAPS,
+    CONNECT_TARGETS,
+    ConnectInspectionError,
+    connect_filename,
+    inspect_connect_artifact,
+    inspect_connect_bootstrap,
+)
 from inspect_release_raw import TARGETS, RawInspectionError, inspect_raw
 from inspect_release_wheel import TARGET_PLATFORMS, WheelInspectionError, inspect_wheel
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "rust/assets/catalog/installable-releases.json"
 PACKAGING_MANIFEST = ROOT / "packaging/pypi/pyproject.toml"
+CONNECT_SOURCE_DIR = ROOT / "packaging/connect"
 CARGO_LOCK = ROOT / "rust/Cargo.lock"
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -124,6 +133,7 @@ def _wheel_record(
     ):
         raise ManifestError(f"wheel/raw payload differs for {target_class}")
     return {
+        "kind": "eggpool",
         "product_target": target_class,
         "rust_target": TARGETS[target_class]["rust_target"],
         "wheel": {
@@ -156,8 +166,62 @@ def _wheel_record(
     }
 
 
+def _connect_binary_record(
+    connect_dir: Path, version: str, target_class: str
+) -> dict[str, Any]:
+    name = connect_filename(version, target_class)
+    matches = sorted(path for path in connect_dir.rglob(name) if path.is_file())
+    if len(matches) != 1:
+        raise ManifestError(f"expected exactly one helper asset for {target_class}")
+    helper = matches[0]
+    try:
+        inspection = inspect_connect_artifact(
+            helper, expected_version=version, target_class=target_class
+        )
+    except ConnectInspectionError as error:
+        raise ManifestError(f"helper validation failed for {target_class}") from error
+    return {
+        "kind": "eggpool-connect",
+        "product_target": target_class,
+        "rust_target": inspection.rust_target,
+        "filename": inspection.filename,
+        "sha256": inspection.sha256,
+        "size": inspection.size,
+        "executable": True,
+    }
+
+
+def _connect_records(connect_dir: Path | None, version: str) -> list[dict[str, Any]]:
+    """Build helper records when a helper artifact directory is provided.
+
+    Proxy-only callers omit the directory and receive an empty list, which
+    keeps the "exactly three proxy raw artifacts" invariant independently
+    testable. A partial helper set is invalid: every supported desktop target
+    plus both reviewed bootstraps must be present.
+    """
+    if connect_dir is None:
+        return []
+    records = [
+        _connect_binary_record(connect_dir, version, target)
+        for target in sorted(CONNECT_TARGETS)
+    ]
+    for name in CONNECT_BOOTSTRAPS:
+        matches = sorted(path for path in connect_dir.rglob(name) if path.is_file())
+        if len(matches) != 1:
+            raise ManifestError(f"expected exactly one bootstrap asset: {name}")
+        try:
+            records.append(inspect_connect_bootstrap(matches[0]))
+        except ConnectInspectionError as error:
+            raise ManifestError(f"bootstrap validation failed: {name}") from error
+    return records
+
+
 def create_manifest(
-    artifact_dir: Path, output: Path, *, qualification_result: str = "pending"
+    artifact_dir: Path,
+    output: Path,
+    *,
+    qualification_result: str = "pending",
+    connect_artifact_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Create and write the bounded manifest for all three supported targets."""
     version = release_version()
@@ -167,6 +231,7 @@ def create_manifest(
         _wheel_record(artifact_dir, version, target, qualification_result)
         for target in sorted(TARGETS)
     ]
+    connect_records = _connect_records(connect_artifact_dir, version)
     manifest: dict[str, Any] = {
         "manifest_version": "release-manifest.v1",
         "release_version": version,
@@ -175,6 +240,7 @@ def create_manifest(
         "packaging_manifest_sha256": _sha256(PACKAGING_MANIFEST),
         "requires_python": ">=3.11",
         "artifacts": records,
+        "connect_artifacts": connect_records,
         "historical_backfill_candidates": [],
         "qualification_result": qualification_result,
     }
@@ -190,6 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--connect-artifact-dir", type=Path, required=False, default=None
+    )
+    parser.add_argument(
         "--qualification-result", choices=("pending", "pass"), default="pending"
     )
     args = parser.parse_args(argv)
@@ -198,6 +267,11 @@ def main(argv: list[str] | None = None) -> int:
             args.artifact_dir.resolve(),
             args.output.resolve(),
             qualification_result=args.qualification_result,
+            connect_artifact_dir=(
+                args.connect_artifact_dir.resolve()
+                if args.connect_artifact_dir is not None
+                else None
+            ),
         )
     except (ManifestError, OSError, json.JSONDecodeError) as error:
         print(f"release artifacts manifest creation failed: {error}", file=sys.stderr)
@@ -208,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
                 "manifest": args.output.name,
                 "sha256": _sha256(args.output),
                 "targets": len(manifest["artifacts"]),
+                "connect_artifacts": len(manifest["connect_artifacts"]),
             },
             sort_keys=True,
         )

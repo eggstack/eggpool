@@ -44,7 +44,25 @@ impl ProfileFetcher for HyperProfileFetcher {
     }
 }
 
-/// Fetch `GET <base_url><endpoint>` with Bearer auth and validate the
+/// Build the request URL for `GET <server-root><endpoint>`.
+///
+/// The advertised connection URL is the API root (`.../v1`) while the
+/// integration endpoint is server-root-relative (`/api/integrations/...`),
+/// so one trailing `/v1` segment is stripped before joining. The endpoint
+/// prefix gate keeps profiles from pointing the helper at arbitrary paths.
+pub fn integration_profile_url(profile: &ConnectionProfileV1) -> Result<String, ConnectError> {
+    let base = profile.proxy.base_url.trim_end_matches('/');
+    let endpoint = profile.integration_profile.endpoint.as_str();
+    if !endpoint.starts_with("/api/integrations/") {
+        return Err(ConnectError::InvalidProfile {
+            detail: "integration endpoint must be under /api/integrations/".to_owned(),
+        });
+    }
+    let root = base.strip_suffix("/v1").unwrap_or(base);
+    Ok(format!("{root}{endpoint}"))
+}
+
+/// Fetch `GET <server-root><endpoint>` with Bearer auth and validate the
 /// versioned schema, bounds, and revision.
 pub async fn fetch_integration_profile(
     profile: &ConnectionProfileV1,
@@ -56,13 +74,7 @@ pub async fn fetch_integration_profile(
         });
     }
     let base = profile.proxy.base_url.trim_end_matches('/');
-    let endpoint = profile.integration_profile.endpoint.as_str();
-    if !endpoint.starts_with("/api/integrations/") {
-        return Err(ConnectError::InvalidProfile {
-            detail: "integration endpoint must be under /api/integrations/".to_owned(),
-        });
-    }
-    let url = format!("{base}{endpoint}");
+    let url = integration_profile_url(profile)?;
     let uri: hyper::Uri = url.parse().map_err(|_| ConnectError::AuthNetwork {
         detail: "advertised EggPool URL is not a valid URI".to_owned(),
     })?;
@@ -267,5 +279,15 @@ mod tests {
             .await
             .expect_err("must fail");
         assert!(error.to_string().contains("dns"));
+    }
+
+    #[test]
+    fn profile_url_joins_server_root_not_api_root() {
+        // The advertised connection URL ends in /v1 but the integration
+        // endpoint is server-root-relative; joining must strip one /v1
+        // segment (live-qualification regression: /v1/api/... 404s).
+        let url = integration_profile_url(&connection()).expect("url");
+        assert_eq!(url, "https://pool.example/api/integrations/v1/profile");
+        assert!(!url.contains("/v1/api/"));
     }
 }
