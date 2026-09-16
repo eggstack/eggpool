@@ -83,6 +83,10 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     Backup {
         #[arg(long, value_name = "DIR")]
         output_dir: Option<PathBuf>,
@@ -432,6 +436,7 @@ impl Command {
             Self::Set { .. } => "set",
             Self::Rehash { .. } => "rehash",
             Self::RuntimeStatus { .. } => "runtime-status",
+            Self::Status { .. } => "status",
             Self::Backup { .. } => "backup",
         }
     }

@@ -677,9 +677,24 @@ unrelated cron entries untouched.
 ## Runtime diagnostics
 
 ```bash
-eggpool runtime-status                 # compact terminal summary
+eggpool status                         # concise proxy/provider health (one row per provider)
+eggpool status --json                  # versioned structured snapshot (schema_version 1)
+eggpool runtime-status                 # detailed process/runtime diagnostics
 eggpool runtime-status --json          # machine-readable JSON
 ```
+
+`eggpool status` calls the authenticated local `/api/status` endpoint and
+prints a compact operator summary: one header line for proxy health, exactly
+one row per configured provider (`ready`/`degraded`/`unavailable`/`disabled`/`unknown`
+with a bounded reason code), and one runtime footer line. It aggregates
+active-generation account identity, live routing health, and cached catalog
+probe evidence without making outbound provider requests or consuming quota.
+Exit codes are `0` when the proxy is reachable and ready (including degraded
+with a viable route), `1` when reachable but unready, and `3` when the server
+is unreachable — in which case locally configured providers are still listed
+as `unknown`/`disabled` from static config. `eggpool status --json` prints the
+typed server snapshot (deterministic provider ordering, numeric durations in
+named units, no credentials or raw upstream error text).
 
 `eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
 prints a one-page overview of the running process. It is intended for operators debugging
@@ -927,7 +942,9 @@ probe before readiness is reopened.
 | `eggpool deploy backup-cron --install --production` | Install production backup (`/etc/cron.d/eggpool-backup` + `/var/backups/eggpool`) |
 | `eggpool deploy all` | Print systemd + logrotate + watchdog cron snippets |
 | `eggpool deploy all --install` | Install systemd + logrotate + watchdog cron (backup-cron is separate) |
-| `eggpool runtime-status` | Print compact runtime health summary from the running server |
+| `eggpool status` | Concise proxy/provider health, one row per provider (exit 0 ready/degraded, 1 unready, 3 unreachable) |
+| `eggpool status --json` | Versioned structured status snapshot for scripting/monitoring |
+| `eggpool runtime-status` | Detailed process/runtime diagnostics from the running server |
 | `eggpool runtime-status --json` | Print machine-readable JSON for scripting/monitoring |
 | `eggpool backup` | Create a timestamped `.zip` backup archive (default `~/backups/eggpool/`) |
 | `eggpool recover [path]` | Restore from a backup archive (interactive menu if no path) |

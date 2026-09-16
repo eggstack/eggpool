@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plan": "O001",
-  "command_count": 63,
+  "command_count": 64,
   "commands": [
     {"path": "accounts", "owner": "O007", "options": []},
     {"path": "accounts explain", "owner": "O007", "options": ["--model", "--provider", "--protocol", "--scores", "--gates"]},
@@ -62,6 +62,7 @@
     {"path": "stats recompute-costs", "owner": "O007", "options": ["--dry-run", "--apply", "--limit"]},
     {"path": "stats repair-costs", "owner": "O007", "options": ["--provider", "--since", "--dry-run", "--apply", "--limit"]},
     {"path": "stats transcoding", "owner": "O007", "options": ["--period", "--json"]},
+    {"path": "status", "owner": "O003", "options": ["--json"]},
     {"path": "stop", "owner": "O003", "options": ["--timeout"]},
     {"path": "uninstall", "owner": "O009", "options": ["--yes", "--keep-data", "--keep-config", "--keep-path", "--deploy-artifacts"]},
     {"path": "update", "owner": "O008", "options": ["--check", "--from-source"]},

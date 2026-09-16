@@ -78,7 +78,7 @@ command tree (`serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
 `modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
-`install-provenance`, `set`, `rehash`, `runtime-status`, `backup`, `version`).
+`install-provenance`, `set`, `rehash`, `status`, `runtime-status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
 `db` without touching coordinator/server internals. `rust/src/error.rs`
 (`AppError`/`BootstrapError`) owns the typed error hierarchy and stable
@@ -122,7 +122,7 @@ lifespan, signal handling, and quiesce/drain/close shutdown. Siblings stay
 thin: `middleware.rs` (constant-time Bearer/`x-api-key` auth, generation-lease
 admission, `max_request_body_bytes` bounding, loopback exemption),
 `health.rs` (`GET /v1/healthz`, `GET /v1/readyz`, `GET /v1/models`,
-`GET /api/stats/runtime`, `GET /api/stats/update`), `inference.rs`
+`GET /api/stats/runtime`, `GET /api/stats/update`, `GET /api/status`), `inference.rs`
 (`chat_completions`, `messages`, `responses`, `responses_compact`; finite vs. stream dispatch on the
 `stream` flag; exactly one `coordinator::execute_finite`/`execute_stream` call
 per request, compact via finite-only `execute_compact_finite`), `dashboard.rs` (server-rendered pages plus static assets).
@@ -288,7 +288,9 @@ discovery, SHA-256 verification, atomic transition; background probes are
 conservative, exact-version resolution is explicit), `catalog.rs` (embedded
 installable-releases catalog), `provenance.rs` (install-provenance detection),
 `operator.rs` (account/explain/stats/catalog/transcoding/cost/model-info
-operator services), `metrics.rs` (bounded scalar-only coalescer),
+operator services), `status.rs` (compact proxy/provider health aggregation:
+typed snapshot, shared readiness evaluation, bounded reason codes; no outbound
+probes, no secret/raw-error output), `metrics.rs` (bounded scalar-only coalescer),
 `integrations.rs` (`eggpool configsetup` renderers for opencode/claude-code/
 aider/codex and others; Codex emits HTTP/SSE Responses TOML with
 `env_key = "EGGPOOL_API_KEY"`, printable by default, no embedded secret;
@@ -306,8 +308,9 @@ Deep dives: [Control plane](deep-dive-control.md),
 Observability is bounded, deterministic, and metadata-only: request/usage/
 latency/failure/reasoning/routing facts via `operations/metrics.rs` and
 coordinator instrumentation; routing traces record decisions, not prompts;
-`runtime-status --json` and `/api/stats/runtime` project active/retiring
-topology without secrets. Security is request limits, API-key auth,
+`eggpool status` / `GET /api/status` project the compact proxy/provider health
+snapshot while `runtime-status --json` and `/api/stats/runtime` keep the deep
+process/runtime diagnostics, all without secrets. Security is request limits, API-key auth,
 header filtering, credential redaction, owner-only socket/state permissions
 (`0o700` runtime dir, `0o600` socket), and safe filesystem handling. Raw
 bodies, prompts, cache keys, token values, and provider bodies stay out of
@@ -324,10 +327,13 @@ Deep dives: [Observability](deep-dive-observability.md),
   as above), `POST /v1/responses/compact` (finite-only bounded distinct
   compaction operation; native compact-capable upstreams only).
 - Discovery/health: `GET /v1/models`, `GET /v1/healthz`, `GET /v1/readyz`,
-  `GET /api/stats/runtime`, `GET /api/stats/update`.
+  `GET /api/status` (authenticated compact snapshot), `GET /api/stats/runtime`,
+  `GET /api/stats/update`.
 - Dashboard: pages listed in §3 plus `/api/stats/summary`; observational only.
-- CLI: full command tree in §1; `runtime.rs` keeps prompts/presentation/
-  exit codes, `operations/lifecycle.rs` keeps reusable workflows,
+- CLI: full command tree in §1 (`status` is the concise provider health
+  summary, `runtime-status` the detailed diagnostics); `runtime.rs` keeps
+  prompts/presentation/exit codes, `operations/lifecycle.rs` keeps reusable
+  workflows, `operations/status.rs` keeps health aggregation,
   `server/*` stays thin.
 - Config profiles: full `config.example.toml` plus low-wear
   `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
@@ -389,8 +395,8 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
 | Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
-| Operator/metrics/integrations | `operations/operator.rs`, `metrics.rs`, `integrations.rs` | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
-| Observability/security | `operations/metrics.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
+| Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
+| Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
 | Tooling/tests | `scripts/`, `tests/tooling/`, `rust/tests/`, `packaging/` | [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md) |
 
 ## Source-development flow

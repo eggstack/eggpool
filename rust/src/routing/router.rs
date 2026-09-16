@@ -240,6 +240,39 @@ impl RoutingRouter {
             .exposed_model_ids()
     }
 
+    /// Clone the generation-owned health manager for read-only status
+    /// observation. The clone shares the underlying synchronous map; no
+    /// probe is acquired and no breaker state is mutated.
+    pub fn health_manager(&self) -> Option<HealthManager> {
+        self.state.health.clone()
+    }
+
+    /// Return one health snapshot per registered account for status
+    /// aggregation. Missing entries mean the account has no live observation.
+    pub fn health_snapshots(&self) -> Vec<crate::health::AccountHealthSnapshot> {
+        self.state
+            .health
+            .as_ref()
+            .map_or_else(Vec::new, |health| health.accounts())
+    }
+
+    /// Return the full catalog snapshot for per-provider model counts.
+    /// Read-only; never performs provider or DB work.
+    pub fn catalog_snapshot(&self) -> crate::catalog::CacheSnapshot {
+        self.state.catalog.lock().expect("catalog lock").snapshot()
+    }
+
+    /// Return immutable account identities for the active generation.
+    pub fn account_identities(&self) -> Vec<crate::accounts::AccountIdentity> {
+        self.state.registry.enabled_snapshot()
+    }
+
+    /// Return every account identity, including disabled rows, so status can
+    /// list intentionally disabled providers explicitly.
+    pub fn all_account_identities(&self) -> Vec<crate::accounts::AccountIdentity> {
+        self.state.registry.all().cloned().collect()
+    }
+
     /// Select, acquire any required half-open probe, and publish active plus
     /// pending quota ownership while holding one async mutex. There is no
     /// await after the mutex is acquired and no SQLite/network operation in

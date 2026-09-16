@@ -161,7 +161,8 @@ See [Firewall](docs/firewall.md) for restricting access to your LAN.
 | `eggpool modelinfo aliases` | Show model aliases |
 | `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
 | `eggpool dashboard public` | Print dashboard public URL |
-| `eggpool runtime-status` | Print runtime health summary |
+| `eggpool status` | Concise proxy/provider health summary (one row per provider; `--json` for structured output) |
+| `eggpool runtime-status` | Detailed process/runtime diagnostics |
 | `eggpool backup` | Create a timestamped backup |
 | `eggpool recover` | Restore from a backup archive |
 | `eggpool db vacuum` | Vacuum the SQLite database |

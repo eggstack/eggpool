@@ -36,6 +36,9 @@ pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path == "/api/stats/update" {
         return true;
     }
+    if path == "/api/status" {
+        return true;
+    }
     if path.starts_with("/v1/") {
         return true;
     }

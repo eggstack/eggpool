@@ -112,7 +112,8 @@ Comprehensive stats endpoints under `/api/stats/`.
 - `eggpool accounts explain` — routing eligibility
 - `eggpool modelinfo show/list/refresh` — model info
 - `eggpool stats` — statistics commands
-- `eggpool runtime-status` — runtime metrics
+- `eggpool status` — concise proxy/provider health (one row per provider)
+- `eggpool runtime-status` — detailed process/runtime diagnostics
 
 ### Manual SBC characterization
 

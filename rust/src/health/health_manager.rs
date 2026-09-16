@@ -451,7 +451,7 @@ impl HealthManager {
         Ok(applied)
     }
 
-    fn now(&self) -> f64 {
+    pub fn now(&self) -> f64 {
         (self.clock)()
     }
 

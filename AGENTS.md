@@ -67,7 +67,9 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `rust/src/error.rs` owns HTTP/status mappings — read it before adding variants,
   keep context explicit, retain causes.
 - `runtime.rs` adapts CLI to operations; reusable lifecycle lives in
-  `operations/lifecycle.rs`. Keep `server/*` thin (no coordinator retries/finalization).
+  `operations/lifecycle.rs`, compact proxy/provider health aggregation in
+  `operations/status.rs` (shared readiness with `readyz`, no outbound probes,
+  secret-free). Keep `server/*` thin (no coordinator retries/finalization).
 - No Python runtime fallbacks; no new restart/reload key lists; no buffering
   arbitrary native streams. Credentials, prompts, raw bodies, cache keys stay
   out of persistence/logs/diagnostics.

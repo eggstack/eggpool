@@ -48,6 +48,7 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 |--------|------|-------------|
 | `GET` | `/v1/healthz` | Liveness check |
 | `GET` | `/v1/readyz` | Readiness check |
+| `GET` | `/api/status` | Authenticated compact proxy/provider health snapshot (`schema_version: 1`; no outbound provider probes) |
 
 ## Upstream Diagnostics
 

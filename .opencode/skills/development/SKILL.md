@@ -26,11 +26,12 @@ baseline allowlist or broad suppression; resolve new warnings locally and use
 narrow, justified allowances only when the intentional API or test shape is
 clearer and safer.
 
-For adapter changes, run the CLI contract, operations O002–O010, health, and
-coordinator publication/boundary targets before the full workspace suite. Keep
-the server modules thin: HTTP handlers must delegate inference lifecycle work
-to the coordinator, and lifecycle workflows must compose the existing process
-safety primitives.
+For adapter changes, run the CLI contract, operations O002–O010,
+`status_command`, health, and coordinator publication/boundary targets before
+the full workspace suite. Keep the server modules thin: HTTP handlers must
+delegate inference lifecycle work to the coordinator (health/status handlers
+only project authoritative state), and lifecycle workflows must compose the
+existing process safety primitives.
 
 Native test targets live in `rust/tests/` (serial `--test-threads=1`). The
 coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
@@ -38,7 +39,9 @@ coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
 `routing_domain`, `routing_domain_d008`, `routing_claims`, `quota`; lifecycle is
 `runtime_lifecycle_r002`–`r013`; wire is `wire_codecs`, `wire_stream`,
 `wire_runtime`, `wire_qualification`, `wire_adaptation`, `wire_profiles`,
-`wire_multimodal`; operations is `operations_o002`–`o010`.
+`wire_multimodal`; operations is `operations_o002`–`o010` plus
+`status_command` (Plan 202 provider/proxy health aggregation, `/api/status`,
+CLI offline behavior).
 
 For `configsetup` integration changes, run the focused O005 contract target
 alongside the integration unit tests:

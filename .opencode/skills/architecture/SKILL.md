@@ -73,7 +73,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
-- Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `metrics.rs`, `integrations.rs`)
+- Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs`)
 - Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`), `rust/assets/db/migrations/` (v1–v54, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
 
 Start routing changes at `architecture/deep-dive-routing.md`, provider/transport

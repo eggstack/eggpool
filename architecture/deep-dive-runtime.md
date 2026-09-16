@@ -141,7 +141,9 @@ process-local routing, quota, health, wire, or supervisor state.
 
 ## Diagnostics
 
-`eggpool runtime-status --json` and `/api/stats/runtime` expose bounded,
+`eggpool status` / `GET /api/status` expose the compact proxy/provider health
+snapshot (one row per provider, shared readiness evaluation with `readyz`),
+while `eggpool runtime-status --json` and `/api/stats/runtime` expose bounded,
 redacted process topology, generation, task, database, routing, and
 finalization information. These diagnostics are observations, not a second
 runtime authority. Use host process/socket tools for operating-system details

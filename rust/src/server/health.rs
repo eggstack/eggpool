@@ -1,5 +1,6 @@
 use super::dashboard::{degraded, json_response};
 use super::*;
+use crate::operations::status as status_service;
 
 pub(super) async fn healthz() -> Response {
     json_response(StatusCode::OK, json!({"status": "ok"}))
@@ -149,39 +150,346 @@ pub(super) fn parent_pid() -> serde_json::Value {
 }
 
 pub(super) async fn readyz(State(state): State<AppState>) -> Response {
+    let snapshot = readiness_snapshot(&state).await;
+    if snapshot.ready {
+        json_response(StatusCode::OK, json!({"status": "ok"}))
+    } else {
+        degraded(snapshot.reason_code.as_deref().unwrap_or("not ready"))
+    }
+}
+
+async fn readiness_snapshot(state: &AppState) -> status_service::ReadinessSnapshot {
     let lease = match state.runtime.acquire().await {
         Ok(lease) => lease,
-        Err(_) => return degraded("runtime unavailable"),
+        Err(_) => {
+            return status_service::evaluate_readiness(0, 0, false, 0, 0, true, false);
+        }
     };
     let generation_config = lease.generation().config();
-    let accounts = match db::AccountRepository::new(&state.database)
+    let configured_accounts = generation_config.all_accounts().len();
+    let enabled_accounts = match db::AccountRepository::new(&state.database)
         .list_enabled()
         .await
     {
-        Ok(accounts) => accounts,
-        Err(_) => return degraded("database not writable"),
+        Ok(accounts) => accounts.len(),
+        Err(_) => {
+            return status_service::evaluate_readiness(
+                configured_accounts,
+                0,
+                false,
+                0,
+                0,
+                false,
+                true,
+            );
+        }
     };
-    if generation_config.all_accounts().is_empty() {
-        return degraded("no accounts configured");
-    }
-    if accounts.is_empty() {
-        return degraded("no enabled accounts");
-    }
-    if !has_loaded_credentials(generation_config) {
-        return degraded("no loaded credentials");
-    }
-    let active_catalog_has_models = lease
+    let has_credentials = has_loaded_credentials(generation_config);
+    let active_catalog_models = lease
         .generation()
         .inference()
         .router_handle()
-        .catalog_model_count()
-        > 0;
-    match db::ModelRepository::new(&state.database).list(None).await {
-        Ok(models) if active_catalog_has_models && !models.is_empty() => {
-            json_response(StatusCode::OK, json!({"status": "ok"}))
+        .catalog_model_count();
+    let persisted_models = match db::ModelRepository::new(&state.database).list(None).await {
+        Ok(models) => models.len(),
+        Err(_) => {
+            return status_service::evaluate_readiness(
+                configured_accounts,
+                enabled_accounts,
+                has_credentials,
+                active_catalog_models,
+                0,
+                false,
+                true,
+            );
         }
-        Ok(_) => degraded("no usable model catalog"),
-        Err(_) => degraded("database not writable"),
+    };
+    status_service::evaluate_readiness(
+        configured_accounts,
+        enabled_accounts,
+        has_credentials,
+        active_catalog_models,
+        persisted_models,
+        true,
+        true,
+    )
+}
+
+pub(super) async fn status_api(State(state): State<AppState>) -> Response {
+    let snapshot = build_status_snapshot(&state).await;
+    match serde_json::to_value(&snapshot) {
+        Ok(value) => json_response(StatusCode::OK, value),
+        Err(_) => degraded("status snapshot failed"),
+    }
+}
+
+async fn build_status_snapshot(state: &AppState) -> status_service::ProxyStatusSnapshot {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let version = crate::version::PACKAGE_VERSION.to_owned();
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let lease = match state.runtime.acquire().await {
+        Ok(lease) => lease,
+        Err(_) => {
+            return status_service::ProxyStatusSnapshot {
+                schema_version: status_service::STATUS_SCHEMA_VERSION,
+                observed_at: status_service::observed_at_now(),
+                proxy: status_service::ProxyHealthSummary {
+                    status: status_service::ProxyStatus::Unready,
+                    ready: false,
+                    available: true,
+                    version,
+                    base_url: String::new(),
+                    uptime_seconds: Some(state.server.started_at.elapsed().as_secs_f64()),
+                    model_count: 0,
+                    routable_accounts: 0,
+                    enabled_accounts: 0,
+                    reason_code: Some("runtime unavailable".to_owned()),
+                },
+                providers: Vec::new(),
+                runtime: status_service::RuntimeHealthSummary {
+                    generation: None,
+                    digest_prefix: String::new(),
+                    reload: "unknown".to_owned(),
+                    tasks: "unknown".to_owned(),
+                    db: "unknown".to_owned(),
+                    retiring: 0,
+                },
+            };
+        }
+    };
+    let generation = lease.generation();
+    let config = generation.config();
+    let router = generation.inference().router_handle();
+    let base_url = format!("http://{}:{}", config.server.host, config.server.port);
+    let stale_after = status_service::stale_after_secs(config.models.stale_after_s);
+
+    let health_manager = router.health_manager();
+    let health_now = health_manager.as_ref().map(|manager| manager.now());
+    let snapshots: BTreeMap<String, crate::health::AccountHealthSnapshot> = router
+        .health_snapshots()
+        .into_iter()
+        .map(|snapshot| (snapshot.account_name.clone(), snapshot))
+        .collect();
+    let catalog_snapshot = router.catalog_snapshot();
+    let catalog_counts =
+        status_service::catalog_counts_by_provider(&catalog_snapshot.provider_model_keys);
+    let total_models = router.catalog_model_count();
+
+    // One bounded DB round-trip for the latest ping per account pair plus
+    // the counts needed for the shared readiness decision.
+    let ping_result = db::PingRepository::new(&state.database)
+        .latest_grouped()
+        .await;
+    let ping_ok = ping_result.is_ok();
+    let ping_map = ping_result.unwrap_or_default();
+    let latest_per_provider: BTreeMap<String, db::Ping> = {
+        let mut grouped: BTreeMap<String, Vec<db::Ping>> = BTreeMap::new();
+        for ping in ping_map.into_values() {
+            grouped
+                .entry(ping.provider_id.clone())
+                .or_default()
+                .push(ping);
+        }
+        grouped
+            .into_iter()
+            .map(|(provider, mut rows)| {
+                rows.sort_by(|left, right| left.probed_at.cmp(&right.probed_at));
+                let latest = rows.pop().expect("grouped ping has one row");
+                (provider, latest)
+            })
+            .collect()
+    };
+    let enabled_result = db::AccountRepository::new(&state.database)
+        .list_enabled()
+        .await;
+    let enabled_ok = enabled_result.is_ok();
+    let enabled_db_accounts = enabled_result.map(|rows| rows.len()).unwrap_or(0);
+    let persisted_result = db::ModelRepository::new(&state.database).list(None).await;
+    let persisted_ok = persisted_result.is_ok();
+    let persisted_models = persisted_result.map(|rows| rows.len()).unwrap_or(0);
+    let database_ok = ping_ok && enabled_ok && persisted_ok;
+
+    // Active-generation identity: every configured provider appears exactly
+    // once, even when all of its accounts are disabled.
+    let mut provider_ids: BTreeSet<String> = config.providers.keys().cloned().collect();
+    for identity in router.all_account_identities() {
+        provider_ids.insert(identity.provider_id.clone());
+    }
+    let identities: BTreeMap<String, crate::accounts::AccountIdentity> = router
+        .all_account_identities()
+        .into_iter()
+        .map(|identity| (identity.account_name.clone(), identity))
+        .collect();
+
+    let mut providers = Vec::new();
+    for provider_id in provider_ids {
+        let configured_accounts: Vec<&crate::config::AccountConfig> = config
+            .providers
+            .get(&provider_id)
+            .map(|provider| provider.accounts.iter().collect())
+            .unwrap_or_default();
+        let mut accounts = Vec::new();
+        for configured in configured_accounts {
+            let identity = identities.get(&configured.name);
+            let enabled = identity.is_some_and(|item| item.enabled) || configured.enabled;
+            // Identity is authoritative when present; static config plus
+            // environment resolution is the fallback for offline parity.
+            let has_creds = identity.map_or_else(
+                || {
+                    configured
+                        .api_key
+                        .as_ref()
+                        .is_some_and(|key| !key.trim().is_empty())
+                        || (!configured.api_key_env.is_empty()
+                            && std::env::var(&configured.api_key_env)
+                                .is_ok_and(|key| !key.trim().is_empty()))
+                },
+                |item| item.has_usable_credentials,
+            );
+            let snapshot = snapshots.get(&configured.name);
+            let now = health_now.unwrap_or(0.0);
+            let circuit_open =
+                snapshot
+                    .zip(health_manager.as_ref())
+                    .is_some_and(|(snapshot, _)| {
+                        snapshot.circuit.state == crate::health::CircuitState::Open
+                    });
+            // Routability reuses the live health gate; unknown accounts stay
+            // eligible for routing but never count as verified.
+            let routable = if enabled && has_creds {
+                match (snapshot, health_manager.as_ref()) {
+                    (Some(_), Some(manager)) => {
+                        manager.is_account_healthy_read_only(&configured.name)
+                    }
+                    (None, _) => true,
+                    (Some(_), None) => true,
+                }
+            } else {
+                false
+            };
+            let mut input = status_service::account_input_from_snapshot(
+                &configured.name,
+                &provider_id,
+                enabled,
+                has_creds,
+                snapshot,
+                now,
+                circuit_open,
+            );
+            input.routable = routable && input.routable;
+            if snapshot.is_none() {
+                input.in_backoff = false;
+            }
+            accounts.push(input);
+        }
+        let ping = latest_per_provider
+            .get(&provider_id)
+            .map(|ping| status_service::ping_evidence_for_provider(Some(ping), now_epoch_secs))
+            .unwrap_or(status_service::PingEvidence::never());
+        providers.push(status_service::aggregate_provider(
+            &status_service::ProviderStatusInput {
+                provider_id: provider_id.clone(),
+                accounts,
+                ping,
+                catalog_model_count: catalog_counts.get(&provider_id).copied(),
+                stale_after_secs: stale_after,
+            },
+        ));
+    }
+    status_service::sort_providers(&mut providers);
+
+    let readiness = status_service::evaluate_readiness(
+        config.all_accounts().len(),
+        enabled_db_accounts,
+        has_loaded_credentials(config),
+        total_models,
+        persisted_models,
+        database_ok,
+        true,
+    );
+    let diagnostics = state
+        .process
+        .as_ref()
+        .map(|process| process.diagnostics(&state.runtime));
+    let task_degraded = diagnostics.as_ref().is_some_and(|snapshot| {
+        snapshot.tasks.iter().any(|task| {
+            matches!(
+                task.last_outcome.as_deref(),
+                Some("error" | "timeout" | "panic_or_join_failure")
+            )
+        })
+    });
+    let reload_active = diagnostics
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.reload.in_progress);
+    let retiring_abnormal = diagnostics.as_ref().is_some_and(|snapshot| {
+        snapshot
+            .retiring_generations
+            .iter()
+            .any(|retiring| retiring.failed_close)
+    });
+    let retiring_count = diagnostics
+        .as_ref()
+        .map(|snapshot| snapshot.retiring_generations.len())
+        .unwrap_or(0);
+    let (proxy_status, ready, reason) = status_service::aggregate_proxy(
+        &readiness,
+        &providers,
+        task_degraded,
+        reload_active,
+        retiring_abnormal,
+    );
+    let routable_accounts = providers.iter().map(|item| item.routable_accounts).sum();
+    let enabled_accounts = providers.iter().map(|item| item.enabled_accounts).sum();
+    let generation_id = generation.generation_id();
+    let digest: String = generation.content_digest().chars().take(12).collect();
+    let reload_state = diagnostics.as_ref().map_or("unknown", |snapshot| {
+        if snapshot.reload.in_progress {
+            "active"
+        } else {
+            "idle"
+        }
+    });
+    let tasks_summary = diagnostics
+        .as_ref()
+        .map_or("unknown".to_owned(), |snapshot| {
+            let total = snapshot.tasks.len();
+            let running = snapshot.tasks.iter().filter(|task| task.running).count();
+            format!("{running}/{total}")
+        });
+    status_service::ProxyStatusSnapshot {
+        schema_version: status_service::STATUS_SCHEMA_VERSION,
+        observed_at: status_service::observed_at_now(),
+        proxy: status_service::ProxyHealthSummary {
+            status: proxy_status,
+            ready,
+            available: true,
+            version,
+            base_url,
+            uptime_seconds: Some(state.server.started_at.elapsed().as_secs_f64()),
+            model_count: total_models,
+            routable_accounts,
+            enabled_accounts,
+            reason_code: reason,
+        },
+        providers,
+        runtime: status_service::RuntimeHealthSummary {
+            generation: Some(generation_id),
+            digest_prefix: digest,
+            reload: reload_state.to_owned(),
+            tasks: tasks_summary,
+            db: if database_ok {
+                "ok".to_owned()
+            } else {
+                "degraded".to_owned()
+            },
+            retiring: retiring_count,
+        },
     }
 }
 

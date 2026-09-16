@@ -63,6 +63,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Restart(args)) => restart(&config_path, args.timeout).await?,
         Some(Command::Rehash { json }) => rehash(&config_path, json).await?,
         Some(Command::RuntimeStatus { json }) => runtime_status(&config_path, json).await?,
+        Some(Command::Status { json }) => status(&config_path, json).await?,
         Some(Command::Croncheck) => croncheck(),
         Some(Command::EnsureRunning) => ensure_running(&config_path).await?,
         Some(Command::Update(args)) => update(&config_path, args).await?,
@@ -2687,6 +2688,21 @@ async fn runtime_status(path: &Path, json_output: bool) -> Result<(), BootstrapE
 }
 
 async fn fetch_runtime_status(config: &config::Config) -> Result<Value, String> {
+    fetch_local_json(config, "/api/stats/runtime", "runtime-status").await
+}
+
+async fn fetch_status_snapshot(config: &config::Config) -> Result<Value, String> {
+    fetch_local_json(config, "/api/status", "status").await
+}
+
+/// Bounded authenticated local-control fetch shared by operational status
+/// commands. No outbound provider requests; one TCP connection, one bounded
+/// body, strict JSON parsing.
+async fn fetch_local_json(
+    config: &config::Config,
+    path: &str,
+    label: &str,
+) -> Result<Value, String> {
     let host = match config.server.host.as_str() {
         "0.0.0.0" => "127.0.0.1",
         "::" => "::1",
@@ -2697,35 +2713,34 @@ async fn fetch_runtime_status(config: &config::Config) -> Result<Value, String> 
         TcpStream::connect((host, config.server.port)),
     )
     .await
-    .map_err(|_| "runtime-status connection timed out".to_owned())?
-    .map_err(|_| "runtime-status server is not running".to_owned())?;
-    let mut request =
-        "GET /api/stats/runtime HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n".to_owned();
+    .map_err(|_| format!("{label} connection timed out"))?
+    .map_err(|_| format!("{label} server is not running"))?;
+    let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     if let Some(key) = config.resolved_server_api_key() {
         request.push_str(&format!("Authorization: Bearer {key}\r\n"));
     }
     request.push_str("\r\n");
     timeout(STATUS_TIMEOUT, stream.write_all(request.as_bytes()))
         .await
-        .map_err(|_| "runtime-status request timed out".to_owned())?
-        .map_err(|_| "runtime-status request failed".to_owned())?;
+        .map_err(|_| format!("{label} request timed out"))?
+        .map_err(|_| format!("{label} request failed"))?;
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 8192];
     loop {
         let count = timeout(STATUS_TIMEOUT, stream.read(&mut chunk))
             .await
-            .map_err(|_| "runtime-status response timed out".to_owned())?
-            .map_err(|_| "runtime-status response failed".to_owned())?;
+            .map_err(|_| format!("{label} response timed out"))?
+            .map_err(|_| format!("{label} response failed"))?;
         if count == 0 {
             break;
         }
         if bytes.len().saturating_add(count) > MAX_STATUS_BODY_BYTES {
-            return Err("runtime-status response body is too large".to_owned());
+            return Err(format!("{label} response body is too large"));
         }
         bytes.extend_from_slice(&chunk[..count]);
     }
     let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return Err("runtime-status response was malformed".to_owned());
+        return Err(format!("{label} response was malformed"));
     };
     let headers = &bytes[..header_end];
     let status = headers
@@ -2734,16 +2749,323 @@ async fn fetch_runtime_status(config: &config::Config) -> Result<Value, String> 
         .and_then(|line| line.split(|byte| *byte == b' ').nth(1))
         .and_then(|value| std::str::from_utf8(value).ok())
         .and_then(|value| value.trim().parse::<u16>().ok())
-        .ok_or_else(|| "runtime-status response status was malformed".to_owned())?;
+        .ok_or_else(|| format!("{label} response status was malformed"))?;
     if status != 200 {
         return Err(match status {
-            401 | 403 => format!("runtime-status authentication failed (HTTP {status})"),
-            404 => "runtime-status endpoint is unavailable".to_owned(),
-            _ => format!("runtime-status server returned HTTP {status}"),
+            401 | 403 => format!("{label} authentication failed (HTTP {status})"),
+            404 => format!("{label} endpoint is unavailable"),
+            _ => format!("{label} server returned HTTP {status}"),
         });
     }
     serde_json::from_slice(&bytes[header_end + 4..])
-        .map_err(|_| "runtime-status response body was malformed JSON".to_owned())
+        .map_err(|_| format!("{label} response body was malformed JSON"))
+}
+
+async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    match fetch_status_snapshot(&config).await {
+        Ok(value) => {
+            let snapshot = sanitize_status_value(&value);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot).expect("JSON rendering")
+                );
+            } else {
+                print_status_human(&snapshot, &config);
+            }
+            let proxy_status = snapshot
+                .get("proxy")
+                .and_then(|proxy| proxy.get("status"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unready");
+            if proxy_status == "unready" {
+                return Err(command_error(
+                    EXIT_VALIDATION,
+                    "proxy is reachable but not ready",
+                ));
+            }
+            Ok(())
+        }
+        Err(fetch_error) => {
+            // Server unreachable: fall back to static local configuration.
+            // Provider rows are honestly unknown; only the enabled state is
+            // known without live health evidence.
+            if is_auth_or_malformed_status_error(&fetch_error) {
+                return Err(command_error(EXIT_VALIDATION, fetch_error));
+            }
+            let snapshot = offline_status_snapshot(&config);
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot).expect("JSON rendering")
+                );
+            } else {
+                print_offline_status_human(&snapshot, &config);
+            }
+            Err(command_error(EXIT_CONTROL_UNAVAILABLE, fetch_error))
+        }
+    }
+}
+
+fn is_auth_or_malformed_status_error(detail: &str) -> bool {
+    detail.contains("authentication failed")
+        || detail.contains("malformed")
+        || detail.contains("too large")
+}
+
+fn sanitize_status_value(value: &Value) -> Value {
+    // The server snapshot is already secret-free by construction; this keeps
+    // the CLI contract stable if the server ever adds advisory fields.
+    value.clone()
+}
+
+fn offline_status_snapshot(config: &config::Config) -> Value {
+    use crate::operations::status as status_service;
+    let mut providers: Vec<Value> = config
+        .providers
+        .iter()
+        .map(|(provider_id, provider)| {
+            let total = provider.accounts.len();
+            let enabled = provider
+                .accounts
+                .iter()
+                .filter(|account| account.enabled)
+                .count();
+            let status = if enabled == 0 { "disabled" } else { "unknown" };
+            let reason = if enabled == 0 {
+                "no_enabled_accounts"
+            } else {
+                "unobserved"
+            };
+            json!({
+                "provider_id": provider_id,
+                "status": status,
+                "enabled_accounts": enabled,
+                "total_accounts": total,
+                "routable_accounts": 0,
+                "backoff_accounts": 0,
+                "unavailable_accounts": 0,
+                "model_count": Value::Null,
+                "last_probe_age_seconds": Value::Null,
+                "last_probe_latency_ms": Value::Null,
+                "last_probe_status_code": Value::Null,
+                "last_observation": "never",
+                "reason_code": reason,
+            })
+        })
+        .collect();
+    providers.sort_by(|left, right| {
+        left["provider_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["provider_id"].as_str().unwrap_or_default())
+    });
+    providers.truncate(status_service::MAX_STATUS_PROVIDERS);
+    let base_url = local_base_url(config);
+    json!({
+        "schema_version": status_service::STATUS_SCHEMA_VERSION,
+        "observed_at": status_service::observed_at_now(),
+        "proxy": {
+            "status": "unavailable",
+            "ready": false,
+            "available": false,
+            "version": PACKAGE_VERSION,
+            "base_url": base_url,
+            "uptime_seconds": Value::Null,
+            "model_count": 0,
+            "routable_accounts": 0,
+            "enabled_accounts": providers.iter().map(|row| row["enabled_accounts"].as_u64().unwrap_or(0)).sum::<u64>(),
+            "reason_code": "server unreachable",
+        },
+        "providers": providers,
+        "runtime": {
+            "generation": Value::Null,
+            "digest_prefix": "",
+            "reload": "unknown",
+            "tasks": "unknown",
+            "db": "unknown",
+            "retiring": 0,
+        },
+    })
+}
+
+fn local_base_url(config: &config::Config) -> String {
+    let host = match config.server.host.as_str() {
+        "0.0.0.0" => "127.0.0.1",
+        "::" => "::1",
+        value => value,
+    };
+    format!("http://{host}:{}", config.server.port)
+}
+
+fn display_base_url(raw: &str, config: &config::Config) -> String {
+    if raw.is_empty() {
+        return local_base_url(config);
+    }
+    // Resolve wildcard binds to loopback for local operator display without
+    // mutating the machine-readable snapshot.
+    raw.replace("0.0.0.0", "127.0.0.1").replace("[::]", "[::1]")
+}
+
+fn print_status_human(snapshot: &Value, config: &config::Config) {
+    let proxy = snapshot.get("proxy").unwrap_or(&Value::Null);
+    let runtime = snapshot.get("runtime").unwrap_or(&Value::Null);
+    let version = proxy
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(PACKAGE_VERSION);
+    let proxy_status = proxy
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unready");
+    let base_url = display_base_url(
+        proxy
+            .get("base_url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        config,
+    );
+    let uptime = proxy
+        .get("uptime_seconds")
+        .and_then(serde_json::Value::as_f64)
+        .map(format_compact_duration)
+        .unwrap_or_else(|| "-".to_owned());
+    let models = proxy
+        .get("model_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let routable = proxy
+        .get("routable_accounts")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let enabled = proxy
+        .get("enabled_accounts")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    println!(
+        "EggPool {version}  {proxy_status}  {base_url}  uptime={uptime}  models={models}  accounts={routable}/{enabled}"
+    );
+    if let Some(providers) = snapshot.get("providers").and_then(Value::as_array) {
+        for provider in providers {
+            let id = provider
+                .get("provider_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let status = provider
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let provider_routable = provider
+                .get("routable_accounts")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let provider_enabled = provider
+                .get("enabled_accounts")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let model_text = provider
+                .get("model_count")
+                .and_then(serde_json::Value::as_u64)
+                .map_or("?".to_owned(), |count| count.to_string());
+            let probe_text = provider
+                .get("last_probe_latency_ms")
+                .and_then(serde_json::Value::as_u64)
+                .map_or("-".to_owned(), |latency| format!("{latency}ms"));
+            let age_text = provider
+                .get("last_probe_age_seconds")
+                .and_then(serde_json::Value::as_u64)
+                .map_or("never".to_owned(), format_compact_age);
+            let reason = provider
+                .get("reason_code")
+                .and_then(serde_json::Value::as_str)
+                .map_or(String::new(), |reason| format!("  reason={reason}"));
+            println!(
+                "{id}  {status}  accounts={provider_routable}/{provider_enabled}  models={model_text}  probe={probe_text}  age={age_text}{reason}"
+            );
+        }
+    }
+    let generation = runtime
+        .get("generation")
+        .and_then(serde_json::Value::as_u64)
+        .map_or("-".to_owned(), |id| id.to_string());
+    let reload = runtime
+        .get("reload")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let tasks = runtime
+        .get("tasks")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let db = runtime
+        .get("db")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let retiring = runtime
+        .get("retiring")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    println!(
+        "Runtime: generation={generation} reload={reload} tasks={tasks} db={db} retiring={retiring}"
+    );
+}
+
+fn print_offline_status_human(snapshot: &Value, config: &config::Config) {
+    let proxy = snapshot.get("proxy").unwrap_or(&Value::Null);
+    let version = proxy
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(PACKAGE_VERSION);
+    let base_url = display_base_url(
+        proxy
+            .get("base_url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        config,
+    );
+    println!("EggPool {version}  unavailable  {base_url}");
+    if let Some(providers) = snapshot.get("providers").and_then(Value::as_array) {
+        for provider in providers {
+            let id = provider
+                .get("provider_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let status = provider
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let enabled = provider
+                .get("enabled_accounts")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if status == "disabled" {
+                println!("{id}  disabled  accounts=0/{enabled}");
+            } else {
+                println!("{id}  unknown  accounts=?/{enabled}");
+            }
+        }
+    }
+}
+
+fn format_compact_duration(seconds: f64) -> String {
+    let total = seconds.max(0.0) as u64;
+    if total >= 3600 {
+        format!("{}h{}m", total / 3600, (total % 3600) / 60)
+    } else if total >= 60 {
+        format!("{}m{}s", total / 60, total % 60)
+    } else {
+        format!("{total}s")
+    }
+}
+
+fn format_compact_age(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn print_runtime_status(value: &Value) {

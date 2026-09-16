@@ -17,7 +17,7 @@ use dashboard::{
     runtime_page, static_chart_js, static_css, static_favicon, static_js, summary, sync_accounts,
     theme_css, timeseries_page, traces_page,
 };
-use health::{healthz, models_api, readyz, runtime_status, update_status};
+use health::{healthz, models_api, readyz, runtime_status, status_api, update_status};
 use inference::{chat_completions, messages, responses, responses_compact};
 use middleware::{admit_inference_body, authenticate, map_generation_error, validate_server_key};
 
@@ -940,6 +940,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/models", get(models_api))
         .route("/api/stats/runtime", get(runtime_status))
         .route("/api/stats/update", get(update_status))
+        .route("/api/status", get(status_api))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))

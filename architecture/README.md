@@ -76,8 +76,8 @@ message, reasoning, and function-call item completion.
 | Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs` |
-| HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` |
-| Operations and local lifecycle | `rust/src/operations/`, especially `config_mutation.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, and `control.rs` |
+| HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` (`health.rs` also serves the authenticated compact `GET /api/status` snapshot and shares readiness evaluation with `readyz`) |
+| Operations and local lifecycle | `rust/src/operations/`, especially `config_mutation.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, and `status.rs` (compact proxy/provider health aggregation; `runtime.rs` only renders) |
 
 See the corresponding deep dive for details:
 

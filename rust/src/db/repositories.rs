@@ -1122,6 +1122,28 @@ impl PingRepository {
         }).await
     }
 
+    /// Return the latest ping per `(provider_id, account_name)` pair.
+    /// One row per configured account at most, so the result stays bounded
+    /// without loading ping history. Raw `error` text stays in the row and
+    /// must be classified to a bounded category before display.
+    pub async fn latest_grouped(&self) -> Result<BTreeMap<(String, String), Ping>, DatabaseError> {
+        let rows: Vec<Ping> = self
+            .database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT provider_id, account_name, probed_at, latency_ms, status_code, error, model_count\n\
+                     FROM provider_pings WHERE id IN\n\
+                     (SELECT MAX(id) FROM provider_pings GROUP BY provider_id, account_name)",
+                )?;
+                statement.query_map([], ping_from_row)?.collect()
+            })
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|ping| ((ping.provider_id.clone(), ping.account_name.clone()), ping))
+            .collect())
+    }
+
     pub async fn record(
         &self,
         provider_id: String,

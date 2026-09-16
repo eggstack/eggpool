@@ -17,4 +17,5 @@ pub mod operator;
 pub mod paths;
 pub mod process;
 pub mod provenance;
+pub mod status;
 pub mod update;
