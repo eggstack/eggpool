@@ -1,6 +1,9 @@
 # Plan 200: Agent model catalog and client configuration lifecycle
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
+>
+> **Closed:** 2026-09-16 (implemented `7499c15e`; live qualification Plan 206;
+> see Closure evidence below)
 >
 > **Parent:** Plan 198
 >
@@ -478,3 +481,24 @@ Then run the full serial workspace suite and locked release build. If Cargo depe
 14. Any richer remote projection uses a separate authenticated Eggpool-specific endpoint/schema.
 15. No model capability is inferred from its name.
 16. No Codex/OpenCode runtime dependency is added.
+
+---
+
+## Closure evidence
+
+- Implemented: `7499c15eec977e3c0bbce1481b247e3f50e36fc4` — provider-neutral
+  `AgentModelProjection`, conservative alias aggregation, generated Codex
+  `model_catalog_json`, Responses-capable OpenCode renderer, managed
+  `--apply/--sync/--check/--remove/--dry-run` lifecycle; `/v1/models`
+  unchanged; no new runtime dependency. Per-plan record in
+  `plans/203-agent-model-catalog-and-client-config-lifecycle-closure.md`.
+- Focused tests: `operations_o005` (13) + `operations::integrations` (16,
+  incl. `codex_catalog_emits_current_required_fields_for_unknown_models`
+  added during Plan 206) + `cli_contract` + `codex_responses_compat`.
+- Live qualification (Plan 206, Codex CLI `0.154.0`, OpenCode `1.18.30`):
+  isolated `configsetup codex --apply` now passes `codex debug models` after
+  narrow fix (always emit `supported_reasoning_levels`, empty when unknown;
+  always emit `base_instructions = ""`); `codex doctor` reports config parse
+  ok and `EGGPOOL_API_KEY (present)`; `configsetup opencode --apply` passes
+  with `@ai-sdk/openai` + `{env:EGGPOOL_API_KEY}` and `opencode models`
+  lists Eggpool models. No secrets in artifacts.

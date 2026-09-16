@@ -86,8 +86,14 @@ catalog from the projection. Each entry carries the EggPool public ID as
 where guaranteed, `shell_type = "shell_command"`, `visibility = "list"`,
 `supported_in_api = true`, `prefer_websockets = false`, and a 90%
 `auto_compact_token_limit` derived from the guaranteed context window.
-`validate_codex_catalog_json()` enforces the strict-parser contract (slug and
-display name present, no WebSocket advertisement, no embedded secret).
+Every entry always emits `supported_reasoning_levels` (empty when no
+reasoning is guaranteed) and `base_instructions = ""` (no EggPool override);
+both are required by current Codex strict parsing (qualified against Codex
+CLI 0.154.0 via `codex debug models` 2026-09-16) and must not be used to
+fabricate provider instructions. `validate_codex_catalog_json()` enforces
+the strict-parser contract (slug and display name present, reasoning-levels
+array present, base-instructions or template instructions present, no
+WebSocket advertisement, no embedded secret).
 
 The standard EggPool `/v1/models` endpoint remains the OpenAI-compatible
 model-list contract and is never overloaded as a Codex-private schema. No

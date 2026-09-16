@@ -1,6 +1,9 @@
 # Plan 199: Responses remote-compaction compatibility
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
+>
+> **Closed:** 2026-09-16 (implemented `94b710e6`; live qualification Plan 206;
+> see Closure evidence below)
 >
 > **Baseline:** Plan 198 baseline plus preceding planning commits
 >
@@ -345,3 +348,21 @@ Then run the full serial workspace suite and locked release build.
 10. No prompt, replacement history, compact summary, credential, or raw upstream body is persisted/logged by the new path.
 11. Deterministic fixtures are pinned to a current Codex source baseline.
 12. No Codex/OpenCodex runtime dependency is added.
+
+---
+
+## Closure evidence
+
+- Implemented: `94b710e6d1b7fc82cb4c3ff5765441e05a008b33` — bounded
+  finite-only `POST /v1/responses/compact`, native compact-capable Responses
+  routes only, no translated summarization fallback, no persisted
+  conversation/response state, v2 trigger capability-gated/native-only.
+- Focused tests: `codex_compaction_compat` (+ `wire_*`, coordinator
+  boundary/finalization/publication suites); full serial workspace suite green.
+- Live qualification (Plan 206, Codex CLI `0.154.0`): custom provider path
+  uses local compaction as expected; remote compaction remains an optional
+  provider capability (`supports_remote_compaction_v1` + template). No live
+  remote-compact upstream exercised (none configured); deterministic fixtures
+  remain the authority. No state added for testing.
+- Intentional deferrals: translated compaction fallback, WebSocket/continuation
+  state — unchanged.

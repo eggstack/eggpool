@@ -36,6 +36,26 @@ Codex CLI version and selected upstream path only; it does not imply support
 for every future Codex version, provider, or native server tool. Translated
 provider live qualification must be recorded separately when it is run.
 
+Managed Codex catalog/config qualification uses an isolated `CODEX_HOME`:
+
+```bash
+eggpool configsetup codex --apply
+codex debug models
+codex doctor --json
+```
+
+`codex debug models` must parse the generated `model_catalog_json` without
+errors; `codex doctor` must report `config.toml parse: ok`, the EggPool
+provider with `wire_api = "responses"` and WebSockets disabled, and
+`EGGPOOL_API_KEY (present)`. The generated catalog always emits
+`supported_reasoning_levels` (empty when no reasoning is guaranteed) and
+`base_instructions = ""` (no EggPool override) as required by current Codex
+strict parsing (qualified against Codex CLI 0.154.0, 2026-09-16). Live text
+and tool-loop inference still require provider credentials and remain opt-in
+(exit 77 without them); deferred `tool_search` live execution is
+`NOT_LIVE_EXERCISABLE` without a stable client path and remains covered by
+`codex_responses_compat`.
+
 Remote-compaction qualification is covered deterministically by the
 `codex_compaction_compat` target: native compact admission and alias
 rewriting, byte-exact native forwarding, bounded compact success/failure

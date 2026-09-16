@@ -903,24 +903,24 @@ fn codex_catalog_entry(projection: &AgentModelProjection) -> Value {
         json!({ "mode": "tokens", "limit": 10000 }),
     );
     if let Some(reasoning) = &capabilities.reasoning {
+        entry.insert(
+            "supports_reasoning_summaries".to_owned(),
+            Value::Bool(false),
+        );
+        entry.insert(
+            "default_reasoning_summary".to_owned(),
+            Value::String("none".to_owned()),
+        );
         if reasoning.efforts.is_empty() {
+            // Current Codex (0.154.0, `codex debug models`) requires
+            // `supported_reasoning_levels` to be present even when the model
+            // has no reasoning support; an empty array is the conservative
+            // representation of "no guaranteed reasoning levels".
             entry.insert(
-                "supports_reasoning_summaries".to_owned(),
-                Value::Bool(false),
-            );
-            entry.insert(
-                "default_reasoning_summary".to_owned(),
-                Value::String("none".to_owned()),
+                "supported_reasoning_levels".to_owned(),
+                Value::Array(Vec::new()),
             );
         } else {
-            entry.insert(
-                "supports_reasoning_summaries".to_owned(),
-                Value::Bool(false),
-            );
-            entry.insert(
-                "default_reasoning_summary".to_owned(),
-                Value::String("none".to_owned()),
-            );
             let levels: Vec<Value> = reasoning
                 .efforts
                 .iter()
@@ -963,8 +963,20 @@ fn codex_catalog_entry(projection: &AgentModelProjection) -> Value {
             "default_reasoning_summary".to_owned(),
             Value::String("none".to_owned()),
         );
+        // See above: current Codex requires the array even without reasoning.
+        entry.insert(
+            "supported_reasoning_levels".to_owned(),
+            Value::Array(Vec::new()),
+        );
     }
     entry.insert("support_verbosity".to_owned(), Value::Bool(false));
+    // Current Codex (0.154.0) rejects a catalog entry missing both
+    // `base_instructions` and `model_messages.instructions_template`.
+    // EggPool provides no custom base instructions; an empty string is the
+    // conservative "no EggPool override" value qualified via
+    // `codex debug models` (live qualification 2026-09-16). It must not be
+    // used to fabricate provider instructions.
+    entry.insert("base_instructions".to_owned(), Value::String(String::new()));
     Value::Object(entry)
 }
 
@@ -1011,6 +1023,35 @@ pub fn validate_codex_catalog_json(
         if object.get("prefer_websockets").and_then(Value::as_bool) == Some(true) {
             return Err(IntegrationError::Drift {
                 detail: "Codex catalog must not advertise websockets".to_owned(),
+            });
+        }
+        // Current Codex (0.154.0, qualified 2026-09-16 via
+        // `codex debug models`) rejects entries missing
+        // `supported_reasoning_levels` or both `base_instructions` and
+        // `model_messages.instructions_template`. The renderer always emits
+        // the conservative empty values; validation enforces the contract so
+        // future renderer regressions fail deterministically.
+        if object
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .is_none()
+        {
+            return Err(IntegrationError::Drift {
+                detail: "Codex catalog entry is missing supported_reasoning_levels".to_owned(),
+            });
+        }
+        let has_base_instructions = object
+            .get("base_instructions")
+            .and_then(Value::as_str)
+            .is_some();
+        let has_template_instructions = object
+            .get("model_messages")
+            .and_then(|messages| messages.get("instructions_template"))
+            .and_then(Value::as_str)
+            .is_some();
+        if !has_base_instructions && !has_template_instructions {
+            return Err(IntegrationError::Drift {
+                detail: "Codex catalog entry is missing base_instructions".to_owned(),
             });
         }
     }
@@ -3011,6 +3052,68 @@ mod tests {
             vec!["low".to_owned(), "medium".to_owned()]
         );
         assert!(!merged.websockets);
+    }
+
+    #[test]
+    fn codex_catalog_emits_current_required_fields_for_unknown_models() {
+        // Regression for live qualification 2026-09-16 against Codex CLI
+        // 0.154.0 (`codex debug models`): entries without reasoning support
+        // previously omitted `supported_reasoning_levels`, and all entries
+        // omitted `base_instructions`, both of which current Codex requires.
+        let context = context();
+        let catalog = build_codex_catalog_json(&context).expect("catalog");
+        let count = validate_codex_catalog_json(&catalog, &context.api_key).expect("valid");
+        assert_eq!(count, 1);
+        let value: Value = serde_json::from_str(&catalog).expect("json");
+        let entry = value
+            .get("models")
+            .and_then(Value::as_array)
+            .and_then(|models| models.first())
+            .expect("entry");
+        assert_eq!(
+            entry
+                .get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(
+            entry.get("base_instructions").and_then(Value::as_str),
+            Some("")
+        );
+
+        // Validation must reject catalogs missing the current required fields
+        // so future renderer regressions fail deterministically.
+        let mut missing_levels: Value = serde_json::from_str(&catalog).expect("json");
+        for model in missing_levels
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .expect("models")
+        {
+            model
+                .as_object_mut()
+                .expect("object")
+                .remove("supported_reasoning_levels");
+        }
+        assert!(
+            validate_codex_catalog_json(&missing_levels.to_string(), &context.api_key).is_err()
+        );
+
+        let mut missing_instructions: Value = serde_json::from_str(&catalog).expect("json");
+        for model in missing_instructions
+            .get_mut("models")
+            .and_then(Value::as_array_mut)
+            .expect("models")
+        {
+            model
+                .as_object_mut()
+                .expect("object")
+                .remove("base_instructions");
+        }
+        assert!(
+            validate_codex_catalog_json(&missing_instructions.to_string(), &context.api_key)
+                .is_err()
+        );
     }
 
     #[test]

@@ -1,8 +1,12 @@
 # Plan 198: Coding-agent proxy compatibility roadmap
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
 >
 > **Baseline:** Eggpool `main` at `f6e5bdbe098356b22a8c5c7705a0b7c1d35fc5ba` (2026-09-16)
+>
+> **Closed:** 2026-09-16 via Plans 206–208 (implementation Plans 199–202 +
+> live qualification; see Closure evidence below)
+>
 >
 > **Parent context:** Plans 192–197
 >
@@ -288,3 +292,31 @@ This roadmap is complete when:
 # Handoff note
 
 Before implementing any client-specific schema, re-check the current Codex/OpenCode source at implementation time. Their config/catalog schemas evolve faster than Eggpool's internal routing contracts. Keep the Eggpool projection stable and make version-sensitive behavior a renderer/test concern rather than a routing concern.
+
+---
+
+## Closure evidence (2026-09-16, Plans 206–208)
+
+- Implemented: Plan 199 in `94b710e6`, Plan 200 in `7499c15e`, Plan 201 in
+  `27890a19`, Plan 202 in `3dc9ece9`; per-plan closure records in
+  `plans/203-agent-model-catalog-and-client-config-lifecycle-closure.md`,
+  `plans/204-codex-deferred-tool-compatibility-and-conformance-closure.md`,
+  `plans/205-status-command-and-provider-health-summary-closure.md`.
+- Focused tests: `codex_compaction_compat`, `codex_responses_compat`,
+  `operations_o005` + `operations::integrations`, `status_command` +
+  `operations::status`, `cli_contract`, wire/coordinator suites; full serial
+  workspace suite green at closure.
+- Live qualification (Plan 206, Eggpool `0.8.0`, Codex CLI `0.154.0`,
+  OpenCode `1.18.30`): managed Codex/OpenCode `--apply/--check/--sync/--remove`
+  PASS (isolated); `codex debug models` + `codex doctor` PASS after narrow
+  catalog fix (`supported_reasoning_levels` always present,
+  `base_instructions = ""`; regression test
+  `codex_catalog_emits_current_required_fields_for_unknown_models`);
+  `opencode models` lists Eggpool models; `eggpool status` healthy/degraded/
+  offline PASS with exit 0/0/3 and secret-free JSON; live inference SKIP (no
+  provider creds, smoke exits 77); deferred `tool_search` live
+  NOT_LIVE_EXERCISABLE (deterministic conformance retained); compaction uses
+  local client path (remote remains optional, no translated fallback/state).
+- Intentional deferrals: Responses WebSocket, persisted
+  `previous_response_id`/conversations/background, server-side tool
+  execution, OpenCodex-private parity, active probing from `status`.

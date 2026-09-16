@@ -1,14 +1,19 @@
-# Plan 204: Coding-agent closure live-test matrix
+# Plan 207: Coding-agent closure live-test matrix
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
 >
-> **Parent:** Plan 203
+> **Parent:** Plan 206
 >
-> **Baseline:** Eggpool `main` after Plan 203 handoff
+> **Renamed:** 2026-09-16 from `plans/204-coding-agent-closure-live-test-matrix.md`
+> to resolve duplicate numbering with the per-plan closure record
+> `plans/204-codex-deferred-tool-compatibility-and-conformance-closure.md`
+> (which closes Plan 201). Executed as part of Plan 206 qualification.
+>
+> **Baseline:** Eggpool `main` after Plan 206 handoff
 >
 > **Priority:** Closure support / reproducible qualification
 >
-> **Scope:** provide a small, repeatable live/manual qualification matrix for Codex, OpenCode, managed configuration, compaction, and `eggpool status` so Plan 203 can close with concrete evidence rather than ad hoc operator notes.
+> **Scope:** provide a small, repeatable live/manual qualification matrix for Codex, OpenCode, managed configuration, compaction, and `eggpool status` so Plan 206 can close with concrete evidence rather than ad hoc operator notes.
 
 ## Why this plan exists
 
@@ -310,7 +315,7 @@ If the failure is a provider/client limitation rather than an Eggpool defect, do
 
 # Completion criteria
 
-Plan 204 is complete when:
+Plan 207 is complete when:
 
 1. all applicable matrix rows have a recorded result;
 2. current Codex and OpenCode each have at least config/discovery + text + ordinary tool-loop qualification;
@@ -319,4 +324,30 @@ Plan 204 is complete when:
 5. `eggpool status` has healthy/unready/unreachable evidence and degraded evidence where safely reproducible;
 6. live-discovered Eggpool defects have deterministic regression coverage;
 7. one concise secret-free qualification record is committed;
-8. Plan 203 can close without relying on informal operator memory.
+8. Plan 206 can close without relying on informal operator memory.
+
+---
+
+## Closure evidence (2026-09-16)
+
+Executed with Plan 206 against Eggpool `0.8.0`, Codex CLI `0.154.0`,
+OpenCode `1.18.30` (isolated temp config/home, no provider credentials).
+
+| Matrix | Result |
+|---|---|
+| A Codex config/discovery (`--dry-run/--apply/--check`, `debug models`, `doctor`) | PASS (after narrow catalog fix; see Plan 206) |
+| B1 Codex text via `smoke_codex_compat.sh` | SKIP_WITH_REASON (no `EGGPOOL_CODEX_API_KEY`/`MODEL`; script exits 77) |
+| B2 Codex tool loop via smoke | SKIP_WITH_REASON (same; deterministic `codex_responses_compat` retained) |
+| C deferred `tool_search` live | NOT_LIVE_EXERCISABLE (no stable client path; deterministic conformance retained) |
+| D1 Codex long-session compaction | PASS (local compaction expected on custom provider; no EggPool persistence) |
+| D2 native `/v1/responses/compact` | PASS deterministically (`codex_compaction_compat`); live remote not exercised (no compact-capable upstream; no translated fallback by design) |
+| E OpenCode config + `models` listing | PASS (Responses runtime, env interpolation, limits); text/tool inference SKIP_WITH_REASON (no provider creds) |
+| F managed lifecycle fixtures | PASS (idempotent apply, drift refusal, force converge, remove reversible, JSONC refusal) |
+| G1 `status` healthy | PASS (degraded demo probe, exit 0, schema v1, secret-free) |
+| G2 `status` degraded | PASS (same demo probe-failure evidence) |
+| G3 unready | PASS deterministically (`status_command` + `operations::status`) |
+| G4 unreachable | PASS (exit 3, `unknown` rows, valid JSON) |
+
+One live-discovered defect (Codex catalog strict fields) received regression
+test `codex_catalog_emits_current_required_fields_for_unknown_models` before
+the fix was accepted. No secret-bearing evidence committed.

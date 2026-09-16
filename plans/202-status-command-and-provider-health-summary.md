@@ -1,6 +1,9 @@
 # Plan 202: `status` command and provider health summary
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
+>
+> **Closed:** 2026-09-16 (implemented `3dc9ece9`; live qualification Plan 206;
+> see Closure evidence below)
 >
 > **Parent:** Plan 198
 >
@@ -733,3 +736,21 @@ Then run the full serial workspace suite and locked release build.
 14. Raw `provider_pings.error` content, credentials, prompts, responses, and tool payloads never appear in status output.
 15. `runtime-status` remains available for detailed diagnostics and is not repurposed.
 16. No new heavy HTTP/TUI/monitoring dependency is added.
+
+---
+
+## Closure evidence
+
+- Implemented: `3dc9ece9d713a49f56c9dd2f7aeba9b0c04e68e1` — top-level
+  `eggpool status [--json]`, authenticated `GET /api/status`, shared
+  `evaluate_readiness()` with `readyz`, one row per provider, bounded
+  reason codes, offline fallback (exit 3), reachable-unready exit 1.
+  Per-plan record in
+  `plans/205-status-command-and-provider-health-summary-closure.md`.
+- Focused tests: `status_command` (10) + `operations::status` lib (9) +
+  `cli_contract`.
+- Live qualification (Plan 206): healthy/degraded running proxy PASS (exit 0,
+  schema v1, deterministic order, secret-free); offline unreachable PASS
+  (exit 3, `unknown` rows, valid JSON); partial degradation covered by demo
+  probe-failure (`probe_failed`, exit 0); unready covered deterministically.
+  No outbound probes, no health mutation, no quota usage.

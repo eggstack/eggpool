@@ -1,8 +1,14 @@
-# Plan 203: Coding-agent proxy closure and real-client qualification
+# Plan 206: Coding-agent proxy closure and real-client qualification
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
 >
 > **Parent:** Plan 198
+>
+> **Renamed:** 2026-09-16 from `plans/203-coding-agent-proxy-closure-qualification.md`
+> to resolve duplicate numbering with the per-plan closure record
+> `plans/203-agent-model-catalog-and-client-config-lifecycle-closure.md`
+> (which closes Plan 200). Companion matrix is now Plan 207 and evidence
+> closure is now Plan 208.
 >
 > **Baseline:** Eggpool `main` at `3dc9ece9d713a49f56c9dd2f7aeba9b0c04e68e1` (2026-09-16)
 >
@@ -435,3 +441,63 @@ This closure pass is complete when:
 # Handoff note
 
 Treat this as a **qualification-first closure pass**. Start by running the current clients against the code already on `main`. Do not preemptively refactor or add features because OpenCodex or another proxy supports them. If the existing Eggpool implementation passes the real-client tests, the correct result is primarily evidence/documentation/plan closure, not additional code.
+
+---
+
+## Closure evidence (2026-09-16)
+
+- Qualification baseline: Eggpool `0.8.0` at `39c83564`, Codex CLI `0.154.0`,
+  OpenCode `1.18.30`, macOS Darwin 25.6.0 (x86_64), isolated `CODEX_HOME` +
+  `XDG_STATE_HOME` + temp Eggpool config (no operator config touched).
+- Codex managed config: `configsetup codex --apply/--check/--sync/--remove/--dry-run`
+  PASS (isolated). `codex debug models` initially FAILED with
+  `missing field supported_reasoning_levels`; after patching also required
+  `base_instructions`. Fixed narrowly in
+  `rust/src/operations/integrations.rs::codex_catalog_entry` (always emit
+  `supported_reasoning_levels`, empty when unknown; always emit
+  `base_instructions = ""` as no-override) plus strict
+  `validate_codex_catalog_json` enforcement and regression test
+  `codex_catalog_emits_current_required_fields_for_unknown_models`.
+  Re-qualified: `codex debug models` PASS, `codex doctor --json`
+  `config.load ok`, `EGGPOOL_API_KEY (present)`, `wire_api responses`,
+  WebSockets disabled. No secrets in TOML/catalog/manifest.
+- OpenCode managed config: `configsetup opencode --apply` PASS (isolated).
+  Generated provider uses `@ai-sdk/openai` with `{env:EGGPOOL_API_KEY}`,
+  per-model `limit.context/output`, no embedded secret. `opencode models`
+  lists `eggpool/demo-model-a/demo`. Config parse PASS.
+- Live inference (Codex text/tool-loop, OpenCode text/tool, deferred
+  `tool_search` live, long-session compaction, native remote compact):
+  SKIP_WITH_REASON — no provider credentials in this environment
+  (`scripts/smoke_codex_compat.sh` exits 77 as designed). Deterministic
+  authorities retained: `codex_responses_compat` (incl. deferred search),
+  `codex_compaction_compat` (native compact, unsupported rejection, no
+  translated fallback/state). Custom Codex path uses local compaction as
+  expected; remote compaction remains optional provider capability.
+- Managed lifecycle: idempotent `--apply`, read-only `--check`/`--dry-run`
+  (no writes), `--sync` drift refusal without `--force`, `--force` converge,
+  `--remove` restores owned fields + deletes catalog, unrelated content
+  preserved, JSONC rewrite refused. Deterministic fixtures in
+  `operations_o005` + `operations::integrations` remain green.
+- `eggpool status`: healthy running proxy PASS (one row per provider,
+  deterministic order, `schema_version: 1`, exit 0, degraded with
+  `probe_failed` reason for demo invalid upstream, no outbound probe beyond
+  normal catalog refresh, secret-free); offline unreachable PASS (providers
+  `unknown`/`disabled`, exit 3, valid JSON wrapper); partial degradation
+  covered by demo probe-failure case. Unready covered deterministically by
+  `status_command` + `operations::status` unit tests.
+- Defect classification: client schema drift (Codex 0.154.0 new required
+  catalog fields) + renderer omission. One narrow fix, one regression test,
+  live re-qualification, no global wire-contract weakening, no new
+  dependencies.
+- Docs: `architecture/deep-dive-integrations.md` (required catalog fields),
+  `docs/codex-compatibility-smoke.md` (isolated catalog qualification +
+  current versions). `README.md`, `AGENTS.md`, skills unchanged (no new
+  module boundary; existing guidance remains accurate).
+- Focused tests: `operations::integrations` (16), `operations_o005` (13),
+  `codex_responses_compat`, `codex_compaction_compat`, `status_command`,
+  `operations::status`, `cli_contract` — all pass. Full workspace gates run
+  at closure commit (see Plan 208).
+- Intentional deferrals: Responses WebSocket, persisted
+  `previous_response_id`/conversations/background, server-side tool
+  execution, OpenCodex parity, active probing from `status`, image/voice
+  APIs — unchanged.

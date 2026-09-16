@@ -1,6 +1,9 @@
 # Plan 201: Codex deferred-tool compatibility and coding-agent conformance
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
+>
+> **Closed:** 2026-09-16 (implemented `27890a19`; live qualification Plan 206;
+> see Closure evidence below)
 >
 > **Parent:** Plan 198
 >
@@ -335,3 +338,19 @@ Then run coordinator tests affected by routing/admission changes and the full se
 10. Existing ordinary function/freeform translations and native Responses unknown-event preservation remain green.
 11. The generated capability metadata from Plan 200 advertises deferred tool support only where it is guaranteed.
 12. No new production dependency on Codex, OpenCodex, OpenCode, or a plugin runtime is added.
+
+---
+
+## Closure evidence
+
+- Implemented: `27890a19f9c78099027e383b73ada0680ee3efb6` — provider-neutral
+  `CanonicalToolKind::DeferredSearch` (client-executed only), declaration-scoped
+  function wrapper, native preservation, pre-dispatch rejection for hosted/server
+  search, stream/finite reconstruction with stable IDs. Per-plan record in
+  `plans/204-codex-deferred-tool-compatibility-and-conformance-closure.md`.
+- Focused tests: `codex_responses_compat` (incl. deferred cases) + `wire_codecs`,
+  `wire_stream`, `wire_runtime`, `wire_qualification`, `wire_adaptation`.
+- Live qualification (Plan 206, Codex CLI `0.154.0`): deferred `tool_search`
+  live path NOT_LIVE_EXERCISABLE (no stable way to force without private app
+  state); deterministic conformance retained as authority. Ordinary function
+  named `tool_search` remains non-reclassified. EggPool never executes search.

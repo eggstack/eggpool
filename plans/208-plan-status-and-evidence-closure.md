@@ -1,14 +1,19 @@
-# Plan 205: Plan-status and evidence closure
+# Plan 208: Plan-status and evidence closure
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete
 >
-> **Parent:** Plan 203
+> **Parent:** Plan 206
 >
-> **Baseline:** Eggpool `main` after Plans 203–204 handoff
+> **Renamed:** 2026-09-16 from `plans/205-plan-status-and-evidence-closure.md`
+> to resolve duplicate numbering with the per-plan closure record
+> `plans/205-status-command-and-provider-health-summary-closure.md` (which
+> closes Plan 202). Executed together with Plans 206–207.
+>
+> **Baseline:** Eggpool `main` after Plans 206–207 handoff
 >
 > **Priority:** Documentation/closure hygiene
 >
-> **Scope:** close stale planning metadata and attach implementation/qualification evidence for Plans 198–202 once Plan 203 qualification is complete, without rewriting historical rationale or reopening completed implementation work.
+> **Scope:** close stale planning metadata and attach implementation/qualification evidence for Plans 198–202 once Plan 206 qualification is complete, without rewriting historical rationale or reopening completed implementation work.
 
 ## Purpose
 
@@ -212,3 +217,31 @@ This plan is complete when:
 # Handoff note
 
 Execute this after the live qualification matrix, not before. The objective is to leave the planning tree truthful and unambiguous for the next agent: implemented work should read as implemented, qualified work should carry evidence, and deferred work should be explicitly deferred rather than looking accidentally incomplete.
+
+---
+
+## Closure evidence (2026-09-16)
+
+Executed with Plans 206–207.
+
+- Renamed duplicate-numbered active plans to next free numbers: `203-...-qualification`
+  → `206-...`, `204-...-matrix` → `207-...`, `205-...-evidence` → `208-...`.
+  Historical complete records `203-agent-...`, `204-codex-...`,
+  `205-status-...` left untouched (append-only).
+- Updated statuses: Plans 198–202 and 206–208 now read `complete`; original
+  scope/rationale preserved, evidence appended (not rewritten).
+- Child evidence: Plan 199 (`94b710e6`), Plan 200 (`7499c15e` + Plan 206 catalog
+  fix), Plan 201 (`27890a19`), Plan 202 (`3dc9ece9`); live qualification from
+  Plan 206 attached where applicable (Codex `0.154.0`, OpenCode `1.18.30`).
+- Docs: `architecture/deep-dive-integrations.md` (required catalog fields),
+  `docs/codex-compatibility-smoke.md` (isolated qualification + versions).
+  Verified no stale `Codex requires explicit model` / `rich discovery deferred` /
+  `status planned` / `OpenCode generic runtime` statements remain in `README.md`,
+  `docs/agent-configuration.md`, `docs/stateless-responses.md`,
+  `architecture/overview.md`; `AGENTS.md` and skills unchanged (no new module
+  boundary; existing guidance accurate).
+- Acceptance mapping: 1 done (all `complete`); 2 done (commits + focused targets
+  cited); 3 done (Plan 206 evidence); 4 done (Plan 198 closed last with full
+  criteria); 5 done (append-only); 6 done (reviewed); 7 done (deferrals explicit);
+  8 satisfied (one narrow renderer fix from real qualification defect, with
+  regression test — permitted corrective loop).
