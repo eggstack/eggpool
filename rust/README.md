@@ -41,20 +41,25 @@ copy the binary into a global/user executable directory for routine
 development. Use the built binary directly, or build a local wheel through
 `packaging/pypi/pyproject.toml` when qualifying package installation.
 
-## T002 direct provider transport
+## T002 provider transport
 
 `eggpool::providers::ProviderHttpClient` is the provider transport boundary
-for direct provider HTTP/HTTPS. Direct routes use one cheap-to-clone
-`eggfetch-core` 0.1.5 HTTP/1.1 client per provider scope via the native
-`Client::execute_http_body` API with redirects, logical retries, and proxy
-support disabled. Physical live-connection admission uses
-`PhysicalConnectionPolicy` (`max_connections`/`pool_timeout`), idle reuse and
-expiry use Hyper idle-pool policy (`max_keepalive`/`keepalive_timeout`),
-establishment uses the Eggfetch connect timeout, established read/write
-inactivity uses `TransportIoTimeout`, and trust uses WebPKI roots plus
-explicit additional CA roots with Eggfetch-owned SNI/hostname verification.
-Pool wait, connect, write, read, TLS, and protocol failures are exposed as
-stable `TransportError` categories through one Eggfetch-to-`TransportError`
+for direct and proxied provider HTTP/HTTPS. Both routes use one
+cheap-to-clone `eggfetch-core` 0.1.5 HTTP/1.1 client per provider scope via
+the native `Client::execute_http_body` API with redirects, logical retries,
+and built-in proxy support disabled. Proxied accounts install a thin
+`EggressDialer` implementing Eggfetch's custom `Dialer` interface over
+Eggress's raw TCP-route API; Eggfetch still performs origin TLS across the
+returned stream, so proxy and origin trust planes stay separate and a failed
+dial never falls back to direct networking. Physical live-connection
+admission uses `PhysicalConnectionPolicy` (`max_connections`/`pool_timeout`),
+idle reuse and expiry use Hyper idle-pool policy
+(`max_keepalive`/`keepalive_timeout`), establishment uses the Eggfetch
+connect timeout, established read/write inactivity uses `TransportIoTimeout`,
+and trust uses WebPKI roots plus explicit additional CA roots with
+Eggfetch-owned SNI/hostname verification. Pool wait, connect, write, read,
+TLS, protocol, and route/dial failures are exposed as stable
+`TransportError` categories through one Eggfetch-to-`TransportError`
 translation boundary. Bodies are consumed incrementally through
 `ProviderBody::next`; transport does not buffer complete responses or inject
 provider credentials.
@@ -82,15 +87,15 @@ dispatch, routing, codecs, or production Rust release.
 ## T004 provider/account client pool
 
 `eggpool::providers::ProviderClientPool` builds one direct Eggfetch client
-per configured provider and one dedicated Eggress-backed Hyper/Rustls client
+per configured provider and one dedicated Eggress-dialer Eggfetch client
 for each configured account with a resolved proxy. Direct accounts fall back
 to the provider client; a configured proxy never falls back to direct
 transport.
 The pool is immutable after construction, exposes a credential-free topology
 snapshot, and is stored in the server application state. Pool construction is
 generation-candidate work and fails closed before the server is exposed. The
-server drops the pool after graceful shutdown, releasing direct Eggfetch and
-proxied Hyper connection pools; routing, credentials, retries, and generation
+server drops the pool after graceful shutdown, releasing direct and proxied
+Eggfetch connection pools; routing, credentials, retries, and generation
 swaps remain downstream work.
 
 ## Runtime and server

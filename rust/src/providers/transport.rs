@@ -1,19 +1,20 @@
-//! Provider HTTP transport with an Eggfetch direct path and Eggress proxy path.
+//! Provider HTTP transport on Eggfetch with an Eggress route dialer.
 //!
 //! The client in this module is intentionally neutral: it knows about HTTP,
 //! connection ownership, and timeouts, but not provider credentials, wire
 //! formats, routing, retries, or finalization.
 //!
-//! Direct provider requests use `eggfetch-core` 0.1.5 native
-//! `Client::execute_http_body` with HTTP/1.1 only, disabled canceled-request
-//! retries, physical connection admission, idle-pool policy, connect timeout,
-//! established transport I/O timeouts, and WebPKI plus explicit additional CA
-//! roots. Proxy/account routes retain the existing Hyper/Rustls/Eggress stack
-//! until phase 2 provides a thin Eggress `Dialer` adapter.
+//! Direct and proxied provider requests share Eggfetch's HTTP/1.1, origin TLS,
+//! pooling, physical admission, and transport-I/O machinery through
+//! `eggfetch-core` 0.1.5 native `Client::execute_http_body`. Proxied routes
+//! supply the physical byte stream through a thin `EggressDialer` adapter that
+//! implements Eggfetch's general custom `Dialer` interface over Eggress's
+//! existing raw TCP-route API. Eggress owns route/proxy handshakes and
+//! route-level TLS; Eggfetch still performs destination/origin TLS across the
+//! returned stream, so proxy and origin trust planes remain separate.
 
 use std::{
     error::Error as StdError,
-    future::Future,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -22,7 +23,8 @@ use std::{
 
 use bytes::Bytes;
 use eggfetch_core::{
-    HttpVersionPolicy, NativeRequestOptions, PhysicalConnectionPolicy, Timeout as EggfetchTimeout,
+    DialError, DialErrorKind, DialFuture, DialStream, DialTarget, Dialer, HttpVersionPolicy,
+    NativeRequestOptions, PhysicalConnectionPolicy, Timeout as EggfetchTimeout,
     TransportIoDirection, TransportIoTimeout, TrustStore,
 };
 #[cfg(feature = "eggress-ssh-fallback")]
@@ -32,24 +34,12 @@ use http::{
     uri::{Authority, PathAndQuery, Scheme},
 };
 use http_body_util::{BodyExt, Full};
-use hyper::rt::{Read, ReadBufCursor, Write};
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::{
-    client::legacy::{
-        Client,
-        connect::{Connected, Connection, HttpConnector},
-    },
-    rt::{TokioExecutor, TokioIo, TokioTimer},
-};
-use rustls::{ClientConfig, RootCertStore, pki_types::CertificateDer};
+#[cfg(any(feature = "eggress-ssh-fallback", feature = "test-support"))]
+use rustls::ClientConfig;
+#[cfg(feature = "test-support")]
+use rustls::{RootCertStore, pki_types::CertificateDer};
 use thiserror::Error;
-use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore},
-    time,
-};
-use tower_service::Service;
-
-type BoxError = Box<dyn StdError + Send + Sync>;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 10 * 1024 * 1024;
 
@@ -201,55 +191,39 @@ pub struct ProviderResponse {
 /// A response body that never buffers the complete upstream response.
 #[derive(Debug)]
 pub struct ProviderBody {
-    inner: ProviderBodyInner,
-}
-
-#[derive(Debug)]
-enum ProviderBodyInner {
-    Hyper(hyper::body::Incoming),
-    Eggfetch(std::pin::Pin<Box<eggfetch_core::NativeResponseBody>>),
+    inner: Pin<Box<eggfetch_core::NativeResponseBody>>,
+    /// Whether the owning client dials through an Eggress route. Dialer
+    /// failures only occur on proxied routes, so error translation needs the
+    /// route to classify establishment timeouts without conflating them with
+    /// direct connection failures.
+    proxy_transport: bool,
 }
 
 impl ProviderBody {
-    fn new(inner: hyper::body::Incoming) -> Self {
+    fn new_eggfetch(inner: eggfetch_core::NativeResponseBody, proxy_transport: bool) -> Self {
         Self {
-            inner: ProviderBodyInner::Hyper(inner),
-        }
-    }
-
-    fn new_eggfetch(inner: eggfetch_core::NativeResponseBody) -> Self {
-        Self {
-            inner: ProviderBodyInner::Eggfetch(Box::pin(inner)),
+            inner: Box::pin(inner),
+            proxy_transport,
         }
     }
 
     /// Wait for the next data chunk. Trailers are consumed and skipped.
     pub async fn next(&mut self) -> Option<Result<Bytes, TransportError>> {
-        match &mut self.inner {
-            ProviderBodyInner::Hyper(inner) => loop {
-                match inner.frame().await {
-                    Some(Ok(frame)) => match frame.into_data() {
-                        Ok(data) => return Some(Ok(data)),
-                        Err(_) => continue,
-                    },
-                    Some(Err(error)) => {
-                        return Some(Err(map_hyper_error(&error, Stage::Read)));
-                    }
-                    None => return None,
+        loop {
+            match self.inner.frame().await {
+                Some(Ok(frame)) => match frame.into_data() {
+                    Ok(data) => return Some(Ok(data)),
+                    Err(_) => continue,
+                },
+                Some(Err(error)) => {
+                    return Some(Err(map_eggfetch_error(
+                        &error,
+                        TransportError::Read,
+                        self.proxy_transport,
+                    )));
                 }
-            },
-            ProviderBodyInner::Eggfetch(inner) => loop {
-                match inner.frame().await {
-                    Some(Ok(frame)) => match frame.into_data() {
-                        Ok(data) => return Some(Ok(data)),
-                        Err(_) => continue,
-                    },
-                    Some(Err(error)) => {
-                        return Some(Err(map_eggfetch_error(&error, Stage::Read)));
-                    }
-                    None => return None,
-                }
-            },
+                None => return None,
+            }
         }
     }
 
@@ -272,8 +246,11 @@ impl ProviderBody {
 /// Cheap cloneable handle around one provider-scoped connection pool.
 ///
 /// Direct provider routes own an Eggfetch HTTP/1.1 client; configured proxy
-/// routes retain the Hyper/Rustls/Eggress client until phase 2 migrates them
-/// to a thin Eggress `Dialer` adapter.
+/// routes own a separate Eggfetch HTTP/1.1 client whose physical byte streams
+/// are supplied by a thin `EggressDialer` adapter. Each proxied
+/// `ProviderHttpClient` owns a distinct Eggfetch `Client` even when two
+/// accounts resolve to the same proxy URI, so account/route pools never share
+/// connection state.
 #[derive(Clone)]
 pub struct ProviderHttpClient {
     inner: ProviderHttpClientInner,
@@ -284,14 +261,7 @@ pub struct ProviderHttpClient {
 #[derive(Clone)]
 enum ProviderHttpClientInner {
     Direct(eggfetch_core::Client),
-    Proxied(
-        Box<
-            Client<
-                AdmissionConnector<hyper_rustls::HttpsConnector<ProviderTcpConnector>>,
-                Full<Bytes>,
-            >,
-        >,
-    ),
+    Proxied(eggfetch_core::Client),
 }
 
 impl std::fmt::Debug for ProviderHttpClient {
@@ -309,7 +279,7 @@ impl ProviderHttpClient {
     /// WebPKI roots plus any additional test CA roots.
     pub fn new(config: ProviderHttpConfig) -> Result<Self, TransportError> {
         validate_config(&config)?;
-        let client = build_direct_eggfetch_client(&config)?;
+        let client = build_eggfetch_client(&config, None)?;
         Ok(Self {
             inner: ProviderHttpClientInner::Direct(client),
             base_url: config.base_url,
@@ -317,8 +287,9 @@ impl ProviderHttpClient {
         })
     }
 
-    /// Build an HTTP/1.1 provider client whose TCP connections use an
-    /// Eggress outbound connector.  TLS and HTTP remain owned by this client.
+    /// Build an HTTP/1.1 provider client whose physical routes are supplied
+    /// by Eggress through Eggfetch's custom `Dialer` interface. Origin TLS
+    /// and HTTP framing remain owned by Eggfetch.
     pub fn new_with_proxy(
         config: ProviderHttpConfig,
         proxy_url: &str,
@@ -338,8 +309,13 @@ impl ProviderHttpClient {
     ) -> Result<Self, TransportError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         validate_config(&config)?;
-        let tcp = ProviderTcpConnector::new_with_test_root(proxy_url, proxy_root_certificate)?;
-        Self::build_with_tcp(config, tcp)
+        let dialer = build_chain_egress_dialer_for_test_root(proxy_url, proxy_root_certificate)?;
+        let client = build_eggfetch_client(&config, Some(dialer))?;
+        Ok(Self {
+            inner: ProviderHttpClientInner::Proxied(client),
+            base_url: config.base_url,
+            max_request_body_bytes: config.max_request_body_bytes,
+        })
     }
 
     fn build(config: ProviderHttpConfig, proxy_url: Option<&str>) -> Result<Self, TransportError> {
@@ -348,42 +324,15 @@ impl ProviderHttpClient {
         // construction begins.
         let _ = rustls::crypto::ring::default_provider().install_default();
         validate_config(&config)?;
-        let tcp = ProviderTcpConnector::new(proxy_url)?;
-        Self::build_with_tcp(config, tcp)
-    }
-
-    fn build_with_tcp(
-        config: ProviderHttpConfig,
-        tcp: ProviderTcpConnector,
-    ) -> Result<Self, TransportError> {
-        let tls_config = build_tls_config(&config.additional_root_certificates)?;
-        let proxy_transport = tcp.proxy.is_some();
-        let https = HttpsConnectorBuilder::new()
-            .with_tls_config(tls_config)
-            .https_or_http()
-            .enable_http1()
-            .wrap_connector(tcp);
-        let connector = AdmissionConnector::new(
-            https,
-            Arc::new(Semaphore::new(config.max_connections)),
-            config.pool_timeout,
-            config.connect_timeout,
-            config.read_timeout,
-            config.write_timeout,
-            proxy_transport,
-        );
-        let mut builder = Client::builder(TokioExecutor::new());
-        builder
-            // Request retry/failover belongs to the coordinator, after it
-            // owns persistence and attempt state.  Hyper-util otherwise
-            // retries a request that loses a reused idle connection before
-            // writing, which would silently consume a transport attempt.
-            .retry_canceled_requests(false)
-            .pool_timer(TokioTimer::new())
-            .pool_idle_timeout(config.keepalive_timeout)
-            .pool_max_idle_per_host(config.max_keepalive);
+        let dialer = build_eggress_dialer(proxy_url)?;
+        let client = build_eggfetch_client(&config, dialer.clone())?;
+        let inner = if dialer.is_some() {
+            ProviderHttpClientInner::Proxied(client)
+        } else {
+            ProviderHttpClientInner::Direct(client)
+        };
         Ok(Self {
-            inner: ProviderHttpClientInner::Proxied(Box::new(builder.build(connector))),
+            inner,
             base_url: config.base_url,
             max_request_body_bytes: config.max_request_body_bytes,
         })
@@ -401,43 +350,26 @@ impl ProviderHttpClient {
             return Err(TransportError::RequestBodyTooLarge);
         }
         let uri = join_provider_target(&self.base_url, target)?;
-        match &self.inner {
-            ProviderHttpClientInner::Direct(client) => {
-                let mut request = Request::new(Full::new(body));
-                *request.method_mut() = method;
-                *request.uri_mut() = uri;
-                *request.headers_mut() = headers;
-                *request.version_mut() = http::Version::HTTP_11;
-                let response = client
-                    .execute_http_body(request, NativeRequestOptions::default())
-                    .await
-                    .map_err(|error| map_eggfetch_error(&error, Stage::Write))?;
-                let (parts, body) = response.into_parts();
-                Ok(ProviderResponse {
-                    status: parts.status,
-                    headers: parts.headers,
-                    extensions: parts.extensions,
-                    body: ProviderBody::new_eggfetch(body),
-                })
-            }
-            ProviderHttpClientInner::Proxied(client) => {
-                let mut request = Request::new(Full::new(body));
-                *request.method_mut() = method;
-                *request.uri_mut() = uri;
-                *request.headers_mut() = headers;
-                let response = client
-                    .request(request)
-                    .await
-                    .map_err(|error| map_transport_error(&error, Stage::Write))?;
-                let (parts, body) = response.into_parts();
-                Ok(ProviderResponse {
-                    status: parts.status,
-                    headers: parts.headers,
-                    extensions: parts.extensions,
-                    body: ProviderBody::new(body),
-                })
-            }
-        }
+        let (client, proxy_transport) = match &self.inner {
+            ProviderHttpClientInner::Direct(client) => (client, false),
+            ProviderHttpClientInner::Proxied(client) => (client, true),
+        };
+        let mut request = Request::new(Full::new(body));
+        *request.method_mut() = method;
+        *request.uri_mut() = uri;
+        *request.headers_mut() = headers;
+        *request.version_mut() = http::Version::HTTP_11;
+        let response = client
+            .execute_http_body(request, NativeRequestOptions::default())
+            .await
+            .map_err(|error| map_eggfetch_error(&error, TransportError::Write, proxy_transport))?;
+        let (parts, body) = response.into_parts();
+        Ok(ProviderResponse {
+            status: parts.status,
+            headers: parts.headers,
+            extensions: parts.extensions,
+            body: ProviderBody::new_eggfetch(body, proxy_transport),
+        })
     }
 
     /// Return the validated base URL without exposing any credential-bearing data.
@@ -446,196 +378,157 @@ impl ProviderHttpClient {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Stage {
-    PoolTimeout,
-    ConnectTimeout,
-    Connect,
-    ProxyConnectTimeout,
-    ProxyConnect,
-    ProxyAuthentication,
-    ProxyTargetConnect,
-    Tls,
-    WriteTimeout,
-    Write,
-    ReadTimeout,
-    Read,
-}
+/// One Eggress-owned byte stream adapted to Eggfetch's dialer contract.
+///
+/// The wrapper performs no HTTP framing and no TLS: Eggress owns the
+/// route/proxy handshake (including any route-level TLS such as a Trojan
+/// connection to the proxy), while Eggfetch performs destination/origin TLS
+/// across this stream for `https://` upstreams. The stream type stays generic
+/// so both the stable embed connector and the compatibility chain executor
+/// can supply routes without naming an optional dependency.
+struct EggressDialStream<S>(S);
 
-trait ProviderHyperStream: Read + Write + Send + Unpin {}
-impl<T: Read + Write + Send + Unpin> ProviderHyperStream for T {}
-
-struct ProviderStream {
-    inner: Box<dyn ProviderHyperStream>,
-}
-
-impl ProviderStream {
-    fn new<T: Read + Write + Send + Unpin + 'static>(inner: T) -> Self {
-        Self {
-            inner: Box::new(inner),
-        }
-    }
-}
-
-impl Connection for ProviderStream {
-    fn connected(&self) -> Connected {
-        Connected::new()
-    }
-}
-
-impl Read for ProviderStream {
+impl<S> AsyncRead for EggressDialStream<S>
+where
+    S: AsyncRead + Unpin,
+{
     fn poll_read(
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
-        buffer: ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut *self.inner).poll_read(context, buffer)
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(context, buffer)
     }
 }
 
-impl Write for ProviderStream {
+impl<S> AsyncWrite for EggressDialStream<S>
+where
+    S: AsyncWrite + Unpin,
+{
     fn poll_write(
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut *self.inner).poll_write(context, buffer)
+        Pin::new(&mut self.0).poll_write(context, buffer)
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut *self.inner).poll_flush(context)
+        Pin::new(&mut self.0).poll_flush(context)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         context: &mut Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut *self.inner).poll_shutdown(context)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
-    }
-
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffers: &[std::io::IoSlice<'_>],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut *self.inner).poll_write_vectored(context, buffers)
+        Pin::new(&mut self.0).poll_shutdown(context)
     }
 }
 
-/// Establishes the TCP leg either directly or through one account's Eggress
-/// connector.  It deliberately returns one stream type so the surrounding
-/// Rustls and Hyper stack is identical for both paths.
-type ProxyConnectFuture = Pin<Box<dyn Future<Output = Result<ProviderStream, BoxError>> + Send>>;
-
-trait ProxyDialer: Send + Sync {
-    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture;
+/// Thin Eggress-to-Eggfetch route adapter.
+///
+/// This is deliberately not a transport framework: it turns an Eggress raw
+/// stream to the requested logical destination into Eggfetch's `DialStream`
+/// and classifies route failures into `DialError` kinds. HTTP framing, origin
+/// TLS, pooling, admission, and timeouts stay in Eggfetch; proxy protocol
+/// behavior stays in Eggress. There is no direct-network fallback: a failed
+/// dial is the only physical route a proxied Eggfetch client owns.
+#[derive(Clone)]
+struct EggressDialer {
+    inner: EggressDialerInner,
 }
 
 #[derive(Clone)]
-struct EgressProxyDialer {
-    connector: Arc<eggress_embed::outbound::OutboundConnector>,
+enum EggressDialerInner {
+    Outbound {
+        connector: Arc<eggress_embed::outbound::OutboundConnector>,
+    },
+    #[cfg(feature = "eggress-ssh-fallback")]
+    Chain {
+        executor: Arc<eggress_core::chain::ChainExecutor>,
+        chain: Arc<Vec<eggress_uri::ProxyHopSpec>>,
+    },
 }
 
-impl ProxyDialer for EgressProxyDialer {
-    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture {
-        let connector = Arc::clone(&self.connector);
+impl Dialer for EggressDialer {
+    fn dial(&self, target: DialTarget) -> DialFuture<'_> {
+        let inner = self.inner.clone();
         Box::pin(async move {
-            connector
-                .connect_tcp(&host, port)
-                .await
-                .map(|(stream, _)| stream)
-                .map(TokioIo::new)
-                .map(ProviderStream::new)
-                .map_err(|error| Box::new(error) as BoxError)
+            match inner {
+                EggressDialerInner::Outbound { connector } => connector
+                    .connect_tcp(target.host(), target.port())
+                    .await
+                    .map(|(stream, _)| dial_stream(stream))
+                    .map_err(map_egress_dial_error),
+                #[cfg(feature = "eggress-ssh-fallback")]
+                EggressDialerInner::Chain { executor, chain } => {
+                    let target = target_addr_for_dial(target.host(), target.port());
+                    executor
+                        .execute(&chain, &target)
+                        .await
+                        .map(dial_stream)
+                        .map_err(map_chain_dial_error)
+                }
+            }
         })
     }
 }
 
+/// Erase one Eggress-owned route stream into Eggfetch's dialer stream type.
+///
+/// The concrete Eggress stream type is inferred from the route API so this
+/// boundary never names an optional dependency; the bounds below are the
+/// actual contract Eggfetch needs.
+fn dial_stream<S>(stream: S) -> DialStream
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    Box::new(EggressDialStream(stream))
+}
+
+/// Convert an Eggfetch logical dial target into an Eggress route target.
+///
+/// Domain names are preserved so SOCKS5 domain-address requests, proxy-side
+/// DNS, and destination TLS SNI keep working. Only IP literals become
+/// `TargetHost::Ip`; nothing is eagerly resolved locally.
 #[cfg(feature = "eggress-ssh-fallback")]
-struct ChainEgressProxyDialer {
-    executor: Arc<eggress_core::chain::ChainExecutor>,
-    chain: Arc<Vec<eggress_uri::ProxyHopSpec>>,
+fn target_addr_for_dial(host: &str, port: u16) -> TargetAddr {
+    let host = host
+        .parse()
+        .map(TargetHost::Ip)
+        .unwrap_or_else(|_| TargetHost::Domain(host.to_owned()));
+    TargetAddr { host, port }
 }
 
-#[cfg(feature = "eggress-ssh-fallback")]
-impl ProxyDialer for ChainEgressProxyDialer {
-    fn connect(&self, host: String, port: u16) -> ProxyConnectFuture {
-        let executor = Arc::clone(&self.executor);
-        let chain = Arc::clone(&self.chain);
-        Box::pin(async move {
-            let host = host
-                .parse()
-                .map(TargetHost::Ip)
-                .unwrap_or_else(|_| TargetHost::Domain(host));
-            executor
-                .execute(&chain, &TargetAddr { host, port })
-                .await
-                .map(TokioIo::new)
-                .map(ProviderStream::new)
-                .map_err(|error| Box::new(error) as BoxError)
-        })
-    }
-}
-
-#[derive(Clone)]
-struct ProviderTcpConnector {
-    direct: HttpConnector,
-    proxy: Option<Arc<dyn ProxyDialer>>,
-}
-
-impl ProviderTcpConnector {
-    fn new(proxy_url: Option<&str>) -> Result<Self, TransportError> {
-        let proxy = match proxy_url {
-            Some("direct://") => {
-                // Keep the explicit pproxy control form valid while using
-                // the direct provider dialer for loopback/test targets that
-                // Eggress deliberately rejects as private egress.
-                build_egress_connector("direct://")
-                    .map_err(|_| TransportError::ProxyConfiguration)?;
-                None
-            }
-            Some(proxy_url) if proxy_uses_ssh(proxy_url) => {
-                Some(build_ssh_proxy_dialer(proxy_url)?)
-            }
-            Some(proxy_url) => Some(Arc::new(EgressProxyDialer {
+/// Select the Eggress route for one account.
+///
+/// `None` means direct Eggfetch dialing. `Some` means the returned custom
+/// dialer owns the only physical route available to that account's Eggfetch
+/// client: a failed dial never falls back to direct networking.
+fn build_eggress_dialer(proxy_url: Option<&str>) -> Result<Option<EggressDialer>, TransportError> {
+    let dialer = match proxy_url {
+        None => None,
+        Some("direct://") => {
+            // Keep the explicit pproxy control form valid while using
+            // the direct provider dialer for loopback/test targets that
+            // Eggress deliberately rejects as private egress.
+            build_egress_connector("direct://").map_err(|_| TransportError::ProxyConfiguration)?;
+            None
+        }
+        Some(proxy_url) if proxy_uses_ssh(proxy_url) => Some(build_ssh_route_dialer(proxy_url)?),
+        Some(proxy_url) => Some(EggressDialer {
+            inner: EggressDialerInner::Outbound {
                 connector: Arc::new(
                     build_egress_connector(proxy_url)
                         .map_err(|_| TransportError::ProxyConfiguration)?,
                 ),
-            }) as Arc<dyn ProxyDialer>),
-            None => None,
-        };
-        let mut direct = HttpConnector::new();
-        direct.enforce_http(false);
-        Ok(Self { direct, proxy })
-    }
-
-    #[cfg(feature = "test-support")]
-    fn new_with_test_root(
-        proxy_url: &str,
-        proxy_root_certificate: Vec<u8>,
-    ) -> Result<Self, TransportError> {
-        let proxy_roots = if proxy_root_certificate.is_empty() {
-            Vec::new()
-        } else {
-            vec![proxy_root_certificate]
-        };
-        let tls_config = Arc::new(build_tls_config(&proxy_roots)?);
-        let dialer = build_chain_egress_dialer(proxy_url, Some(&tls_config))?;
-        let mut direct = HttpConnector::new();
-        direct.enforce_http(false);
-        Ok(Self {
-            direct,
-            proxy: Some(Arc::new(dialer)),
-        })
-    }
+            },
+        }),
+    };
+    Ok(dialer)
 }
 
 fn proxy_uses_ssh(proxy_url: &str) -> bool {
@@ -646,20 +539,37 @@ fn proxy_uses_ssh(proxy_url: &str) -> bool {
 }
 
 #[cfg(feature = "eggress-ssh-fallback")]
-fn build_ssh_proxy_dialer(proxy_url: &str) -> Result<Arc<dyn ProxyDialer>, TransportError> {
-    Ok(Arc::new(build_chain_egress_dialer(proxy_url, None)?) as Arc<dyn ProxyDialer>)
+fn build_ssh_route_dialer(proxy_url: &str) -> Result<EggressDialer, TransportError> {
+    build_chain_egress_dialer(proxy_url, None)
 }
 
 #[cfg(not(feature = "eggress-ssh-fallback"))]
-fn build_ssh_proxy_dialer(_proxy_url: &str) -> Result<Arc<dyn ProxyDialer>, TransportError> {
+fn build_ssh_route_dialer(_proxy_url: &str) -> Result<EggressDialer, TransportError> {
     Err(TransportError::ProxyConfiguration)
+}
+
+/// Build a chain-route dialer with a deterministic test-only Eggress TLS
+/// root.  Production callers use [`build_eggress_dialer`], which preserves
+/// Eggress's system-root verification.
+#[cfg(feature = "test-support")]
+fn build_chain_egress_dialer_for_test_root(
+    proxy_url: &str,
+    proxy_root_certificate: Vec<u8>,
+) -> Result<EggressDialer, TransportError> {
+    let proxy_roots = if proxy_root_certificate.is_empty() {
+        Vec::new()
+    } else {
+        vec![proxy_root_certificate]
+    };
+    let tls_config = Arc::new(build_tls_config(&proxy_roots)?);
+    build_chain_egress_dialer(proxy_url, Some(&tls_config))
 }
 
 #[cfg(feature = "eggress-ssh-fallback")]
 fn build_chain_egress_dialer(
     proxy_url: &str,
     tls_config: Option<&Arc<ClientConfig>>,
-) -> Result<ChainEgressProxyDialer, TransportError> {
+) -> Result<EggressDialer, TransportError> {
     let parsed = eggress_pproxy_compat::uri::parse_pproxy_chain(proxy_url)
         .map_err(|_| TransportError::ProxyConfiguration)?;
     let output = eggress_pproxy_compat::translate_from_uris(
@@ -682,9 +592,11 @@ fn build_chain_egress_dialer(
         eggress_transport_ssh::SshSessionCache::new_compatibility(),
     ));
     let executor = eggress_server::build_chain_executor(tls_config, None, ssh_sessions);
-    Ok(ChainEgressProxyDialer {
-        executor: Arc::new(executor),
-        chain: Arc::new(chain),
+    Ok(EggressDialer {
+        inner: EggressDialerInner::Chain {
+            executor: Arc::new(executor),
+            chain: Arc::new(chain),
+        },
     })
 }
 
@@ -694,365 +606,113 @@ fn build_egress_connector(
     eggress_embed::outbound::OutboundConnector::from_pproxy_uri(proxy_url)
 }
 
-impl Service<Uri> for ProviderTcpConnector {
-    type Response = ProviderStream;
-    type Error = BoxError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.proxy.is_some() {
-            Poll::Ready(Ok(()))
-        } else {
-            self.direct
-                .poll_ready(context)
-                .map_err(|error| Box::new(error) as BoxError)
-        }
-    }
-
-    fn call(&mut self, destination: Uri) -> Self::Future {
-        let Some(proxy) = &self.proxy else {
-            let future = self.direct.call(destination);
-            return Box::pin(async move {
-                future
-                    .await
-                    .map(ProviderStream::new)
-                    .map_err(|error| Box::new(error) as BoxError)
-            });
-        };
-
-        let Some(host) = destination.host().map(str::to_owned) else {
-            return Box::pin(async {
-                Err(Box::new(TransportMarker::new(Stage::ProxyConnect)) as BoxError)
-            });
-        };
-        let port = destination.port_u16().unwrap_or_else(|| {
-            if destination.scheme().is_some_and(|s| s == &Scheme::HTTPS) {
-                443
+/// Classify an Eggress embed route failure into an Eggfetch dial kind.
+///
+/// The pinned embed API reports route execution as `EggressError::Runtime`
+/// with the typed `ChainError` already rendered to a redacted string, so the
+/// variant selects the category and only the route-failure bucket uses
+/// conservative message predicates. Those predicates mirror the previous
+/// transport classification exactly; if a future Eggress embed API exposes
+/// the typed route error here, replace the predicates with a direct match.
+/// The original error is retained as the `DialError` source. Eggress
+/// documents its messages as credential-redacted, and the fixed display
+/// message below carries no route input.
+fn map_egress_dial_error(error: eggress_embed::EggressError) -> DialError {
+    const MESSAGE: &str = "eggress route establishment failed";
+    match &error {
+        eggress_embed::EggressError::Runtime(detail) => {
+            let message = detail.to_ascii_lowercase();
+            if message.contains("timed out") || message.contains("timeout") {
+                DialError::with_source(DialErrorKind::Timeout, MESSAGE, error)
+            } else if message.contains("auth")
+                || message.contains("credential")
+                || message.contains("password")
+                || message.contains("407")
+            {
+                DialError::with_source(DialErrorKind::Authentication, MESSAGE, error)
+            } else if message.contains("target") || message.contains("destination") {
+                DialError::with_source(DialErrorKind::Rejected, MESSAGE, error)
             } else {
-                80
+                DialError::with_source(DialErrorKind::Connection, MESSAGE, error)
             }
-        });
-        let proxy = Arc::clone(proxy);
-        Box::pin(async move {
-            proxy.connect(host, port).await.map_err(|error| {
-                let message = error.to_string().to_ascii_lowercase();
-                let stage = if message.contains("timed out") || message.contains("timeout") {
-                    Stage::ProxyConnectTimeout
-                } else if message.contains("auth")
-                    || message.contains("credential")
-                    || message.contains("password")
-                    || message.contains("407")
-                {
-                    Stage::ProxyAuthentication
-                } else if message.contains("target") || message.contains("destination") {
-                    Stage::ProxyTargetConnect
-                } else {
-                    Stage::ProxyConnect
-                };
-                Box::new(TransportMarker::with_source(stage, error)) as BoxError
-            })
-        })
-    }
-}
-
-struct TransportMarker {
-    stage: Stage,
-    source: Option<BoxError>,
-}
-
-impl std::fmt::Debug for TransportMarker {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("TransportMarker")
-            .field("stage", &self.stage)
-            .finish_non_exhaustive()
-    }
-}
-
-impl TransportMarker {
-    fn new(stage: Stage) -> Self {
-        Self {
-            stage,
-            source: None,
         }
-    }
-
-    fn with_source(stage: Stage, source: BoxError) -> Self {
-        Self {
-            stage,
-            source: Some(source),
-        }
+        _ => DialError::with_source(DialErrorKind::Other, MESSAGE, error),
     }
 }
 
-impl std::fmt::Display for TransportMarker {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("provider transport stage failure")
-    }
-}
+/// Classify a typed chain-executor route failure into an Eggfetch dial kind.
+///
+/// Unlike the embed facade path, the executor preserves `ChainError`
+/// structure, so this mapping uses typed variants and predicates only. The
+/// original error is retained as the `DialError` source; the fixed display
+/// message carries no route input.
+#[cfg(feature = "eggress-ssh-fallback")]
+fn map_chain_dial_error(error: eggress_core::chain::ChainError) -> DialError {
+    use eggress_core::ConnectError;
 
-impl StdError for TransportMarker {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source
-            .as_ref()
-            .map(|source| source.as_ref() as &(dyn StdError + 'static))
-    }
-}
-
-#[derive(Clone)]
-struct AdmissionConnector<C> {
-    inner: C,
-    permits: Arc<Semaphore>,
-    pool_timeout: Duration,
-    connect_timeout: Duration,
-    read_timeout: Duration,
-    write_timeout: Duration,
-    proxy_transport: bool,
-}
-
-impl<C> AdmissionConnector<C> {
-    fn new(
-        inner: C,
-        permits: Arc<Semaphore>,
-        pool_timeout: Duration,
-        connect_timeout: Duration,
-        read_timeout: Duration,
-        write_timeout: Duration,
-        proxy_transport: bool,
-    ) -> Self {
-        Self {
-            inner,
-            permits,
-            pool_timeout,
-            connect_timeout,
-            read_timeout,
-            write_timeout,
-            proxy_transport,
-        }
-    }
-}
-
-impl<C> Service<Uri> for AdmissionConnector<C>
-where
-    C: Service<Uri> + Clone + Send + 'static,
-    C::Response: Read + Write + Connection + Unpin + Send + 'static,
-    C::Future: Future<Output = Result<C::Response, C::Error>> + Send + 'static,
-    C::Error: Into<BoxError> + std::fmt::Debug + Send + Sync + 'static,
-{
-    type Response = TimedConnection<C::Response>;
-    type Error = BoxError;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.inner.poll_ready(context) {
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-            Poll::Ready(Err(error)) => {
-                let source: BoxError = error.into();
-                let stage = if contains_source::<rustls::Error>(source.as_ref()) {
-                    Stage::Tls
-                } else {
-                    Stage::Connect
-                };
-                Poll::Ready(Err(Box::new(TransportMarker::with_source(stage, source))))
+    const MESSAGE: &str = "eggress route establishment failed";
+    let kind = match &error {
+        eggress_core::chain::ChainError::ConnectFailed { source, .. } => match source {
+            ConnectError::Timeout => DialErrorKind::Timeout,
+            ConnectError::ReservedTarget(_) => DialErrorKind::Rejected,
+            ConnectError::Io(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                DialErrorKind::Timeout
             }
-            Poll::Pending => Poll::Pending,
+            ConnectError::ConnectionRefused
+            | ConnectError::DnsResolution(_)
+            | ConnectError::TlsHandshake(_)
+            | ConnectError::Io(_) => DialErrorKind::Connection,
+        },
+        eggress_core::chain::ChainError::HandshakeFailed { source, .. } => {
+            classify_chain_handshake_source(source.as_ref())
         }
-    }
-
-    fn call(&mut self, destination: Uri) -> Self::Future {
-        let is_https = destination.scheme() == Some(&Scheme::HTTPS);
-        let mut inner = self.inner.clone();
-        let permits = Arc::clone(&self.permits);
-        let pool_timeout = self.pool_timeout;
-        let connect_timeout = self.connect_timeout;
-        let read_timeout = self.read_timeout;
-        let write_timeout = self.write_timeout;
-        let proxy_transport = self.proxy_transport;
-        Box::pin(async move {
-            let permit = match time::timeout(pool_timeout, permits.acquire_owned()).await {
-                Ok(Ok(permit)) => permit,
-                Ok(Err(error)) => {
-                    let source: BoxError = error.into();
-                    let stage = if is_https
-                        && contains_io_kind(source.as_ref(), std::io::ErrorKind::InvalidData)
-                    {
-                        Stage::Tls
-                    } else {
-                        Stage::Connect
-                    };
-                    return Err(Box::new(TransportMarker::with_source(stage, source)) as BoxError);
-                }
-                Err(_) => {
-                    return Err(Box::new(TransportMarker::new(Stage::PoolTimeout)) as BoxError);
-                }
-            };
-            let connecting = inner.call(destination);
-            let stream = match time::timeout(connect_timeout, connecting).await {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(error)) => {
-                    let source: BoxError = error.into();
-                    let stage = find_marker(source.as_ref()).unwrap_or_else(|| {
-                        if is_https && contains_source::<rustls::Error>(source.as_ref()) {
-                            Stage::Tls
-                        } else {
-                            Stage::Connect
-                        }
-                    });
-                    return Err(Box::new(TransportMarker::with_source(stage, source)) as BoxError);
-                }
-                Err(_) => {
-                    let stage = if proxy_transport {
-                        Stage::ProxyConnectTimeout
-                    } else {
-                        Stage::ConnectTimeout
-                    };
-                    return Err(Box::new(TransportMarker::new(stage)) as BoxError);
-                }
-            };
-            Ok(TimedConnection::new(
-                stream,
-                permit,
-                read_timeout,
-                write_timeout,
-            ))
-        })
-    }
+        eggress_core::chain::ChainError::EmptyChain
+        | eggress_core::chain::ChainError::InvalidChain { .. } => DialErrorKind::Other,
+    };
+    DialError::with_source(kind, MESSAGE, error)
 }
 
-struct TimedConnection<T> {
-    inner: T,
-    _permit: OwnedSemaphorePermit,
-    read_timeout: Duration,
-    write_timeout: Duration,
-    read_timer: Option<Pin<Box<time::Sleep>>>,
-    write_timer: Option<Pin<Box<time::Sleep>>>,
-}
+/// Classify a chain handshake failure from its typed source chain.
+///
+/// Authentication evidence wins over generic I/O evidence; route-level TLS
+/// failures stay route connection failures and never masquerade as origin
+/// TLS. Unrecognized sources are `Other`: they remain fail-closed through
+/// the proxy error category without claiming a more specific cause.
+#[cfg(feature = "eggress-ssh-fallback")]
+fn classify_chain_handshake_source(source: &(dyn StdError + 'static)) -> DialErrorKind {
+    use eggress_core::{AuthError, chain::HandshakeError};
 
-impl<T> TimedConnection<T> {
-    fn new(
-        inner: T,
-        permit: OwnedSemaphorePermit,
-        read_timeout: Duration,
-        write_timeout: Duration,
-    ) -> Self {
-        Self {
-            inner,
-            _permit: permit,
-            read_timeout,
-            write_timeout,
-            read_timer: None,
-            write_timer: None,
-        }
+    if contains_source::<AuthError>(source) {
+        return DialErrorKind::Authentication;
     }
-}
-
-impl<T: Connection> Connection for TimedConnection<T> {
-    fn connected(&self) -> Connected {
-        self.inner.connected()
-    }
-}
-
-impl<T: Read + Unpin> Read for TimedConnection<T> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: ReadBufCursor<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        let this = self.get_mut();
-        if this.read_timer.is_none() {
-            this.read_timer = Some(Box::pin(time::sleep(this.read_timeout)));
-        }
-        match Pin::new(&mut this.inner).poll_read(context, buffer) {
-            Poll::Ready(result) => {
-                this.read_timer = None;
-                Poll::Ready(result)
-            }
-            Poll::Pending => {
-                if this
-                    .read_timer
-                    .as_mut()
-                    .is_some_and(|timer| timer.as_mut().poll(context).is_ready())
-                {
-                    Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        TransportMarker::new(Stage::ReadTimeout),
-                    )))
-                } else {
-                    Poll::Pending
+    let mut current: Option<&(dyn StdError + 'static)> = Some(source);
+    while let Some(next) = current {
+        if let Some(handshake) = next.downcast_ref::<HandshakeError>() {
+            match handshake {
+                HandshakeError::AuthFailed => return DialErrorKind::Authentication,
+                HandshakeError::Protocol(_) => return DialErrorKind::Rejected,
+                HandshakeError::ConnectionRefused => return DialErrorKind::Connection,
+                HandshakeError::Io(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    return DialErrorKind::Timeout;
+                }
+                HandshakeError::Io(_) | HandshakeError::Other(_) => {
+                    return DialErrorKind::Connection;
                 }
             }
         }
-    }
-}
-
-impl<T: Read + Write + Unpin> Write for TimedConnection<T> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        let this = self.get_mut();
-        if this.write_timer.is_none() {
-            this.write_timer = Some(Box::pin(time::sleep(this.write_timeout)));
-        }
-        match Pin::new(&mut this.inner).poll_write(context, buffer) {
-            Poll::Ready(result) => {
-                this.write_timer = None;
-                Poll::Ready(result)
-            }
-            Poll::Pending => {
-                if this
-                    .write_timer
-                    .as_mut()
-                    .is_some_and(|timer| timer.as_mut().poll(context).is_ready())
-                {
-                    Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        TransportMarker::new(Stage::WriteTimeout),
-                    )))
-                } else {
-                    Poll::Pending
-                }
+        if let Some(error) = next.downcast_ref::<std::io::Error>() {
+            match error.kind() {
+                std::io::ErrorKind::TimedOut => return DialErrorKind::Timeout,
+                std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected => return DialErrorKind::Connection,
+                _ => {}
             }
         }
+        current = next.source();
     }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        let this = self.get_mut();
-        if this.write_timer.is_none() {
-            this.write_timer = Some(Box::pin(time::sleep(this.write_timeout)));
-        }
-        match Pin::new(&mut this.inner).poll_flush(context) {
-            Poll::Ready(result) => {
-                this.write_timer = None;
-                Poll::Ready(result)
-            }
-            Poll::Pending => {
-                if this
-                    .write_timer
-                    .as_mut()
-                    .is_some_and(|timer| timer.as_mut().poll(context).is_ready())
-                {
-                    Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        TransportMarker::new(Stage::WriteTimeout),
-                    )))
-                } else {
-                    Poll::Pending
-                }
-            }
-        }
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(context)
-    }
+    DialErrorKind::Other
 }
 
 fn parse_base_url(value: &str) -> Result<Uri, TransportError> {
@@ -1164,6 +824,12 @@ fn duration_from_seconds_allow_zero(seconds: f64) -> Result<Duration, TransportE
     Duration::try_from_secs_f64(seconds).map_err(|_| TransportError::Configuration)
 }
 
+/// Rustls client configuration for the test-only Eggress TLS override.
+///
+/// Production route establishment uses Eggress's own system-root TLS stack;
+/// only `new_with_proxy_test_root` supplies an explicit test CA, and only to
+/// the route executor. Origin TLS always stays in Eggfetch.
+#[cfg(feature = "test-support")]
 fn build_tls_config(certificates: &[Vec<u8>]) -> Result<ClientConfig, TransportError> {
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     for certificate in certificates {
@@ -1180,7 +846,7 @@ fn build_tls_config(certificates: &[Vec<u8>]) -> Result<ClientConfig, TransportE
     )
 }
 
-/// Build the Eggfetch direct client for phase 1.
+/// Build the Eggfetch client shared by direct and proxied routes.
 ///
 /// Semantics mirror the previous direct Hyper/Rustls stack: HTTP/1.1 only, no
 /// hidden canceled-request retry, physical live-connection admission via
@@ -1189,8 +855,15 @@ fn build_tls_config(certificates: &[Vec<u8>]) -> Result<ClientConfig, TransportE
 /// Eggfetch's connect facility, established read/write inactivity via
 /// `TransportIoTimeout`, WebPKI roots plus explicit additional CA roots, and
 /// no high-level Eggfetch retries, redirects, or request timeout layers.
-fn build_direct_eggfetch_client(
+///
+/// A proxied route installs the account's `EggressDialer` as the client's
+/// only physical route. Eggfetch still performs origin TLS across the dialed
+/// stream using the same TLS configuration as the direct path, so proxy and
+/// origin trust planes remain separate. Each `ProviderHttpClient` builds its
+/// own Eggfetch `Client`, preserving per-account pool isolation.
+fn build_eggfetch_client(
     config: &ProviderHttpConfig,
+    dialer: Option<EggressDialer>,
 ) -> Result<eggfetch_core::Client, TransportError> {
     let mut tls_builder = eggfetch_core::TlsConfig::builder().trust_store(TrustStore::WebPkiOnly);
     if !config.additional_root_certificates.is_empty() {
@@ -1199,7 +872,8 @@ fn build_direct_eggfetch_client(
             .map_err(|_| TransportError::Configuration)?;
     }
     let tls_config = tls_builder.build();
-    Ok(eggfetch_core::Client::builder()
+    let mut builder = eggfetch_core::Client::builder();
+    builder = builder
         .http_version_policy(HttpVersionPolicy::Http1Only)
         // One coordinator attempt maps to one upstream transport attempt.
         .retry_canceled_requests(false)
@@ -1210,9 +884,9 @@ fn build_direct_eggfetch_client(
             max_live: Some(config.max_connections),
             admission_timeout: Some(config.pool_timeout),
         })
-        // Established transport inactivity guards replacing TimedConnection.
-        // No high-level Timeout read/write layer is added; doubling layers
-        // would change error precedence for body/header stalls.
+        // Established transport inactivity guards. No high-level Timeout
+        // read/write layer is added; doubling layers would change error
+        // precedence for body/header stalls.
         .transport_io_timeout(TransportIoTimeout {
             read: Some(config.read_timeout),
             write: Some(config.write_timeout),
@@ -1226,46 +900,37 @@ fn build_direct_eggfetch_client(
             connect: Some(config.connect_timeout),
             ..Default::default()
         })
-        .tls_config(tls_config)
-        .build())
+        .tls_config(tls_config);
+    if let Some(dialer) = dialer {
+        // The custom dialer is incompatible with Eggfetch's built-in proxy
+        // routing, which stays disabled: the dialer owns the only physical
+        // route, so route failures stay fail-closed without direct fallback.
+        builder = builder.dialer(dialer);
+    }
+    Ok(builder.build())
 }
 
 fn safe_authority(uri: &Uri) -> Option<&Authority> {
     uri.authority()
 }
 
-fn map_hyper_error(error: &hyper::Error, default_stage: Stage) -> TransportError {
-    map_transport_error(error, default_stage)
-}
-
-fn map_transport_error(error: &(dyn StdError + 'static), default_stage: Stage) -> TransportError {
-    if let Some(hyper_error) = error.downcast_ref::<hyper::Error>() {
-        if hyper_error.is_canceled() {
-            return TransportError::Cancelled;
-        }
-        if hyper_error.is_parse()
-            || hyper_error.is_incomplete_message()
-            || contains_io_kind(hyper_error, std::io::ErrorKind::UnexpectedEof)
-        {
-            return TransportError::Protocol;
-        }
-    }
-    if contains_source::<rustls::Error>(error) {
-        return TransportError::Tls;
-    }
-    if let Some(stage) = find_marker(error) {
-        return map_stage(stage);
-    }
-    map_stage(default_stage)
-}
-
-/// Translate Eggfetch direct-path errors to the stable `TransportError`
+/// Translate Eggfetch errors to the stable `TransportError`
 /// contract without leaking Eggfetch types above this module.
 ///
 /// Typed inspection order preserves specific timeout categories before broad
 /// connection failures: physical admission, established I/O direction,
-/// connect establishment, TLS, framing, then ordinary direct failures.
-fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> TransportError {
+/// connect establishment, TLS, framing, custom dialer kinds, then ordinary
+/// connection failures.
+///
+/// `proxy_transport` records whether the owning client dials through an
+/// Eggress route. Physical admission timeout stays `PoolTimeout` on both
+/// routes, but connection-establishment timeout on a proxied route is an
+/// Eggress route timeout, never a direct connection failure.
+fn map_eggfetch_error(
+    error: &eggfetch_core::Error,
+    fallback: TransportError,
+    proxy_transport: bool,
+) -> TransportError {
     use eggfetch_core::{Error as EggfetchError, TimeoutPhase};
 
     // 1. Physical connection admission timeout stays PoolTimeout. The
@@ -1290,16 +955,19 @@ fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> Tra
             TransportIoDirection::Write => TransportError::WriteTimeout,
         };
     }
-    // 4. Phase-aware timeouts. Only connect is configured on the direct
-    // path; read/write/total/proxy phases are mapped defensively so a
-    // future misconfiguration cannot silently become Connect.
+    // 4. Phase-aware timeouts. Only connect is configured on either route;
+    // read/write/total/proxy phases are mapped defensively so a future
+    // misconfiguration cannot silently become Connect. A connect timeout on
+    // a proxied route covers Eggress route establishment plus origin TLS,
+    // so it keeps the established Eggress timeout category.
     if let EggfetchError::Timeout { phase, .. } = error {
         return match phase {
             TimeoutPhase::Pool => TransportError::PoolTimeout,
+            TimeoutPhase::Connect if proxy_transport => TransportError::ProxyConnectTimeout,
             TimeoutPhase::Connect => TransportError::ConnectTimeout,
             TimeoutPhase::Read => TransportError::ReadTimeout,
             TimeoutPhase::Write => TransportError::WriteTimeout,
-            // No total deadline is configured on the direct path. Map to a
+            // No total deadline is configured on either route. Map to a
             // timeout category rather than a connection failure.
             TimeoutPhase::Total => TransportError::ReadTimeout,
             TimeoutPhase::ProxyConnect | TimeoutPhase::ProxyTls => {
@@ -1374,8 +1042,8 @@ fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> Tra
         EggfetchError::Unsupported(_) => return TransportError::Configuration,
         _ => {}
     }
-    // Proxy-route errors retain proxy categories for phase 2; the direct
-    // path never configures a proxy so these are defensive.
+    // Proxy-route errors retain proxy categories; the direct path never
+    // configures a proxy so these are defensive.
     match error {
         EggfetchError::InvalidProxyUrl(_)
         | EggfetchError::ProxyConnect(_)
@@ -1383,6 +1051,21 @@ fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> Tra
         EggfetchError::ProxyAuthRequired => return TransportError::ProxyAuthentication,
         EggfetchError::ProxyConnectRejected { .. } => return TransportError::ProxyTargetConnect,
         _ => {}
+    }
+    // Custom dialer failures are Eggress route failures by construction:
+    // only proxied clients install a dialer. The typed dial kind selects
+    // the established Eggress category, keeping route authentication and
+    // rejection distinct from ordinary direct connection failures and from
+    // origin TLS.
+    if let EggfetchError::CustomTransport(_) = error {
+        return match error.custom_transport_error().map(DialError::kind) {
+            Some(DialErrorKind::Timeout) => TransportError::ProxyConnectTimeout,
+            Some(DialErrorKind::Authentication) => TransportError::ProxyAuthentication,
+            Some(DialErrorKind::Rejected) => TransportError::ProxyTargetConnect,
+            Some(DialErrorKind::Connection) | Some(DialErrorKind::Other) | None => {
+                TransportError::ProxyConnect
+            }
+        };
     }
     // 7. Ordinary direct connection failures stay Connect. This includes
     // typed Connect, HyperClient connect failures, and I/O connection
@@ -1400,13 +1083,9 @@ fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> Tra
     {
         return TransportError::Connect;
     }
-    if let EggfetchError::CustomTransport(_) = error {
-        return TransportError::Connect;
-    }
     // Hyper and I/O errors without a more specific classification fall back
-    // to the caller phase: Write for dispatch, Read for body polling,
-    // matching the previous Hyper mapping defaults.
-    map_stage(default_stage)
+    // to the caller phase: Write for dispatch, Read for body polling.
+    fallback
 }
 
 /// Return true when any Hyper error in the Eggfetch source chain reports a
@@ -1438,19 +1117,6 @@ fn eggfetch_source_is_protocol(error: &(dyn StdError + 'static)) -> bool {
         current = next.source();
     }
     contains_io_kind(error, std::io::ErrorKind::UnexpectedEof)
-}
-
-fn find_marker(error: &(dyn StdError + 'static)) -> Option<Stage> {
-    if let Some(marker) = error.downcast_ref::<TransportMarker>() {
-        return Some(marker.stage);
-    }
-    if let Some(io_error) = error.downcast_ref::<std::io::Error>()
-        && let Some(inner) = io_error.get_ref()
-        && let Some(stage) = find_marker(inner)
-    {
-        return Some(stage);
-    }
-    error.source().and_then(find_marker)
 }
 
 fn contains_source<T: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
@@ -1485,23 +1151,6 @@ fn contains_io_kind(error: &(dyn StdError + 'static), kind: std::io::ErrorKind) 
         return true;
     }
     false
-}
-
-fn map_stage(stage: Stage) -> TransportError {
-    match stage {
-        Stage::PoolTimeout => TransportError::PoolTimeout,
-        Stage::ConnectTimeout => TransportError::ConnectTimeout,
-        Stage::Connect => TransportError::Connect,
-        Stage::ProxyConnectTimeout => TransportError::ProxyConnectTimeout,
-        Stage::ProxyConnect => TransportError::ProxyConnect,
-        Stage::ProxyAuthentication => TransportError::ProxyAuthentication,
-        Stage::ProxyTargetConnect => TransportError::ProxyTargetConnect,
-        Stage::Tls => TransportError::Tls,
-        Stage::WriteTimeout => TransportError::WriteTimeout,
-        Stage::Write => TransportError::Write,
-        Stage::ReadTimeout => TransportError::ReadTimeout,
-        Stage::Read => TransportError::Read,
-    }
 }
 
 #[cfg(test)]
@@ -1563,5 +1212,192 @@ mod tests {
         ] {
             assert!(!proxy_uses_ssh(proxy_url), "unexpected SSH in {proxy_url}");
         }
+    }
+
+    #[test]
+    fn egress_route_failures_classify_into_stable_dial_kinds() {
+        use super::{DialErrorKind, map_egress_dial_error};
+
+        let cases = [
+            (
+                eggress_embed::EggressError::Runtime("connection timed out".to_owned()),
+                DialErrorKind::Timeout,
+            ),
+            (
+                eggress_embed::EggressError::Runtime("proxy timeout".to_owned()),
+                DialErrorKind::Timeout,
+            ),
+            (
+                eggress_embed::EggressError::Runtime(
+                    "407 Proxy Authentication Required".to_owned(),
+                ),
+                DialErrorKind::Authentication,
+            ),
+            (
+                eggress_embed::EggressError::Runtime("invalid credentials".to_owned()),
+                DialErrorKind::Authentication,
+            ),
+            (
+                eggress_embed::EggressError::Runtime(
+                    "proxy could not connect to the target".to_owned(),
+                ),
+                DialErrorKind::Rejected,
+            ),
+            (
+                eggress_embed::EggressError::Runtime("destination rejected".to_owned()),
+                DialErrorKind::Rejected,
+            ),
+            (
+                eggress_embed::EggressError::Runtime("connection refused".to_owned()),
+                DialErrorKind::Connection,
+            ),
+            (
+                eggress_embed::EggressError::Config("bad chain".to_owned()),
+                DialErrorKind::Other,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(map_egress_dial_error(error).kind(), expected);
+        }
+    }
+
+    #[test]
+    fn egress_dial_errors_are_secret_free() {
+        use super::map_egress_dial_error;
+
+        let marker = "dial-secret-marker";
+        let error = map_egress_dial_error(eggress_embed::EggressError::Runtime(format!(
+            "route to proxy failed for caller {marker}"
+        )));
+        // The fixed display message carries no route input; only the
+        // redacted source chain may retain the detail, and `DialError`
+        // redacts source `Debug` output by construction.
+        assert!(!error.message().contains(marker));
+        assert!(!format!("{error}").contains(marker));
+        assert!(!format!("{error:?}").contains(marker));
+        assert!(std::error::Error::source(&error).is_some());
+    }
+
+    #[test]
+    fn custom_dial_kinds_map_to_stable_proxy_transport_errors() {
+        use super::{DialError, DialErrorKind, map_eggfetch_error};
+        use eggfetch_core::Error as EggfetchError;
+
+        for (kind, expected) in [
+            (DialErrorKind::Timeout, TransportError::ProxyConnectTimeout),
+            (
+                DialErrorKind::Authentication,
+                TransportError::ProxyAuthentication,
+            ),
+            (DialErrorKind::Rejected, TransportError::ProxyTargetConnect),
+            (DialErrorKind::Connection, TransportError::ProxyConnect),
+            (DialErrorKind::Other, TransportError::ProxyConnect),
+        ] {
+            let dial = DialError::new(kind, "route failed");
+            let error = EggfetchError::CustomTransport(std::sync::Arc::new(dial));
+            assert_eq!(
+                map_eggfetch_error(&error, TransportError::Write, true),
+                expected,
+                "dial kind {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn connect_timeout_keeps_route_aware_classification() {
+        use super::map_eggfetch_error;
+        use eggfetch_core::{Error as EggfetchError, TimeoutPhase};
+
+        let error = EggfetchError::Timeout {
+            phase: TimeoutPhase::Connect,
+            elapsed: std::time::Duration::from_secs(2),
+        };
+        assert_eq!(
+            map_eggfetch_error(&error, TransportError::Write, true),
+            TransportError::ProxyConnectTimeout
+        );
+        assert_eq!(
+            map_eggfetch_error(&error, TransportError::Write, false),
+            TransportError::ConnectTimeout
+        );
+    }
+
+    #[cfg(feature = "eggress-ssh-fallback")]
+    #[test]
+    fn chain_route_failures_classify_from_typed_variants() {
+        use super::{DialErrorKind, map_chain_dial_error};
+        use eggress_core::{AuthError, ConnectError, chain::ChainError};
+
+        let cases = [
+            (
+                ChainError::ConnectFailed {
+                    hop_index: 0,
+                    endpoint: "127.0.0.1:8080".to_owned(),
+                    source: ConnectError::Timeout,
+                },
+                DialErrorKind::Timeout,
+            ),
+            (
+                ChainError::ConnectFailed {
+                    hop_index: 0,
+                    endpoint: "127.0.0.1:8080".to_owned(),
+                    source: ConnectError::ConnectionRefused,
+                },
+                DialErrorKind::Connection,
+            ),
+            (
+                ChainError::ConnectFailed {
+                    hop_index: 0,
+                    endpoint: "127.0.0.1:8080".to_owned(),
+                    source: ConnectError::ReservedTarget("10.0.0.1".parse().unwrap()),
+                },
+                DialErrorKind::Rejected,
+            ),
+            (
+                ChainError::HandshakeFailed {
+                    hop_index: 0,
+                    protocol: "Http".to_owned(),
+                    source: Box::new(AuthError::InvalidCredentials),
+                },
+                DialErrorKind::Authentication,
+            ),
+            (
+                ChainError::HandshakeFailed {
+                    hop_index: 1,
+                    protocol: "tls".to_owned(),
+                    source: Box::new(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "route TLS stall",
+                    )),
+                },
+                DialErrorKind::Timeout,
+            ),
+            (
+                ChainError::InvalidChain {
+                    reason: "no handler".to_owned(),
+                },
+                DialErrorKind::Other,
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(map_chain_dial_error(error).kind(), expected);
+        }
+    }
+
+    #[cfg(feature = "eggress-ssh-fallback")]
+    #[test]
+    fn dial_targets_preserve_domain_names_and_ports() {
+        use super::target_addr_for_dial;
+        use eggress_core::TargetHost;
+
+        let domain = target_addr_for_dial("provider.example", 443);
+        assert_eq!(
+            domain.host,
+            TargetHost::Domain("provider.example".to_owned())
+        );
+        assert_eq!(domain.port, 443);
+        let literal = target_addr_for_dial("127.0.0.1", 80);
+        assert_eq!(literal.host, TargetHost::Ip("127.0.0.1".parse().unwrap()));
+        assert_eq!(literal.port, 80);
     }
 }

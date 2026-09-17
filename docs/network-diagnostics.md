@@ -1,6 +1,6 @@
 # Network diagnostics
 
-EggPool uses its native Hyper provider clients for upstream requests. Ordinary
+EggPool uses its native Eggfetch provider clients for upstream requests. Ordinary
 host name resolution is delegated to the operating system and reused through
 the connection pool; EggPool does not maintain a process-local DNS cache.
 

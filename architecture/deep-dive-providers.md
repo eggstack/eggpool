@@ -3,8 +3,8 @@
 Back to [Architecture](README.md)
 
 `rust/src/providers/` owns provider contracts, account credentials, endpoint
-composition, direct Eggfetch transport plus the retained Eggress proxy
-transport, and the per-provider/account client pool. Provider profiles
+composition, Eggfetch direct/proxied transport with the Eggress route dialer,
+and the per-provider/account client pool. Provider profiles
 describe protocol, URL, auth shape, wire surface, and capability facts without
 storing secrets in metadata.
 
@@ -32,15 +32,36 @@ identity, Eggress selection, and stable `TransportError` classification;
 Eggfetch owns HTTP/1.1 framing, origin TLS, pooling, admission, I/O guards,
 and streaming body leases.
 
+Direct and proxied provider routes share one Eggfetch HTTP/1.1 engine with
+the same physical admission, idle-pool, connect/I/O timeout, and WebPKI plus
+additional CA trust policy. Proxied accounts install a thin `EggressDialer`
+that implements Eggfetch's general custom `Dialer` interface over Eggress's
+existing raw TCP-route API; Eggfetch still performs origin TLS across the
+returned stream, so proxy/route TLS and origin TLS stay separate trust
+planes. Each account client owns a distinct Eggfetch `Client`, so pools never
+collapse across accounts even for identical proxy URIs. A failed dial is the
+only physical route a proxied client owns: there is no direct fallback.
+
 Normal provider proxy construction crosses one stable Eggress boundary:
 `eggress_embed::outbound::OutboundConnector::from_pproxy_uri` parses and
-compiles single-hop and canonical `__`-separated multi-hop expressions. The
-small `EgressProxyDialer` adapter only turns the facade's stream into the
-Hyper connector shape; proxy HTTP/TLS, admission, timeout, retry, and error
-ownership remain in EggPool for the retained proxy stack. Explicit `direct://`
-is still validated through Eggress and intentionally retains the previous
-direct Hyper connector until the proxy cutover removes the dual-stack
-scaffolding.
+compiles single-hop and canonical `__`-separated multi-hop expressions, and
+the dialer passes the logical destination host/port through unchanged so
+domain names survive to SOCKS5 requests, proxy-side DNS, and origin SNI.
+Explicit `direct://` is still validated through Eggress but uses the direct
+Eggfetch client for loopback/test targets that Eggress rejects as private
+egress.
+
+Route failures translate through typed `DialError` kinds into the stable
+`TransportError` proxy categories (`ProxyConnectTimeout`,
+`ProxyAuthentication`, `ProxyTargetConnect`, `ProxyConnect`); origin TLS
+failures stay `Tls` and physical admission timeout stays `PoolTimeout` on
+both routes. One deliberate limitation is documented in the adapter: the
+pinned embed facade renders typed route errors to redacted
+`EggressError::Runtime` strings, so that path classifies the route-failure
+bucket with conservative message predicates mirroring the previous transport
+behavior. The compatibility chain-executor path (SSH, test roots) keeps fully
+typed `ChainError` classification. If a future Eggress embed API exposes the
+typed route error, the predicates collapse to a direct match.
 
 Eggress 1.0.6 has one documented facade gap: its outbound constructor builds
 the SSH-capable executor without an SSH session cache. The explicitly named
@@ -57,10 +78,10 @@ under `test-support`; it adds a test CA and never disables verification.
 Protocol fixture crates remain dev-only. These are intentional compatibility
 boundaries, while ordinary provider source uses the stable embed API.
 
-The retained proxy HTTP client intentionally remains a separate Hyper/Rustls
-stack: HTTP/1.1 only, Rustls with `ring` and TLS 1.2, deterministic webpki
-roots, bounded pooling, and explicit timeout/error classification. SQLite's
-bundled and backup features likewise belong to the database and lifecycle
+Direct Hyper/Rustls dependencies remain declared until the transport-cutover
+phase confirms no remaining references and removes them; they are no longer
+used by provider transport code. SQLite's bundled and backup features
+likewise belong to the database and lifecycle
 contracts. Review the resolved graph with `cargo tree -e features` before
 changing any of these boundaries. Run the repository policy gate as part of
 dependency changes:

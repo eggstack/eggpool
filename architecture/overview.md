@@ -206,12 +206,14 @@ Deep dive: [Transcoding](deep-dive-transcoder.md).
 credentials render only at dispatch-header construction. Proxy construction
 crosses the stable `eggress-embed` boundary (`OutboundConnector::from_pproxy_uri`
 for single-hop and `__`-separated multi-hop; explicit `direct://` validated
-through Eggress but using the direct Hyper connector). Default
+through Eggress but using the direct Eggfetch client). Default
 `eggress-ssh-fallback` retains the 1.0.6 native SSH chain/session-cache
 compat path; `--no-default-features` keeps direct/non-SSH proxy paths and
 rejects SSH proxy config as `TransportError::ProxyConfiguration` before
-dialing. Underlying HTTP is Hyper/Rustls (HTTP/1.1, `ring`, TLS 1.2, webpki
-roots, bounded pooling). `rust/Cargo.toml` plus `cargo tree -e features` is the
+dialing. Underlying HTTP is Eggfetch (`eggfetch-core` 0.1.5 over Hyper/Rustls:
+HTTP/1.1, `ring`, TLS 1.2, webpki roots, bounded pooling); proxied routes add
+only a thin Eggress `Dialer` supplying the raw route stream, with origin TLS
+still owned by Eggfetch. `rust/Cargo.toml` plus `cargo tree -e features` is the
 dependency authority; `deny.toml` + `cargo deny check` gates
 licenses/advisories/sources/duplicates. `unsafe_code = "forbid"` is a repo
 invariant.
