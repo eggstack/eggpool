@@ -1,6 +1,6 @@
 # Phase 3 — Eggfetch Transport Cutover and Cleanup
 
-Status: planned
+Status: complete
 
 Depends on:
 - `215-eggfetch-transport-consolidation-roadmap.md`
@@ -256,19 +256,19 @@ Adjust only to match repository CI/platform constraints; do not silently skip th
 
 Before merging/handing off phase 3, verify:
 
-- [ ] all provider HTTP traffic goes through Eggfetch,
-- [ ] proxied traffic still routes through Eggress `Dialer`,
-- [ ] no direct-network fallback exists for proxied clients,
-- [ ] no old Hyper client is built in Eggpool,
-- [ ] no old physical admission wrapper remains,
-- [ ] no old established-I/O timer wrapper remains,
-- [ ] no old origin TLS connector remains,
-- [ ] no high-level Eggfetch retries or redirects are configured,
-- [ ] per-account clients remain distinct,
-- [ ] error translation is centralized,
-- [ ] old direct dependencies are removed where unused,
-- [ ] Eggfetch feature resolution remains minimal,
-- [ ] all transport acceptance tests remain green.
+- [x] all provider HTTP traffic goes through Eggfetch,
+- [x] proxied traffic still routes through Eggress `Dialer`,
+- [x] no direct-network fallback exists for proxied clients,
+- [x] no old Hyper client is built in Eggpool,
+- [x] no old physical admission wrapper remains,
+- [x] no old established-I/O timer wrapper remains,
+- [x] no old origin TLS connector remains,
+- [x] no high-level Eggfetch retries or redirects are configured,
+- [x] per-account clients remain distinct,
+- [x] error translation is centralized,
+- [x] old direct dependencies are removed where unused,
+- [x] Eggfetch feature resolution remains minimal,
+- [x] all transport acceptance tests remain green.
 
 ## Phase completion criteria
 
@@ -287,3 +287,34 @@ Phase 3 is complete when:
 ## Handoff notes
 
 This phase should result in materially less transport code in Eggpool. If the diff adds roughly as much new abstraction as it deletes old machinery, reconsider the design before proceeding. The intended architecture is Eggfetch for generic HTTP transport, Eggress for routing, and a thin Eggpool adapter/policy boundary between them.
+
+## Completion note
+
+Implemented on `main`. Phases 1–2 had already made Eggfetch the sole
+provider transport and deleted the bespoke Hyper/Rustls
+connector/admission/timer machinery, so this phase finalized the cutover:
+
+- collapsed the redundant `ProviderHttpClientInner::{Direct, Proxied}`
+  enum into one Eggfetch `Client` plus a `proxy_transport` route flag
+  (`rust/src/providers/transport.rs`), keeping constructors, method
+  signatures, per-account pool isolation, and the centralized
+  Eggfetch-to-`TransportError` boundary unchanged;
+- removed the unused direct `tower-service` dependency
+  (`rust/Cargo.toml`, `rust/Cargo.lock` single-edge diff);
+- retained `hyper`/`hyper-rustls`/`hyper-util`/`rustls`/`webpki-roots`
+  for their live owners: the `operations/update.rs` self-update release
+  client, typed `hyper::Error`/`rustls::Error` source inspection in the
+  error boundary, and the `test-support` Eggress route-TLS seam;
+- confirmed Eggfetch resolves only `http1` + `tls-rustls`
+  (`cargo tree -e features`);
+- updated `architecture/deep-dive-providers.md`,
+  `architecture/overview.md`, and `rust/README.md` to describe the
+  shipped Eggfetch ownership.
+
+Evidence: `cargo fmt --check`, strict clippy (default and
+`--no-default-features`), `cargo check` (default and `--no-default`),
+serial `cargo test --workspace --all-targets`,
+`--features test-support --test provider_transport` (35 passed),
+`--test provider_transport` (30 passed), `cargo deny check`,
+locked release build, and the `uv` ruff/pyright/pytest tooling gates —
+all green locally before push.

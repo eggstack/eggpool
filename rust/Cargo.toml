@@ -89,7 +89,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 tokio-rusqlite = { version = "0.7.0", features = ["bundled", "backup"] }
 zip = { version = "2.4.2", default-features = false }
-tower-service = "0.3"
 webpki-roots = "1"
 
 [build-dependencies]

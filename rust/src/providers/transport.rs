@@ -182,7 +182,7 @@ pub struct ProviderResponse {
     pub status: StatusCode,
     /// Response headers returned by the provider.
     pub headers: HeaderMap,
-    /// Hyper response extensions, including connection metadata when present.
+    /// Response extensions, including connection metadata when present.
     pub extensions: Extensions,
     /// Stream-capable response body.
     pub body: ProviderBody,
@@ -253,15 +253,14 @@ impl ProviderBody {
 /// connection state.
 #[derive(Clone)]
 pub struct ProviderHttpClient {
-    inner: ProviderHttpClientInner,
+    client: eggfetch_core::Client,
+    /// Whether this client dials through an Eggress route. Dialer failures
+    /// only occur on proxied routes, so error translation needs the route to
+    /// classify establishment timeouts without conflating them with direct
+    /// connection failures.
+    proxy_transport: bool,
     base_url: Uri,
     max_request_body_bytes: usize,
-}
-
-#[derive(Clone)]
-enum ProviderHttpClientInner {
-    Direct(eggfetch_core::Client),
-    Proxied(eggfetch_core::Client),
 }
 
 impl std::fmt::Debug for ProviderHttpClient {
@@ -281,7 +280,8 @@ impl ProviderHttpClient {
         validate_config(&config)?;
         let client = build_eggfetch_client(&config, None)?;
         Ok(Self {
-            inner: ProviderHttpClientInner::Direct(client),
+            client,
+            proxy_transport: false,
             base_url: config.base_url,
             max_request_body_bytes: config.max_request_body_bytes,
         })
@@ -312,7 +312,8 @@ impl ProviderHttpClient {
         let dialer = build_chain_egress_dialer_for_test_root(proxy_url, proxy_root_certificate)?;
         let client = build_eggfetch_client(&config, Some(dialer))?;
         Ok(Self {
-            inner: ProviderHttpClientInner::Proxied(client),
+            client,
+            proxy_transport: true,
             base_url: config.base_url,
             max_request_body_bytes: config.max_request_body_bytes,
         })
@@ -325,14 +326,11 @@ impl ProviderHttpClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         validate_config(&config)?;
         let dialer = build_eggress_dialer(proxy_url)?;
-        let client = build_eggfetch_client(&config, dialer.clone())?;
-        let inner = if dialer.is_some() {
-            ProviderHttpClientInner::Proxied(client)
-        } else {
-            ProviderHttpClientInner::Direct(client)
-        };
+        let proxy_transport = dialer.is_some();
+        let client = build_eggfetch_client(&config, dialer)?;
         Ok(Self {
-            inner,
+            client,
+            proxy_transport,
             base_url: config.base_url,
             max_request_body_bytes: config.max_request_body_bytes,
         })
@@ -350,10 +348,8 @@ impl ProviderHttpClient {
             return Err(TransportError::RequestBodyTooLarge);
         }
         let uri = join_provider_target(&self.base_url, target)?;
-        let (client, proxy_transport) = match &self.inner {
-            ProviderHttpClientInner::Direct(client) => (client, false),
-            ProviderHttpClientInner::Proxied(client) => (client, true),
-        };
+        let client = &self.client;
+        let proxy_transport = self.proxy_transport;
         let mut request = Request::new(Full::new(body));
         *request.method_mut() = method;
         *request.uri_mut() = uri;
@@ -848,10 +844,10 @@ fn build_tls_config(certificates: &[Vec<u8>]) -> Result<ClientConfig, TransportE
 
 /// Build the Eggfetch client shared by direct and proxied routes.
 ///
-/// Semantics mirror the previous direct Hyper/Rustls stack: HTTP/1.1 only, no
+/// Semantics: HTTP/1.1 only, no
 /// hidden canceled-request retry, physical live-connection admission via
 /// `PhysicalConnectionPolicy` (never the logical request-concurrency limit),
-/// Hyper idle-pool timeout plus per-host idle cap, connect timeout via
+/// Eggfetch idle-pool timeout plus per-host idle cap, connect timeout via
 /// Eggfetch's connect facility, established read/write inactivity via
 /// `TransportIoTimeout`, WebPKI roots plus explicit additional CA roots, and
 /// no high-level Eggfetch retries, redirects, or request timeout layers.
@@ -891,7 +887,7 @@ fn build_eggfetch_client(
             read: Some(config.read_timeout),
             write: Some(config.write_timeout),
         })
-        // Idle-pool reuse and expiry matching the previous Hyper policy.
+        // Idle-pool reuse and expiry.
         .idle_timeout(config.keepalive_timeout)
         .max_idle_connections_per_host(config.max_keepalive)
         // Connection establishment only; admission wait stays in the physical
@@ -976,7 +972,7 @@ fn map_eggfetch_error(
         };
     }
     // 5. TLS establishment/verification stays Tls, including rustls sources
-    // wrapped through Hyper/HyperClient on the standard connector path.
+    // wrapped through the Eggfetch engine's connector path.
     match error {
         EggfetchError::Tls(_)
         | EggfetchError::TlsConfig(_)
@@ -990,7 +986,7 @@ fn map_eggfetch_error(
     if contains_source::<rustls::Error>(error) {
         return TransportError::Tls;
     }
-    // Canceled Hyper requests map to Cancelled so coordinator accounting can
+    // Canceled requests map to Cancelled so coordinator accounting can
     // distinguish caller cancellation from transport failures.
     if eggfetch_source_is_canceled(error) {
         return TransportError::Cancelled;
@@ -1069,7 +1065,7 @@ fn map_eggfetch_error(
     }
     // 7. Ordinary direct connection failures stay Connect. This includes
     // typed Connect, HyperClient connect failures, and I/O connection
-    // refusal observed through the standard connector.
+    // refusal observed through the Eggfetch connector.
     if let EggfetchError::HyperClient(inner) = error
         && inner.is_connect()
     {
@@ -1083,7 +1079,7 @@ fn map_eggfetch_error(
     {
         return TransportError::Connect;
     }
-    // Hyper and I/O errors without a more specific classification fall back
+    // Remaining engine and I/O errors without a more specific classification fall back
     // to the caller phase: Write for dispatch, Read for body polling.
     fallback
 }

@@ -1013,7 +1013,6 @@ dependencies = [
  "tokio-stream",
  "toml",
  "tower",
- "tower-service",
  "tracing",
  "tracing-subscriber",
  "webpki-roots 1.0.9",

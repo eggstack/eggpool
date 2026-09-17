@@ -384,6 +384,7 @@ Deep dives: [Observability](deep-dive-observability.md),
 ### 14. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
+Eggfetch (`eggfetch-core` 0.1.5, provider transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
 `tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.6
 (optional SSH compat), plus the path crates `eggpool-model-routing`,

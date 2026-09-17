@@ -78,10 +78,15 @@ under `test-support`; it adds a test CA and never disables verification.
 Protocol fixture crates remain dev-only. These are intentional compatibility
 boundaries, while ordinary provider source uses the stable embed API.
 
-Direct Hyper/Rustls dependencies remain declared until the transport-cutover
-phase confirms no remaining references and removes them; they are no longer
-used by provider transport code. SQLite's bundled and backup features
-likewise belong to the database and lifecycle
+Provider transport cutover is complete: `ProviderHttpClient` is Eggfetch-only
+and the bespoke Hyper/Rustls connector/admission/timer machinery is gone.
+The `hyper`, `hyper-util`, `hyper-rustls`, `rustls`, and `webpki-roots`
+direct dependencies remain for their live owners outside provider transport:
+the `operations/update.rs` self-update release client (bounded Hyper/Rustls
+metadata/artifact fetch with WebPKI roots), typed `hyper::Error` /
+`rustls::Error` source inspection in the Eggfetch-to-`TransportError`
+boundary, and the `test-support` Eggress route-TLS seam. SQLite's bundled
+and backup features likewise belong to the database and lifecycle
 contracts. Review the resolved graph with `cargo tree -e features` before
 changing any of these boundaries. Run the repository policy gate as part of
 dependency changes:

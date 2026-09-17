@@ -53,7 +53,7 @@ Eggress's raw TCP-route API; Eggfetch still performs origin TLS across the
 returned stream, so proxy and origin trust planes stay separate and a failed
 dial never falls back to direct networking. Physical live-connection
 admission uses `PhysicalConnectionPolicy` (`max_connections`/`pool_timeout`),
-idle reuse and expiry use Hyper idle-pool policy
+idle reuse and expiry use the Eggfetch idle-pool policy
 (`max_keepalive`/`keepalive_timeout`), establishment uses the Eggfetch
 connect timeout, established read/write inactivity uses `TransportIoTimeout`,
 and trust uses WebPKI roots plus explicit additional CA roots with
