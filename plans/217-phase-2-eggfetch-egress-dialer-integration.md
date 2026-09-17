@@ -1,6 +1,6 @@
 # Phase 2 — Eggfetch Eggress Dialer Integration
 
-Status: planned
+Status: complete
 
 Depends on:
 - `215-eggfetch-transport-consolidation-roadmap.md`
@@ -290,3 +290,10 @@ Phase 2 is complete when:
 The desired result is intentionally boring: a small adapter that turns an Eggress raw stream into Eggfetch's `DialStream`. If this phase starts accumulating proxy protocol branches in Eggfetch-facing code, re-evaluate the boundary; protocol behavior belongs in Eggress.
 
 Do not weaken fail-closed tests to accommodate Eggfetch. The 0.1.5 custom dialer path was designed to own the physical route without direct fallback, so a fallback indicates an integration/configuration defect that should be fixed.
+
+## Completion note
+
+Implemented on `main` (thin `EggressDialer` over the existing raw TCP-route
+API, per-account Eggfetch clients, typed dial-error mapping). Proxy matrix
+parity was proven by the full provider transport suite and re-verified
+through the phase 3 cutover and the phase 4 qualification pass (`219`).

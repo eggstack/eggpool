@@ -1,6 +1,6 @@
 # Phase 1 — Eggfetch Direct Transport Foundation
 
-Status: planned
+Status: complete
 
 Depends on: `215-eggfetch-transport-consolidation-roadmap.md`
 
@@ -308,3 +308,10 @@ Phase 1 is complete when:
 If a direct-path parity test fails, fix the semantic mapping before proceeding to Eggress. Do not paper over a mismatch by weakening the existing test unless the old behavior is demonstrably incorrect and the change is separately documented.
 
 The key risk in this phase is using an Eggfetch convenience control whose name resembles an Eggpool setting but whose lifecycle differs. In particular, treat physical admission, established I/O inactivity, logical request timeouts, and logical request concurrency as separate concepts.
+
+## Completion note
+
+Implemented on `main` (direct Eggfetch client, MSRV 1.89, exact-pinned
+`eggfetch-core =0.1.5` with `http1` + `tls-rustls`). Direct-path parity was
+proven by the provider transport acceptance subset and re-verified through
+the phase 3 cutover and the phase 4 qualification pass (`219`).

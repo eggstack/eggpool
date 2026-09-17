@@ -1,6 +1,6 @@
 # Eggfetch Transport Consolidation Roadmap
 
-Status: planned
+Status: complete
 
 Depends on: current Rust provider transport and provider transport qualification suite
 
@@ -248,3 +248,14 @@ This roadmap is complete when:
 Favor deletion and consolidation over creating a new abstraction hierarchy. `ProviderHttpClient` is already the correct containment boundary; keep it unless a concrete blocker requires otherwise.
 
 Do not refactor provider routing, coordinator retry logic, or Eggress protocol configuration while performing this work. Those changes would make transport parity harder to prove and would obscure the maintenance benefit this roadmap is intended to deliver.
+
+## Closure note
+
+Closed by the phase 4 qualification pass (`219`): all four phase plans are
+complete, all provider transport paths use reviewed `eggfetch-core` 0.1.5,
+no bespoke Hyper/Rustls connection lifecycle remains, Eggress integration is
+a thin raw-stream dialer, coordinator retry/failover ownership is unchanged,
+physical admission and timeout behavior is preserved, the transport
+acceptance and full Rust suites pass, direct dependency cleanup is complete,
+and before/after artifact/dependency measurements are recorded in
+`architecture/deep-dive-providers.md` and the `219` completion note.

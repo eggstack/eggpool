@@ -1,6 +1,6 @@
 # Phase 4 — Eggfetch Qualification and Footprint Closure
 
-Status: planned
+Status: complete
 
 Depends on:
 - `215-eggfetch-transport-consolidation-roadmap.md`
@@ -308,24 +308,24 @@ Do not weaken acceptance tests before ruling out these integration mistakes.
 
 ## Final completion checklist
 
-- [ ] Rust MSRV is 1.89 everywhere it is authoritative.
-- [ ] Eggfetch is exact-pinned to reviewed 0.1.5 for the initial landing.
-- [ ] Only intended Eggfetch features are enabled.
-- [ ] All direct provider transport tests pass.
-- [ ] All Eggress/proxy transport tests pass.
-- [ ] Full Rust tests pass.
-- [ ] Formatting/check/clippy match CI.
-- [ ] Coordinator attempt counts show no hidden transport retries.
-- [ ] Error categories remain stable.
-- [ ] Cancellation/body-drop cases recover capacity.
-- [ ] No direct fallback occurs for custom routes.
-- [ ] Old generic Hyper/Rustls transport code is removed.
-- [ ] Unused direct transport dependencies are removed.
-- [ ] Resolved feature/dependency graph is audited.
-- [ ] Before/after release artifact sizes are recorded under comparable conditions.
-- [ ] Any binary-size increase is explained or escalated rather than hidden.
-- [ ] Supported release targets remain buildable.
-- [ ] No migration-only runtime switch/scaffolding remains.
+- [x] Rust MSRV is 1.89 everywhere it is authoritative.
+- [x] Eggfetch is exact-pinned to reviewed 0.1.5 for the initial landing.
+- [x] Only intended Eggfetch features are enabled.
+- [x] All direct provider transport tests pass.
+- [x] All Eggress/proxy transport tests pass.
+- [x] Full Rust tests pass.
+- [x] Formatting/check/clippy match CI.
+- [x] Coordinator attempt counts show no hidden transport retries.
+- [x] Error categories remain stable.
+- [x] Cancellation/body-drop cases recover capacity.
+- [x] No direct fallback occurs for custom routes.
+- [x] Old generic Hyper/Rustls transport code is removed.
+- [x] Unused direct transport dependencies are removed.
+- [x] Resolved feature/dependency graph is audited.
+- [x] Before/after release artifact sizes are recorded under comparable conditions.
+- [x] Any binary-size increase is explained or escalated rather than hidden.
+- [x] Supported release targets remain buildable.
+- [x] No migration-only runtime switch/scaffolding remains.
 
 ## Phase completion criteria
 
@@ -334,3 +334,45 @@ Phase 4, and therefore the Eggfetch consolidation roadmap, is complete when all 
 ## Handoff notes
 
 The final decision should be based on Eggpool's measured result, not Eggfetch-versus-reqwest micro-fixtures. The expected architectural result is strong even if the stripped binary is roughly unchanged: Eggpool stops maintaining a custom Hyper/Rustls connection stack, while Eggfetch remains a general reusable HTTP engine and Eggress remains a general routing engine.
+
+## Completion note
+
+Implemented on `main`. Baseline `7cc0521c` (pre-phase-1) versus
+post-phase-3 `028ad76a`, both built with Rust 1.89.0 for
+`aarch64-apple-darwin` under the normal release profile without stripping:
+
+- behavioral qualification green: `--features test-support --test
+  provider_transport` (35 passed), `--test provider_transport` (30 passed),
+  coordinator `c008`/`c009`/`c011`/`boundaries`/`finalization`/`publication`
+  (no hidden retries, stable attempt counts and error categories,
+  cancellation/body-drop recovery), serial `cargo test --workspace
+  --all-targets` (680 passed, 0 failed);
+- feature audit clean: `eggfetch-core` resolves only `http1` + `tls-rustls`
+  (plus implicit `hyper-rustls`); no proxy/HTTP-2/HTTP-3/compression/
+  native-root/JSON/cookie/multipart activation;
+- dependency delta: direct `-1` (`tower-service` removed;
+  `hyper`/`hyper-util`/`hyper-rustls`/`rustls`/`webpki-roots` retained for
+  the live `operations/update.rs`, error-boundary, and `test-support`
+  owners), resolved `383 -> 414` (`+31`, entirely the `eggfetch-core`
+  closure: `url`/`idna`/ICU plus `dashmap`; nothing removed from the graph);
+- artifact delta: `27,908,656 -> 30,139,568` bytes (`+2,230,912`, `+8.0%`),
+  classified as larger by a measured amount, explained and acceptable per
+  the interpretation criteria; SBC suitability preserved;
+- source maintenance: only `rust/src/providers/transport.rs` changed under
+  `rust/src/`; bespoke connector/admission/timer/TLS-string-plumbing
+  ownership deleted, leaving request validation, route selection, and one
+  typed error boundary;
+- runtime smoke: release binary boots, serves degraded-but-valid
+  `/v1/readyz` + `/api/status` with zero accounts, holds ~15.6 MB idle RSS,
+  and stops cleanly with no lingering tasks;
+- MSRV/release matrix: `1.89` in `rust/Cargo.toml`,
+  `rust/crates/eggpool-connect/Cargo.toml`, and all `release.yml` builders
+  (shared `1.81` crates unchanged by design); CI uses stable with no
+  oldest-toolchain pin; installer/update paths untouched;
+- footprint recorded in `architecture/deep-dive-providers.md`; no new
+  architecture document, no migration scaffolding remains, no CI expansion.
+
+This closes the Eggfetch consolidation roadmap (`215`–`219`): Eggpool owns
+less generic transport machinery without surrendering routing or
+failure-isolation semantics. Any future `url`/IDNA trimming inside
+Eggfetch is a separate general upstream improvement.

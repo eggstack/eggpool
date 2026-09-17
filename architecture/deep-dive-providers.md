@@ -99,3 +99,41 @@ cargo tree --manifest-path rust/Cargo.toml --duplicates
 
 The policy deliberately reports duplicate versions instead of rejecting the
 legitimate Eggress/SSH/crypto and platform families in the current lockfile.
+
+## Consolidation footprint (Phase 4 measurement)
+
+Before/after comparison of the pre-migration revision against the post-cutover
+revision, both built with Rust 1.89.0 for `aarch64-apple-darwin`, default
+features, the normal release profile, and no stripping (matching the release
+packaging, which passes `--strip false` to maturin):
+
+| Measurement | Before | After | Delta |
+|---|---:|---:|---|
+| final artifact bytes | 27,908,656 | 30,139,568 | +2,230,912 (+8.0%) |
+| direct dependencies | includes `tower-service` | `tower-service` removed | -1 |
+| resolved packages (`cargo metadata`) | 383 | 414 | +31 |
+| Eggfetch enabled features | N/A | `http1` + `tls-rustls` only | minimal |
+
+The result classifies as **larger by a measured amount**. The delta is
+explained, not accidental: the entire added package closure arrives through
+`eggfetch-core` itself (`url` → `idna` → ICU tables, plus `dashmap`), while
+no package leaves the resolved graph because `hyper`/`hyper-util`/
+`hyper-rustls`/`rustls`/`webpki-roots` remain both transitively and directly
+for the live owners listed above. `cargo tree -e features` confirms no
+proxy, HTTP/2, HTTP/3, compression, native-root, JSON, cookie, or multipart
+activation, and both old and new transports are never linked together — the
+old engine is deleted. A bounded local smoke check (boot, degraded-but-valid
+`/v1/readyz` + `/api/status` with zero accounts, ~15.6 MB idle RSS, clean
+`stop` with no lingering tasks) shows no lifecycle or footprint regression at
+rest. The increase is acceptable: behavior is fully preserved, bespoke
+transport ownership is gone, and the artifact remains suitable for SBC/local
+deployment. Trimming Eggfetch's own `url`/IDNA closure would be a separate
+general upstream improvement, not a migration follow-up.
+
+The source-maintenance win is the only file changed under `rust/src/`:
+`providers/transport.rs` is rewritten around the Eggfetch engine with the
+custom Hyper connector, physical admission wrapper, established-I/O timeout
+wrapper, manual origin TLS connector, Hyper pool construction, and
+string-based error plumbing deleted. What remains Eggpool-owned is request
+validation, route/dialer selection, and the centralized typed
+Eggfetch-to-`TransportError` boundary.
