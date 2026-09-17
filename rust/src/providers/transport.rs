@@ -1,8 +1,15 @@
-//! Direct provider HTTP transport built on Hyper and Rustls.
+//! Provider HTTP transport with an Eggfetch direct path and Eggress proxy path.
 //!
 //! The client in this module is intentionally neutral: it knows about HTTP,
 //! connection ownership, and timeouts, but not provider credentials, wire
 //! formats, routing, retries, or finalization.
+//!
+//! Direct provider requests use `eggfetch-core` 0.1.5 native
+//! `Client::execute_http_body` with HTTP/1.1 only, disabled canceled-request
+//! retries, physical connection admission, idle-pool policy, connect timeout,
+//! established transport I/O timeouts, and WebPKI plus explicit additional CA
+//! roots. Proxy/account routes retain the existing Hyper/Rustls/Eggress stack
+//! until phase 2 provides a thin Eggress `Dialer` adapter.
 
 use std::{
     error::Error as StdError,
@@ -14,6 +21,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use eggfetch_core::{
+    HttpVersionPolicy, NativeRequestOptions, PhysicalConnectionPolicy, Timeout as EggfetchTimeout,
+    TransportIoDirection, TransportIoTimeout, TrustStore,
+};
 #[cfg(feature = "eggress-ssh-fallback")]
 use eggress_core::{TargetAddr, TargetHost};
 use http::{
@@ -190,25 +201,55 @@ pub struct ProviderResponse {
 /// A response body that never buffers the complete upstream response.
 #[derive(Debug)]
 pub struct ProviderBody {
-    inner: hyper::body::Incoming,
+    inner: ProviderBodyInner,
+}
+
+#[derive(Debug)]
+enum ProviderBodyInner {
+    Hyper(hyper::body::Incoming),
+    Eggfetch(std::pin::Pin<Box<eggfetch_core::NativeResponseBody>>),
 }
 
 impl ProviderBody {
     fn new(inner: hyper::body::Incoming) -> Self {
-        Self { inner }
+        Self {
+            inner: ProviderBodyInner::Hyper(inner),
+        }
+    }
+
+    fn new_eggfetch(inner: eggfetch_core::NativeResponseBody) -> Self {
+        Self {
+            inner: ProviderBodyInner::Eggfetch(Box::pin(inner)),
+        }
     }
 
     /// Wait for the next data chunk. Trailers are consumed and skipped.
     pub async fn next(&mut self) -> Option<Result<Bytes, TransportError>> {
-        loop {
-            match self.inner.frame().await {
-                Some(Ok(frame)) => match frame.into_data() {
-                    Ok(data) => return Some(Ok(data)),
-                    Err(_) => continue,
-                },
-                Some(Err(error)) => return Some(Err(map_hyper_error(&error, Stage::Read))),
-                None => return None,
-            }
+        match &mut self.inner {
+            ProviderBodyInner::Hyper(inner) => loop {
+                match inner.frame().await {
+                    Some(Ok(frame)) => match frame.into_data() {
+                        Ok(data) => return Some(Ok(data)),
+                        Err(_) => continue,
+                    },
+                    Some(Err(error)) => {
+                        return Some(Err(map_hyper_error(&error, Stage::Read)));
+                    }
+                    None => return None,
+                }
+            },
+            ProviderBodyInner::Eggfetch(inner) => loop {
+                match inner.frame().await {
+                    Some(Ok(frame)) => match frame.into_data() {
+                        Ok(data) => return Some(Ok(data)),
+                        Err(_) => continue,
+                    },
+                    Some(Err(error)) => {
+                        return Some(Err(map_eggfetch_error(&error, Stage::Read)));
+                    }
+                    None => return None,
+                }
+            },
         }
     }
 
@@ -228,13 +269,29 @@ impl ProviderBody {
     }
 }
 
-/// Cheap cloneable handle around one provider-scoped Hyper connection pool.
+/// Cheap cloneable handle around one provider-scoped connection pool.
+///
+/// Direct provider routes own an Eggfetch HTTP/1.1 client; configured proxy
+/// routes retain the Hyper/Rustls/Eggress client until phase 2 migrates them
+/// to a thin Eggress `Dialer` adapter.
 #[derive(Clone)]
 pub struct ProviderHttpClient {
-    client:
-        Client<AdmissionConnector<hyper_rustls::HttpsConnector<ProviderTcpConnector>>, Full<Bytes>>,
+    inner: ProviderHttpClientInner,
     base_url: Uri,
     max_request_body_bytes: usize,
+}
+
+#[derive(Clone)]
+enum ProviderHttpClientInner {
+    Direct(eggfetch_core::Client),
+    Proxied(
+        Box<
+            Client<
+                AdmissionConnector<hyper_rustls::HttpsConnector<ProviderTcpConnector>>,
+                Full<Bytes>,
+            >,
+        >,
+    ),
 }
 
 impl std::fmt::Debug for ProviderHttpClient {
@@ -248,9 +305,16 @@ impl std::fmt::Debug for ProviderHttpClient {
 }
 
 impl ProviderHttpClient {
-    /// Build a direct HTTP/1.1 provider client with explicit Rustls roots.
+    /// Build a direct HTTP/1.1 provider client on Eggfetch with explicit
+    /// WebPKI roots plus any additional test CA roots.
     pub fn new(config: ProviderHttpConfig) -> Result<Self, TransportError> {
-        Self::build(config, None)
+        validate_config(&config)?;
+        let client = build_direct_eggfetch_client(&config)?;
+        Ok(Self {
+            inner: ProviderHttpClientInner::Direct(client),
+            base_url: config.base_url,
+            max_request_body_bytes: config.max_request_body_bytes,
+        })
     }
 
     /// Build an HTTP/1.1 provider client whose TCP connections use an
@@ -319,7 +383,7 @@ impl ProviderHttpClient {
             .pool_idle_timeout(config.keepalive_timeout)
             .pool_max_idle_per_host(config.max_keepalive);
         Ok(Self {
-            client: builder.build(connector),
+            inner: ProviderHttpClientInner::Proxied(Box::new(builder.build(connector))),
             base_url: config.base_url,
             max_request_body_bytes: config.max_request_body_bytes,
         })
@@ -337,22 +401,43 @@ impl ProviderHttpClient {
             return Err(TransportError::RequestBodyTooLarge);
         }
         let uri = join_provider_target(&self.base_url, target)?;
-        let mut request = Request::new(Full::new(body));
-        *request.method_mut() = method;
-        *request.uri_mut() = uri;
-        *request.headers_mut() = headers;
-        let response = self
-            .client
-            .request(request)
-            .await
-            .map_err(|error| map_transport_error(&error, Stage::Write))?;
-        let (parts, body) = response.into_parts();
-        Ok(ProviderResponse {
-            status: parts.status,
-            headers: parts.headers,
-            extensions: parts.extensions,
-            body: ProviderBody::new(body),
-        })
+        match &self.inner {
+            ProviderHttpClientInner::Direct(client) => {
+                let mut request = Request::new(Full::new(body));
+                *request.method_mut() = method;
+                *request.uri_mut() = uri;
+                *request.headers_mut() = headers;
+                *request.version_mut() = http::Version::HTTP_11;
+                let response = client
+                    .execute_http_body(request, NativeRequestOptions::default())
+                    .await
+                    .map_err(|error| map_eggfetch_error(&error, Stage::Write))?;
+                let (parts, body) = response.into_parts();
+                Ok(ProviderResponse {
+                    status: parts.status,
+                    headers: parts.headers,
+                    extensions: parts.extensions,
+                    body: ProviderBody::new_eggfetch(body),
+                })
+            }
+            ProviderHttpClientInner::Proxied(client) => {
+                let mut request = Request::new(Full::new(body));
+                *request.method_mut() = method;
+                *request.uri_mut() = uri;
+                *request.headers_mut() = headers;
+                let response = client
+                    .request(request)
+                    .await
+                    .map_err(|error| map_transport_error(&error, Stage::Write))?;
+                let (parts, body) = response.into_parts();
+                Ok(ProviderResponse {
+                    status: parts.status,
+                    headers: parts.headers,
+                    extensions: parts.extensions,
+                    body: ProviderBody::new(body),
+                })
+            }
+        }
     }
 
     /// Return the validated base URL without exposing any credential-bearing data.
@@ -1095,6 +1180,56 @@ fn build_tls_config(certificates: &[Vec<u8>]) -> Result<ClientConfig, TransportE
     )
 }
 
+/// Build the Eggfetch direct client for phase 1.
+///
+/// Semantics mirror the previous direct Hyper/Rustls stack: HTTP/1.1 only, no
+/// hidden canceled-request retry, physical live-connection admission via
+/// `PhysicalConnectionPolicy` (never the logical request-concurrency limit),
+/// Hyper idle-pool timeout plus per-host idle cap, connect timeout via
+/// Eggfetch's connect facility, established read/write inactivity via
+/// `TransportIoTimeout`, WebPKI roots plus explicit additional CA roots, and
+/// no high-level Eggfetch retries, redirects, or request timeout layers.
+fn build_direct_eggfetch_client(
+    config: &ProviderHttpConfig,
+) -> Result<eggfetch_core::Client, TransportError> {
+    let mut tls_builder = eggfetch_core::TlsConfig::builder().trust_store(TrustStore::WebPkiOnly);
+    if !config.additional_root_certificates.is_empty() {
+        tls_builder = tls_builder
+            .additional_ca_certificate_der(config.additional_root_certificates.clone())
+            .map_err(|_| TransportError::Configuration)?;
+    }
+    let tls_config = tls_builder.build();
+    Ok(eggfetch_core::Client::builder()
+        .http_version_policy(HttpVersionPolicy::Http1Only)
+        // One coordinator attempt maps to one upstream transport attempt.
+        .retry_canceled_requests(false)
+        // Physical lifecycle: max_connections bounds live physical
+        // connections including idle pooled sockets; pool_timeout bounds
+        // admission wait. Never use the logical max_connections control.
+        .physical_connection_policy(PhysicalConnectionPolicy {
+            max_live: Some(config.max_connections),
+            admission_timeout: Some(config.pool_timeout),
+        })
+        // Established transport inactivity guards replacing TimedConnection.
+        // No high-level Timeout read/write layer is added; doubling layers
+        // would change error precedence for body/header stalls.
+        .transport_io_timeout(TransportIoTimeout {
+            read: Some(config.read_timeout),
+            write: Some(config.write_timeout),
+        })
+        // Idle-pool reuse and expiry matching the previous Hyper policy.
+        .idle_timeout(config.keepalive_timeout)
+        .max_idle_connections_per_host(config.max_keepalive)
+        // Connection establishment only; admission wait stays in the physical
+        // policy and classifies as PoolTimeout.
+        .timeout(EggfetchTimeout {
+            connect: Some(config.connect_timeout),
+            ..Default::default()
+        })
+        .tls_config(tls_config)
+        .build())
+}
+
 fn safe_authority(uri: &Uri) -> Option<&Authority> {
     uri.authority()
 }
@@ -1122,6 +1257,187 @@ fn map_transport_error(error: &(dyn StdError + 'static), default_stage: Stage) -
         return map_stage(stage);
     }
     map_stage(default_stage)
+}
+
+/// Translate Eggfetch direct-path errors to the stable `TransportError`
+/// contract without leaking Eggfetch types above this module.
+///
+/// Typed inspection order preserves specific timeout categories before broad
+/// connection failures: physical admission, established I/O direction,
+/// connect establishment, TLS, framing, then ordinary direct failures.
+fn map_eggfetch_error(error: &eggfetch_core::Error, default_stage: Stage) -> TransportError {
+    use eggfetch_core::{Error as EggfetchError, TimeoutPhase};
+
+    // 1. Physical connection admission timeout stays PoolTimeout. The
+    // physical policy is authoritative for live connections including idle
+    // pooled sockets; never conflate with logical request concurrency.
+    if error.is_physical_connection_admission_timeout() {
+        return TransportError::PoolTimeout;
+    }
+    if let EggfetchError::Pool(message) = error {
+        // Zero max_live or admission without max_live is a construction bug;
+        // validate_config already rejects max_connections == 0, so fail
+        // closed as configuration rather than a transient pool timeout.
+        if message.contains("max_live") {
+            return TransportError::Configuration;
+        }
+        return TransportError::PoolTimeout;
+    }
+    // 2-3. Established transport inactivity direction is typed.
+    if let EggfetchError::TransportIoTimeout { direction, .. } = error {
+        return match direction {
+            TransportIoDirection::Read => TransportError::ReadTimeout,
+            TransportIoDirection::Write => TransportError::WriteTimeout,
+        };
+    }
+    // 4. Phase-aware timeouts. Only connect is configured on the direct
+    // path; read/write/total/proxy phases are mapped defensively so a
+    // future misconfiguration cannot silently become Connect.
+    if let EggfetchError::Timeout { phase, .. } = error {
+        return match phase {
+            TimeoutPhase::Pool => TransportError::PoolTimeout,
+            TimeoutPhase::Connect => TransportError::ConnectTimeout,
+            TimeoutPhase::Read => TransportError::ReadTimeout,
+            TimeoutPhase::Write => TransportError::WriteTimeout,
+            // No total deadline is configured on the direct path. Map to a
+            // timeout category rather than a connection failure.
+            TimeoutPhase::Total => TransportError::ReadTimeout,
+            TimeoutPhase::ProxyConnect | TimeoutPhase::ProxyTls => {
+                TransportError::ProxyConnectTimeout
+            }
+        };
+    }
+    // 5. TLS establishment/verification stays Tls, including rustls sources
+    // wrapped through Hyper/HyperClient on the standard connector path.
+    match error {
+        EggfetchError::Tls(_)
+        | EggfetchError::TlsConfig(_)
+        | EggfetchError::CaBundle(_)
+        | EggfetchError::ClientCert(_)
+        | EggfetchError::PrivateKey(_)
+        | EggfetchError::CertificateVerification(_)
+        | EggfetchError::HostnameVerification(_) => return TransportError::Tls,
+        _ => {}
+    }
+    if contains_source::<rustls::Error>(error) {
+        return TransportError::Tls;
+    }
+    // Canceled Hyper requests map to Cancelled so coordinator accounting can
+    // distinguish caller cancellation from transport failures.
+    if eggfetch_source_is_canceled(error) {
+        return TransportError::Cancelled;
+    }
+    // 6. Malformed/protocol/body framing failures map to Protocol.
+    if matches!(
+        error,
+        EggfetchError::Protocol(_)
+            | EggfetchError::Body(_)
+            | EggfetchError::Decompression(_)
+            | EggfetchError::UnsupportedContentEncoding(_)
+            | EggfetchError::DecodedBodyTooLarge
+            | EggfetchError::DecompressionRatioExceeded
+            | EggfetchError::Http2GoAway { .. }
+            | EggfetchError::Http2StreamReset { .. }
+            | EggfetchError::Http2FlowControl(_)
+            | EggfetchError::Http2Protocol(_)
+            | EggfetchError::H3Connect(_)
+            | EggfetchError::H3ConnectionClosed(_)
+            | EggfetchError::H3Stream(_)
+            | EggfetchError::H3Protocol(_)
+    ) {
+        return TransportError::Protocol;
+    }
+    if eggfetch_source_is_protocol(error) {
+        return TransportError::Protocol;
+    }
+    // Target construction failures stay InvalidTarget; other request-build
+    // failures are malformed requests and map to Protocol.
+    match error {
+        EggfetchError::InvalidUrl(_)
+        | EggfetchError::InvalidResolvedTarget(_)
+        | EggfetchError::ResolvedTargetRedirect => return TransportError::InvalidTarget,
+        EggfetchError::InvalidMethod(_)
+        | EggfetchError::InvalidHeaderName(_)
+        | EggfetchError::InvalidHeaderValue(_)
+        | EggfetchError::RequestBuild(_)
+        | EggfetchError::InvalidRedirectLocation(_)
+        | EggfetchError::InvalidAuthHeader(_)
+        | EggfetchError::ConflictingAuth(_)
+        | EggfetchError::BodyNotReplayableForRedirect
+        | EggfetchError::BodyNotReplayableForRetry
+        | EggfetchError::JsonSerialize(_)
+        | EggfetchError::JsonDeserialize(_) => return TransportError::Protocol,
+        EggfetchError::RetryBudgetExhausted { .. } | EggfetchError::RetryNotConfigured => {
+            return TransportError::Protocol;
+        }
+        EggfetchError::TraceCallbackAborted => return TransportError::Cancelled,
+        EggfetchError::Unsupported(_) => return TransportError::Configuration,
+        _ => {}
+    }
+    // Proxy-route errors retain proxy categories for phase 2; the direct
+    // path never configures a proxy so these are defensive.
+    match error {
+        EggfetchError::InvalidProxyUrl(_)
+        | EggfetchError::ProxyConnect(_)
+        | EggfetchError::MalformedProxyResponse(_) => return TransportError::ProxyConnect,
+        EggfetchError::ProxyAuthRequired => return TransportError::ProxyAuthentication,
+        EggfetchError::ProxyConnectRejected { .. } => return TransportError::ProxyTargetConnect,
+        _ => {}
+    }
+    // 7. Ordinary direct connection failures stay Connect. This includes
+    // typed Connect, HyperClient connect failures, and I/O connection
+    // refusal observed through the standard connector.
+    if let EggfetchError::HyperClient(inner) = error
+        && inner.is_connect()
+    {
+        return TransportError::Connect;
+    }
+    if let EggfetchError::Connect(_) = error {
+        return TransportError::Connect;
+    }
+    if let EggfetchError::Io(inner) = error
+        && inner.kind() == std::io::ErrorKind::ConnectionRefused
+    {
+        return TransportError::Connect;
+    }
+    if let EggfetchError::CustomTransport(_) = error {
+        return TransportError::Connect;
+    }
+    // Hyper and I/O errors without a more specific classification fall back
+    // to the caller phase: Write for dispatch, Read for body polling,
+    // matching the previous Hyper mapping defaults.
+    map_stage(default_stage)
+}
+
+/// Return true when any Hyper error in the Eggfetch source chain reports a
+/// canceled request.
+fn eggfetch_source_is_canceled(error: &(dyn StdError + 'static)) -> bool {
+    let mut current: Option<&(dyn StdError + 'static)> = Some(error);
+    while let Some(next) = current {
+        if next
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(|hyper_error| hyper_error.is_canceled())
+        {
+            return true;
+        }
+        current = next.source();
+    }
+    false
+}
+
+/// Return true when any Hyper framing error or truncated-body I/O marker in
+/// the Eggfetch source chain indicates a protocol failure.
+fn eggfetch_source_is_protocol(error: &(dyn StdError + 'static)) -> bool {
+    let mut current: Option<&(dyn StdError + 'static)> = Some(error);
+    while let Some(next) = current {
+        if let Some(hyper_error) = next.downcast_ref::<hyper::Error>()
+            && (hyper_error.is_parse() || hyper_error.is_incomplete_message())
+        {
+            return true;
+        }
+        current = next.source();
+    }
+    contains_io_kind(error, std::io::ErrorKind::UnexpectedEof)
 }
 
 fn find_marker(error: &(dyn StdError + 'static)) -> Option<Stage> {

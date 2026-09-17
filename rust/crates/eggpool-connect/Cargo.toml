@@ -2,7 +2,7 @@
 name = "eggpool-connect"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 publish = false
 description = "Transactional desktop configurator for EggPool connection profiles (Codex/OpenCode)"
 license = "MIT"

@@ -2,7 +2,7 @@
 name = "eggpool"
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 publish = false
 description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 
@@ -54,6 +54,10 @@ eggress-server = { version = "=1.0.6", default-features = false, optional = true
 ] }
 eggress-uri = { version = "=1.0.6", optional = true }
 eggress-transport-ssh = { version = "=1.0.6", optional = true }
+eggfetch-core = { version = "=0.1.5", default-features = false, features = [
+    "http1",
+    "tls-rustls",
+] }
 getrandom = "0.3.4"
 eggpool-client-config = { path = "crates/eggpool-client-config" }
 eggpool-model-routing = { path = "crates/eggpool-model-routing" }

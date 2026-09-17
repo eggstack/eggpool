@@ -18,10 +18,10 @@ static facts.
 
 ## Toolchain policy
 
-The package uses Rust edition 2024 and declares Rust 1.88 as its MSRV, the
-first stable toolchain with edition-2024 support. The current development
-toolchain may be newer, but code should remain compatible with the declared
-MSRV and intended deployment targets.
+The package uses Rust edition 2024 and declares Rust 1.89 as its MSRV, required
+by `eggfetch-core` 0.1.5 for the provider direct transport. The current
+development toolchain may be newer, but code should remain compatible with the
+declared MSRV and intended deployment targets.
 
 ## Source-development flow
 
@@ -44,13 +44,20 @@ development. Use the built binary directly, or build a local wheel through
 ## T002 direct provider transport
 
 `eggpool::providers::ProviderHttpClient` is the provider transport boundary
-for direct provider HTTP/HTTPS. It uses one cheap-to-clone Hyper HTTP/1.1
-client per future provider scope, Rustls with explicit Mozilla webpki roots,
-and a connection-lifetime semaphore that bounds physical connections while
-idle sockets remain in the pool. Pool wait, connect, write, read, TLS, and
-protocol failures are exposed as stable `TransportError` categories. Bodies
-are consumed incrementally through `ProviderBody::next`; transport does not
-buffer complete responses or inject provider credentials.
+for direct provider HTTP/HTTPS. Direct routes use one cheap-to-clone
+`eggfetch-core` 0.1.5 HTTP/1.1 client per provider scope via the native
+`Client::execute_http_body` API with redirects, logical retries, and proxy
+support disabled. Physical live-connection admission uses
+`PhysicalConnectionPolicy` (`max_connections`/`pool_timeout`), idle reuse and
+expiry use Hyper idle-pool policy (`max_keepalive`/`keepalive_timeout`),
+establishment uses the Eggfetch connect timeout, established read/write
+inactivity uses `TransportIoTimeout`, and trust uses WebPKI roots plus
+explicit additional CA roots with Eggfetch-owned SNI/hostname verification.
+Pool wait, connect, write, read, TLS, and protocol failures are exposed as
+stable `TransportError` categories through one Eggfetch-to-`TransportError`
+translation boundary. Bodies are consumed incrementally through
+`ProviderBody::next`; transport does not buffer complete responses or inject
+provider credentials.
 
 The direct client disables ambient proxy behavior by construction. Additional
 DER roots are available only as an explicit constructor setting for
@@ -74,16 +81,17 @@ dispatch, routing, codecs, or production Rust release.
 
 ## T004 provider/account client pool
 
-`eggpool::providers::ProviderClientPool` builds one direct Hyper/Rustls client
-per configured provider and one dedicated Eggress-backed client for each
-configured account with a resolved proxy. Direct accounts fall back to the
-provider client; a configured proxy never falls back to direct transport.
+`eggpool::providers::ProviderClientPool` builds one direct Eggfetch client
+per configured provider and one dedicated Eggress-backed Hyper/Rustls client
+for each configured account with a resolved proxy. Direct accounts fall back
+to the provider client; a configured proxy never falls back to direct
+transport.
 The pool is immutable after construction, exposes a credential-free topology
 snapshot, and is stored in the server application state. Pool construction is
 generation-candidate work and fails closed before the server is exposed. The
-server drops the pool after graceful shutdown, releasing direct and proxied
-Hyper connection pools; routing, credentials, retries, and generation swaps
-remain downstream work.
+server drops the pool after graceful shutdown, releasing direct Eggfetch and
+proxied Hyper connection pools; routing, credentials, retries, and generation
+swaps remain downstream work.
 
 ## Runtime and server
 

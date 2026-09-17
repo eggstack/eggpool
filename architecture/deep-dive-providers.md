@@ -3,9 +3,10 @@
 Back to [Architecture](README.md)
 
 `rust/src/providers/` owns provider contracts, account credentials, endpoint
-composition, direct Hyper/Rustls transport, and the per-provider/account client
-pool. Provider profiles describe protocol, URL, auth shape, wire surface, and
-capability facts without storing secrets in metadata.
+composition, direct Eggfetch transport plus the retained Eggress proxy
+transport, and the per-provider/account client pool. Provider profiles
+describe protocol, URL, auth shape, wire surface, and capability facts without
+storing secrets in metadata.
 
 `ProviderClientPool` is generation-owned. Direct and configured proxy accounts
 use the selected transport path; a configured proxy never silently falls back
@@ -19,13 +20,27 @@ advance account-wide health.
 
 ## Native dependency boundaries
 
+Direct provider transport uses exact-pinned `eggfetch-core =0.1.5` with only
+`http1` + `tls-rustls` through the native `Client::execute_http_body` API:
+HTTP/1.1 only, no hidden canceled-request retry, physical live-connection
+admission (`PhysicalConnectionPolicy`), Hyper idle-pool reuse/expiry,
+connect timeout, established `TransportIoTimeout` read/write guards, WebPKI
+plus explicit additional CA roots with Eggfetch-owned SNI/hostname
+verification, and one Eggfetch-to-`TransportError` translation boundary.
+EggPool keeps provider/account selection, request shaping, body bounds, pool
+identity, Eggress selection, and stable `TransportError` classification;
+Eggfetch owns HTTP/1.1 framing, origin TLS, pooling, admission, I/O guards,
+and streaming body leases.
+
 Normal provider proxy construction crosses one stable Eggress boundary:
 `eggress_embed::outbound::OutboundConnector::from_pproxy_uri` parses and
 compiles single-hop and canonical `__`-separated multi-hop expressions. The
 small `EgressProxyDialer` adapter only turns the facade's stream into the
-Hyper connector shape; provider HTTP/TLS, admission, timeout, retry, and error
-ownership remain in EggPool. Explicit `direct://` is still validated through
-Eggress but intentionally uses EggPool's direct Hyper connector.
+Hyper connector shape; proxy HTTP/TLS, admission, timeout, retry, and error
+ownership remain in EggPool for the retained proxy stack. Explicit `direct://`
+is still validated through Eggress and intentionally retains the previous
+direct Hyper connector until the proxy cutover removes the dual-stack
+scaffolding.
 
 Eggress 1.0.6 has one documented facade gap: its outbound constructor builds
 the SSH-capable executor without an SSH session cache. The explicitly named
@@ -42,7 +57,7 @@ under `test-support`; it adds a test CA and never disables verification.
 Protocol fixture crates remain dev-only. These are intentional compatibility
 boundaries, while ordinary provider source uses the stable embed API.
 
-The surrounding HTTP client intentionally remains a separate Hyper/Rustls
+The retained proxy HTTP client intentionally remains a separate Hyper/Rustls
 stack: HTTP/1.1 only, Rustls with `ring` and TLS 1.2, deterministic webpki
 roots, bounded pooling, and explicit timeout/error classification. SQLite's
 bundled and backup features likewise belong to the database and lifecycle

@@ -170,7 +170,7 @@ The root `deny.toml` checks RustSec advisories, the reviewed third-party
 license allowlist, registry/git sources, and duplicate-version warnings across
 the declared feature and contributor/build graph. It is a low-noise policy
 gate, not a substitute for strict Clippy, serial tests, release builds, or
-owner-specific Eggress/Hyper/Rustls/SQLite qualification. The dedicated
+owner-specific Eggfetch/Eggress/Hyper/Rustls/SQLite qualification. The dedicated
 dependency workflow runs on Cargo/policy changes, weekly, and by manual
 dispatch; ordinary source-only CI remains network-light.
 
