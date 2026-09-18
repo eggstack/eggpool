@@ -624,3 +624,61 @@ eggfetch-core 0.1.7
 ```
 
 Success is behavioral parity plus removal of the avoidable Eggfetch dependency closure. Any binary-size recovery is measured and recorded rather than assumed.
+
+## Closure record (2026-09-18)
+
+Status: complete
+
+Implementation commit: `cfe4812` (`Adopt Eggfetch 0.1.7 native provider profile`).
+
+The published dependency was adopted without provider source compatibility
+changes beyond the stale version comment in `rust/src/providers/transport.rs`:
+
+- `rust/Cargo.toml` now exact-pins `eggfetch-core =0.1.7` with
+  `default-features = false` and `native-http1,tls-rustls`.
+- The resolved Eggfetch features are `native-http1`, `transport-http1`,
+  `standard-route`, `advanced-routing`, and `tls-rustls`. The Eggfetch
+  `http1` compatibility alias, `high-level-url`, logical retry, redirects,
+  Basic auth, built-in proxy, HTTP/2/3, compression, native roots, JSON,
+  cookies, and multipart are not selected.
+- `cargo tree -i` reports no package for `url`, `idna`, `icu_provider`,
+  `icu_normalizer`, `icu_properties`, or `dashmap`. Direct Hyper/Rustls
+  dependencies remain for the updater, error-boundary inspection, and
+  test-support owners.
+- The provider path continues to use parsed `http::Uri`, separate connect and
+  established read/write timeout layers, no `Timeout.total`, Eggress custom
+  dialing, origin TLS in Eggfetch, and fail-closed proxy behavior. The updater
+  and Eggress version/facade work remain out of scope.
+
+Qualification evidence:
+
+- Provider transport: normal profile `30 passed`; `test-support` profile
+  `35 passed`.
+- Coordinator: `coordinator_c008` 29, `coordinator_c009` 13,
+  `coordinator_c011` 17, `coordinator_boundaries` 5,
+  `coordinator_finalization` 10, and `coordinator_publication` 6 passed.
+- Full Rust suite: `680 passed` across `60 suites`, serial execution.
+- Static/policy checks: format, default and no-default Clippy, no-default
+  check, and `cargo deny check` passed. Cargo deny reported only the existing
+  duplicate-version warnings.
+- Tooling checks: Ruff format (`44 files already formatted`), Ruff, Pyright,
+  and `pytest tests/tooling/` (`83 passed, 1 skipped`) passed. Release-doc and
+  runtime-package-boundary validators passed, as did `git diff --check`.
+- Runtime smoke: the release binary booted with the valid zero-account SBC
+  configuration, `/api/status` returned the degraded no-account snapshot,
+  `/v1/readyz` returned the expected 503 degraded response, and Ctrl-C
+  stopped the process cleanly with no remaining process.
+
+Footprint evidence uses Rust `1.98.1`, `aarch64-apple-darwin`, default
+features, normal release profile, and no stripping for both builds:
+
+| Measurement | 0.1.5 / `http1` baseline | 0.1.7 / `native-http1` candidate | Delta |
+|---|---:|---:|---:|
+| final release artifact bytes | 30,622,256 | 30,370,272 | -251,984 (-0.82%) |
+| resolved packages (`cargo metadata`) | 414 | 385 | -29 |
+
+The architecture overview, provider deep dive, Rust README, root README,
+`AGENTS.md`, and the architecture/development/documentation skills now point
+to the current profile and retain the 0.1.5 phase-4 result as historical
+evidence. The two pre-existing empty untracked files `1` and `1t` were not
+modified or included.
