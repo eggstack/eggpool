@@ -210,10 +210,13 @@ through Eggress but using the direct Eggfetch client). Default
 `eggress-ssh-fallback` retains the 1.0.6 native SSH chain/session-cache
 compat path; `--no-default-features` keeps direct/non-SSH proxy paths and
 rejects SSH proxy config as `TransportError::ProxyConfiguration` before
-dialing. Underlying HTTP is Eggfetch (`eggfetch-core` 0.1.5 over Hyper/Rustls:
-HTTP/1.1, `ring`, TLS 1.2, webpki roots, bounded pooling); proxied routes add
-only a thin Eggress `Dialer` supplying the raw route stream, with origin TLS
-still owned by Eggfetch. `rust/Cargo.toml` plus `cargo tree -e features` is the
+dialing. Underlying HTTP is Eggfetch (`eggfetch-core` 0.1.7 with
+`native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
+WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
+add only a thin Eggress `Dialer` supplying the raw route stream, with origin
+TLS still owned by Eggfetch. The native profile deliberately excludes
+Eggfetch's `http1` high-level alias, URL/retry/redirect/Basic-auth policy, and
+built-in proxy support. `rust/Cargo.toml` plus `cargo tree -e features` is the
 dependency authority; `deny.toml` + `cargo deny check` gates
 licenses/advisories/sources/duplicates. `unsafe_code = "forbid"` is a repo
 invariant.
@@ -384,7 +387,8 @@ Deep dives: [Observability](deep-dive-observability.md),
 ### 14. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
-Eggfetch (`eggfetch-core` 0.1.5, provider transport),
+Eggfetch (`eggfetch-core` 0.1.7 `native-http1` + `tls-rustls`, provider
+transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
 `tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.6
 (optional SSH compat), plus the path crates `eggpool-model-routing`,

@@ -20,17 +20,38 @@ advance account-wide health.
 
 ## Native dependency boundaries
 
-Direct provider transport uses exact-pinned `eggfetch-core =0.1.5` with only
-`http1` + `tls-rustls` through the native `Client::execute_http_body` API:
-HTTP/1.1 only, no hidden canceled-request retry, physical live-connection
-admission (`PhysicalConnectionPolicy`), Hyper idle-pool reuse/expiry,
-connect timeout, established `TransportIoTimeout` read/write guards, WebPKI
-plus explicit additional CA roots with Eggfetch-owned SNI/hostname
-verification, and one Eggfetch-to-`TransportError` translation boundary.
-EggPool keeps provider/account selection, request shaping, body bounds, pool
-identity, Eggress selection, and stable `TransportError` classification;
-Eggfetch owns HTTP/1.1 framing, origin TLS, pooling, admission, I/O guards,
-and streaming body leases.
+Direct provider transport uses exact-pinned `eggfetch-core =0.1.7` with
+`native-http1` + `tls-rustls` through the native
+`Client::execute_http_body` API. `native-http1` expands to
+`transport-http1`, `standard-route`, and `advanced-routing`: it supplies the
+direct route and the custom `Dialer` capability without selecting Eggfetch's
+high-level policy bundle. HTTP/1.1 remains the only provider protocol, with no
+hidden canceled-request retry, physical live-connection admission
+(`PhysicalConnectionPolicy`), Hyper idle-pool reuse/expiry, connect timeout,
+established `TransportIoTimeout` read/write guards, WebPKI plus explicit
+additional CA roots with Eggfetch-owned SNI/hostname verification, and one
+Eggfetch-to-`TransportError` translation boundary. EggPool keeps
+provider/account selection, request shaping, body bounds, pool identity,
+Eggress selection, and stable `TransportError` classification; Eggfetch owns
+HTTP/1.1 framing, origin TLS, pooling, admission, I/O guards, and streaming
+body leases.
+
+Do not replace `native-http1` with Eggfetch's `http1` compatibility alias:
+that alias also enables `high-level-url`, logical retry, redirects, and
+Basic-auth policy. `standard-http1` is also wrong because it omits
+`advanced-routing`, which proxied accounts need for Eggpool's custom Eggress
+`Dialer`. The provider profile leaves built-in proxy, HTTP/2/3, compression,
+native roots, JSON, cookies, and multipart features disabled. Eggpool does not
+configure Eggfetch `Timeout.total`; connect and established read/write
+inactivity remain the separate Eggpool-owned timeout layers described below.
+
+Eggfetch 0.1.7 derives native origin facts directly from Eggpool's parsed
+`http::Uri`; the provider path does not serialize through `url::Url` or add
+IDNA conversion. `join_provider_target()` remains the boundary that validates
+the configured authority and rejects unsafe absolute or authority-form
+relative targets before dispatch. The updater's bounded Hyper/Rustls client
+in `operations/update.rs` remains a separate owner and is not being migrated
+to Eggfetch by this adoption.
 
 Direct and proxied provider routes share one Eggfetch HTTP/1.1 engine with
 the same physical admission, idle-pool, connect/I/O timeout, and WebPKI plus
@@ -137,3 +158,23 @@ wrapper, manual origin TLS connector, Hyper pool construction, and
 string-based error plumbing deleted. What remains Eggpool-owned is request
 validation, route/dialer selection, and the centralized typed
 Eggfetch-to-`TransportError` boundary.
+
+## Eggfetch 0.1.7 adoption measurement (2026-09-18)
+
+The adoption compares the plan-220 starting commit (`2f0e07e3`) and the
+candidate under the same local Rust `1.98.1` toolchain, `aarch64-apple-darwin`
+target, default features, normal release profile, and no stripping:
+
+| Measurement | 0.1.5 / `http1` baseline | 0.1.7 / `native-http1` candidate | Delta |
+|---|---:|---:|---:|
+| final release artifact bytes | 30,622,256 | 30,370,272 | -251,984 (-0.82%) |
+| resolved packages (`cargo metadata`) | 414 | 385 | -29 |
+| direct Eggfetch feature profile | `http1`, `tls-rustls` | `native-http1`, `tls-rustls` | native-only |
+
+The candidate graph resolves `native-http1`, `transport-http1`,
+`standard-route`, `advanced-routing`, and `tls-rustls`. The `cargo tree -i`
+queries for `url`, `idna`, `icu_provider`, `icu_normalizer`,
+`icu_properties`, and `dashmap` report no package, so the former Eggfetch
+URL/IDNA/ICU and DashMap closures are absent from the resolved Eggpool graph.
+The candidate still retains direct Hyper/Rustls dependencies for the updater,
+error-boundary inspection, and test-support owners documented above.

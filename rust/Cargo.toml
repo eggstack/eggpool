@@ -54,8 +54,8 @@ eggress-server = { version = "=1.0.6", default-features = false, optional = true
 ] }
 eggress-uri = { version = "=1.0.6", optional = true }
 eggress-transport-ssh = { version = "=1.0.6", optional = true }
-eggfetch-core = { version = "=0.1.5", default-features = false, features = [
-    "http1",
+eggfetch-core = { version = "=0.1.7", default-features = false, features = [
+    "native-http1",
     "tls-rustls",
 ] }
 getrandom = "0.3.4"

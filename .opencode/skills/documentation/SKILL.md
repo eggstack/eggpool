@@ -33,6 +33,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   compatibility exception: the default fallback supports it, while
   no-default builds reject SSH configuration before dialing and retain
   non-SSH proxy support.
+- Keep provider transport documentation aligned with the exact Cargo profile:
+  Eggfetch 0.1.7 uses `native-http1,tls-rustls`, while the high-level `http1`
+  alias and `standard-http1` are intentionally not selected. Preserve the
+  historical 0.1.5 measurement as history and record newer footprint evidence
+  in a dated architecture subsection.
 - Describe configuration transitions through the typed policy in
   `rust/src/config_reload_policy.rs`: mutation paths classify before atomic
   replacement, and server-side rehash reclassifies before generation

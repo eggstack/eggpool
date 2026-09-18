@@ -80,4 +80,9 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   before dialing (`eggress-ssh-fallback` is default-only compat).
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
+- Provider transport is exact-pinned to `eggfetch-core =0.1.7` with
+  `native-http1,tls-rustls`; do not substitute Eggfetch's `http1` alias or
+  `standard-http1`, and keep the high-level URL/retry/redirect/Basic-auth,
+  built-in proxy, and HTTP/2/3 features disabled. `operations/update.rs` is a
+  separate Hyper/Rustls owner.
 - Branch `main`, imperative commits. Never commit secrets, API keys, or `.env`.

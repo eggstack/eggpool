@@ -49,6 +49,11 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
+- Provider transport uses exact-pinned `eggfetch-core =0.1.7` with
+  `native-http1,tls-rustls`: retain `advanced-routing` for the custom Eggress
+  dialer, and do not enable the `http1` compatibility alias, high-level URL,
+  logical retry, redirects, Basic auth, built-in proxy, HTTP/2/3, or unrelated
+  policy features. The updater remains a separate Hyper/Rustls owner.
 - Treat `configsetup` renderers as format-specific delivery boundaries: a
   target is secret-bearing only when its rendered artifact embeds the resolved
   key. Codex emits an HTTP/SSE Responses TOML block with

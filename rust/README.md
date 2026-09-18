@@ -19,7 +19,7 @@ static facts.
 ## Toolchain policy
 
 The package uses Rust edition 2024 and declares Rust 1.89 as its MSRV, required
-by `eggfetch-core` 0.1.5 for the provider direct transport. The current
+by `eggfetch-core` 0.1.7 for the provider direct transport. The current
 development toolchain may be newer, but code should remain compatible with the
 declared MSRV and intended deployment targets.
 
@@ -45,9 +45,11 @@ development. Use the built binary directly, or build a local wheel through
 
 `eggpool::providers::ProviderHttpClient` is the provider transport boundary
 for direct and proxied provider HTTP/HTTPS. Both routes use one
-cheap-to-clone `eggfetch-core` 0.1.5 HTTP/1.1 client per provider scope via
-the native `Client::execute_http_body` API with redirects, logical retries,
-and built-in proxy support disabled. Proxied accounts install a thin
+cheap-to-clone `eggfetch-core` 0.1.7 HTTP/1.1 client per provider scope via
+the native `Client::execute_http_body` API. Eggpool selects Eggfetch's
+`native-http1` profile (`transport-http1`, `standard-route`, and
+`advanced-routing`) rather than the high-level `http1` alias; redirects,
+logical retries, and built-in proxy support remain disabled. Proxied accounts install a thin
 `EggressDialer` implementing Eggfetch's custom `Dialer` interface over
 Eggress's raw TCP-route API; Eggfetch still performs origin TLS across the
 returned stream, so proxy and origin trust planes stay separate and a failed

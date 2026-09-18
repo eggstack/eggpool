@@ -470,6 +470,13 @@ cargo build --manifest-path rust/Cargo.toml --locked --release
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
 ```
 
+Provider transport is pinned to `eggfetch-core =0.1.7` with
+`native-http1,tls-rustls`: this keeps direct standard routing and custom
+Eggress routing while excluding Eggfetch's high-level URL, retry, redirect,
+Basic-auth, built-in proxy, and HTTP/2/3 policies. See the [provider
+architecture deep dive](architecture/deep-dive-providers.md) for the resolved
+graph and release-size evidence.
+
 `cargo deny` uses the repository-root `deny.toml` to check RustSec advisories,
 the reviewed third-party license allowlist, registry/git sources, and
 duplicate-version warnings. It covers the declared feature and
