@@ -1,7 +1,7 @@
 # Plan 222 — Plan 221 Terminal Interruption and PTY Closure Pass
 
 Date: 2026-09-19  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: `e93c4085a9a6121b03ff93e4947e618054b552ad`  
 Closes: `plans/221-python-cli-lan-dashboard-parity-corrective-pass.md`  
 Priority: P2 corrective polish / terminal lifecycle qualification  
@@ -566,3 +566,87 @@ boundary plus the absence of a PTY-level proof for the raw-mode guard.
 Fix those two things directly. Do not turn terminal handling into a subsystem
 rewrite and do not reopen the LAN/dashboard policy that Plan 221 already
 qualified.
+
+## Implementation record
+
+Implemented 2026-09-19 on `main` as `2aa2327a` above the planning baseline.
+No new direct dependency and no new nix feature (existing `term` only; no
+`portable-pty`/`expectrl`/`rexpect`/`crossterm`/`dialoguer`/`inquire`, no
+`forkpty`, no unsafe code).
+
+- Interruption mapping chosen: `SelectError::Interrupted` ->
+  `MutationError::Interrupted` (`interrupted`) -> `BootstrapError::Interrupted`
+  (`Interrupted.`, exit 130). `runtime.rs::mutation_error` bypasses the
+  caller-supplied validation/control code for the interruption variant only;
+  all other mutation errors keep their current codes/messages. Genuine
+  nix/stdio failures stay in `MutationError::Read`. Selector `Err` returns
+  before any config lock, so Ctrl-C never mutates config, never removes an
+  account, and never continues into API-key input or follow-on prompts.
+- Terminal seam: `run_interactive` now delegates to private
+  `run_interactive_on(BorrowedFd, &mut dyn Write, ...)` with one
+  `RawGuard { fd, original }` restoration authority covering
+  Enter/q/Esc/Ctrl-C/EOF/read-write error paths. Public `select_one`
+  contract unchanged (`Result<Option<usize>, SelectError>`).
+- PTY cases executed (safe `nix::pty::openpty`, Unix-only, bounded
+  channel/thread coordination, master non-blocking via safe std
+  `UnixStream::set_nonblocking`, no wall-clock sleeps beyond 1 ms polls):
+  confirm `j`+Enter -> `Some(1)`; cancel `q` -> `None`; cancel standalone
+  Esc -> `None` (exercises the VTIME-bounded path); interrupt `0x03` ->
+  `Err(SelectError::Interrupted)`. Each asserts the raw-relevant termios
+  fields are restored (input/output/control flags, local flags with macOS
+  `PENDIN`-masked, control chars; macOS sets `PENDIN` on `tcsetattr` even
+  for a bare round-trip, so full-struct equality would be OS-brittle).
+- Mapping coverage: `MutationError::Interrupted.to_string()` is
+  `interrupted`, never `configuration file could not be read`;
+  `BootstrapError::Interrupted.exit_code()` is 130 with `Interrupted.`
+  only; `mutation_error(Interrupted, EXIT_VALIDATION)` bypasses
+  `EXIT_VALIDATION`.
+- Plan 221 behavior unchanged and green: `operations_o004` (host
+  `0.0.0.0`, dashboard public default, key/transcoder contracts),
+  `status_command` (public `/` HTML, authenticated `/v1/*`,
+  `/api/integrations/*`, `/api/stats/*`, `/api/status`), `cli_contract`.
+- Docs: `architecture/overview.md` terminal entry extended with the
+  interruption/exit-130/guard/`openpty` note. `README.md`, `AGENTS.md`,
+  and `.opencode/skills/*` reviewed: no stale selector/interruption
+  wording and no detail worth duplicating there, so no churn (per
+  `AGENTS.md`, do not copy deep-dive detail; streaming `terminal.rs`
+  references elsewhere are a different file).
+
+Focused commands (repo root, green):
+
+```bash
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --lib operations::terminal -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib error::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib runtime::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib operations::config_mutation::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o004 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
+```
+
+Full baseline (repo root): `cargo fmt --check`, strict `clippy`
+(default + `--no-default-features`), `cargo check --no-default-features`,
+serial `cargo test --workspace --all-targets` (green on retry; one
+unrelated flake on the first pass:
+`coordinator_publication::cancelling_the_waiter_cannot_strand_a_claim_or_durable_rows`
+failed with `active_request_count != 0` after 100 yields, then passed in
+isolation and on a full retry — same cancellation-race family as the known
+`provider_transport::extended_encrypted_proxy_cancellation` 1 ms abort
+flake, untouched per plan), `cargo build --locked --release`,
+`uv sync --frozen`, `ruff format --check`, `ruff check`, `pyright scripts/`,
+`pytest tests/tooling/`, `validate_release_docs.py`,
+`validate_runtime_package_boundary.py`, `git diff --check`. `Cargo.toml` /
+`Cargo.lock` unchanged, so no `cargo deny` delta.
+
+Real-TTY smoke: not performed — execution environment has no interactive
+TTY (`test -t 0/1` false), so the PTY regression above is the
+source-controlled proof. Post-command terminal usability for Ctrl-C exit
+130 remains to be observed opportunistically on a real terminal.
+
+LAN smoke: not performed — no second LAN client available. Router-level
+`status_command::public_dashboard_default_renders_without_api_key_and_keeps_sensitive_routes_authenticated`
+remains the source-controlled proof.
+
+Plan 221 requires no further corrective implementation work.
