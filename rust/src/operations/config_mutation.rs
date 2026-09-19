@@ -20,7 +20,7 @@ use toml::{Value, map::Map};
 use crate::{
     Config, ConfigError,
     config_reload_policy::{ConfigTransition, classify_transition},
-    operations::{control::ControlClient, paths::RuntimePaths, process},
+    operations::{control::ControlClient, paths::RuntimePaths, process, terminal},
 };
 
 const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
@@ -852,30 +852,63 @@ pub fn connect(
     Ok(connect_with_transition(path, providers_path)?.value)
 }
 
-pub fn connect_with_transition(
-    path: &Path,
-    providers_path: Option<&Path>,
-) -> Result<MutationResult<Option<String>>, MutationError> {
-    let templates = load_provider_templates(providers_path)?;
-    let mut ids: Vec<&String> = templates.keys().collect();
-    ids.sort();
+/// Single-line provider option label for the interactive selector. Keeps the
+/// useful template metadata (display name, URL, status, recommendation, notes)
+/// without the numeric-index affordance of the line-oriented fallback.
+fn provider_option_label(template: &ProviderTemplate) -> String {
+    let marker = if template.recommended { "*" } else { " " };
+    let notes = if template.notes.is_empty() {
+        String::new()
+    } else {
+        format!(" — {}", template.notes)
+    };
+    format!(
+        "{marker} {}: {} ({}) [{}]{notes}",
+        template.id, template.display, template.url, template.status
+    )
+}
+
+fn map_select_error(error: terminal::SelectError) -> MutationError {
+    match error {
+        terminal::SelectError::Io(error) => MutationError::Read(error),
+        terminal::SelectError::Interrupted => {
+            MutationError::Read(io::Error::new(io::ErrorKind::Interrupted, "interrupted"))
+        }
+        terminal::SelectError::NotInteractive => MutationError::Read(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "not a terminal",
+        )),
+    }
+}
+
+/// Interactive provider selection with the shared terminal selector.
+/// Returns `Ok(None)` on clean cancellation (including EOF).
+fn select_provider_interactive(
+    ids: &[&String],
+    templates: &BTreeMap<String, ProviderTemplate>,
+) -> Result<Option<String>, MutationError> {
+    let options: Vec<String> = ids
+        .iter()
+        .map(|id| provider_option_label(&templates[*id]))
+        .collect();
+    match terminal::select_one(terminal::PROVIDER_SELECT_TITLE, &options) {
+        Ok(None) => Ok(None),
+        Ok(Some(index)) => Ok(ids.get(index).map(|id| (*id).clone())),
+        Err(terminal::SelectError::NotInteractive) => Err(MutationError::Read(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "not a terminal",
+        ))),
+        Err(error) => Err(map_select_error(error)),
+    }
+}
+
+/// Deterministic line-oriented provider selection for non-TTY use. Accepts a
+/// provider ID or numeric index for backward/script compatibility; EOF and
+/// empty input cancel without touching the config.
+fn select_provider_line(ids: &[&String]) -> Result<Option<String>, MutationError> {
     println!("Available providers:");
     for (index, id) in ids.iter().enumerate() {
-        let template = &templates[*id];
-        let marker = if template.recommended { "*" } else { " " };
-        println!(
-            "  {marker} {}: {} ({}) [{}]{}",
-            template.id,
-            template.display,
-            template.url,
-            template.status,
-            if template.notes.is_empty() {
-                String::new()
-            } else {
-                format!(" — {}", template.notes)
-            }
-        );
-        println!("    selection {index}");
+        println!("  {index}: {id}");
     }
     print!("Select provider (id or number, Enter cancels): ");
     io::stdout().flush().map_err(MutationError::Write)?;
@@ -885,7 +918,7 @@ pub fn connect_with_transition(
         .map_err(MutationError::Read)?
         == 0
     {
-        return no_op_result(path, None);
+        return Ok(None);
     }
     let selection = selection.trim();
     if selection.is_empty()
@@ -894,13 +927,37 @@ pub fn connect_with_transition(
             "q" | "quit" | "exit"
         )
     {
-        return no_op_result(path, None);
+        return Ok(None);
     }
-    let selected_provider_id = selection
+    let selected = selection
         .parse::<usize>()
         .ok()
         .and_then(|index| ids.get(index).copied())
         .map_or(selection, |id| id.as_str());
+    Ok(Some(selected.to_owned()))
+}
+
+pub fn connect_with_transition(
+    path: &Path,
+    providers_path: Option<&Path>,
+) -> Result<MutationResult<Option<String>>, MutationError> {
+    let templates = load_provider_templates(providers_path)?;
+    let mut ids: Vec<&String> = templates.keys().collect();
+    ids.sort();
+    let selected = if terminal::is_interactive() {
+        match select_provider_interactive(&ids, &templates) {
+            Ok(value) => value,
+            Err(error) if matches!(&error, MutationError::Read(error) if error.kind() == io::ErrorKind::NotConnected) => {
+                select_provider_line(&ids)?
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        select_provider_line(&ids)?
+    };
+    let Some(selected_provider_id) = selected.as_deref() else {
+        return no_op_result(path, None);
+    };
     let Some(selected_template) = templates.get(selected_provider_id) else {
         return Err(MutationError::Invalid("unknown provider template".into()));
     };
@@ -1124,6 +1181,31 @@ fn remove_provider_block(text: &str, provider_id: &str) -> Result<String, Mutati
     Ok(format!("{}\n", output.join("\n")))
 }
 
+/// Deterministic line-oriented account selection for non-TTY use.
+/// Returns `Ok(None)` on clean cancellation (including EOF/invalid input);
+/// the caller converts cancellation into the canonical no-op result.
+fn select_logout_line(matches: &[AccountMatch]) -> Result<Option<AccountMatch>, MutationError> {
+    println!("Select provider account to remove:");
+    for (index, item) in matches.iter().enumerate() {
+        let key = item
+            .api_key
+            .as_deref()
+            .map(redact_key)
+            .unwrap_or_else(|| format!("env:{}", item.api_key_env));
+        println!("  {index}: {}/{} {key}", item.provider_id, item.name);
+    }
+    print!("Selection (Enter cancels): ");
+    io::stdout().flush().map_err(MutationError::Write)?;
+    let mut selection = String::new();
+    io::stdin()
+        .read_line(&mut selection)
+        .map_err(MutationError::Read)?;
+    let Ok(index) = selection.trim().parse::<usize>() else {
+        return Ok(None);
+    };
+    Ok(matches.get(index).cloned())
+}
+
 pub fn logout(path: &Path, target: Option<&str>) -> Result<Option<AccountMatch>, MutationError> {
     Ok(logout_with_transition(path, target)?.value)
 }
@@ -1138,29 +1220,37 @@ pub fn logout_with_transition(
     }
     let account = if matches.len() == 1 {
         matches.remove(0)
-    } else {
-        println!("Select provider account to remove:");
-        for (index, item) in matches.iter().enumerate() {
-            let key = item
-                .api_key
-                .as_deref()
-                .map(redact_key)
-                .unwrap_or_else(|| format!("env:{}", item.api_key_env));
-            println!("  {index}: {}/{} {key}", item.provider_id, item.name);
+    } else if terminal::is_interactive() {
+        let options: Vec<String> = matches
+            .iter()
+            .map(|item| {
+                let key = item
+                    .api_key
+                    .as_deref()
+                    .map(redact_key)
+                    .unwrap_or_else(|| format!("env:{}", item.api_key_env));
+                format!("{}/{} {key}", item.provider_id, item.name)
+            })
+            .collect();
+        match terminal::select_one(terminal::ACCOUNT_REMOVE_TITLE, &options) {
+            Ok(None) => return no_op_result(path, None),
+            Ok(Some(index)) => match matches.get(index).cloned() {
+                Some(account) => account,
+                // Clamped selector indices always resolve; treat any other
+                // outcome as a clean cancellation, never a wrong removal.
+                None => return no_op_result(path, None),
+            },
+            Err(terminal::SelectError::NotInteractive) => match select_logout_line(&matches)? {
+                Some(account) => account,
+                None => return no_op_result(path, None),
+            },
+            Err(error) => return Err(map_select_error(error)),
         }
-        print!("Selection (Enter cancels): ");
-        io::stdout().flush().map_err(MutationError::Write)?;
-        let mut selection = String::new();
-        io::stdin()
-            .read_line(&mut selection)
-            .map_err(MutationError::Read)?;
-        let Ok(index) = selection.trim().parse::<usize>() else {
-            return no_op_result(path, None);
-        };
-        let Some(account) = matches.get(index).cloned() else {
-            return no_op_result(path, None);
-        };
-        account
+    } else {
+        match select_logout_line(&matches)? {
+            Some(account) => account,
+            None => return no_op_result(path, None),
+        }
     };
     let guard = lock_mutation(path)?;
     let original = read_bounded(path)?;

@@ -123,6 +123,67 @@ fn init_config_uses_the_repository_canonical_example() {
 }
 
 #[test]
+fn canonical_lan_and_dashboard_defaults_agree_across_helpers() {
+    assert_eq!(Config::default().server.host, "0.0.0.0");
+    assert!(Config::default().dashboard.public);
+
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    fs::write(&path, base_config()).expect("config");
+    // A missing `[dashboard].public` means the public read-only dashboard in
+    // both the typed config and the text mutation helper.
+    assert!(config_mutation::read_dashboard_public(&path).expect("default"));
+    let typed = Config::from_toml_bytes(&path, fs::read(&path).expect("config").as_slice())
+        .expect("typed config");
+    assert!(typed.dashboard.public);
+
+    // An explicit opt-out survives and is never rewritten unexpectedly.
+    config_mutation::set_dashboard_public(&path, Some(false)).expect("dashboard edit");
+    assert!(!config_mutation::read_dashboard_public(&path).expect("updated"));
+    let typed = Config::from_toml_bytes(&path, fs::read(&path).expect("config").as_slice())
+        .expect("typed config");
+    assert!(!typed.dashboard.public);
+}
+
+#[test]
+fn dashboard_public_toggle_keeps_restart_required_semantics() {
+    use eggpool::config_reload_policy::ReloadDisposition;
+
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    fs::write(&path, base_config()).expect("config");
+
+    let mutation = config_mutation::set_dashboard_public_with_transition(&path, Some(false))
+        .expect("dashboard edit");
+    assert!(!mutation.value || mutation.transition.has_restart_required());
+    assert_eq!(
+        disposition_for("dashboard.public"),
+        ReloadDisposition::RestartRequired
+    );
+    assert!(
+        mutation.transition.has_restart_required(),
+        "dashboard visibility changes apply on restart, like before"
+    );
+    let back = config_mutation::set_dashboard_public_with_transition(&path, Some(true))
+        .expect("dashboard edit");
+    assert!(back.transition.has_restart_required());
+    assert!(config_mutation::read_dashboard_public(&path).expect("restored"));
+}
+
+#[test]
+fn init_config_writes_the_canonical_lan_and_public_dashboard_values() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    assert!(config_mutation::init_config(&path, false).expect("initialize config"));
+    let generated = fs::read_to_string(&path).expect("generated config");
+    assert!(generated.contains("host = \"0.0.0.0\""));
+    let typed = Config::from_toml_bytes(&path, generated.as_bytes()).expect("parses");
+    assert_eq!(typed.server.host, "0.0.0.0");
+    assert!(typed.dashboard.public);
+    assert!(config_mutation::read_dashboard_public(&path).expect("public"));
+}
+
+#[test]
 fn server_threads_is_a_restart_required_compatibility_field() {
     assert_eq!(Config::default().server.threads, 1);
     assert_eq!(

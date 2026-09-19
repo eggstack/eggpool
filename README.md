@@ -142,14 +142,22 @@ remains supported, and `/v1/models` keeps the standard OpenAI-compatible schema.
 
 ### LAN Access
 
-By default, EggPool binds to localhost. To expose it on your LAN:
+By default, EggPool binds to `0.0.0.0` (all interfaces) and serves a public
+read-only dashboard: a browser on your LAN can open `http://<lan-ip>:11300/`
+without an API key. Inference (`/v1/*`), integration
+(`/api/integrations/*`), and runtime/update/status endpoints always require
+the server API key, which `eggpool onboard` generates for you.
 
 1. Set a server API key first: `eggpool onboard` (or set `[server].api_key` in config)
-2. Change the bind address: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
+2. The default bind is already LAN-ready: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
 3. Advertise the desktop URL: `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`
 4. Restart: `eggpool restart`
 5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token plus version-pinned verified bootstrap commands)
 6. On each desktop: paste the `configremote` bootstrap block (verifies SHA-256, then `eggpool-connect install --profile 'epc1.…'` confirms plan, backs up byte-exact, verifies, rolls back on failure)
+
+To restrict the proxy to the same machine instead, set `[server].host = "127.0.0.1"`.
+To require the API key on the dashboard too, run `eggpool dashboard public --off`
+(`--on` restores the public default).
 
 See [Firewall](docs/firewall.md) for restricting access to your LAN.
 

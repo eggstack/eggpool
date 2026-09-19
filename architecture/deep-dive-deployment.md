@@ -86,7 +86,9 @@ from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 
 Runtime configuration. Selected sections (see `config.example.toml` and
 `rust/src/config.rs` for the full contract):
-- `[server]` — host, port, and compatibility/diagnostic settings
+- `[server]` — host (canonical default `0.0.0.0` for LAN access; the SBC
+  profile deliberately overrides to loopback-only), port, and
+  compatibility/diagnostic settings
 - `[upstream]` — default upstream settings
 - `[database]` — SQLite path, WAL mode
 - `[routing]` — fairness mode/epsilon/scope, plus `[routing.wire_negotiation]` and `[routing.trace]`
@@ -98,7 +100,8 @@ Runtime configuration. Selected sections (see `config.example.toml` and
 - `[readiness_probe]` — readiness gating
 - `[model_info]` — source enablement
 - `[update_checker]` — background freshness probes
-- `[dashboard]` — theme, auth policy
+- `[dashboard]` — theme, auth policy (public read-only by default; inference,
+  integration, and runtime/update/status routes stay authenticated)
 - `[metrics]` — buffering, flush modes
 - `[security]` — header redaction and exact trusted reverse-proxy peers
 - `[backup]` — automatic backup schedule

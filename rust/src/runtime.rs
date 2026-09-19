@@ -2056,8 +2056,9 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             println!("  Generated server API key");
         }
     }
-    config_mutation::set_server_value(path, "host", "127.0.0.1")
-        .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
+    // Newly initialized configs already carry the canonical `0.0.0.0` LAN
+    // bind default; existing configs keep their explicit operator host.
+    // Onboarding never rewrites the bind address.
     let mut connected = 0_u32;
     loop {
         let mutation = config_mutation::connect_with_transition(path, args.providers.as_deref())

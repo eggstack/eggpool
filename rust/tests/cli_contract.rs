@@ -68,20 +68,20 @@ fn rust_parser_has_one_entry_for_every_frozen_python_command() {
 }
 
 #[test]
-fn current_python_option_deltas_are_parseable_in_rust() {
+fn current_option_deltas_are_parseable_in_rust() {
     let dashboard = Cli::try_parse_from(["eggpool", "dashboard", "public", "--off"])
-        .expect("dashboard --off is part of the current Python contract");
+        .expect("dashboard --off is part of the current product contract");
     assert!(matches!(
         dashboard.command,
         Some(EggpoolCommand::Dashboard(_))
     ));
 
     let recompute = Cli::try_parse_from(["eggpool", "stats", "recompute-costs", "--apply"])
-        .expect("stats recompute --apply is part of the current Python contract");
+        .expect("stats recompute --apply is part of the current product contract");
     assert!(matches!(recompute.command, Some(EggpoolCommand::Stats(_))));
 
     let repair = Cli::try_parse_from(["eggpool", "stats", "repair-costs", "--dry-run"])
-        .expect("stats repair --dry-run is part of the current Python contract");
+        .expect("stats repair --dry-run is part of the current product contract");
     assert!(matches!(repair.command, Some(EggpoolCommand::Stats(_))));
 }
 

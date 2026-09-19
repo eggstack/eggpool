@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-const DEFAULT_HOST: &str = "127.0.0.1";
+const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 11_300;
 const DEFAULT_PROVIDER_ID: &str = "opencode-go";
 const DEFAULT_UPSTREAM_URL: &str = "https://opencode.ai/zen/go/v1";
@@ -406,7 +406,7 @@ impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            public: false,
+            public: true,
             theme: "Cyber Red".into(),
             themes_dir: None,
             retain_request_stats_days: 30,
@@ -2173,11 +2173,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_match_the_python_contract() {
+    fn defaults_match_the_current_product_contract() {
         let config = Config::default();
-        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 11300);
         assert_eq!(config.server.api_key_env, "SERVER_API_KEY");
+        assert!(config.dashboard.enabled);
+        assert!(
+            config.dashboard.public,
+            "the default dashboard is public and read-only; inference and sensitive control endpoints stay authenticated"
+        );
         assert_eq!(config.upstream.base_url, DEFAULT_UPSTREAM_URL);
         assert_eq!(config.database.busy_timeout_ms, 5000);
         assert!(config.database.wal);

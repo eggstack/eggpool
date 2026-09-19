@@ -617,6 +617,99 @@ async fn integration_profile_is_authenticated_deterministic_and_secret_free() {
 }
 
 #[tokio::test]
+async fn public_dashboard_default_renders_without_api_key_and_keeps_sensitive_routes_authenticated()
+{
+    async fn harness(public: bool) -> (axum::Router, tempfile::TempDir) {
+        let root = tempfile::tempdir().expect("temp root");
+        let database = Database::open(DatabaseConfig {
+            path: root.path().join("usage.sqlite3").display().to_string(),
+            ..DatabaseConfig::default()
+        })
+        .await
+        .expect("database opens");
+        MigrationRunner::new(&database)
+            .run()
+            .await
+            .expect("migrations run");
+        let process = ProcessRuntime::new(database.clone());
+        let mut config = Config::default();
+        assert!(
+            Config::default().dashboard.public,
+            "canonical default is a public read-only dashboard"
+        );
+        config.server.api_key = Some("dashboard-default-key".to_owned());
+        config.dashboard.public = public;
+        config.database.path = root.path().join("usage.sqlite3").display().to_string();
+        let candidate = RuntimeGenerationFactory::prepare(
+            &process,
+            config.clone(),
+            "dashboard-test".to_owned(),
+            1,
+        )
+        .await
+        .expect("generation prepares");
+        let manager = Arc::new(RuntimeManager::new(
+            candidate.transfer().expect("generation transfers"),
+        ));
+        let app = build_router(AppState::from_runtime(config, database.clone(), manager));
+        (app, root)
+    }
+
+    async fn get_status(app: &axum::Router, uri: &str) -> u16 {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("request completes")
+            .status()
+            .as_u16()
+    }
+
+    let (public, _public_root) = harness(true).await;
+    // A normal browser request renders the dashboard without an API key.
+    let overview = public
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(overview.status(), 200);
+    assert!(
+        overview
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .contains("text/html"),
+        "default GET / renders HTML, not an API-key error"
+    );
+    assert_eq!(get_status(&public, "/api/stats/summary").await, 200);
+    // Inference and sensitive control surfaces stay authenticated.
+    assert_eq!(get_status(&public, "/v1/models").await, 401);
+    assert_eq!(
+        get_status(&public, "/api/integrations/v1/profile").await,
+        401
+    );
+    assert_eq!(get_status(&public, "/api/stats/runtime").await, 401);
+    assert_eq!(get_status(&public, "/api/stats/update").await, 401);
+    assert_eq!(get_status(&public, "/api/status").await, 401);
+
+    // `dashboard public --off` restores authentication on ordinary pages/data.
+    let (private, _private_root) = harness(false).await;
+    assert_eq!(get_status(&private, "/").await, 401);
+    assert_eq!(get_status(&private, "/api/stats/summary").await, 401);
+    assert_eq!(get_status(&private, "/v1/models").await, 401);
+}
+
+#[tokio::test]
 async fn integration_profile_does_not_inherit_dashboard_public_exemption() {
     let root = tempfile::tempdir().expect("temp root");
     let database = Database::open(DatabaseConfig {

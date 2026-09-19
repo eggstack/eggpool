@@ -26,7 +26,7 @@ Codex and OpenCode additionally support a managed lifecycle that installs a gene
 
 | Option | Description |
 |--------|-------------|
-| `--host HOST` | Override the EggPool host (default: `localhost`) |
+| `--host HOST` | Override the EggPool host (default: detected LAN IP) |
 | `--base-url URL` | Override the full base URL |
 | `--model MODEL` | Override the default model (Codex: optional root `model`; OpenCode exposes all models) |
 | `--write` | Write output to the default file for the target (snippet mode only) |

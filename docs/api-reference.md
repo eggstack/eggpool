@@ -118,7 +118,7 @@ per-request traces stay auth-gated regardless.
 
 ## Dashboard
 
-When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`.
+When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`. The dashboard is public and read-only by default (`[dashboard].public = true`): browsers render pages and ordinary stats data without an API key. Set `public = false` (or `eggpool dashboard public --off`) to require the key there too.
 
 ## Events
 
@@ -132,4 +132,13 @@ Request ingestion is bounded by `[server].max_request_body_bytes` (default 10 Mi
 
 ## Authentication
 
-All endpoints require the server API key unless `[server].api_key` is unset (loopback-only development). The key is sent as `Authorization: Bearer <key>` for OpenAI-compatible endpoints or `x-api-key: <key>` for Anthropic-compatible endpoints.
+Inference endpoints (`/v1/*`), the integration profile
+(`/api/integrations/*`), and runtime/update/status endpoints
+(`/api/stats/runtime`, `/api/stats/update`, `/api/status`) always require the
+server API key whenever one is configured. Ordinary dashboard pages and their
+non-sensitive JSON data are public while `[dashboard].public = true` (the
+default) and require the key when it is `false`. The key is sent as
+`Authorization: Bearer <key>` for OpenAI-compatible endpoints or
+`x-api-key: <key>` for Anthropic-compatible endpoints. Health, readiness, and
+static assets are unauthenticated, and a loopback-only install without a
+configured key remains open for local development.

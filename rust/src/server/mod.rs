@@ -1005,3 +1005,79 @@ async fn shutdown_signal(handle: ServerRuntimeHandle) -> Result<(), SignalError>
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{middleware::requires_auth, *};
+
+    fn state_with_dashboard(public: bool) -> ServerState {
+        ServerState {
+            api_key: Some("test-server-key-12345678".to_owned()),
+            dashboard_enabled: true,
+            dashboard_public: public,
+            dashboard_theme: "default".to_owned(),
+            dashboard_refresh_interval_s: 60,
+            configured_server_threads: 1,
+            database_path: ":memory:".to_owned(),
+            started_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn public_dashboard_exempts_pages_and_data_but_not_sensitive_routes() {
+        let public = state_with_dashboard(true);
+        for path in [
+            "/",
+            "/accounts",
+            "/models",
+            "/latency",
+            "/runtime",
+            "/api/stats/summary",
+            "/api/stats/accounts",
+            "/static/dashboard.css",
+            "/v1/healthz",
+            "/v1/readyz",
+        ] {
+            assert!(!requires_auth(path, &public), "{path} is public");
+        }
+        for path in [
+            "/v1/models",
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+            "/v1/responses/compact",
+            "/api/integrations/v1/profile",
+            "/api/stats/runtime",
+            "/api/stats/update",
+            "/api/status",
+        ] {
+            assert!(requires_auth(path, &public), "{path} stays authenticated");
+        }
+    }
+
+    #[test]
+    fn private_dashboard_restores_auth_on_pages_and_data() {
+        let private = state_with_dashboard(false);
+        for path in [
+            "/",
+            "/accounts",
+            "/models",
+            "/api/stats/summary",
+            "/api/stats/accounts",
+        ] {
+            assert!(requires_auth(path, &private), "{path} requires a key");
+        }
+        for path in ["/static/dashboard.css", "/v1/healthz", "/v1/readyz"] {
+            assert!(!requires_auth(path, &private), "{path} stays exempt");
+        }
+        for path in [
+            "/v1/models",
+            "/api/integrations/v1/profile",
+            "/api/stats/runtime",
+            "/api/stats/update",
+            "/api/status",
+        ] {
+            assert!(requires_auth(path, &private), "{path} stays authenticated");
+        }
+    }
+}

@@ -18,6 +18,12 @@ responses, and rendering escapes operator/provider-controlled values. Runtime
 and generation views distinguish active and retiring ownership without exposing
 raw prompts, credentials, cache keys, or provider bodies.
 
+Default auth posture: `[dashboard].public` defaults to `true`, so ordinary
+pages and non-sensitive stats data render without an API key. Inference
+(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
+endpoints never inherit that exemption and stay authenticated;
+`eggpool dashboard public --off` restores key auth on ordinary pages and data.
+
 The native server owns route registration and static asset delivery. Changes to
 dashboard assets or API contracts must update the Rust asset manifest and the
 corresponding Rust integration tests. Dashboard handlers remain observational

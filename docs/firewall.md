@@ -1,6 +1,7 @@
 # Firewall Configuration
 
-The proxy listens on port 11300 by default. Restrict access to your LAN.
+The proxy binds to `0.0.0.0` (all interfaces) on port 11300 by default, so it
+is reachable from your LAN. Restrict access to your LAN.
 
 ## nftables (recommended)
 

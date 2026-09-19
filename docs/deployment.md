@@ -358,16 +358,22 @@ production installation is documented below.
 ## Performance Profiles
 
 EggPool ships with a lean SBC default and a fuller standard default. The
-standard install uses one SQLite worker, low-wear analytics, loopback binding,
-and the metadata-enrichment sidecar (model_info) enabled by default. The SBC
+standard install uses one SQLite worker, low-wear analytics, a LAN bind
+(`server.host = "0.0.0.0"`), a public read-only dashboard
+(`dashboard.public = true`), and the metadata-enrichment sidecar (model_info)
+enabled by default. The SBC
 profile keeps optional enrichment/diagnostics disabled to bound resource
-use on Raspberry Pi class hardware. All profiles use the supported
+use on Raspberry Pi class hardware, and deliberately stays on a loopback bind
+(see `config.sbc.example.toml`). All profiles use the supported
 single-event-loop default (`threads = 1`).
 
-`eggpool onboard` asks whether to bind the API/dashboard to the LAN. Answering
-yes writes `server.host = "0.0.0.0"`; noninteractive onboarding writes the safe
-loopback value. Dashboard authentication remains enabled by default through
-the generated server API key (`dashboard.public = false`).
+`eggpool onboard` keeps any explicit operator bind address and never rewrites
+it to loopback; newly initialized configs carry the canonical `0.0.0.0` LAN
+bind. The server API key generated during onboarding still guards inference
+(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
+endpoints even though the human-facing dashboard is public by default. Use
+`eggpool dashboard public --off` to require the API key on ordinary dashboard
+pages and data as well.
 
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
@@ -533,8 +539,8 @@ sudo nano /etc/eggpool/env
 # Minimal config:
 #
 # [server]
-# host = "127.0.0.1"       # use a LAN bind only with a server API key
-# port = 11300
+# host = "0.0.0.0"         # canonical LAN bind (set "127.0.0.1" for loopback-only)
+# port = 11300             # a server API key is required for non-loopback binds
 #
 # [database]
 # path = "/var/lib/eggpool/usage.sqlite3"

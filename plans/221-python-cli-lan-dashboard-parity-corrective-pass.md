@@ -1,7 +1,7 @@
 # Plan 221 — Python CLI / LAN Dashboard Parity Corrective Pass
 
 Date: 2026-09-19  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: `68ddd656f38fb8d461554415135d221b6c6722a6`  
 Priority: P1 operator UX / configuration-default correction / auth-boundary regression prevention  
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -647,3 +647,59 @@ The key architectural point is that EggPool already has the right separation for
 For the CLI, recover the Python selector's ergonomics without recovering Python implementation architecture. The existing `nix` term support is enough to build a small Rust-native selector; keep it small, synchronous, and reusable by the provider-connect path.
 
 Do not “fix” the dashboard by teaching browsers to carry the server API key. Do not “fix” LAN access by overloading the advertised integration URL. Correct the defaults and preserve the existing security boundaries.
+
+## Implementation record
+
+Implemented 2026-09-19 on `main` above the planning baseline. No new direct
+dependency (`nix` `term` feature only, no TUI framework).
+
+- New `rust/src/operations/terminal.rs`: TTY-only `j/k`/arrow/Enter/`q`/Esc
+  selector with clamped navigation, `\r\n` rendering, termios scope-guard
+  restore, VTIME-bounded Esc-prefix parsing (standalone Esc cancels promptly,
+  malformed CSI is ignored, never hangs), Ctrl-C as interruption, empty-list
+  no-op, and control-byte sanitizing. Registered in `operations/mod.rs`.
+- `config_mutation.rs`: `connect_with_transition` uses the selector when
+  interactive (title `Select a provider to connect:` with display/URL/status/
+  recommendation/notes labels); `onboard` inherits it via the canonical
+  connect operation. Logout reuses the selector for multi-account choice;
+  secondary parity done inline, no new abstraction. Non-TTY keeps the
+  deterministic ID/number fallback with EOF/empty cancel.
+- `DEFAULT_HOST` is `0.0.0.0`; `DashboardConfig::default().public` is `true`,
+  agreeing with `read_dashboard_public()`'s implicit default. Root example
+  updated (host + `public = true`); SBC example keeps its documented
+  deliberate loopback-only bind and now states the canonical `public = true`
+  default. `runtime-manifest.json` hashes refreshed for both templates.
+- Onboarding no longer writes `127.0.0.1`; new configs carry `0.0.0.0` and
+  existing explicit hosts are preserved. `requires_auth` needed no change:
+  the always-authenticated classes were already correct; only the default
+  was wrong.
+- Docs corrected: `README.md` LAN access, `docs/deployment.md` profiles +
+  production snippet, `docs/api-reference.md` dashboard/auth, `docs/firewall.md`
+  default bind, `docs/agent-configuration.md` `--host` default,
+  `architecture/deep-dive-dashboard.md` + `deep-dive-deployment.md` +
+  `overview.md` (incl. `terminal.rs` in the module map). `AGENTS.md` and
+  `.opencode/skills/` reviewed: no stale host/dashboard/selection wording, so
+  no churn there. Test prose `current Python contract` renamed to
+  `current product contract` where it describes Rust behavior.
+- Coverage: terminal unit matrix (clamp, controls, escape, render,
+  sanitize), config default test renamed/extended, new O004 agreement/
+  transition/init-config tests, `requires_auth` policy matrix in
+  `server/mod.rs`, router-level public/private test in `status_command.rs`,
+  explicit-loopback fix in `provider_transport.rs` (pool-failure test now
+  trips key validation under the LAN default otherwise).
+
+Evidence (repo root, all green): `cargo fmt --check`, strict `clippy`
+(default + `--no-default-features`), `cargo check --no-default-features`,
+serial `cargo test --workspace --all-targets` (exit 0),
+`uv sync --frozen`, `ruff format --check`, `ruff check`, `pyright scripts/`,
+`pytest tests/tooling/`, `validate_release_docs.py`,
+`validate_runtime_package_boundary.py`, `git diff --check`.
+
+Residual / not performed here: Unix-TTY manual acceptance (onboard menu,
+`j/k`/arrow/Esc behavior, LAN browser `GET /` HTML + authenticated-only 401s,
+`dashboard public --off/--on` round-trip) needs a real terminal and LAN host;
+a dedicated PTY raw-restore test was skipped rather than add a PTY
+dependency for one assertion (out of scope per the dependency constraint).
+`provider_transport::extended_encrypted_proxy_cancellation_recovers_through_same_client`
+is timing-flaky (1 ms abort race; mixed pass/fail on identical builds) and
+unrelated to this pass.

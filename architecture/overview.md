@@ -291,7 +291,9 @@ resolution; production `/etc/eggpool`, `/var/lib/eggpool`, `/var/log/eggpool`
 vs. XDG personal layout; `$EGGPOOL_CONFIG`, `$EGGPOOL_ENV`,
 `$EGGPOOL_RUNTIME_DIR` aware), `control.rs` (Unix-domain JSON control
 protocol for `rehash`/`runtime-status`), `config_mutation.rs` (comment-preserving
-atomic TOML edits + `classify_transition`-carrying apply), `deploy.rs`
+atomic TOML edits + `classify_transition`-carrying apply), `terminal.rs`
+(TTY-only `j/k`/arrow interactive selector with a deterministic line-oriented
+fallback for non-TTY use), `deploy.rs`
 (systemd/logrotate/cron rendering, install/uninstall), `backup.rs` (staged
 atomic ZIP with `META` + config + optional `.env` + consistent SQLite
 snapshot; restore requires stopped service), `update.rs` (GitHub release
@@ -371,9 +373,11 @@ Deep dives: [Observability](deep-dive-observability.md),
   bootstraps (`packaging/connect/`, SHA-256 against the release SHA256SUMS);
   helper release assets (`connect_artifacts`, Windows x86_64 included) are
   typed separately from the proxy triple and never imply Windows proxy support.
-- Config profiles: full `config.example.toml` plus low-wear
+- Config profiles: full `config.example.toml` (LAN bind, public read-only
+  dashboard) plus low-wear
   `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
-  model-info/backup disabled; request/accounting durability preserved).
+  model-info/backup disabled, deliberate loopback-only bind;
+  request/accounting durability preserved).
 - Codex contract: `[model_providers.eggpool]` Responses shape with
   `wire_api = "responses"`, `supports_websockets = false`, generated
   `model_catalog_json` picker discovery, optional explicit model/alias,
@@ -437,7 +441,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
-| Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
+| Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
 | Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
 | Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |

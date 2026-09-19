@@ -1570,6 +1570,9 @@ async fn failed_pool_build_after_bind_closes_database_and_releases_listener() {
 
     let config = Config {
         server: eggpool::config::ServerConfig {
+            // Explicit loopback: this test targets pool-build failure, not
+            // the canonical LAN bind default (which requires a server key).
+            host: "127.0.0.1".to_owned(),
             port,
             ..Default::default()
         },
