@@ -1,7 +1,7 @@
 # Plan 224 — Physical-Capacity Cancellation Test Closure
 
 Date: 2026-09-19  
-Status: implementation handoff  
+Status: complete
 Planning baseline: `13c0c53a25f6e38ed646300489bc3ff088d4b463`  
 Closes residual from: `plans/223-cancellation-test-determinism-cleanup.md`  
 Priority: P2 narrow test-contract cleanup  
@@ -404,3 +404,29 @@ origin request log are the useful product-level proof.
 Eggfetch owns how physical admission is implemented. Eggpool only needs to
 prove that its client wrapper behaves correctly when cancellation occurs at
 that boundary.
+
+## Implementation record
+
+Completed 2026-09-19.
+
+- Final test: `cancelling_request_while_physical_capacity_is_saturated_preserves_client_recovery`.
+- The second request is owned by `Box::pin`, polled directly with
+  `std::future::poll_fn` until it returns `Poll::Pending`, and cancelled by
+  dropping that owned future.
+- The held response is then dropped and the same provider client successfully
+  completes `/released`, consuming both chunked body fragments.
+- The exact fixture origin sequence was `[/held, /released]`; `/cancelled`
+  was not observed.
+- The targeted test passed 200 consecutive exact invocations.
+- The default provider-transport suite passed 30 tests; the
+  `test-support` suite passed 35 tests.
+- Full validation passed: formatting, default and no-default-feature Clippy,
+  no-default-feature check, 702 serial workspace tests across 60 suites,
+  locked release build, frozen `uv` sync, Ruff format/check, Pyright, 83
+  tooling tests with 1 skip, release-doc validation, runtime-package-boundary
+  validation, and `git diff --check`.
+- No production source, Cargo manifest/lockfile, Eggfetch version, or runtime
+  transport policy changed. Existing cancellation guidance in `AGENTS.md`,
+  `.opencode/skills/development/SKILL.md`, and the architecture provider
+  documentation already covered the resulting contract; no redundant edits
+  were made.

@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::Future as _,
     io::{Read, Write},
     net::{Shutdown, SocketAddr},
     net::{TcpListener, TcpStream},
@@ -7,6 +8,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    task::Poll,
     thread,
     time::{Duration, Instant},
 };
@@ -1365,7 +1367,7 @@ async fn pool_pressure_times_out_without_leaking_capacity() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn cancellation_during_pool_wait_releases_no_permit() {
+async fn cancelling_request_while_physical_capacity_is_saturated_preserves_client_recovery() {
     let server = FixtureServer::http(ResponseMode::Chunked, 2);
     let mut config = ProviderHttpConfig::new(&server.http_url()).expect("provider config");
     config.max_connections = 1;
@@ -1376,22 +1378,41 @@ async fn cancellation_during_pool_wait_releases_no_permit() {
         .send(Method::GET, "/held", HeaderMap::new(), Bytes::new())
         .await
         .expect("held response");
-    let waiting_client = client.clone();
-    let waiting = tokio::spawn(async move {
-        waiting_client
-            .send(Method::GET, "/cancelled", HeaderMap::new(), Bytes::new())
-            .await
-    });
-    tokio::task::yield_now().await;
-    waiting.abort();
-    let cancellation = waiting.await.expect_err("cancelled pool-wait task");
-    assert!(cancellation.is_cancelled());
+
+    let mut waiting =
+        Box::pin(client.send(Method::GET, "/cancelled", HeaderMap::new(), Bytes::new()));
+    std::future::poll_fn(|cx| match waiting.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(result) => {
+            panic!("capacity-saturated request completed before cancellation: {result:?}")
+        }
+    })
+    .await;
+    drop(waiting);
+
     drop(held);
-    let released = client
+    let mut released = client
         .send(Method::GET, "/released", HeaderMap::new(), Bytes::new())
         .await
         .expect("capacity released");
     assert_eq!(released.status.as_u16(), 200);
+    assert_eq!(
+        released.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"first")
+    );
+    assert_eq!(
+        released.body.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"second")
+    );
+    assert!(released.body.next().await.is_none());
+    assert_eq!(
+        server
+            .requests()
+            .into_iter()
+            .map(|request| request.target)
+            .collect::<Vec<_>>(),
+        vec!["/held", "/released"]
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
