@@ -4,6 +4,7 @@ use std::{
         Arc, Barrier,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use eggpool::{
@@ -331,16 +332,45 @@ async fn cancelling_the_waiter_cannot_strand_a_claim_or_durable_rows() {
         let service = service.clone();
         async move { service.publish(pending_claim, input(1)).await }
     });
-    while !entered.load(Ordering::Acquire) {
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !entered.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("publication reaches the BeforeCommit barrier");
     task.abort();
     barrier.wait();
-    for _ in 0..100 {
-        if fixture.router.active_request_count("account-a") == 0 {
-            break;
+
+    let released = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if fixture.router.active_request_count("account-a") == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
+    })
+    .await;
+    if released.is_err() {
+        let counts = row_counts(&fixture.database).await;
+        let reservation_status = if counts.2 == 1 {
+            fixture
+                .database
+                .call(|connection| {
+                    connection.query_row("SELECT status FROM reservations", [], |row| {
+                        row.get::<_, String>(0)
+                    })
+                })
+                .await
+                .expect("reservation status")
+        } else {
+            "none".to_owned()
+        };
+        panic!(
+            "publication compensation did not release the claim: active_request_count={}, row_counts={counts:?}, reservation_status={reservation_status:?}, before_commit_entered={}",
+            fixture.router.active_request_count("account-a"),
+            entered.load(Ordering::Acquire),
+        );
     }
     assert_eq!(fixture.router.active_request_count("account-a"), 0);
     let counts = row_counts(&fixture.database).await;

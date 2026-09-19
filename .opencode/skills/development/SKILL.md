@@ -81,6 +81,17 @@ cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads
 cargo test --manifest-path rust/Cargo.toml --test wire_qualification -- --test-threads=1
 ```
 
+For cancellation and ownership tests, synchronize on an observable fixture
+transition or product invariant under a bounded `tokio::time::timeout`.
+Avoid fixed millisecond sleeps and fixed `yield_now()` counts as readiness or
+cleanup proofs. Provider cancellation fixtures should expose accepted-TCP or
+equivalent gates, keep accepted and completed-handshake counters separate, and
+assert client recovery plus no cancelled request reaching the origin. When no
+narrow external-fixture boundary exists, use the smallest cooperative
+criterion available and document the limitation; do not add arbitrary timeout
+inflation or production ownership changes. Repeat originally flaky tests at
+least 100 times before closing the cleanup.
+
 For Responses admission or wire-preservation changes, also run the focused
 canonical request, wire qualification, and coordinator stateless-contract
 targets. Verify native same-surface alias rewriting and cross-surface rejection

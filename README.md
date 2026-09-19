@@ -467,6 +467,10 @@ uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
+Cancellation-path tests should wait for an observable fixture transition or
+invariant under a bounded timeout, not guess with fixed sleeps or yield-count
+loops. See `AGENTS.md` for focused native test targets and stress guidance.
+
 When changing native dependencies or Cargo features, inspect the resolved
 authority and qualify the release graph as well:
 

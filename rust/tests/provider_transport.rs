@@ -36,6 +36,7 @@ use rustls::{
 use serde_json::json;
 #[cfg(feature = "test-support")]
 use tempfile::TempDir;
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestObservation {
@@ -161,21 +162,33 @@ enum EncryptedProxyKind {
 struct EncryptedProxyFixture {
     address: SocketAddr,
     targets: Arc<Mutex<Vec<String>>>,
+    accepted_connections: Arc<AtomicUsize>,
     handshakes: Arc<AtomicUsize>,
+    first_connection_accepted: Arc<Notify>,
+    first_connection_release: Arc<Notify>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl EncryptedProxyFixture {
     fn start(kind: EncryptedProxyKind, password: &'static str, expected: usize) -> Self {
-        Self::start_with_delay(kind, password, expected, Duration::ZERO, false)
+        Self::start_inner(kind, password, expected, false, false)
     }
 
-    fn start_with_delay(
+    fn start_with_first_connection_gate(
         kind: EncryptedProxyKind,
         password: &'static str,
         expected: usize,
-        handshake_delay: Duration,
         discard_first: bool,
+    ) -> Self {
+        Self::start_inner(kind, password, expected, discard_first, true)
+    }
+
+    fn start_inner(
+        kind: EncryptedProxyKind,
+        password: &'static str,
+        expected: usize,
+        discard_first: bool,
+        gate_first_connection: bool,
     ) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("encrypted proxy listener");
         let address = listener.local_addr().expect("encrypted proxy address");
@@ -185,15 +198,25 @@ impl EncryptedProxyFixture {
         let listener =
             tokio::net::TcpListener::from_std(listener).expect("tokio encrypted proxy listener");
         let targets = Arc::new(Mutex::new(Vec::new()));
+        let accepted_connections = Arc::new(AtomicUsize::new(0));
         let handshakes = Arc::new(AtomicUsize::new(0));
+        let first_connection_accepted = Arc::new(Notify::new());
+        let first_connection_release = Arc::new(Notify::new());
         let target_log = Arc::clone(&targets);
+        let accepted_connection_log = Arc::clone(&accepted_connections);
         let handshake_log = Arc::clone(&handshakes);
+        let first_connection_accepted_signal = Arc::clone(&first_connection_accepted);
+        let first_connection_release_gate = Arc::clone(&first_connection_release);
         let task = tokio::spawn(async move {
             for connection_index in 0..expected {
                 let Ok((stream, _)) = listener.accept().await else {
                     return;
                 };
-                tokio::time::sleep(handshake_delay).await;
+                accepted_connection_log.fetch_add(1, Ordering::SeqCst);
+                if gate_first_connection && connection_index == 0 {
+                    first_connection_accepted_signal.notify_one();
+                    first_connection_release_gate.notified().await;
+                }
                 let boxed: BoxStream = Box::new(stream);
                 let accepted = match kind {
                     EncryptedProxyKind::Shadowsocks => {
@@ -240,7 +263,10 @@ impl EncryptedProxyFixture {
         Self {
             address,
             targets,
+            accepted_connections,
             handshakes,
+            first_connection_accepted,
+            first_connection_release,
             task: Some(task),
         }
     }
@@ -257,8 +283,20 @@ impl EncryptedProxyFixture {
         self.targets.lock().unwrap().clone()
     }
 
+    fn accepted_connection_count(&self) -> usize {
+        self.accepted_connections.load(Ordering::SeqCst)
+    }
+
     fn handshake_count(&self) -> usize {
         self.handshakes.load(Ordering::SeqCst)
+    }
+
+    async fn wait_for_first_connection(&self) {
+        self.first_connection_accepted.notified().await;
+    }
+
+    fn release_first_connection(&self) {
+        self.first_connection_release.notify_one();
     }
 
     async fn shutdown(&mut self) {
@@ -373,11 +411,22 @@ struct SshProxyFixture {
     user: String,
     private_key: PathBuf,
     wrong_private_key: PathBuf,
+    first_connection_accepted: Arc<Notify>,
+    first_connection_release: Arc<Notify>,
+    relay_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[cfg(feature = "test-support")]
 impl SshProxyFixture {
     async fn start() -> Self {
+        Self::start_inner(false).await
+    }
+
+    async fn start_with_first_connection_gate() -> Self {
+        Self::start_inner(true).await
+    }
+
+    async fn start_inner(gate_first_connection: bool) -> Self {
         assert!(
             command_available("sshd"),
             "sshd is required for SSH fixture"
@@ -417,15 +466,24 @@ impl SshProxyFixture {
             .ok()
             .filter(|user| !user.is_empty())
             .expect("SSH fixture user");
-        let port = TcpListener::bind(("127.0.0.1", 0))
+        let backend_port = TcpListener::bind(("127.0.0.1", 0))
             .expect("SSH fixture port")
             .local_addr()
             .expect("SSH fixture address")
             .port();
+        let relay_listener = TcpListener::bind(("127.0.0.1", 0)).expect("SSH relay listener");
+        relay_listener
+            .set_nonblocking(true)
+            .expect("SSH relay listener nonblocking");
+        let relay_address = relay_listener.local_addr().expect("SSH relay address");
+        let relay_listener =
+            tokio::net::TcpListener::from_std(relay_listener).expect("tokio SSH relay listener");
+        let first_connection_accepted = Arc::new(Notify::new());
+        let first_connection_release = Arc::new(Notify::new());
         let config = directory.path().join("sshd_config");
         let pid_file = directory.path().join("sshd.pid");
         let config_text = format!(
-            "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nUsePAM no\nPermitRootLogin yes\nPubkeyAuthentication yes\nAllowTcpForwarding yes\nAllowStreamLocalForwarding yes\nGatewayPorts no\nStrictModes no\nUseDNS no\nLogLevel QUIET\n",
+            "Port {backend_port}\nListenAddress 127.0.0.1\nHostKey {}\nAuthorizedKeysFile {}\nPidFile {}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nUsePAM no\nPermitRootLogin yes\nPubkeyAuthentication yes\nAllowTcpForwarding yes\nAllowStreamLocalForwarding yes\nGatewayPorts no\nStrictModes no\nUseDNS no\nLogLevel QUIET\n",
             host_key.display(),
             directory.path().join("authorized_keys").display(),
             pid_file.display(),
@@ -451,15 +509,39 @@ impl SshProxyFixture {
         let mut fixture = Self {
             _directory: directory,
             child,
-            address: SocketAddr::from(([127, 0, 0, 1], port)),
+            address: relay_address,
             user,
             private_key,
             wrong_private_key,
+            first_connection_accepted: Arc::clone(&first_connection_accepted),
+            first_connection_release: Arc::clone(&first_connection_release),
+            relay_task: None,
         };
         assert!(
             wait_for_process(&mut fixture.child).await,
             "SSH fixture did not start"
         );
+        let first_connection_accepted_signal = Arc::clone(&first_connection_accepted);
+        let first_connection_release_gate = Arc::clone(&first_connection_release);
+        let backend_address = SocketAddr::from(([127, 0, 0, 1], backend_port));
+        fixture.relay_task = Some(tokio::spawn(async move {
+            let mut connection_index = 0;
+            loop {
+                let Ok((mut client_stream, _)) = relay_listener.accept().await else {
+                    return;
+                };
+                if gate_first_connection && connection_index == 0 {
+                    first_connection_accepted_signal.notify_one();
+                    first_connection_release_gate.notified().await;
+                }
+                connection_index += 1;
+                let Ok(mut ssh_stream) = tokio::net::TcpStream::connect(backend_address).await
+                else {
+                    continue;
+                };
+                let _ = tokio::io::copy_bidirectional(&mut client_stream, &mut ssh_stream).await;
+            }
+        }));
         fixture
     }
 
@@ -479,11 +561,29 @@ impl SshProxyFixture {
     fn wrong_uri(&self) -> String {
         self.uri_for_key(&self.wrong_private_key)
     }
+
+    async fn wait_for_first_connection(&self) {
+        self.first_connection_accepted.notified().await;
+    }
+
+    fn release_first_connection(&self) {
+        self.first_connection_release.notify_one();
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(task) = self.relay_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
 }
 
 #[cfg(feature = "test-support")]
 impl Drop for SshProxyFixture {
     fn drop(&mut self) {
+        if let Some(task) = self.relay_task.take() {
+            task.abort();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -1257,7 +1357,6 @@ async fn pool_pressure_times_out_without_leaking_capacity() {
         .expect_err("pool timeout");
     assert_eq!(error, TransportError::PoolTimeout);
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
     let released = client
         .send(Method::GET, "/released", HeaderMap::new(), Bytes::new())
         .await
@@ -1278,19 +1377,16 @@ async fn cancellation_during_pool_wait_releases_no_permit() {
         .await
         .expect("held response");
     let waiting_client = client.clone();
-    let mut waiting = tokio::spawn(async move {
+    let waiting = tokio::spawn(async move {
         waiting_client
             .send(Method::GET, "/cancelled", HeaderMap::new(), Bytes::new())
             .await
     });
-    tokio::select! {
-        _ = tokio::time::sleep(Duration::from_millis(10)) => {}
-        result = &mut waiting => panic!("pool wait completed before cancellation: {result:?}"),
-    }
+    tokio::task::yield_now().await;
     waiting.abort();
-    let _ = waiting.await;
+    let cancellation = waiting.await.expect_err("cancelled pool-wait task");
+    assert!(cancellation.is_cancelled());
     drop(held);
-    tokio::time::sleep(Duration::from_millis(200)).await;
     let released = client
         .send(Method::GET, "/released", HeaderMap::new(), Bytes::new())
         .await
@@ -1718,11 +1814,10 @@ async fn extended_encrypted_proxy_cancellation_recovers_through_same_client() {
     install_test_crypto_provider();
     let server =
         FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
-    let mut proxy = EncryptedProxyFixture::start_with_delay(
+    let mut proxy = EncryptedProxyFixture::start_with_first_connection_gate(
         EncryptedProxyKind::Shadowsocks,
         "cancel-secret",
         2,
-        Duration::from_millis(100),
         true,
     );
     let client = ProviderHttpClient::new_with_proxy(
@@ -1741,10 +1836,14 @@ async fn extended_encrypted_proxy_cancellation_recovers_through_same_client() {
             )
             .await
     });
-    tokio::time::sleep(Duration::from_millis(1)).await;
+    tokio::time::timeout(Duration::from_secs(2), proxy.wait_for_first_connection())
+        .await
+        .expect("encrypted proxy accepts the cancelled request connection");
+    assert_eq!(proxy.accepted_connection_count(), 1);
     pending.abort();
-    let _ = pending.await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let cancellation = pending.await.expect_err("cancelled request task");
+    assert!(cancellation.is_cancelled());
+    proxy.release_first_connection();
 
     let mut response = client
         .send(
@@ -1765,7 +1864,16 @@ async fn extended_encrypted_proxy_cancellation_recovers_through_same_client() {
     drop(response);
     drop(client);
     proxy.shutdown().await;
-    assert_eq!(proxy.handshake_count(), 2);
+    assert_eq!(proxy.accepted_connection_count(), 2);
+    assert!(proxy.handshake_count() >= 1);
+    let expected_target = format!("localhost:{}", server.port());
+    assert!(!proxy.targets().is_empty());
+    assert!(
+        proxy
+            .targets()
+            .iter()
+            .all(|target| target == &expected_target)
+    );
 }
 
 #[cfg(feature = "test-support")]
@@ -1890,7 +1998,7 @@ async fn ssh_cancellation_does_not_poison_the_provider_client() {
     install_test_crypto_provider();
     let server =
         FixtureServer::http_with_idle_timeout(ResponseMode::Normal, 1, Duration::from_secs(5));
-    let proxy = SshProxyFixture::start().await;
+    let mut proxy = SshProxyFixture::start_with_first_connection_gate().await;
     let client =
         ProviderHttpClient::new_with_proxy(proxy_test_config(&server.http_url()), &proxy.uri())
             .expect("SSH proxy client");
@@ -1905,9 +2013,13 @@ async fn ssh_cancellation_does_not_poison_the_provider_client() {
             )
             .await
     });
-    tokio::time::sleep(Duration::from_millis(1)).await;
+    tokio::time::timeout(Duration::from_secs(2), proxy.wait_for_first_connection())
+        .await
+        .expect("SSH relay accepts the cancelled request connection");
     pending.abort();
-    let _ = pending.await;
+    let cancellation = pending.await.expect_err("cancelled request task");
+    assert!(cancellation.is_cancelled());
+    proxy.release_first_connection();
 
     let mut response = client
         .send(
@@ -1925,6 +2037,7 @@ async fn ssh_cancellation_does_not_poison_the_provider_client() {
     );
     assert_eq!(server.requests().len(), 1);
     assert_eq!(server.requests()[0].target, "/after-ssh-cancel");
+    proxy.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -18,6 +18,16 @@ Provider failures are typed before reaching health/retry effects. Per-model
 failures quarantine only the affected pair; genuine transport failures may
 advance account-wide health.
 
+Provider-client cancellation is an ownership contract: aborting a request must
+not poison the configured client or create a direct-network fallback. The
+`rust/tests/provider_transport.rs` qualification fixtures make this contract
+observable without changing production transport: encrypted-proxy and SSH
+tests gate the first accepted TCP connection, separate accepted connections
+from completed handshakes, and use the subsequent same-client recovery request
+as the release proof. A cancelled handshake may complete protocol negotiation;
+the semantic assertions are proxy-target integrity, one recovery origin
+request, and successful client reuse rather than an incidental handshake count.
+
 ## Native dependency boundaries
 
 Direct provider transport uses exact-pinned `eggfetch-core =0.1.7` with

@@ -78,6 +78,11 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing (`eggress-ssh-fallback` is default-only compat).
+- Cancellation-path tests must synchronize on an observable fixture boundary or
+  invariant under a bounded timeout. Do not use fixed millisecond sleeps or
+  yield-count loops to guess that a detached worker, proxy handshake, or pool
+  waiter has reached a state; the provider recovery request is itself the
+  release condition when it is the first direct observable.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
 - Provider transport is exact-pinned to `eggfetch-core =0.1.7` with

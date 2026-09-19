@@ -1,7 +1,7 @@
 # Plan 223 — Cancellation Test Determinism and Cleanup Pass
 
 Date: 2026-09-19  
-Status: implementation handoff  
+Status: complete
 Planning baseline: `2acb09ca6297058afc730862e40b14dd04226187`  
 Priority: P2 test determinism / cancellation-path confidence  
 Execution target: GPT-5.6 Luna/Sol or comparable implementation model
@@ -548,3 +548,50 @@ the state was reached."
 If the deterministic version fails, that is valuable evidence: stop widening
 the timeout and elevate the newly reproducible production bug into its own
 corrective plan.
+
+## Implementation record (2026-09-19)
+
+Status: complete
+
+### Changes
+
+- `coordinator_publication::cancelling_the_waiter_cannot_strand_a_claim_or_durable_rows`
+  now uses bounded two-second condition waits for the `BeforeCommit` barrier
+  and active-claim release. A timeout reports active claims, durable row
+  counts, reservation status, and barrier state; production publication and
+  claim ownership code were not changed.
+- `EncryptedProxyFixture` now exposes a `tokio::sync::Notify` gate after the
+  first TCP accept, records accepted connections separately from completed
+  encrypted handshakes, and releases the first connection explicitly. The
+  encrypted cancellation test aborts only after that boundary, then proves
+  same-client recovery, one origin request for `/after-encrypted-cancel`, and
+  configured proxy-target integrity. It no longer uses the 1 ms or 50 ms
+  sleeps, and no longer requires an incidental completed-handshake count.
+- The SSH cancellation test uses a test-only transparent TCP relay with the
+  same accepted-connection gate and release notification. This avoids SSHD
+  log parsing or production changes while removing its 1 ms scheduler guess.
+- The adjacent pool-capacity audit found a 10 ms pre-abort wait and two 200 ms
+  post-drop waits. The test now yields once to schedule the known blocked
+  waiter, asserts task cancellation, and uses the recovery request itself as
+  the capacity-release observation; no fixed sleeps remain in that path.
+
+### Stress and validation evidence
+
+- Coordinator cancellation test: 100 consecutive targeted runs passed.
+- Encrypted proxy cancellation test: 100 consecutive targeted runs passed.
+- Focused adjacent pool-capacity tests: both passed.
+- Full `provider_transport` suite with `test-support`: 35 passed.
+- Full serial workspace suite: 702 passed across 60 suites.
+- No-default serial suite: 587 passed across 56 suites.
+- Strict format/Clippy, no-default check/Clippy, locked release build,
+  `uv sync --frozen`, Ruff format/check, Pyright, tooling pytest (83 passed,
+  1 skipped), release-doc validation, runtime-package-boundary validation, and
+  `git diff --check` all passed.
+
+### Documentation and scope audit
+
+The root README, `AGENTS.md`, development skill, and provider architecture
+deep dive now state the observable-boundary rule for cancellation tests and
+the provider-client recovery contract. No production source, dependency, retry
+policy, routing behavior, or persistence ownership changed. No additional
+follow-up corrective plan is required.
