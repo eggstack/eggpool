@@ -53,13 +53,33 @@ pub enum BootstrapError {
     /// exit category.
     #[error("{detail}")]
     Command { code: u8, detail: String },
+
+    /// Explicit user interruption (for example Ctrl-C inside an interactive
+    /// selector). This is not a validation failure: it exits with the
+    /// conventional `128 + SIGINT` status.
+    #[error("Interrupted.")]
+    Interrupted,
 }
 
 impl BootstrapError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Command { code, .. } => *code,
+            Self::Interrupted => 130,
             _ => 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BootstrapError;
+
+    #[test]
+    fn interruption_exits_130_with_concise_message() {
+        let error = BootstrapError::Interrupted;
+        assert_eq!(error.exit_code(), 130);
+        assert_eq!(error.to_string(), "Interrupted.");
+        assert!(!error.to_string().contains("configuration file"));
     }
 }

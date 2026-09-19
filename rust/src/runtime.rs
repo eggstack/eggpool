@@ -1805,6 +1805,9 @@ fn check_config(path: &Path) -> Result<(), BootstrapError> {
 }
 
 fn mutation_error(error: config_mutation::MutationError, code: u8) -> BootstrapError {
+    if matches!(error, config_mutation::MutationError::Interrupted) {
+        return BootstrapError::Interrupted;
+    }
     command_error(code, error.to_string())
 }
 
@@ -3252,5 +3255,25 @@ fn format_bytes(value: Option<&Value>) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXIT_VALIDATION, mutation_error};
+    use crate::operations::config_mutation::MutationError;
+
+    #[test]
+    fn interruption_bypasses_validation_exit_code() {
+        let error = mutation_error(MutationError::Interrupted, EXIT_VALIDATION);
+        assert_eq!(error.exit_code(), 130);
+        assert_eq!(error.to_string(), "Interrupted.");
+        assert!(!error.to_string().contains("configuration file"));
+    }
+
+    #[test]
+    fn ordinary_mutation_errors_keep_caller_exit_code() {
+        let error = mutation_error(MutationError::Invalid("bad value".into()), EXIT_VALIDATION);
+        assert_eq!(error.exit_code(), EXIT_VALIDATION);
     }
 }

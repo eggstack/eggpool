@@ -196,30 +196,44 @@ pub fn select_one(title: &str, options: &[String]) -> Result<Option<usize>, Sele
 
 #[cfg(unix)]
 fn run_interactive(title: &str, options: &[String]) -> Result<Option<usize>, SelectError> {
-    use nix::sys::termios::{SetArg, SpecialCharacterIndices, cfmakeraw, tcgetattr, tcsetattr};
-    use nix::unistd::read;
     use std::os::fd::AsFd;
 
     let stdin = io::stdin();
-    let original = tcgetattr(&stdin).map_err(|error| SelectError::Io(io::Error::other(error)))?;
+    let mut stdout = io::stdout();
+    run_interactive_on(stdin.as_fd(), &mut stdout, title, options)
+}
+
+#[cfg(unix)]
+fn run_interactive_on(
+    input: std::os::fd::BorrowedFd<'_>,
+    output: &mut dyn Write,
+    title: &str,
+    options: &[String],
+) -> Result<Option<usize>, SelectError> {
+    use nix::sys::termios::{SetArg, SpecialCharacterIndices, cfmakeraw, tcgetattr, tcsetattr};
+    use nix::unistd::read;
+
+    let original = tcgetattr(input).map_err(|error| SelectError::Io(io::Error::other(error)))?;
     let mut raw = original.clone();
     cfmakeraw(&mut raw);
     raw.control_chars[SpecialCharacterIndices::VMIN as usize] = 1;
     raw.control_chars[SpecialCharacterIndices::VTIME as usize] = 0;
-    tcsetattr(&stdin, SetArg::TCSANOW, &raw)
+    tcsetattr(input, SetArg::TCSANOW, &raw)
         .map_err(|error| SelectError::Io(io::Error::other(error)))?;
 
-    struct RawGuard {
+    struct RawGuard<'scope> {
+        fd: std::os::fd::BorrowedFd<'scope>,
         original: nix::sys::termios::Termios,
     }
-    impl Drop for RawGuard {
+    impl Drop for RawGuard<'_> {
         fn drop(&mut self) {
-            let stdin = io::stdin();
-            let _ = tcsetattr(&stdin, SetArg::TCSANOW, &self.original);
+            let _ = tcsetattr(self.fd, SetArg::TCSANOW, &self.original);
         }
     }
-    let guard = RawGuard { original };
-    let stdin_fd = stdin.as_fd();
+    let _guard = RawGuard {
+        fd: input,
+        original,
+    };
 
     // Bounded wait (deciseconds) for the bytes following an Esc prefix so a
     // standalone Esc cancels promptly while arrow-key CSI sequences still
@@ -229,16 +243,13 @@ fn run_interactive(title: &str, options: &[String]) -> Result<Option<usize>, Sel
     let mut selected = 0_usize;
     loop {
         let frame = render_menu(title, options, selected);
-        {
-            let mut stdout = io::stdout();
-            stdout
-                .write_all(frame.as_bytes())
-                .map_err(SelectError::Io)?;
-            stdout.flush().map_err(SelectError::Io)?;
-        }
+        output
+            .write_all(frame.as_bytes())
+            .map_err(SelectError::Io)?;
+        output.flush().map_err(SelectError::Io)?;
         let mut byte = [0_u8; 1];
         let count =
-            read(stdin_fd, &mut byte).map_err(|error| SelectError::Io(io::Error::other(error)))?;
+            read(input, &mut byte).map_err(|error| SelectError::Io(io::Error::other(error)))?;
         if count == 0 {
             return Ok(None);
         }
@@ -248,12 +259,12 @@ fn run_interactive(title: &str, options: &[String]) -> Result<Option<usize>, Sel
                 timed.control_chars[SpecialCharacterIndices::VMIN as usize] = 0;
                 timed.control_chars[SpecialCharacterIndices::VTIME as usize] =
                     ESCAPE_WAIT_DECISECONDS;
-                tcsetattr(&stdin, SetArg::TCSANOW, &timed)
+                tcsetattr(input, SetArg::TCSANOW, &timed)
                     .map_err(|error| SelectError::Io(io::Error::other(error)))?;
                 let mut following = Vec::new();
                 for _ in 0..2 {
                     let mut next = [0_u8; 1];
-                    let extra = read(stdin_fd, &mut next)
+                    let extra = read(input, &mut next)
                         .map_err(|error| SelectError::Io(io::Error::other(error)))?;
                     if extra == 0 {
                         break;
@@ -266,7 +277,7 @@ fn run_interactive(title: &str, options: &[String]) -> Result<Option<usize>, Sel
                         break;
                     }
                 }
-                tcsetattr(&stdin, SetArg::TCSANOW, &raw)
+                tcsetattr(input, SetArg::TCSANOW, &raw)
                     .map_err(|error| SelectError::Io(io::Error::other(error)))?;
                 match classify_escape_sequence(&following) {
                     EscapeOutcome::Cancel => return Ok(None),
@@ -279,9 +290,8 @@ fn run_interactive(title: &str, options: &[String]) -> Result<Option<usize>, Sel
                 KeyAction::Next => selected = next_index(selected, options.len()),
                 KeyAction::Previous => selected = prev_index(selected, options.len()),
                 KeyAction::Confirm => {
-                    let _ = io::stdout().write_all(b"\r\n");
-                    let _ = io::stdout().flush();
-                    drop(guard);
+                    let _ = output.write_all(b"\r\n");
+                    let _ = output.flush();
                     return Ok(Some(selected));
                 }
                 KeyAction::Cancel => return Ok(None),
@@ -377,5 +387,177 @@ mod tests {
         let frame = render_menu("title", &options, 0);
         assert!(!frame.contains("a\x1bb\nc"));
         assert!(frame.contains("a?b?c"));
+    }
+
+    #[cfg(unix)]
+    fn run_selector_on_pty(
+        input: &[u8],
+        options: &[String],
+    ) -> (
+        Result<Option<usize>, SelectError>,
+        nix::sys::termios::Termios,
+        nix::sys::termios::Termios,
+    ) {
+        use nix::pty::openpty;
+        use nix::sys::termios::tcgetattr;
+        use std::os::fd::AsFd;
+        use std::os::unix::net::UnixStream;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let pty = openpty(None, None).expect("openpty");
+        let slave = pty.slave;
+        // Put the master side into non-blocking mode through the safe std
+        // API so the drain loop cannot block. This avoids adding the nix
+        // `fs` feature for `fcntl`; `O_NONBLOCK` applies to the open file
+        // description, so later `nix::unistd` reads/writes on the same fd
+        // observe it.
+        let master = UnixStream::from(pty.master);
+        master.set_nonblocking(true).expect("master nonblocking");
+        let original = tcgetattr(&slave).expect("slave tcgetattr");
+
+        let (sender, receiver) = mpsc::channel();
+        let outcome = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let writer_fd = slave.try_clone().expect("duplicate slave");
+                let mut writer = std::fs::File::from(writer_fd);
+                let outcome = run_interactive_on(slave.as_fd(), &mut writer, "PTY test", options);
+                let _ = sender.send(outcome);
+            });
+            // Wait briefly for the selector to install raw mode so master
+            // input is not consumed by the pre-raw line discipline.
+            let raw_start = Instant::now();
+            loop {
+                let current = tcgetattr(&slave).expect("poll slave termios");
+                if current != original {
+                    break;
+                }
+                if raw_start.elapsed() > Duration::from_secs(2) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let mut written = 0_usize;
+            let write_start = Instant::now();
+            while written < input.len() {
+                match nix::unistd::write(master.as_fd(), &input[written..]) {
+                    Ok(0) => std::thread::sleep(Duration::from_millis(1)),
+                    Ok(count) => written += count,
+                    Err(nix::errno::Errno::EAGAIN) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("pty write failed: {error}"),
+                }
+                assert!(
+                    write_start.elapsed() <= Duration::from_secs(2),
+                    "pty write timeout"
+                );
+            }
+            let wait_start = Instant::now();
+            loop {
+                let mut discard = [0_u8; 4096];
+                match nix::unistd::read(master.as_fd(), &mut discard) {
+                    Ok(_) | Err(nix::errno::Errno::EAGAIN) => {}
+                    Err(error) => panic!("pty drain failed: {error}"),
+                }
+                match receiver.try_recv() {
+                    Ok(outcome) => {
+                        for _ in 0..8 {
+                            let mut tail = [0_u8; 4096];
+                            match nix::unistd::read(master.as_fd(), &mut tail) {
+                                Ok(0) => break,
+                                Ok(_) => {}
+                                Err(nix::errno::Errno::EAGAIN) => break,
+                                Err(error) => panic!("pty final drain failed: {error}"),
+                            }
+                        }
+                        return outcome;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        assert!(
+                            wait_start.elapsed() <= Duration::from_secs(5),
+                            "pty selector timeout"
+                        );
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        panic!("selector thread ended without a result")
+                    }
+                }
+            }
+        });
+        let restored = tcgetattr(&slave).expect("restored tcgetattr");
+        // SelectError carries an io::Error which is not PartialEq; callers
+        // match on the variant instead of comparing full results.
+        (outcome, original, restored)
+    }
+
+    #[cfg(unix)]
+    fn assert_termios_restored(
+        original: &nix::sys::termios::Termios,
+        restored: &nix::sys::termios::Termios,
+    ) {
+        use nix::sys::termios::LocalFlags;
+        // macOS sets PENDIN as a side effect of `tcsetattr` on a PTY slave,
+        // even for a bare raw round-trip with no I/O. PENDIN is not part of
+        // the raw transition (`cfmakeraw` never touches it), so mask it and
+        // compare all raw-relevant fields explicitly.
+        assert_eq!(
+            original.input_flags, restored.input_flags,
+            "input flags restored"
+        );
+        assert_eq!(
+            original.output_flags, restored.output_flags,
+            "output flags restored"
+        );
+        assert_eq!(
+            original.control_flags, restored.control_flags,
+            "control flags restored"
+        );
+        let mut expected_local = original.local_flags;
+        expected_local.remove(LocalFlags::PENDIN);
+        let mut actual_local = restored.local_flags;
+        actual_local.remove(LocalFlags::PENDIN);
+        assert_eq!(expected_local, actual_local, "local flags restored");
+        assert_eq!(
+            original.control_chars, restored.control_chars,
+            "control chars restored"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_confirm_restores_termios() {
+        let options = vec!["alpha".to_owned(), "beta".to_owned()];
+        let (outcome, original, restored) = run_selector_on_pty(b"j\r", &options);
+        assert_eq!(outcome.expect("confirm result"), Some(1));
+        assert_termios_restored(&original, &restored);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_cancel_q_restores_termios() {
+        let options = vec!["alpha".to_owned(), "beta".to_owned()];
+        let (outcome, original, restored) = run_selector_on_pty(b"q", &options);
+        assert_eq!(outcome.expect("cancel result"), None);
+        assert_termios_restored(&original, &restored);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_cancel_esc_restores_termios() {
+        let options = vec!["alpha".to_owned(), "beta".to_owned()];
+        let (outcome, original, restored) = run_selector_on_pty(b"\x1b", &options);
+        assert_eq!(outcome.expect("esc cancel result"), None);
+        assert_termios_restored(&original, &restored);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_interrupt_restores_termios() {
+        let options = vec!["alpha".to_owned(), "beta".to_owned()];
+        let (outcome, original, restored) = run_selector_on_pty(b"\x03", &options);
+        assert!(matches!(outcome, Err(SelectError::Interrupted)));
+        assert_termios_restored(&original, &restored);
     }
 }

@@ -51,6 +51,8 @@ pub enum MutationError {
     Read(#[source] io::Error),
     #[error("configuration file could not be written")]
     Write(#[source] io::Error),
+    #[error("interrupted")]
+    Interrupted,
     #[error("configuration mutation is already in progress")]
     Busy,
     #[error("{0}")]
@@ -871,9 +873,7 @@ fn provider_option_label(template: &ProviderTemplate) -> String {
 fn map_select_error(error: terminal::SelectError) -> MutationError {
     match error {
         terminal::SelectError::Io(error) => MutationError::Read(error),
-        terminal::SelectError::Interrupted => {
-            MutationError::Read(io::Error::new(io::ErrorKind::Interrupted, "interrupted"))
-        }
+        terminal::SelectError::Interrupted => MutationError::Interrupted,
         terminal::SelectError::NotInteractive => MutationError::Read(io::Error::new(
             io::ErrorKind::NotConnected,
             "not a terminal",
@@ -1343,4 +1343,26 @@ pub fn read_line_prompt(prompt: &str) -> Result<Option<String>, MutationError> {
 #[allow(dead_code)]
 fn _duration_for_control() -> Duration {
     Duration::from_secs(5)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MutationError, map_select_error};
+    use crate::operations::terminal;
+
+    #[test]
+    fn interruption_preserves_first_class_semantic() {
+        let error = map_select_error(terminal::SelectError::Interrupted);
+        assert!(matches!(error, MutationError::Interrupted));
+        assert_eq!(error.to_string(), "interrupted");
+        assert_ne!(error.to_string(), "configuration file could not be read");
+        assert!(!error.to_string().contains("could not be read"));
+    }
+
+    #[test]
+    fn io_failures_stay_in_read_category() {
+        let io_error = std::io::Error::other("boom");
+        let error = map_select_error(terminal::SelectError::Io(io_error));
+        assert!(matches!(error, MutationError::Read(_)));
+    }
 }

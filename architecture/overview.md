@@ -293,7 +293,9 @@ vs. XDG personal layout; `$EGGPOOL_CONFIG`, `$EGGPOOL_ENV`,
 protocol for `rehash`/`runtime-status`), `config_mutation.rs` (comment-preserving
 atomic TOML edits + `classify_transition`-carrying apply), `terminal.rs`
 (TTY-only `j/k`/arrow interactive selector with a deterministic line-oriented
-fallback for non-TTY use), `deploy.rs`
+fallback for non-TTY use; `Ctrl-C` stays `MutationError::Interrupted` to
+`BootstrapError::Interrupted` exit 130 behind one termios guard, qualified by
+safe `openpty` PTY tests), `deploy.rs`
 (systemd/logrotate/cron rendering, install/uninstall), `backup.rs` (staged
 atomic ZIP with `META` + config + optional `.env` + consistent SQLite
 snapshot; restore requires stopped service), `update.rs` (GitHub release
