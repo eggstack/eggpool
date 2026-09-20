@@ -1,7 +1,7 @@
 # Plan 229 — Compact Hot-Path Corrective Closure
 
 Date: 2026-09-20  
-Status: corrective-pass — implementation handoff  
+Status: complete — implementation verified 2026-09-20
 Planning baseline: `dd3110fb293623f5ffcf2d284a52e410a18b8b5f`  
 Corrects residual from: `plans/226-request-hot-path-single-admission-zero-copy.md` and `plans/227-coordinator-provider-ownership-allocation-cleanup.md`  
 Parent roadmap: `plans/225-native-runtime-performance-optimization-roadmap.md`  
@@ -820,32 +820,32 @@ Stop and investigate rather than forcing the optimization if:
 
 This corrective pass is complete when:
 
-- [ ] `execute_compact_finite` performs one bounded JSON parse/depth check;
-- [ ] compact final admission consumes the already-parsed concrete request;
-- [ ] the production compact endpoint does not call
+- [x] `execute_compact_finite` performs one bounded JSON parse/depth check;
+- [x] compact final admission consumes the already-parsed concrete request;
+- [x] the production compact endpoint does not call
       `FiniteRequest::new_compact`;
-- [ ] `FiniteRequest::new_compact` remains available as a compatibility
+- [x] `FiniteRequest::new_compact` remains available as a compatibility
       constructor;
-- [ ] an already-admitted compact constructor/path is used by production;
-- [ ] direct/provider-qualified/virtual compact routing semantics are unchanged;
-- [ ] compact attempt preparation uses `AttemptPreparation<'_>`;
-- [ ] compact credentials/headers/provider/profile/request identity are borrowed
+- [x] an already-admitted compact constructor/path is used by production;
+- [x] direct/provider-qualified/virtual compact routing semantics are unchanged;
+- [x] compact attempt preparation uses `AttemptPreparation<'_>`;
+- [x] compact credentials/headers/provider/profile/request identity are borrowed
       through synchronous preparation;
-- [ ] `PreparedUpstreamAttempt` remains fully owned before provider I/O;
-- [ ] compact wire dispatch borrows `CompactAdmittedRequest` rather than
+- [x] `PreparedUpstreamAttempt` remains fully owned before provider I/O;
+- [x] compact wire dispatch borrows `CompactAdmittedRequest` rather than
       cloning it solely for preparation;
-- [ ] native/no-model-rewrite compact dispatch reuses owned `Bytes`;
-- [ ] model-rewrite compact dispatch allocates only because bytes change;
-- [ ] public slice-based compact admission/wire helpers remain compatible;
-- [ ] `ProviderClientPoolInner.closed` and unused `AtomicBool` state are
+- [x] native/no-model-rewrite compact dispatch reuses owned `Bytes`;
+- [x] model-rewrite compact dispatch allocates only because bytes change;
+- [x] public slice-based compact admission/wire helpers remain compatible;
+- [x] `ProviderClientPoolInner.closed` and unused `AtomicBool` state are
       removed;
-- [ ] provider pool close behavior remains unchanged;
-- [ ] `codex_compaction_compat`, wire, coordinator, provider, default, and
+- [x] provider pool close behavior remains unchanged;
+- [x] `codex_compaction_compat`, wire, coordinator, provider, default, and
       no-default qualification passes;
-- [ ] full repository validation passes;
-- [ ] closure evidence records one parse and zero native full-body copies for
+- [x] full repository validation passes;
+- [x] closure evidence records one parse and zero native full-body copies for
       the corrected compact path;
-- [ ] this plan is marked complete with the implementation commit SHA.
+- [x] this plan is marked complete with the implementation commit SHA.
 
 ---
 
@@ -872,3 +872,53 @@ Axum Bytes
 Once that path is true and the dead client-pool atomic is removed, stop. The
 broader performance campaign does not need another concurrency or architecture
 round.
+
+---
+
+# Closure evidence
+
+Implementation commit: `dd9d2ad77c84603dc376ecc3aa4b2fa43265aca6`
+
+Plan 229 closes the missed compact owned-`Bytes` criterion from Plan 226.
+The production compact path now follows the intended ownership sequence:
+
+~~~text
+Axum Bytes
+  -> parse_request_body once
+  -> stateless/finite inspection
+  -> in-memory model resolution
+  -> admit_compact_parsed_request
+  -> FiniteRequest::from_compact_admitted
+  -> borrowed AttemptPreparation
+  -> prepare_compact_dispatch
+  -> unchanged Bytes handle OR one required model-rewrite encoding
+  -> owned PreparedUpstreamAttempt
+  -> provider send
+~~~
+
+The public `admit_compact_request` and `FiniteRequest::new_compact` helpers
+remain available as compatibility entry points. The compact wire inspection
+helper remains available and keeps its slice-based copy semantics; production
+dispatch uses the new crate-internal owned-`Bytes` method. The dead
+`ProviderClientPoolInner.closed` atomic was removed while topology-swap close
+semantics, idempotent close counts, post-close lookup failure, and cloned-client
+survival remained unchanged.
+
+Qualification completed locally:
+
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`
+- strict default and `--no-default-features` Clippy
+- `cargo test --manifest-path rust/Cargo.toml --test codex_compaction_compat -- --test-threads=1` (13 passed)
+- `codex_responses_compat` (15), `wire_runtime` (10), `wire_qualification` (16), `wire_adaptation` (6)
+- `coordinator_c008` (29), `coordinator_c009` (13), `coordinator_c011` (17), `coordinator_boundaries` (5)
+- `coordinator_finalization` (10), `coordinator_publication` (6), `provider_transport` (30)
+- full `--no-default-features` serial workspace suite: 589 passed across 56 suites
+- full default serial workspace suite: 702 passed across 60 suites
+- locked release build, `cargo deny check`, and `git diff --check`
+- `uv sync --frozen`, Ruff format/check, Pyright, and tooling pytest: 83 passed, 1 skipped
+
+Regression coverage includes parsed-vs-slice compact admission parity and
+native compact dispatch pointer identity for the unchanged request body, plus
+model-rewrite allocation/content coverage. No Cargo dependency, SQLite,
+runtime-concurrency, stream-body, Eggfetch, Eggress, or routing changes were
+introduced.
