@@ -1,6 +1,6 @@
 # Plan 191: Eggress 1.0.7 facade migration and SSH fallback retirement
 
-> **Status:** READY FOR IMPLEMENTATION
+> **Status:** complete (verified 2026-09-20; implementation `48bf6b1`; CI run `35539446691`)
 >
 > **Baseline:** Eggpool `main` immediately before this plan at `9144ff910f2ef62055e0560fab850ad224f36c6d`
 >
@@ -614,3 +614,53 @@ Plan 191 is complete only when:
 The goal is not simply to consume a newer crate. The goal is to consume the upstream ownership fix that Eggpool originally needed, delete the local compatibility ownership that fix makes obsolete, and leave a smaller and more explicit trust/dependency boundary.
 
 Once the stable facade passes Eggpool's real SSH fixture and the custom-root seam is cleanly test-only, stop. Further proxy architecture work requires a separate justification.
+
+---
+
+## Closure evidence
+
+Implementation commit: `48bf6b1a68376931232e3261e3906ed2b9190147`
+(`Migrate Eggress SSH to facade ownership`), pushed to `main`.
+
+- Registry resolution succeeded for the complete published Eggress `1.0.7`
+  line. `rust/Cargo.toml` and `rust/Cargo.lock` contain no selected Eggress
+  `1.0.6` packages, git overrides, or path overrides.
+- The root feature topology is `default = ["ssh"]`,
+  `ssh = ["eggress-embed/ssh"]`; `test-support` implies `ssh` and owns only
+  the low-level crates needed by the deterministic custom-root adapter.
+  `eggress-ssh-fallback` and the direct `eggress-transport-ssh` edge are gone.
+- Production provider construction now sends every proxy expression,
+  including SSH and SSH-containing multihop routes, through
+  `eggress_embed::outbound::OutboundConnector`. Eggpool no longer creates an
+  SSH session cache or reconstructs production SSH chain state. The private
+  test-root adapter is `#[cfg(feature = "test-support")]`, supplies no SSH
+  session state, and preserves strict TLS verification.
+- `cargo tree -e features` and inverse queries show `eggress-transport-ssh`
+  only transitively through Eggress facade/runtime/server ownership; current
+  source references to Eggress implementation crates are confined to the
+  test-support adapter. No Eggpool-specific Eggress API or insecure trust hook
+  was added.
+- Behavior qualification passed: `provider_transport` with `test-support`
+  passed 35 tests, including live SSH traversal/authentication behavior and
+  custom-root Trojan success/failure; no-default serial tests passed 586 tests
+  across 56 suites; all-feature serial tests passed 593 tests across 56
+  suites; the exact default workspace suite passed 699 tests across 60 suites.
+- Compile/lint qualification passed for default, no-default,
+  `test-support`, and all-feature profiles. `cargo deny check` passed
+  advisories, bans, licenses, and sources with only existing duplicate-version
+  warnings. Formatting, UV/Ruff/Pyright, tooling tests (83 passed, 1 skipped),
+  release-doc validation, package-boundary validation, and `git diff --check`
+  all passed.
+- The locked release build produced `rust/target/release/eggpool` at
+  27.0 MB (`cargo bloat --release --crates`: 27.0 MiB file, 14.7 MiB
+  `.text`). The result is recorded for comparison; no release profile changes
+  were made and size reduction was not treated as a prerequisite.
+- Remote CI passed at
+  `https://github.com/eggstack/eggpool/actions/runs/35539446691` for the
+  pushed implementation head. Only upstream action-runtime and future
+  Ubuntu-label deprecation annotations were reported.
+
+Current documentation and skills now describe Eggress 1.0.7 facade-owned SSH,
+the root `ssh` capability, reduced-feature fail-closed behavior, and the
+test-only TLS-root seam. Plan 190 carries a historical supersession note; its
+original closure body remains unchanged.
