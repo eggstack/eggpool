@@ -131,6 +131,36 @@ pub struct AdmittedRequest {
     pub context_tokens: u64,
 }
 
+/// The bounded, already-parsed request boundary used by the HTTP coordinator.
+///
+/// The value is kept private to the native runtime so callers cannot bypass
+/// the body-size and depth checks.  It is consumed by admission after endpoint
+/// classification, which lets model resolution mutate the one parsed tree
+/// without reparsing serialized bytes.
+#[derive(Debug)]
+pub(crate) struct ParsedRequestBody {
+    pub(crate) raw_body: bytes::Bytes,
+    pub(crate) value: Value,
+}
+
+impl ParsedRequestBody {
+    pub(crate) fn object(&self) -> Result<&Map<String, Value>, AdmissionError> {
+        self.value
+            .as_object()
+            .ok_or(AdmissionError::TopLevelNotObject)
+    }
+
+    pub(crate) fn object_mut(&mut self) -> Result<&mut Map<String, Value>, AdmissionError> {
+        self.value
+            .as_object_mut()
+            .ok_or(AdmissionError::TopLevelNotObject)
+    }
+
+    pub(crate) fn into_parts(self) -> (bytes::Bytes, Value) {
+        (self.raw_body, self.value)
+    }
+}
+
 /// Bounded facts for one remote-compaction operation.
 ///
 /// Compaction is a distinct model-facing operation whose output replaces
@@ -189,18 +219,39 @@ pub fn admit_request(
     raw_body: &[u8],
     options: AdmissionOptions,
 ) -> Result<AdmittedRequest, AdmissionError> {
-    if raw_body.len() > options.max_body_bytes {
+    let parsed = parse_request_body(
+        bytes::Bytes::copy_from_slice(raw_body),
+        options.max_body_bytes,
+    )?;
+    admit_parsed_request(parsed, options)
+}
+
+/// Parse and depth-check one bounded request body exactly once.
+pub(crate) fn parse_request_body(
+    raw_body: bytes::Bytes,
+    max_body_bytes: usize,
+) -> Result<ParsedRequestBody, AdmissionError> {
+    if raw_body.len() > max_body_bytes {
         return Err(AdmissionError::BodyTooLarge {
             length: raw_body.len(),
-            limit: options.max_body_bytes,
+            limit: max_body_bytes,
         });
     }
-    let value = parse_once(raw_body)?;
+    let value = parse_once(&raw_body)?;
+    Ok(ParsedRequestBody { raw_body, value })
+}
+
+/// Admit a body after it has crossed the bounded parse/depth boundary.
+pub(crate) fn admit_parsed_request(
+    parsed: ParsedRequestBody,
+    options: AdmissionOptions,
+) -> Result<AdmittedRequest, AdmissionError> {
+    let (raw_body, value) = parsed.into_parts();
     let object = value.as_object().ok_or(AdmissionError::TopLevelNotObject)?;
     let canonical = canonical_request_from_object(object, options.client_surface)?;
-    let reservation_tokens = estimate_reservation_tokens(raw_body);
+    let reservation_tokens = estimate_reservation_tokens(&raw_body);
     let context_tokens =
-        estimate_context_input_tokens(raw_body, &value, options.extra_context_tokens);
+        estimate_context_input_tokens(&raw_body, &value, options.extra_context_tokens);
     let native_summary = (options.client_surface == ClientSurface::Responses)
         .then(|| native_feature_summary(object));
     let native_preservation = if options.client_surface == ClientSurface::Responses {
@@ -379,7 +430,7 @@ fn validate_value_depth(value: &Value, depth: usize) -> Result<(), AdmissionErro
     }
 }
 
-fn canonical_request_from_object(
+pub(crate) fn canonical_request_from_object(
     object: &Map<String, Value>,
     surface: ClientSurface,
 ) -> Result<CanonicalRequest, AdmissionError> {

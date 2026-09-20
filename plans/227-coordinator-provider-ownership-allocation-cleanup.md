@@ -1,7 +1,7 @@
 # Plan 227 — Coordinator/Provider Ownership and Allocation Cleanup
 
 Date: 2026-09-20  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: 3e90d36c4094af1c93756ace1c882f55b5f8f5d5  
 Parent roadmap: plans/225-native-runtime-performance-optimization-roadmap.md  
 Prerequisites: Plan 226 complete; prefer Plan 191 complete first if provider construction changed  
@@ -550,3 +550,28 @@ The clean boundary is:
 Do not allow lifetime-driven design to leak across that final arrow. The
 performance win comes from removing unnecessary temporary ownership, not from
 making the whole coordinator reference-based.
+
+## Closure record — 2026-09-20
+
+Implementation candidate: the current `main` working-tree candidate; the
+committed SHA is recorded by the follow-up campaign closure commit.
+
+Evidence:
+
+- Finite and streaming coordinators now use borrowed synchronous
+  `AttemptPreparation`; credentials, incoming headers, provider/profile data,
+  request IDs, and the admitted request are not deep-cloned solely for
+  pre-await preparation. The owned `PreparedUpstreamAttempt` remains the
+  provider-send boundary.
+- `WireRuntime::prepare_admitted_dispatch` is internal and dispatch-oriented;
+  native no-rewrite requests retain the ingress `Bytes` handle while public
+  `PreparedRequest`/slice helpers remain available.
+- `ProviderClientPool` builds local maps before publication, uses a nested
+  provider/account topology with borrowed lookups, and atomically swaps the
+  topology to `None` on close. Existing close, fallback, snapshot, and cloned
+  client-survival semantics passed `provider_transport`.
+- Static routing inputs are generation-owned per client surface, and incoming
+  header filtering compares normalized names without allocating lowercase
+  strings.
+- Focused coordinator, provider, wire, default, no-default, and tooling gates
+  passed; no dependency or feature changes were made.

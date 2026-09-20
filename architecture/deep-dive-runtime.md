@@ -47,6 +47,12 @@ threads. Its existing reload classification remains restart-required. A future
 removal or multithread implementation requires a separate compatibility and
 performance decision.
 
+The 2026 performance qualification measured the current-thread runtime,
+streaming bridge, SQLite gate, and routing selection lock as evidence-gated
+boundaries. They remain intentionally simple unless a comparable loopback
+workload demonstrates material tail-latency or throughput benefit that
+outweighs lifecycle and ownership complexity.
+
 ## Runtime generations
 
 The `rust/src/runtime_lifecycle/` package owns the generation state machine.

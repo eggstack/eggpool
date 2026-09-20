@@ -36,6 +36,22 @@ pub struct AttemptInput {
     pub candidate_fingerprint: String,
 }
 
+/// Borrowed request data used only during synchronous preparation.  Nothing
+/// in this value may cross the `submit_once` await boundary.
+pub struct AttemptPreparation<'a> {
+    pub(crate) identity: &'a FinalizationIdentity,
+    pub(crate) provider: &'a ProviderConfig,
+    pub(crate) account_api_key: Option<&'a str>,
+    pub(crate) incoming_headers: &'a HeaderMap,
+    pub(crate) request_id: Option<&'a str>,
+    pub(crate) correlation_id: Option<&'a str>,
+    pub(crate) raw_body: &'a Bytes,
+    pub(crate) client_surface: ClientSurface,
+    pub(crate) profile: &'a ConfiguredWireProfile,
+    pub(crate) stream: bool,
+    pub(crate) candidate_fingerprint: &'a str,
+}
+
 #[derive(Clone)]
 pub struct PreparedUpstreamAttempt {
     pub identity: FinalizationIdentity,
@@ -141,10 +157,39 @@ impl AttemptBuilder {
         self.prepare_with_admission(input, Some(admission))
     }
 
+    pub(crate) fn prepare_borrowed(
+        &self,
+        input: AttemptPreparation<'_>,
+        admission: &AdmittedRequest,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        self.prepare_parts(input, Some(admission))
+    }
+
     fn prepare_with_admission(
         &self,
         input: AttemptInput,
         admission: Option<AdmittedRequest>,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        let borrowed = AttemptPreparation {
+            identity: &input.identity,
+            provider: &input.provider,
+            account_api_key: input.account_api_key.as_deref(),
+            incoming_headers: &input.incoming_headers,
+            request_id: input.request_id.as_deref(),
+            correlation_id: input.correlation_id.as_deref(),
+            raw_body: &input.raw_body,
+            client_surface: input.client_surface,
+            profile: &input.profile,
+            stream: input.stream,
+            candidate_fingerprint: &input.candidate_fingerprint,
+        };
+        self.prepare_parts(borrowed, admission.as_ref())
+    }
+
+    fn prepare_parts(
+        &self,
+        input: AttemptPreparation<'_>,
+        admission: Option<&AdmittedRequest>,
     ) -> Result<PreparedUpstreamAttempt, AttemptError> {
         let mut context = WireRuntimeContext::new(
             input.client_surface,
@@ -163,12 +208,18 @@ impl AttemptBuilder {
                 crate::wire::CompactionCapabilities::from_surface_config(surface),
             );
         }
-        let prepared = match admission {
+        let body = match admission {
             Some(admission) => {
                 self.wire
-                    .prepare_admitted_request(admission, &input.raw_body, &context)?
+                    .prepare_admitted_dispatch(admission, (*input.raw_body).clone(), &context)?
+                    .body
             }
-            None => self.wire.prepare_request(&input.raw_body, &context)?,
+            None => {
+                self.wire
+                    .prepare_request(input.raw_body, &context)?
+                    .body
+                    .bytes
+            }
         };
         let path_template = if input.stream {
             input
@@ -194,14 +245,14 @@ impl AttemptBuilder {
             http::header::USER_AGENT,
             HeaderValue::from_static(concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))),
         );
-        add_forwarded_headers(&mut headers, &input.incoming_headers)?;
+        add_forwarded_headers(&mut headers, input.incoming_headers)?;
         add_request_identity_headers(
             &mut headers,
-            input.request_id.as_deref().or_else(|| {
+            input.request_id.or_else(|| {
                 (!input.identity.proxy_request_id.is_empty())
                     .then_some(input.identity.proxy_request_id.as_str())
             }),
-            input.correlation_id.as_deref(),
+            input.correlation_id,
         )?;
         add_static_headers(&mut headers, &input.provider.headers)?;
         if let Some(surface) = input
@@ -213,26 +264,22 @@ impl AttemptBuilder {
             add_auth_header(
                 &mut headers,
                 surface.auth.as_ref().unwrap_or(&input.provider.auth),
-                input.account_api_key.as_deref(),
+                input.account_api_key,
             )?;
         } else {
-            add_auth_header(
-                &mut headers,
-                &input.provider.auth,
-                input.account_api_key.as_deref(),
-            )?;
+            add_auth_header(&mut headers, &input.provider.auth, input.account_api_key)?;
         }
         Ok(PreparedUpstreamAttempt {
             identity: identity.clone(),
             provider_id: identity.provider_id.clone(),
             account_name: identity.account_name.clone(),
             upstream_model_id: identity.upstream_model_id.clone(),
-            profile: input.profile,
-            candidate_fingerprint: input.candidate_fingerprint,
+            profile: input.profile.clone(),
+            candidate_fingerprint: input.candidate_fingerprint.to_owned(),
             method: Method::POST,
             path,
             headers,
-            body: prepared.body.bytes,
+            body,
             stream: input.stream,
         })
     }

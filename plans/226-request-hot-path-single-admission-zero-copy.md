@@ -1,7 +1,7 @@
 # Plan 226 — Request Hot-Path Single Admission and Zero-Copy Native Body
 
 Date: 2026-09-20  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: 3e90d36c4094af1c93756ace1c882f55b5f8f5d5  
 Parent roadmap: plans/225-native-runtime-performance-optimization-roadmap.md  
 Priority: P0 request-path CPU/allocation reduction  
@@ -508,3 +508,25 @@ The final shape should make ownership obvious:
 
 The direct path should not pay virtual-routing or transcoding costs it does not
 use.
+
+## Closure record — 2026-09-20
+
+Implementation candidate: the current `main` working-tree candidate; the
+committed SHA is recorded by the follow-up campaign closure commit.
+
+Evidence:
+
+- `server/inference.rs` now makes one `execute_endpoint` call. Bounded parse,
+  depth validation, stream classification, model mutation, and final admission
+  happen in `coordinator/endpoints.rs`; direct finite/stream requests use
+  `from_admitted`.
+- Direct concrete requests have one `serde_json::from_slice` at the endpoint
+  boundary and no top-level `Map` clone. Virtual/provider-qualified rewrites
+  mutate the parsed tree and serialize once for the final concrete body.
+- Native no-rewrite dispatch returns the ingress `Bytes` handle directly;
+  model rewrites and cross-surface codecs retain their required allocations.
+- Focused coordinator, wire, Codex compatibility, default/no-default, and
+  tooling gates passed; no permanent benchmark dependency was added.
+
+The structural result is the acceptance evidence: direct admission is one
+parse and native body forwarding shares the original allocation.

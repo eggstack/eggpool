@@ -14,6 +14,24 @@ codec under `rust/src/wire/` encodes the provider request and decodes finite or
 streaming responses. Native terminal evidence is required; transport EOF is
 never treated as successful completion.
 
+## Bounded admission and ownership
+
+The production path in `rust/src/coordinator/endpoints.rs` receives the
+already bounded Axum `Bytes`, parses and depth-checks it once, and selects
+finite versus streaming from the same parsed object. `ParsedRequestBody` is
+consumed by admission after direct inspection. Provider-qualified and virtual
+model resolution mutates that object before one bounded serialization; the
+final request is then constructed with `FiniteRequest::from_admitted` or
+`StreamRequest::from_admitted`. Public slice-based admission/wire helpers
+remain available for tests and compatibility callers.
+
+For unchanged native forwarding, the coordinator uses the owned dispatch wire
+path and clones only the `Bytes` handle, not its backing allocation. A borrowed
+`AttemptPreparation` supplies headers, credentials, profile, and request data
+through synchronous preparation; `PreparedUpstreamAttempt` owns all values
+before provider submission is awaited. Cross-surface codecs and actual model
+rewrites continue to allocate their required encoded representation.
+
 Responses admission deliberately creates two bounded products: the canonical
 semantic projection used by routing/accounting and a source-native preservation
 envelope holding the already-parsed request JSON plus redacted feature facts.

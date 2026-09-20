@@ -310,6 +310,15 @@ pub struct PreparedRequest {
     pub stream: StreamIntent,
 }
 
+/// Minimal provider-dispatch result.  The coordinator does not need the
+/// inspection-only canonical/admission trees once validation and encoding are
+/// complete.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PreparedWireDispatch {
+    pub(crate) body: Bytes,
+    pub(crate) adaptation: AdaptationSummary,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FiniteResponseOutcome {
     Success(Box<CanonicalResponse>),
@@ -622,6 +631,80 @@ impl WireRuntime {
             },
             admission,
             body,
+        })
+    }
+
+    /// Prepare an already-admitted request while retaining an owned ingress
+    /// `Bytes` handle.  Public slice callers keep their compatibility copy;
+    /// coordinator dispatch uses this path so native no-rewrite bodies share
+    /// the original backing allocation.
+    pub(crate) fn prepare_admitted_dispatch(
+        &self,
+        admission: &AdmittedRequest,
+        raw_body: Bytes,
+        context: &WireRuntimeContext,
+    ) -> Result<PreparedWireDispatch, WireRuntimeError> {
+        let native_no_rewrite = context.profile_flags.body_passthrough
+            && compatibility_path(
+                context.client_surface,
+                context.selected_profile.definition.surface,
+            ) == super::CompatibilityPath::Native
+            && context.upstream_model_id == admission.canonical.model;
+        if native_no_rewrite {
+            self.validate_context(context)?;
+            if admission.canonical.model != context.canonical_model_id {
+                return Err(
+                    self.profile_error(context, ProfileMismatchReason::CanonicalModelMismatch)
+                );
+            }
+            if admission.canonical.stream && !context.profile_flags.supports_streaming {
+                return Err(
+                    self.profile_error(context, ProfileMismatchReason::StreamingUnavailable)
+                );
+            }
+            if context.client_surface == ClientSurface::Responses
+                && let Some(preservation) = admission.native_preservation.as_ref()
+                && let Some(object) = preservation.parsed.as_object()
+                && has_compaction_trigger(object)
+            {
+                let native_v2 = context.selected_profile.definition.surface
+                    == WireSurface::OpenaiResponses
+                    && context.compaction.supports_remote_compaction_v2;
+                if !native_v2 {
+                    return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                        reason: CodecReasonCode::UnsupportedSemanticFeature,
+                        field: Some("input.compaction_trigger".into()),
+                        source_surface: Some(WireSurface::OpenaiResponses),
+                        target_surface: Some(context.selected_profile.definition.surface),
+                    }));
+                }
+            }
+            if admission
+                .canonical
+                .tools
+                .iter()
+                .any(|tool| tool.kind == CanonicalToolKind::DeferredSearch)
+                && !supports_deferred_tool_search(context.selected_profile.definition.surface)
+            {
+                return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                    reason: CodecReasonCode::UnsupportedSemanticFeature,
+                    field: Some("tools.tool_search".into()),
+                    source_surface: Some(WireSurface::OpenaiResponses),
+                    target_surface: Some(context.selected_profile.definition.surface),
+                }));
+            }
+            let _ = self.request_codec(context)?;
+            let _ = stream_adapter(context.selected_profile.definition.stream_codec)
+                .map_err(|reason| self.profile_error(context, reason))?;
+            return Ok(PreparedWireDispatch {
+                body: raw_body,
+                adaptation: AdaptationSummary::from_notices(&[]),
+            });
+        }
+        let prepared = self.prepare_admitted_request(admission.clone(), &raw_body, context)?;
+        Ok(PreparedWireDispatch {
+            body: prepared.body.bytes,
+            adaptation: prepared.adaptation,
         })
     }
 

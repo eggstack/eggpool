@@ -13,6 +13,10 @@ pub use admission::{
     admit_request, affinity_identity_input, canonical_request_from_value, has_compaction_trigger,
     routing_request_facts, validate_responses_stateless_policy,
 };
+
+pub(crate) use admission::{
+    ParsedRequestBody, admit_parsed_request, canonical_request_from_object, parse_request_body,
+};
 pub use body::{
     BodyEncodingError, EncodedJsonBody, encode_compact_json, encode_compact_json_bounded,
 };

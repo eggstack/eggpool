@@ -75,6 +75,20 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - No Python runtime fallbacks; no new restart/reload key lists; no buffering
   arbitrary native streams. Credentials, prompts, raw bodies, cache keys stay
   out of persistence/logs/diagnostics.
+- Inference admission is owned by `coordinator/endpoints.rs`: the production
+  server makes one endpoint execution call, and finite/streaming selection,
+  depth validation, virtual/provider-qualified model mutation, and final
+  `from_admitted` construction reuse one parsed body. Native no-rewrite
+  dispatch retains the ingress `Bytes` backing allocation.
+- Attempt preparation may borrow generation/request data only synchronously;
+  `PreparedUpstreamAttempt` is fully owned before `submit_once` is awaited.
+  `ProviderClientPool` publishes an immutable nested provider/account topology
+  and closes it atomically; do not reintroduce per-request topology mutexes or
+  allocated tuple lookup keys.
+- The performance campaign in Plans 226–228 is evidence-gated. Keep the
+  single SQLite gate, streaming mpsc bridge, Tokio `current_thread` runtime,
+  and routing selection lock unless comparable loopback measurements justify a
+  narrowly scoped change.
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing (`eggress-ssh-fallback` is default-only compat).

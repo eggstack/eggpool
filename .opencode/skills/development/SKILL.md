@@ -81,6 +81,23 @@ cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads
 cargo test --manifest-path rust/Cargo.toml --test wire_qualification -- --test-threads=1
 ```
 
+For request hot-path or provider ownership changes, also qualify the single
+endpoint boundary and immutable client topology before the full suite:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c009 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c011 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test provider_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads=1
+```
+
+Plans 226–228 require comparable release/loopback evidence for parse and
+body-copy work. Treat dashboard SQLite, the streaming mpsc bridge, the
+current-thread runtime, and the routing selection lock as measurement targets;
+do not add a second database connection, runtime worker pool, broad queue, or
+lock-free routing structure without reproducible tail-latency evidence.
+
 For cancellation and ownership tests, synchronize on an observable fixture
 transition or product invariant under a bounded `tokio::time::timeout`.
 Avoid fixed millisecond sleeps and fixed `yield_now()` counts as readiness or

@@ -41,7 +41,10 @@ use crate::{
     },
     providers::ProviderClientPool,
     quota::{AccountQuota, QuotaEstimator},
-    request::{AdmissionError, StaticRoutingFacts, validate_responses_stateless_policy},
+    request::{
+        AdmissionError, ParsedRequestBody, StaticRoutingFacts, admit_parsed_request,
+        canonical_request_from_object, parse_request_body, validate_responses_stateless_policy,
+    },
     routing::{EligibilityPolicy, RoutingRouter},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireProfileRegistry,
@@ -114,6 +117,41 @@ pub enum EndpointError {
     Attempt,
     #[error("Finalization failed")]
     Finalization,
+}
+
+impl From<AdmissionError> for EndpointError {
+    fn from(error: AdmissionError) -> Self {
+        match error {
+            AdmissionError::BodyTooLarge { .. } => Self::BodyTooLarge,
+            AdmissionError::InvalidJson | AdmissionError::TopLevelNotObject => Self::InvalidJson,
+            AdmissionError::StatefulResponsesFeature { field: "previous_response_id" } => {
+                Self::StatelessViolation(
+                    "EggPool's /v1/responses is stateless only; previous_response_id is not supported."
+                        .into(),
+                )
+            }
+            AdmissionError::StatefulResponsesFeature { field: "conversation" } => {
+                Self::StatelessViolation(
+                    "EggPool's /v1/responses is stateless only; conversation references are not supported."
+                        .into(),
+                )
+            }
+            AdmissionError::StatefulResponsesFeature { field: "store" } => {
+                Self::StatelessViolation(
+                    "EggPool's /v1/responses is stateless only; store=true is not supported."
+                        .into(),
+                )
+            }
+            AdmissionError::StatefulResponsesFeature { field: "background" } => {
+                Self::StatelessViolation(
+                    "EggPool's /v1/responses is stateless only; background=true is not supported."
+                        .into(),
+                )
+            }
+            AdmissionError::InvalidField { field: "stream" } => Self::InvalidStream,
+            _ => Self::Admission,
+        }
+    }
 }
 
 impl EndpointError {
@@ -222,6 +260,7 @@ pub struct InferenceState {
     registry: ModelRouterRegistry,
     affinity: Arc<ModelRouterAffinity>,
     known_providers: BTreeSet<String>,
+    routing_inputs: [StaticRoutingFacts; 3],
     max_body_bytes: usize,
     router: RoutingRouter,
     catalog_service: Option<Arc<CatalogService>>,
@@ -271,12 +310,18 @@ impl InferenceState {
         router: RoutingRouter,
         catalog_service: Option<Arc<CatalogService>>,
     ) -> Self {
+        let routing_inputs = [
+            static_routing_facts(&known_providers, ClientSurface::ChatCompletions),
+            static_routing_facts(&known_providers, ClientSurface::Responses),
+            static_routing_facts(&known_providers, ClientSurface::Messages),
+        ];
         Self {
             finite,
             streaming,
             registry,
             affinity,
             known_providers,
+            routing_inputs,
             max_body_bytes: max_body_bytes.max(1),
             router,
             catalog_service,
@@ -331,6 +376,14 @@ impl InferenceState {
         self.max_body_bytes
     }
 
+    pub fn routing_inputs(&self, surface: ClientSurface) -> &StaticRoutingFacts {
+        &self.routing_inputs[match surface {
+            ClientSurface::ChatCompletions => 0,
+            ClientSurface::Responses => 1,
+            ClientSurface::Messages => 2,
+        }]
+    }
+
     pub fn catalog_service(&self) -> Option<Arc<CatalogService>> {
         self.catalog_service.clone()
     }
@@ -352,10 +405,19 @@ pub struct VirtualResolution {
 pub struct ResolvedInference {
     pub concrete_body: Bytes,
     pub concrete_model: String,
+    pub admitted: crate::request::AdmittedRequest,
     pub provider_id: Option<String>,
     pub virtual_resolution: Option<VirtualResolution>,
     pub selector_attempts: u32,
     pub selector_latency_ms: Option<f64>,
+}
+
+/// The one production endpoint decision made after bounded admission.
+/// Keeping stream classification here prevents the HTTP adapter from parsing
+/// the request a second time merely to choose a coordinator.
+pub enum EndpointExecution {
+    Finite(Box<FiniteExecution>, Option<VirtualResolution>),
+    Stream(Box<StreamingExecution>, Option<VirtualResolution>),
 }
 
 /// Client-visible inference outcome for metrics (secret-free).
@@ -445,13 +507,33 @@ fn static_routing_facts(
     }
 }
 
-fn rewrite_model_field(body: &[u8], concrete_model: &str) -> Result<Bytes, EndpointError> {
-    let mut value: Value = serde_json::from_slice(body).map_err(|_| EndpointError::InvalidJson)?;
-    let object = value.as_object_mut().ok_or(EndpointError::InvalidJson)?;
-    object.insert("model".into(), Value::String(concrete_model.to_owned()));
-    serde_json::to_vec(&value)
+fn encode_resolved_value(value: &Value) -> Result<Bytes, EndpointError> {
+    serde_json::to_vec(value)
         .map(Bytes::from)
         .map_err(|_| EndpointError::InvalidJson)
+}
+
+fn admit_resolved(
+    parsed: ParsedRequestBody,
+    state: &InferenceState,
+    surface: ClientSurface,
+    concrete_body: Bytes,
+) -> Result<crate::request::AdmittedRequest, EndpointError> {
+    admit_parsed_request(
+        parsed,
+        crate::request::AdmissionOptions {
+            max_body_bytes: state.max_body_bytes,
+            client_surface: surface,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| EndpointError::Admission)
+    .and_then(|admitted| {
+        if concrete_body.len() > state.max_body_bytes {
+            return Err(EndpointError::BodyTooLarge);
+        }
+        Ok(admitted)
+    })
 }
 
 /// Resolve virtual aliases before concrete parsing.
@@ -462,12 +544,11 @@ fn rewrite_model_field(body: &[u8], concrete_model: &str) -> Result<Bytes, Endpo
 async fn resolve_concrete(
     state: &InferenceState,
     surface: ClientSurface,
-    raw_body: Bytes,
-    payload: &Map<String, Value>,
+    mut parsed: ParsedRequestBody,
     session_header: Option<&str>,
     proxy_request_id: &str,
 ) -> Result<ResolvedInference, EndpointError> {
-    let model_value = model_field(payload)?;
+    let model_value = model_field(parsed.object()?)?;
     // Exact virtual-alias match comes before concrete provider parsing.
     let Some(router) = state.registry.get(model_value.trim()) else {
         let (model_id, provider_id) =
@@ -476,13 +557,20 @@ async fn resolve_concrete(
         // does not understand EggPool's namespace. The qualifier survives as
         // a routing pin, matching the Python `provider_id` context field.
         let concrete_body = if model_id != model_value.trim() {
-            rewrite_model_field(&raw_body, &model_id)?
+            parsed
+                .object_mut()?
+                .insert("model".into(), Value::String(model_id.clone()));
+            let concrete_body = encode_resolved_value(&parsed.value)?;
+            parsed.raw_body = concrete_body.clone();
+            concrete_body
         } else {
-            raw_body
+            parsed.raw_body.clone()
         };
+        let admitted = admit_resolved(parsed, state, surface, concrete_body.clone())?;
         return Ok(ResolvedInference {
             concrete_body,
             concrete_model: model_id,
+            admitted,
             provider_id,
             virtual_resolution: None,
             selector_attempts: 0,
@@ -492,8 +580,7 @@ async fn resolve_concrete(
     resolve_virtual(
         state,
         surface,
-        raw_body,
-        payload,
+        parsed,
         &router,
         session_header,
         proxy_request_id,
@@ -504,31 +591,22 @@ async fn resolve_concrete(
 async fn resolve_virtual(
     state: &InferenceState,
     surface: ClientSurface,
-    raw_body: Bytes,
-    _payload: &Map<String, Value>,
+    parsed: ParsedRequestBody,
     router: &CompiledModelRouter,
     session_header: Option<&str>,
     proxy_request_id: &str,
 ) -> Result<ResolvedInference, EndpointError> {
     // Build the early canonical view for the semantic prompt and affinity
     // identity. Admission here is bounded by the same body ceiling.
-    let admitted = crate::request::admit_request(
-        &raw_body,
-        crate::request::AdmissionOptions {
-            max_body_bytes: state.max_body_bytes,
-            client_surface: surface,
-            ..Default::default()
-        },
-    )
-    .map_err(|_| EndpointError::Admission)?;
+    let canonical = canonical_request_from_object(parsed.object()?, surface)
+        .map_err(|_| EndpointError::Admission)?;
     let _ = proxy_request_id;
-    let identity_input = admitted.affinity_identity(session_header);
+    let identity_input = crate::request::affinity_identity_input(&canonical, session_header);
     let identity = identity_input.session_identity();
     let known = state.known_providers.clone();
     let registry_virtual = state.registry.clone();
     let selector = SemanticSelector::new(state.finite.clone(), known)
         .with_virtual_check(move |model| registry_virtual.is_virtual(model));
-    let canonical = admitted.canonical.clone();
     if router.sticky
         && let Some(identity) = identity
     {
@@ -550,7 +628,8 @@ async fn resolve_virtual(
         };
         return finish_virtual_resolution(
             state,
-            &raw_body,
+            surface,
+            parsed,
             router,
             resolution.decision.concrete_model.clone(),
             resolution.decision.route_id.clone(),
@@ -564,7 +643,8 @@ async fn resolve_virtual(
     let selection = selector.select(router, &canonical, surface).await;
     finish_virtual_resolution(
         state,
-        &raw_body,
+        surface,
+        parsed,
         router,
         selection.concrete_model.clone(),
         selection.route_id.clone(),
@@ -601,7 +681,8 @@ async fn selector_affinity_selection(
 #[allow(clippy::too_many_arguments)]
 fn finish_virtual_resolution(
     state: &InferenceState,
-    raw_body: &[u8],
+    surface: ClientSurface,
+    mut parsed: ParsedRequestBody,
     router: &CompiledModelRouter,
     concrete_model: String,
     route_id: String,
@@ -621,20 +702,21 @@ fn finish_virtual_resolution(
     if route.label != route_label || route.model != concrete_model {
         return Err(EndpointError::Admission);
     }
-    let concrete_body = rewrite_model_field(raw_body, &concrete_model)?;
     let (_, provider_id) = parse_provider_qualified_model(&concrete_model, &state.known_providers);
     // Strip any provider qualifier from the dispatched model: the upstream
     // does not understand EggPool's namespace.
     let (dispatch_model, _) =
         parse_provider_qualified_model(&concrete_model, &state.known_providers);
-    let concrete_body = if dispatch_model != concrete_model {
-        rewrite_model_field(&concrete_body, &dispatch_model)?
-    } else {
-        concrete_body
-    };
+    parsed
+        .object_mut()?
+        .insert("model".into(), Value::String(dispatch_model.clone()));
+    let concrete_body = encode_resolved_value(&parsed.value)?;
+    parsed.raw_body = concrete_body.clone();
+    let admitted = admit_resolved(parsed, state, surface, concrete_body.clone())?;
     Ok(ResolvedInference {
         concrete_body,
         concrete_model: dispatch_model,
+        admitted,
         provider_id,
         virtual_resolution: Some(VirtualResolution {
             virtual_model: router.virtual_model.clone(),
@@ -658,51 +740,95 @@ pub async fn execute_finite(
     session_header: Option<String>,
     proxy_request_id: String,
 ) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
-    if raw_body.len() > state.max_body_bytes {
-        return Err(EndpointError::BodyTooLarge);
-    }
-    let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
-    let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
-    if surface == ClientSurface::Responses
-        && let Some(rejection) = validate_responses_stateless(&payload)
+    match execute_endpoint(
+        state,
+        surface,
+        raw_body,
+        incoming_headers,
+        session_header,
+        proxy_request_id,
+    )
+    .await?
     {
-        return Err(EndpointError::StatelessViolation(rejection));
+        EndpointExecution::Finite(execution, virtual_resolution) => {
+            Ok((*execution, virtual_resolution))
+        }
+        EndpointExecution::Stream(_, _) => Err(EndpointError::Admission),
     }
-    if stream_flag(&payload)? {
-        return Err(EndpointError::Admission);
-    }
+}
+
+/// Parse, classify, resolve, admit, and execute one inference request.  This
+/// is the only production entry point that decides finite versus streaming.
+pub async fn execute_endpoint(
+    state: &InferenceState,
+    surface: ClientSurface,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    session_header: Option<String>,
+    proxy_request_id: String,
+) -> Result<EndpointExecution, EndpointError> {
+    let parsed =
+        parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
+            AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
+            AdmissionError::InvalidJson => EndpointError::InvalidJson,
+            AdmissionError::TopLevelNotObject => EndpointError::InvalidJson,
+            _ => EndpointError::Admission,
+        })?;
+    let stream = stream_flag(parsed.object()?)?;
     let resolved = resolve_concrete(
         state,
         surface,
-        raw_body.clone(),
-        &payload,
+        parsed,
         session_header.as_deref(),
         &proxy_request_id,
     )
     .await?;
-    let mut request = FiniteRequest::new(
-        proxy_request_id,
-        resolved.concrete_body.clone(),
-        incoming_headers,
-        surface,
-        static_routing_facts(&state.known_providers, surface),
-    )
-    .map_err(|_| EndpointError::Admission)?;
-    // The resolved concrete model must match admission; a mismatch is a
-    // fail-closed programming error, never silent failover.
-    if request.admitted.canonical.model != resolved.concrete_model {
+    if resolved.admitted.canonical.stream != stream {
         return Err(EndpointError::Admission);
     }
-    // Preserve an explicit provider qualifier (`model/provider`) as a routing
-    // pin. Admission carries the stripped canonical model; the qualifier
-    // survives only here, matching the Python `provider_id` context field.
-    request.routing_facts.provider_id = resolved.provider_id.clone();
-    let execution = state
-        .finite
-        .execute(request)
-        .await
-        .map_err(map_finite_error)?;
-    Ok((execution, resolved.virtual_resolution))
+    let mut routing_facts = resolved
+        .admitted
+        .routing_facts(state.routing_inputs(surface));
+    routing_facts.provider_id = resolved.provider_id.clone();
+    if stream {
+        let request = StreamRequest::from_admitted(
+            proxy_request_id,
+            resolved.concrete_body,
+            incoming_headers,
+            surface,
+            resolved.admitted,
+            routing_facts,
+        )
+        .map_err(|_| EndpointError::Admission)?;
+        let execution = state
+            .streaming
+            .execute(request)
+            .await
+            .map_err(map_stream_error)?;
+        Ok(EndpointExecution::Stream(
+            Box::new(execution),
+            resolved.virtual_resolution,
+        ))
+    } else {
+        let request = FiniteRequest::from_admitted(
+            proxy_request_id,
+            resolved.concrete_body,
+            incoming_headers,
+            surface,
+            resolved.admitted,
+            routing_facts,
+        )
+        .map_err(|_| EndpointError::Admission)?;
+        let execution = state
+            .finite
+            .execute(request)
+            .await
+            .map_err(map_finite_error)?;
+        Ok(EndpointExecution::Finite(
+            Box::new(execution),
+            resolved.virtual_resolution,
+        ))
+    }
 }
 
 /// Execute one finite remote-compaction request through the thin endpoint
@@ -725,24 +851,21 @@ pub async fn execute_compact_finite(
     proxy_request_id: String,
 ) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
     const SURFACE: ClientSurface = ClientSurface::Responses;
-    if raw_body.len() > state.max_body_bytes {
-        return Err(EndpointError::BodyTooLarge);
-    }
-    let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
-    let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
-    if let Some(rejection) = validate_responses_stateless(&payload) {
+    let parsed = parse_request_body(raw_body, state.max_body_bytes)
+        .map_err(|_| EndpointError::InvalidJson)?;
+    let payload = parsed.object()?;
+    if let Some(rejection) = validate_responses_stateless(payload) {
         return Err(EndpointError::StatelessViolation(rejection));
     }
     // The compact endpoint is finite-only; streaming compaction results are
     // not part of the current contract.
-    if stream_flag(&payload)? {
+    if stream_flag(payload)? {
         return Err(EndpointError::Admission);
     }
     let resolved = resolve_concrete(
         state,
         SURFACE,
-        raw_body.clone(),
-        &payload,
+        parsed,
         session_header.as_deref(),
         &proxy_request_id,
     )
@@ -775,46 +898,21 @@ pub async fn execute_stream(
     session_header: Option<String>,
     proxy_request_id: String,
 ) -> Result<(StreamingExecution, Option<VirtualResolution>), EndpointError> {
-    if raw_body.len() > state.max_body_bytes {
-        return Err(EndpointError::BodyTooLarge);
-    }
-    let value: Value = serde_json::from_slice(&raw_body).map_err(|_| EndpointError::InvalidJson)?;
-    let payload = value.as_object().ok_or(EndpointError::InvalidJson)?.clone();
-    if surface == ClientSurface::Responses
-        && let Some(rejection) = validate_responses_stateless(&payload)
-    {
-        return Err(EndpointError::StatelessViolation(rejection));
-    }
-    if !stream_flag(&payload)? {
-        return Err(EndpointError::Admission);
-    }
-    let resolved = resolve_concrete(
+    match execute_endpoint(
         state,
         surface,
-        raw_body.clone(),
-        &payload,
-        session_header.as_deref(),
-        &proxy_request_id,
-    )
-    .await?;
-    let mut request = StreamRequest::new(
-        proxy_request_id,
-        resolved.concrete_body.clone(),
+        raw_body,
         incoming_headers,
-        surface,
-        static_routing_facts(&state.known_providers, surface),
+        session_header,
+        proxy_request_id,
     )
-    .map_err(|_| EndpointError::Admission)?;
-    if request.admitted.canonical.model != resolved.concrete_model {
-        return Err(EndpointError::Admission);
+    .await?
+    {
+        EndpointExecution::Stream(execution, virtual_resolution) => {
+            Ok((*execution, virtual_resolution))
+        }
+        EndpointExecution::Finite(_, _) => Err(EndpointError::Admission),
     }
-    request.routing_facts.provider_id = resolved.provider_id.clone();
-    let execution = state
-        .streaming
-        .execute(request)
-        .await
-        .map_err(map_stream_error)?;
-    Ok((execution, resolved.virtual_resolution))
 }
 
 /// Build a production [`InferenceState`] from validated config and open DB.

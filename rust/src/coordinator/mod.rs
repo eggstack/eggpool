@@ -16,7 +16,8 @@ mod streaming;
 mod wire_resolver;
 
 pub use attempt::{
-    AttemptBuilder, AttemptError, AttemptInput, PreparedUpstreamAttempt, UpstreamResponseEvidence,
+    AttemptBuilder, AttemptError, AttemptInput, AttemptPreparation, PreparedUpstreamAttempt,
+    UpstreamResponseEvidence,
 };
 pub use failure::{
     EffectLedger, EffectLedgerError, FailureCategory, FailureDecisionEngine, FailureEffects,
@@ -58,10 +59,10 @@ pub use streaming::{
 };
 
 pub use endpoints::{
-    EndpointError, InferenceOperation, InferenceOutcome, InferenceState, ResolvedInference,
-    VirtualResolution, build_stream_response_headers, endpoint_error_body, execute_compact_finite,
-    execute_finite, execute_stream, new_proxy_request_id, parse_provider_qualified_model,
-    validate_responses_stateless,
+    EndpointError, EndpointExecution, InferenceOperation, InferenceOutcome, InferenceState,
+    ResolvedInference, VirtualResolution, build_stream_response_headers, endpoint_error_body,
+    execute_compact_finite, execute_endpoint, execute_finite, execute_stream, new_proxy_request_id,
+    parse_provider_qualified_model, validate_responses_stateless,
 };
 pub(crate) use endpoints::{
     build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,

@@ -1,7 +1,7 @@
 # Plan 225 — Native Runtime Performance Optimization Roadmap
 
 Date: 2026-09-20  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: 3e90d36c4094af1c93756ace1c882f55b5f8f5d5  
 Parent context: completed Plans 220, 223, and 224; active Plan 191  
 Priority: P0/P1 request-path efficiency with evidence-gated structural follow-up  
@@ -327,3 +327,14 @@ the selected wire body. Make that path parse once and retain the original Bytes
 allocation when nothing needs rewriting. Only after that work is measured
 should the implementation spend complexity on runtime threading, stream-body
 plumbing, or extra SQLite connections.
+
+## Campaign closure — 2026-09-20
+
+Plans 226, 227, and 228 are complete. The native request path now admits a
+bounded body once, preserves unchanged native `Bytes`, borrows only through
+synchronous attempt preparation, and uses an immutable provider/account client
+topology with atomic close. Loopback and file-backed SQLite qualification did
+not justify a second read connection, stream-body redesign, multithread Tokio
+runtime, or routing-lock change. Default/no-default Rust, locked release,
+Python tooling, package-boundary, and documentation checks are green. See the
+closure records in Plans 226–228 for the exact evidence and limitations.

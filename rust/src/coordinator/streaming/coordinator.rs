@@ -34,7 +34,7 @@ use super::{
     provider_error_signal,
 };
 use crate::coordinator::{
-    AttemptBuilder, AttemptError, AttemptInput, ClientResponseHeaders, FailureCategory,
+    AttemptBuilder, AttemptError, AttemptPreparation, ClientResponseHeaders, FailureCategory,
     FailureDecisionEngine, FailureEffects, FailureObservation, FailureSource, FinalizationCommand,
     FinalizationData, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, NextAction, PublicationError, PublicationInput, PublicationOutcome,
@@ -400,26 +400,22 @@ impl StreamingCoordinator {
             };
             last_identity = Some(published.identity.clone());
             let identity = published.identity.clone();
-            let account_key = self
-                .credentials
-                .get(&identity.account_name)
-                .map(str::to_owned);
-            let attempt_input = AttemptInput {
-                identity: identity.clone(),
-                provider: provider.clone(),
-                account_api_key: account_key,
-                incoming_headers: request.incoming_headers.clone(),
-                request_id: request.request_id.clone(),
-                correlation_id: request.correlation_id.clone(),
-                raw_body: request.raw_body.clone(),
+            let attempt_input = AttemptPreparation {
+                identity: &identity,
+                provider: &provider,
+                account_api_key: self.credentials.get(&identity.account_name),
+                incoming_headers: &request.incoming_headers,
+                request_id: request.request_id.as_deref(),
+                correlation_id: request.correlation_id.as_deref(),
+                raw_body: &request.raw_body,
                 client_surface: request.client_surface,
-                profile: candidate.profile.clone(),
+                profile: &candidate.profile,
                 stream: true,
-                candidate_fingerprint: resolution.fingerprint.clone(),
+                candidate_fingerprint: &resolution.fingerprint,
             };
             let prepared = match self
                 .attempts
-                .prepare_admitted(attempt_input, request.admitted.clone())
+                .prepare_borrowed(attempt_input, &request.admitted)
             {
                 Ok(value) => value,
                 Err(error) => {

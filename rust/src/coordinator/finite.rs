@@ -29,11 +29,11 @@ use crate::{
 };
 
 use super::{
-    AttemptBuilder, AttemptError, AttemptInput, FailureCategory, FailureDecisionEngine,
-    FailureEffects, FailureObservation, FailureSource, FinalizationCommand, FinalizationData,
-    FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
-    FinalizationSupervisor, PublicationError, PublicationInput, PublicationOutcome,
-    PublicationService, RetryPolicy, WireResolver,
+    AttemptBuilder, AttemptError, AttemptInput, AttemptPreparation, FailureCategory,
+    FailureDecisionEngine, FailureEffects, FailureObservation, FailureSource, FinalizationCommand,
+    FinalizationData, FinalizationError, FinalizationIdentity, FinalizationOutcome,
+    FinalizationResult, FinalizationSupervisor, PublicationError, PublicationInput,
+    PublicationOutcome, PublicationService, RetryPolicy, WireResolver,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -569,14 +569,11 @@ impl FiniteCoordinator {
             };
             last_identity = Some(published.identity.clone());
             let identity = published.identity.clone();
-            let account_key = self
-                .credentials
-                .get(&identity.account_name)
-                .map(str::to_owned);
+            let account_key = self.credentials.get(&identity.account_name);
             let attempt_input = AttemptInput {
                 identity: identity.clone(),
                 provider: provider.clone(),
-                account_api_key: account_key,
+                account_api_key: account_key.map(str::to_owned),
                 incoming_headers: request.incoming_headers.clone(),
                 request_id: request.request_id.clone(),
                 correlation_id: request.correlation_id.clone(),
@@ -623,9 +620,22 @@ impl FiniteCoordinator {
                     }
                 }
             } else {
+                let borrowed_input = AttemptPreparation {
+                    identity: &identity,
+                    provider: &provider,
+                    account_api_key: account_key,
+                    incoming_headers: &request.incoming_headers,
+                    request_id: request.request_id.as_deref(),
+                    correlation_id: request.correlation_id.as_deref(),
+                    raw_body: &request.raw_body,
+                    client_surface: request.client_surface,
+                    profile: &candidate.profile,
+                    stream: false,
+                    candidate_fingerprint: &resolution.fingerprint,
+                };
                 match self
                     .attempts
-                    .prepare_admitted(attempt_input, request.admitted.clone())
+                    .prepare_borrowed(borrowed_input, &request.admitted)
                 {
                     Ok(value) => value,
                     Err(error) => {

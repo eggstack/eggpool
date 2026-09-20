@@ -63,6 +63,12 @@ and stable exit-code mapping. Reusable local process workflows are composed by
 `rust/src/coordinator/` owns endpoint detection, bounded request preparation,
 model/account routing, durable request and attempt state, provider dispatch,
 response adaptation, retry classification, and terminal finalization.
+The production endpoint boundary parses and depth-checks each bounded body
+once, classifies finite versus streaming from that parsed value, and mutates
+the same tree for provider-qualified or virtual model rewrites. Direct native
+no-rewrite dispatch retains the ingress `Bytes` allocation. Borrowed attempt
+preparation ends at the synchronous wire/header boundary; the prepared
+provider attempt is fully owned before any network await.
 Streaming is decomposed under `rust/src/coordinator/streaming/`: `coordinator.rs`
 owns pre-handoff selection, dispatch, timeout, and retry decisions;
 `execution.rs` owns the single post-handoff body/cancellation owner;
@@ -87,7 +93,7 @@ message, reasoning, and function-call item completion.
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop helper) |
 | Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
-| Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` |
+| Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` (immutable provider/account topology; dispatch-oriented wire preparation) |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs` |
 | HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference,dashboard}.rs` (`health.rs` also serves the authenticated compact `GET /api/status` snapshot and the authenticated versioned `GET /api/integrations/v1/profile`, and shares readiness evaluation with `readyz`) |

@@ -126,3 +126,12 @@ For streaming changes, preserve the handoff boundary: retries belong only to
 `streaming/terminal.rs` consumes wire terminal summaries and must not duplicate
 wire event parsing. Streams remain incremental, translated Responses state is
 bounded, and SSE transport EOF is not success without terminal evidence.
+
+For inference hot-path work, `coordinator/endpoints.rs` is the single
+production admission/classification boundary. It parses and depth-checks the
+bounded Axum `Bytes` once, mutates the parsed object for model resolution, and
+constructs finite/streaming requests through `from_admitted`. Borrowed
+`AttemptPreparation` values end before provider I/O; `PreparedUpstreamAttempt`
+must be fully owned at that boundary. `ProviderClientPool` uses an immutable
+nested topology with an atomic close swap. Keep SQLite, stream-bridge, Tokio
+runtime, and routing-lock changes evidence-gated under Plans 226–228.

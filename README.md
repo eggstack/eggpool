@@ -289,6 +289,14 @@ dropping them. Responses remains stateless: `store` may be omitted or false,
 while `store: true`, continuation references, and background execution are
 rejected locally.
 
+The native inference hot path performs one bounded JSON parse/depth check at
+the coordinator boundary. Finite and streaming execution are selected from
+that parsed request; unchanged native bodies retain the incoming `Bytes`
+allocation, while model rewrites and cross-surface adaptation allocate only
+when the wire representation changes. Provider/account clients are built as
+an immutable generation topology and looked up without a per-request map
+lock; the borrowed preparation phase ends before provider I/O begins.
+
 Responses streaming has two bounded paths. Responses-to-Responses streams are
 observed for terminal evidence and usage while the original SSE event payloads
 — including forward-compatible unknown events — are forwarded unchanged.

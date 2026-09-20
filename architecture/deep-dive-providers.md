@@ -14,6 +14,13 @@ to direct transport. Credentials are rendered only while constructing dispatch
 headers. The closed wire registry under `rust/src/wire/` accepts only compiled
 codec IDs and does not probe in the background.
 
+The pool publishes one immutable `ClientTopology` per generation. Provider
+defaults are keyed by provider ID and account-specific clients are nested by
+provider ID and account name, so ordinary lookup borrows both keys without a
+temporary tuple allocation or topology mutex. Closing a generation atomically
+removes the topology: lookups that already cloned a client may finish, while
+later lookups fail closed.
+
 Provider failures are typed before reaching health/retry effects. Per-model
 failures quarantine only the affected pair; genuine transport failures may
 advance account-wide health.

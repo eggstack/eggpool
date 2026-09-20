@@ -1,7 +1,7 @@
 # Plan 228 — Performance Qualification, Contention Characterization, and Conditional Runtime Closure
 
 Date: 2026-09-20  
-Status: implementation handoff  
+Status: complete  
 Planning baseline: 3e90d36c4094af1c93756ace1c882f55b5f8f5d5  
 Parent roadmap: plans/225-native-runtime-performance-optimization-roadmap.md  
 Prerequisites: Plans 226 and 227 complete; include Plan 191 candidate if available  
@@ -531,3 +531,40 @@ If Plans 226 and 227 remove the dominant local CPU/allocation costs and the
 remaining SQLite/stream/runtime contention is small, the correct result is to
 document that and stop. Eggpool benefits more from a simple, predictable
 single-node architecture than from speculative concurrency machinery.
+
+## Closure record — 2026-09-20
+
+Candidates: audit baseline `3e90d36c4094af1c93756ace1c882f55b5f8f5d5`, plan
+commits `3fb83e1e`, `f9032c86`, and `73e47432`, followed by the implementation
+candidate on `main`. Host was `aarch64-apple-darwin`, Rust `1.98.1`, default
+release profile, target `aarch64-apple-darwin`; the release binary measured
+30,418,016 bytes. No Plan 191 dependency changes landed in this campaign.
+
+Qualification evidence:
+
+- The deterministic loopback qualification passed its fixed seven-request
+  matrix across Chat Completions, Responses, and Messages, including three
+  streams. A reduced stability run also passed warmup, steady, fault, reload,
+  restart, and final convergence checks.
+- Structural request evidence is one bounded parse for direct finite/stream
+  admission, zero full-body copies on native no-rewrite dispatch, and no
+  account tuple-key allocation or hot-path topology mutex.
+- A file-backed SQLite fixture was seeded with 10,000 requests, routing rows,
+  account events, and provider pings (13 MiB). Dashboard query plans used the
+  existing request/account, event, and ping indexes. Routing aggregation used
+  `idx_routing_decisions_model_started` plus a temporary GROUP BY b-tree; its
+  local plan measured about 0.011 ms and did not justify a migration.
+- No dedicated dashboard read connection was added. No stream bridge,
+  current-thread runtime, or routing selection-lock change was justified by
+  the local evidence. The simpler single-connection, bounded mpsc, and
+  current-thread designs remain the documented architecture.
+- Full validation passed: default 702 tests/60 suites, no-default 587 tests/56
+  suites, strict Clippy and format checks, locked release build, frozen uv
+  environment, Ruff, Pyright, tooling tests (83 passed/1 skipped), release
+  documentation, package-boundary, and diff checks.
+
+Limitations: the host was not a Raspberry Pi-class SBC, and no live provider
+credentials or request-content benchmark was used. The qualification records
+semantic loopback coverage and structural parse/copy evidence; future
+latency/RSS comparisons should use the same release fixture on the target
+deployment class before considering conditional concurrency changes.
