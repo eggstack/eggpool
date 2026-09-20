@@ -885,8 +885,7 @@ pub async fn execute_compact_finite(
     if compact.canonical.model != resolved.concrete_model {
         return Err(EndpointError::Admission);
     }
-    let mut routing_facts =
-        compact.routing_facts(&static_routing_facts(&state.known_providers, SURFACE));
+    let mut routing_facts = compact.routing_facts(state.routing_inputs(SURFACE));
     routing_facts.provider_id = resolved.provider_id.clone();
     let request = FiniteRequest::from_compact_admitted(
         proxy_request_id,
