@@ -206,11 +206,11 @@ Deep dive: [Transcoding](deep-dive-transcoder.md).
 credentials render only at dispatch-header construction. Proxy construction
 crosses the stable `eggress-embed` boundary (`OutboundConnector::from_pproxy_uri`
 for single-hop and `__`-separated multi-hop; explicit `direct://` validated
-through Eggress but using the direct Eggfetch client). Default
-`eggress-ssh-fallback` retains the 1.0.6 native SSH chain/session-cache
-compat path; `--no-default-features` keeps direct/non-SSH proxy paths and
-rejects SSH proxy config as `TransportError::ProxyConfiguration` before
-dialing. Underlying HTTP is Eggfetch (`eggfetch-core` 0.1.7 with
+through Eggress but using the direct Eggfetch client). The root `ssh`
+capability enables Eggress 1.0.7's native SSH session ownership;
+`--no-default-features` keeps direct/non-SSH proxy paths and rejects SSH proxy
+config as `TransportError::ProxyConfiguration` before dialing. Underlying HTTP
+is Eggfetch (`eggfetch-core` 0.1.7 with
 `native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
 WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
 add only a thin Eggress `Dialer` supplying the raw route stream, with origin
@@ -396,13 +396,14 @@ Deep dives: [Observability](deep-dive-observability.md),
 Eggfetch (`eggfetch-core` 0.1.7 `native-http1` + `tls-rustls`, provider
 transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
-`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.6
-(optional SSH compat), plus the path crates `eggpool-model-routing`,
+`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.7
+(optional SSH capability), plus the path crates `eggpool-model-routing`,
 `eggpool-client-config`, and the `eggpool-connect` desktop binary (narrow
-Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `eggress-ssh-fallback` supports SSH upstreams;
-`--no-default-features` still compiles/tests, keeps direct/non-SSH proxy, and
-rejects SSH proxy config pre-dial. Test-only `test-support` adds deterministic
-local TLS peers; protocol fixture crates stay dev-only.
+Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `ssh`
+supports SSH upstreams through the facade; `--no-default-features` still
+compiles/tests, keeps direct/non-SSH proxy, and rejects SSH proxy config
+pre-dial. Test-only `test-support` adds deterministic local TLS peers through
+the private non-SSH test-root adapter; protocol fixture crates stay dev-only.
 
 Deep dives: [Providers](deep-dive-providers.md), [Core](deep-dive-core.md).
 
@@ -461,8 +462,8 @@ cargo build --manifest-path rust/Cargo.toml --locked
 rust/target/debug/eggpool --help
 ```
 
-Reduced surface (SSH fallback off) must still compile/test and must keep
-direct/non-SSH proxy while rejecting SSH proxy config pre-dial:
+Reduced surface (the root `ssh` capability off) must still compile/test and
+must keep direct/non-SSH proxy while rejecting SSH proxy config pre-dial:
 
 ```bash
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features

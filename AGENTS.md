@@ -91,7 +91,8 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   narrowly scoped change.
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
-  before dialing (`eggress-ssh-fallback` is default-only compat).
+  before dialing. Default SSH is the root `ssh` capability forwarded to
+  Eggress 1.0.7; there is no Eggpool SSH executor fallback.
 - Cancellation-path tests must synchronize on an observable fixture boundary or
   invariant under a bounded timeout. Do not use fixed millisecond sleeps or
   yield-count loops to guess that a detached worker, proxy handshake, or pool

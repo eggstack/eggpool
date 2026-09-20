@@ -27,14 +27,14 @@ use eggfetch_core::{
     NativeRequestOptions, PhysicalConnectionPolicy, Timeout as EggfetchTimeout,
     TransportIoDirection, TransportIoTimeout, TrustStore,
 };
-#[cfg(feature = "eggress-ssh-fallback")]
+#[cfg(feature = "test-support")]
 use eggress_core::{TargetAddr, TargetHost};
 use http::{
     Extensions, HeaderMap, Method, Request, StatusCode, Uri,
     uri::{Authority, PathAndQuery, Scheme},
 };
 use http_body_util::{BodyExt, Full};
-#[cfg(any(feature = "eggress-ssh-fallback", feature = "test-support"))]
+#[cfg(feature = "test-support")]
 use rustls::ClientConfig;
 #[cfg(feature = "test-support")]
 use rustls::{RootCertStore, pki_types::CertificateDer};
@@ -309,7 +309,7 @@ impl ProviderHttpClient {
     ) -> Result<Self, TransportError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         validate_config(&config)?;
-        let dialer = build_chain_egress_dialer_for_test_root(proxy_url, proxy_root_certificate)?;
+        let dialer = build_test_root_proxy_dialer(proxy_url, proxy_root_certificate)?;
         let client = build_eggfetch_client(&config, Some(dialer))?;
         Ok(Self {
             client,
@@ -442,8 +442,8 @@ enum EggressDialerInner {
     Outbound {
         connector: Arc<eggress_embed::outbound::OutboundConnector>,
     },
-    #[cfg(feature = "eggress-ssh-fallback")]
-    Chain {
+    #[cfg(feature = "test-support")]
+    TestRoot {
         executor: Arc<eggress_core::chain::ChainExecutor>,
         chain: Arc<Vec<eggress_uri::ProxyHopSpec>>,
     },
@@ -459,8 +459,8 @@ impl Dialer for EggressDialer {
                     .await
                     .map(|(stream, _)| dial_stream(stream))
                     .map_err(map_egress_dial_error),
-                #[cfg(feature = "eggress-ssh-fallback")]
-                EggressDialerInner::Chain { executor, chain } => {
+                #[cfg(feature = "test-support")]
+                EggressDialerInner::TestRoot { executor, chain } => {
                     let target = target_addr_for_dial(target.host(), target.port());
                     executor
                         .execute(&chain, &target)
@@ -485,20 +485,6 @@ where
     Box::new(EggressDialStream(stream))
 }
 
-/// Convert an Eggfetch logical dial target into an Eggress route target.
-///
-/// Domain names are preserved so SOCKS5 domain-address requests, proxy-side
-/// DNS, and destination TLS SNI keep working. Only IP literals become
-/// `TargetHost::Ip`; nothing is eagerly resolved locally.
-#[cfg(feature = "eggress-ssh-fallback")]
-fn target_addr_for_dial(host: &str, port: u16) -> TargetAddr {
-    let host = host
-        .parse()
-        .map(TargetHost::Ip)
-        .unwrap_or_else(|_| TargetHost::Domain(host.to_owned()));
-    TargetAddr { host, port }
-}
-
 /// Select the Eggress route for one account.
 ///
 /// `None` means direct Eggfetch dialing. `Some` means the returned custom
@@ -514,7 +500,6 @@ fn build_eggress_dialer(proxy_url: Option<&str>) -> Result<Option<EggressDialer>
             build_egress_connector("direct://").map_err(|_| TransportError::ProxyConfiguration)?;
             None
         }
-        Some(proxy_url) if proxy_uses_ssh(proxy_url) => Some(build_ssh_route_dialer(proxy_url)?),
         Some(proxy_url) => Some(EggressDialer {
             inner: EggressDialerInner::Outbound {
                 connector: Arc::new(
@@ -527,28 +512,23 @@ fn build_eggress_dialer(proxy_url: Option<&str>) -> Result<Option<EggressDialer>
     Ok(dialer)
 }
 
-fn proxy_uses_ssh(proxy_url: &str) -> bool {
-    proxy_url.split("__").any(|hop| {
-        hop.split_once("://")
-            .is_some_and(|(scheme, _)| scheme.split('+').any(|protocol| protocol == "ssh"))
-    })
-}
-
-#[cfg(feature = "eggress-ssh-fallback")]
-fn build_ssh_route_dialer(proxy_url: &str) -> Result<EggressDialer, TransportError> {
-    build_chain_egress_dialer(proxy_url, None)
-}
-
-#[cfg(not(feature = "eggress-ssh-fallback"))]
-fn build_ssh_route_dialer(_proxy_url: &str) -> Result<EggressDialer, TransportError> {
-    Err(TransportError::ProxyConfiguration)
+/// Convert an Eggfetch logical dial target into an Eggress route target for
+/// the test-root adapter. Domain names remain proxy-resolved and preserve
+/// destination TLS SNI; only IP literals become `TargetHost::Ip`.
+#[cfg(feature = "test-support")]
+fn target_addr_for_dial(host: &str, port: u16) -> TargetAddr {
+    let host = host
+        .parse()
+        .map(TargetHost::Ip)
+        .unwrap_or_else(|_| TargetHost::Domain(host.to_owned()));
+    TargetAddr { host, port }
 }
 
 /// Build a chain-route dialer with a deterministic test-only Eggress TLS
 /// root.  Production callers use [`build_eggress_dialer`], which preserves
 /// Eggress's system-root verification.
 #[cfg(feature = "test-support")]
-fn build_chain_egress_dialer_for_test_root(
+fn build_test_root_proxy_dialer(
     proxy_url: &str,
     proxy_root_certificate: Vec<u8>,
 ) -> Result<EggressDialer, TransportError> {
@@ -558,11 +538,11 @@ fn build_chain_egress_dialer_for_test_root(
         vec![proxy_root_certificate]
     };
     let tls_config = Arc::new(build_tls_config(&proxy_roots)?);
-    build_chain_egress_dialer(proxy_url, Some(&tls_config))
+    build_test_root_proxy_dialer_inner(proxy_url, Some(&tls_config))
 }
 
-#[cfg(feature = "eggress-ssh-fallback")]
-fn build_chain_egress_dialer(
+#[cfg(feature = "test-support")]
+fn build_test_root_proxy_dialer_inner(
     proxy_url: &str,
     tls_config: Option<&Arc<ClientConfig>>,
 ) -> Result<EggressDialer, TransportError> {
@@ -584,12 +564,11 @@ fn build_chain_egress_dialer(
         .next()
         .map(|upstream| upstream.chain.hops)
         .ok_or(TransportError::ProxyConfiguration)?;
-    let ssh_sessions = Some(Arc::new(
-        eggress_transport_ssh::SshSessionCache::new_compatibility(),
-    ));
-    let executor = eggress_server::build_chain_executor(tls_config, None, ssh_sessions);
+    // The facade's `ssh` capability unifies the server's cfg signature, but
+    // this adapter never supplies or owns an SSH session cache.
+    let executor = eggress_server::build_chain_executor(tls_config, None, None);
     Ok(EggressDialer {
-        inner: EggressDialerInner::Chain {
+        inner: EggressDialerInner::TestRoot {
             executor: Arc::new(executor),
             chain: Arc::new(chain),
         },
@@ -642,7 +621,7 @@ fn map_egress_dial_error(error: eggress_embed::EggressError) -> DialError {
 /// structure, so this mapping uses typed variants and predicates only. The
 /// original error is retained as the `DialError` source; the fixed display
 /// message carries no route input.
-#[cfg(feature = "eggress-ssh-fallback")]
+#[cfg(feature = "test-support")]
 fn map_chain_dial_error(error: eggress_core::chain::ChainError) -> DialError {
     use eggress_core::ConnectError;
 
@@ -674,7 +653,7 @@ fn map_chain_dial_error(error: eggress_core::chain::ChainError) -> DialError {
 /// failures stay route connection failures and never masquerade as origin
 /// TLS. Unrecognized sources are `Other`: they remain fail-closed through
 /// the proxy error category without claiming a more specific cause.
-#[cfg(feature = "eggress-ssh-fallback")]
+#[cfg(feature = "test-support")]
 fn classify_chain_handshake_source(source: &(dyn StdError + 'static)) -> DialErrorKind {
     use eggress_core::{AuthError, chain::HandshakeError};
 
@@ -1151,9 +1130,7 @@ fn contains_io_kind(error: &(dyn StdError + 'static), kind: std::io::ErrorKind) 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ProviderHttpConfig, TransportError, join_provider_target, parse_base_url, proxy_uses_ssh,
-    };
+    use super::{ProviderHttpConfig, TransportError, join_provider_target, parse_base_url};
 
     #[test]
     fn joins_base_path_and_query_without_changing_authority() {
@@ -1189,25 +1166,6 @@ mod tests {
             super::validate_config(&config),
             Err(TransportError::Configuration)
         );
-    }
-
-    #[test]
-    fn detects_ssh_only_as_a_protocol_token_in_any_chain_hop() {
-        for proxy_url in [
-            "ssh://user@proxy.example:22",
-            "ssh+http://user@proxy.example:22",
-            "http://proxy.example:8080__ssh://user@proxy.example:22",
-            "http+ssh://proxy.example:8080",
-        ] {
-            assert!(proxy_uses_ssh(proxy_url), "expected SSH in {proxy_url}");
-        }
-        for proxy_url in [
-            "http://proxy.example:8080",
-            "https://ssh.example",
-            "socks5://proxy.example:1080__trojan://ssh.example",
-        ] {
-            assert!(!proxy_uses_ssh(proxy_url), "unexpected SSH in {proxy_url}");
-        }
     }
 
     #[test]
@@ -1318,7 +1276,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "eggress-ssh-fallback")]
+    #[cfg(feature = "test-support")]
     #[test]
     fn chain_route_failures_classify_from_typed_variants() {
         use super::{DialErrorKind, map_chain_dial_error};
@@ -1380,7 +1338,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "eggress-ssh-fallback")]
+    #[cfg(feature = "test-support")]
     #[test]
     fn dial_targets_preserve_domain_names_and_ports() {
         use super::target_addr_for_dial;

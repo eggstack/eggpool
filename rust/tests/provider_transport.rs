@@ -1746,7 +1746,7 @@ fn mandatory_proxy_corpus_uri_families_construct() {
         format!("ssr://aes-256-cfb:synthetic-key@127.0.0.1:{port}"),
         format!("trojan://aes-256-gcm:synthetic-key@127.0.0.1:{port}"),
     ];
-    #[cfg(feature = "eggress-ssh-fallback")]
+    #[cfg(feature = "ssh")]
     let uris = uris
         .into_iter()
         .chain(std::iter::once(format!(
@@ -2308,9 +2308,9 @@ fn malformed_proxy_fails_closed_without_secret_bearing_diagnostics() {
     assert!(!format!("{error:?}").contains(marker));
 }
 
-#[cfg(not(feature = "eggress-ssh-fallback"))]
+#[cfg(not(feature = "ssh"))]
 #[test]
-fn ssh_proxy_is_rejected_when_the_compatibility_fallback_is_disabled() {
+fn ssh_proxy_is_rejected_when_ssh_capability_is_disabled() {
     let result = ProviderHttpClient::new_with_proxy(
         proxy_test_config("http://127.0.0.1:1"),
         "ssh://user@127.0.0.1:22",

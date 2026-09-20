@@ -36,6 +36,14 @@ Consequently, the source/manifest contract is inconsistent. A default build succ
 
 The existing CI does not cover this configuration. It runs fmt, default-feature Clippy, and default-feature workspace tests, so the mismatch can regress without detection.
 
+## Historical follow-up
+
+Plan 191 supersedes this plan's active SSH architecture after Eggress 1.0.7
+published the facade-owned SSH session fix. The `eggress-ssh-fallback` feature
+and Eggpool-owned SSH executor described here were retired; the current root
+`ssh` capability forwards to `eggress-embed/ssh`, while the test-root TLS seam
+remains private and supplies no SSH session state.
+
 This plan is deliberately narrow. It does **not** reopen the Eggress consolidation, remove SSH support from the default product, weaken TLS verification, or redesign the provider transport.
 
 ## Root cause

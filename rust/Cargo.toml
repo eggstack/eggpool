@@ -14,46 +14,36 @@ members = [
 ]
 
 [features]
-default = ["eggress-ssh-fallback"]
+default = ["ssh"]
 # Test-only constructor for deterministic local TLS proxy peers.  The normal
 # provider transport keeps Eggress's production-owned TLS configuration.
-test-support = ["eggress-ssh-fallback"]
-# Eggress 1.0.6's stable OutboundConnector does not install an SSH session
-# cache, so SSH upstreams temporarily retain the narrow native executor path.
-eggress-ssh-fallback = [
-    "eggress-embed/ssh",
+test-support = [
+    "ssh",
     "dep:eggress-core",
     "dep:eggress-config",
     "dep:eggress-pproxy-compat",
     "dep:eggress-server",
     "dep:eggress-uri",
-    "dep:eggress-transport-ssh",
 ]
+ssh = ["eggress-embed/ssh"]
 
 [dependencies]
 arc-swap = "1.9"
 axum = "0.8"
 bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
-eggress-embed = { version = "=1.0.6", default-features = false, features = [
+eggress-embed = { version = "=1.0.7", default-features = false, features = [
     "pproxy-compat",
     "pproxy-legacy",
     "legacy-crypto",
 ] }
-# The native executor is used only for the documented Eggress 1.0.6 SSH
-# facade gap and the test-root trust seam; all other proxy construction uses
-# eggress-embed.
-eggress-core = { version = "=1.0.6", optional = true }
-eggress-config = { version = "=1.0.6", optional = true }
-eggress-pproxy-compat = { version = "=1.0.6", optional = true }
-eggress-server = { version = "=1.0.6", default-features = false, optional = true, features = [
+eggress-core = { version = "=1.0.7", optional = true }
+eggress-config = { version = "=1.0.7", optional = true }
+eggress-pproxy-compat = { version = "=1.0.7", optional = true }
+eggress-server = { version = "=1.0.7", default-features = false, optional = true, features = [
     "extended",
-    "legacy-crypto",
-    "pproxy-legacy",
-    "ssh",
 ] }
-eggress-uri = { version = "=1.0.6", optional = true }
-eggress-transport-ssh = { version = "=1.0.6", optional = true }
+eggress-uri = { version = "=1.0.7", optional = true }
 eggfetch-core = { version = "=0.1.7", default-features = false, features = [
     "native-http1",
     "tls-rustls",
@@ -96,14 +86,14 @@ serde = "1"
 serde_json = "1"
 
 [dev-dependencies]
-eggress-core = "=1.0.6"
-eggress-protocol-shadowsocks = { version = "=1.0.6", features = [
+eggress-core = "=1.0.7"
+eggress-protocol-shadowsocks = { version = "=1.0.7", features = [
     "legacy-crypto",
     "pproxy-legacy",
 ] }
 rcgen = "0.14"
 tempfile = "3"
-eggress-protocol-trojan = "=1.0.6"
+eggress-protocol-trojan = "=1.0.7"
 tokio-rustls = "0.26"
 
 [lints.rust]

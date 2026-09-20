@@ -97,24 +97,22 @@ both routes. One deliberate limitation is documented in the adapter: the
 pinned embed facade renders typed route errors to redacted
 `EggressError::Runtime` strings, so that path classifies the route-failure
 bucket with conservative message predicates mirroring the previous transport
-behavior. The compatibility chain-executor path (SSH, test roots) keeps fully
-typed `ChainError` classification. If a future Eggress embed API exposes the
-typed route error, the predicates collapse to a direct match.
+behavior. The private test-root chain-executor path keeps fully typed
+`ChainError` classification. If a future Eggress embed API exposes the typed
+route error, the production predicates collapse to a direct match.
 
-Eggress 1.0.6 has one documented facade gap: its outbound constructor builds
-the SSH-capable executor without an SSH session cache. The explicitly named
-default `eggress-ssh-fallback` feature therefore retains the matching 1.0.6
-native chain executor and compatibility SSH session cache for SSH upstreams.
-Builds that deliberately disable this fallback still compile and retain direct
-and non-SSH proxy construction, but reject an SSH-containing proxy expression
-as `TransportError::ProxyConfiguration` before any connection attempt. They do
-not route the expression through the known-broken embed SSH path or fall back
-to direct egress. This is a temporary compatibility boundary pending an
-upstream Eggress facade fix.
-The deterministic custom-root constructor uses that same narrow seam only
-under `test-support`; it adds a test CA and never disables verification.
-Protocol fixture crates remain dev-only. These are intentional compatibility
-boundaries, while ordinary provider source uses the stable embed API.
+Eggpool delegates provider proxy-chain construction and execution to
+`eggress-embed` 1.0.7. The root `ssh` capability enables the facade's native
+SSH session ownership by default; `--no-default-features` omits that capability
+and rejects SSH-containing expressions as
+`TransportError::ProxyConfiguration` before dialing while retaining non-SSH
+proxy construction. There is no Eggpool SSH executor fallback and no direct
+fallback after a proxy construction or dial failure.
+
+Eggpool retains one private `test-support` adapter for deterministic custom
+proxy TLS roots. It uses the low-level Eggress chain executor only to inject a
+verified fixture CA, supplies no SSH session state, and is never reachable from
+production constructors. Protocol fixture crates remain dev-only.
 
 Provider transport cutover is complete: `ProviderHttpClient` is Eggfetch-only
 and the bespoke Hyper/Rustls connector/admission/timer machinery is gone.

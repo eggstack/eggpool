@@ -22,9 +22,9 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Thinking/reasoning capability metadata with compositional toggle/effort/budget
   controls and explicit translation-policy budget mapping
 - Per-account outbound proxy support in the native runtime
-- Default builds retain Eggress 1.0.6 SSH proxy compatibility; deliberately
-  reduced `--no-default-features` builds reject configured SSH proxies while
-  retaining non-SSH proxy support
+- Default builds enable Eggress 1.0.7 SSH support through the stable
+  `OutboundConnector`; deliberately reduced `--no-default-features` builds
+  reject configured SSH proxies while retaining non-SSH proxy support
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
 For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).

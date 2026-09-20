@@ -159,8 +159,8 @@ The provider transport currently requires exact `eggfetch-core =0.1.7` with
 targets and the C008/C009/C011 plus boundary/finalization/publication suites
 before the full workspace checks.
 
-The Eggress SSH compatibility fallback is intentionally optional. Feature
-changes affecting provider transport must also qualify the reduced surface:
+The Eggress SSH capability is intentionally optional. Feature changes affecting
+provider transport must also qualify the reduced surface:
 
 ```bash
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
@@ -170,6 +170,8 @@ cargo test --manifest-path rust/Cargo.toml --no-default-features
 
 No-default builds must preserve direct and non-SSH proxy construction while
 returning `TransportError::ProxyConfiguration` for SSH proxy configuration.
+Default SSH uses Eggress 1.0.7's stable `OutboundConnector`; no Eggpool-owned
+SSH executor fallback is permitted.
 
 `cargo deny` checks RustSec advisories, the reviewed license allowlist, allowed
 registry/git sources, and duplicate-version warnings from `deny.toml`. It does
