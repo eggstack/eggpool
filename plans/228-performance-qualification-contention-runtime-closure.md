@@ -535,8 +535,9 @@ single-node architecture than from speculative concurrency machinery.
 ## Closure record — 2026-09-20
 
 Candidates: audit baseline `3e90d36c4094af1c93756ace1c882f55b5f8f5d5`, plan
-commits `3fb83e1e`, `f9032c86`, and `73e47432`, followed by the implementation
-candidate on `main`. Host was `aarch64-apple-darwin`, Rust `1.98.1`, default
+commits `3fb83e1e`, `f9032c86`, and `73e47432`, followed by implementation
+commit `aba2ab33945e21bdc9086a8c80734d4d6ce62209`. Host was
+`aarch64-apple-darwin`, Rust `1.98.1`, default
 release profile, target `aarch64-apple-darwin`; the release binary measured
 30,418,016 bytes. No Plan 191 dependency changes landed in this campaign.
 

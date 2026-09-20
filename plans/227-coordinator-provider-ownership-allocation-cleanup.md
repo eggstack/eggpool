@@ -553,8 +553,7 @@ making the whole coordinator reference-based.
 
 ## Closure record — 2026-09-20
 
-Implementation candidate: the current `main` working-tree candidate; the
-committed SHA is recorded by the follow-up campaign closure commit.
+Implementation candidate: `aba2ab33945e21bdc9086a8c80734d4d6ce62209`.
 
 Evidence:
 
