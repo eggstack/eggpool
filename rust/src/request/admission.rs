@@ -318,13 +318,27 @@ pub fn admit_compact_request(
     raw_body: &[u8],
     options: AdmissionOptions,
 ) -> Result<CompactAdmittedRequest, AdmissionError> {
+    let parsed = parse_request_body(
+        bytes::Bytes::copy_from_slice(raw_body),
+        options.max_body_bytes,
+    )?;
+    admit_compact_parsed_request(parsed, options)
+}
+
+/// Admit a compact request after it has crossed the bounded parse/depth
+/// boundary. The endpoint uses this consuming form so model resolution can
+/// mutate the parsed request without serializing and parsing it again.
+pub(crate) fn admit_compact_parsed_request(
+    parsed: ParsedRequestBody,
+    options: AdmissionOptions,
+) -> Result<CompactAdmittedRequest, AdmissionError> {
+    let (raw_body, value) = parsed.into_parts();
     if raw_body.len() > options.max_body_bytes {
         return Err(AdmissionError::BodyTooLarge {
             length: raw_body.len(),
             limit: options.max_body_bytes,
         });
     }
-    let value = parse_once(raw_body)?;
     let object = value.as_object().ok_or(AdmissionError::TopLevelNotObject)?;
     validate_responses_stateless_policy(object)?;
     if has_compaction_trigger(object) {
@@ -356,9 +370,9 @@ pub fn admit_compact_request(
     if canonical.stream {
         return Err(AdmissionError::InvalidField { field: "stream" });
     }
-    let reservation_tokens = estimate_reservation_tokens(raw_body);
+    let reservation_tokens = estimate_reservation_tokens(&raw_body);
     let context_tokens =
-        estimate_context_input_tokens(raw_body, &value, options.extra_context_tokens);
+        estimate_context_input_tokens(&raw_body, &value, options.extra_context_tokens);
     let summary = native_feature_summary(object);
     Ok(CompactAdmittedRequest {
         canonical,
@@ -2218,4 +2232,21 @@ fn decode_tool_result_media(value: Option<&Value>) -> Result<Option<MediaSource>
         return Ok(block.media);
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_compact_admission_matches_slice_compatibility_helper() {
+        let body = bytes::Bytes::from_static(
+            br#"{"model":"compact-model","input":"history","store":false}"#,
+        );
+        let options = AdmissionOptions::default();
+        let from_slice = admit_compact_request(body.as_ref(), options).expect("slice admission");
+        let parsed = parse_request_body(body, options.max_body_bytes).expect("parsed body");
+        let from_parsed = admit_compact_parsed_request(parsed, options).expect("parsed admission");
+        assert_eq!(from_slice, from_parsed);
+    }
 }

@@ -358,6 +358,30 @@ impl AttemptBuilder {
         admission: &crate::request::CompactAdmittedRequest,
     ) -> Result<PreparedUpstreamAttempt, AttemptError> {
         validate_input(&input)?;
+        let borrowed = AttemptPreparation {
+            identity: &input.identity,
+            provider: &input.provider,
+            account_api_key: input.account_api_key.as_deref(),
+            incoming_headers: &input.incoming_headers,
+            request_id: input.request_id.as_deref(),
+            correlation_id: input.correlation_id.as_deref(),
+            raw_body: &input.raw_body,
+            client_surface: input.client_surface,
+            profile: &input.profile,
+            stream: input.stream,
+            candidate_fingerprint: &input.candidate_fingerprint,
+        };
+        self.prepare_compact_borrowed(borrowed, admission)
+    }
+
+    /// Prepare compact dispatch from borrowed request/generation state. The
+    /// borrow ends before the returned owned attempt is submitted.
+    pub(crate) fn prepare_compact_borrowed(
+        &self,
+        input: AttemptPreparation<'_>,
+        admission: &crate::request::CompactAdmittedRequest,
+    ) -> Result<PreparedUpstreamAttempt, AttemptError> {
+        validate_preparation(&input)?;
         if input.stream {
             return Err(AttemptError::InvalidInput(
                 "compact operations are finite-only".into(),
@@ -406,7 +430,7 @@ impl AttemptBuilder {
         context = context.with_compaction(capabilities.clone());
         let prepared =
             self.wire
-                .prepare_compact_request(admission.clone(), &input.raw_body, &context)?;
+                .prepare_compact_dispatch(admission, input.raw_body.clone(), &context)?;
         let compact_template = capabilities
             .compact_path_template
             .as_deref()
@@ -426,14 +450,14 @@ impl AttemptBuilder {
             http::header::USER_AGENT,
             HeaderValue::from_static(concat!("eggpool-rust/", env!("CARGO_PKG_VERSION"))),
         );
-        add_forwarded_headers(&mut headers, &input.incoming_headers)?;
+        add_forwarded_headers(&mut headers, input.incoming_headers)?;
         add_request_identity_headers(
             &mut headers,
-            input.request_id.as_deref().or_else(|| {
+            input.request_id.or_else(|| {
                 (!input.identity.proxy_request_id.is_empty())
                     .then_some(input.identity.proxy_request_id.as_str())
             }),
-            input.correlation_id.as_deref(),
+            input.correlation_id,
         )?;
         add_static_headers(&mut headers, &input.provider.headers)?;
         if let Some(surface) = input
@@ -445,32 +469,40 @@ impl AttemptBuilder {
             add_auth_header(
                 &mut headers,
                 surface.auth.as_ref().unwrap_or(&input.provider.auth),
-                input.account_api_key.as_deref(),
+                input.account_api_key,
             )?;
         } else {
-            add_auth_header(
-                &mut headers,
-                &input.provider.auth,
-                input.account_api_key.as_deref(),
-            )?;
+            add_auth_header(&mut headers, &input.provider.auth, input.account_api_key)?;
         }
         Ok(PreparedUpstreamAttempt {
             identity: identity.clone(),
             provider_id: identity.provider_id.clone(),
             account_name: identity.account_name.clone(),
             upstream_model_id: identity.upstream_model_id.clone(),
-            profile: input.profile,
-            candidate_fingerprint: input.candidate_fingerprint,
+            profile: input.profile.clone(),
+            candidate_fingerprint: input.candidate_fingerprint.to_owned(),
             method: Method::POST,
             path,
             headers,
-            body: prepared.body.bytes,
+            body: prepared.body,
             stream: false,
         })
     }
 }
 
 fn validate_input(input: &AttemptInput) -> Result<(), AttemptError> {
+    if input.identity.provider_id.trim().is_empty() || input.identity.model_id.trim().is_empty() {
+        return Err(AttemptError::InvalidInput(
+            "provider and model are required".into(),
+        ));
+    }
+    if input.raw_body.is_empty() {
+        return Err(AttemptError::InvalidInput("request body is empty".into()));
+    }
+    Ok(())
+}
+
+fn validate_preparation(input: &AttemptPreparation<'_>) -> Result<(), AttemptError> {
     if input.identity.provider_id.trim().is_empty() || input.identity.model_id.trim().is_empty() {
         return Err(AttemptError::InvalidInput(
             "provider and model are required".into(),

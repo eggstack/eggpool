@@ -15,7 +15,8 @@ pub use admission::{
 };
 
 pub(crate) use admission::{
-    ParsedRequestBody, admit_parsed_request, canonical_request_from_object, parse_request_body,
+    ParsedRequestBody, admit_compact_parsed_request, admit_parsed_request,
+    canonical_request_from_object, parse_request_body,
 };
 pub use body::{
     BodyEncodingError, EncodedJsonBody, encode_compact_json, encode_compact_json_bounded,

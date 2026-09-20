@@ -9,7 +9,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -81,7 +81,6 @@ pub struct ProviderClientPoolCloseReport {
 #[derive(Debug)]
 struct ProviderClientPoolInner {
     topology: ArcSwapOption<ClientTopology>,
-    closed: AtomicBool,
     close_count: AtomicUsize,
 }
 
@@ -120,7 +119,6 @@ impl ProviderClientPool {
         Self {
             inner: Arc::new(ProviderClientPoolInner {
                 topology: ArcSwapOption::from(Some(Arc::new(ClientTopology::default()))),
-                closed: AtomicBool::new(false),
                 close_count: AtomicUsize::new(0),
             }),
         }
@@ -272,7 +270,6 @@ impl ProviderClientPool {
     pub fn close(&self) -> ProviderClientPoolCloseReport {
         let closed_now = self.inner.topology.swap(None).is_some();
         if closed_now {
-            self.inner.closed.store(true, Ordering::Release);
             self.inner.close_count.fetch_add(1, Ordering::AcqRel);
         }
         ProviderClientPoolCloseReport {

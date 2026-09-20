@@ -42,8 +42,9 @@ use crate::{
     providers::ProviderClientPool,
     quota::{AccountQuota, QuotaEstimator},
     request::{
-        AdmissionError, ParsedRequestBody, StaticRoutingFacts, admit_parsed_request,
-        canonical_request_from_object, parse_request_body, validate_responses_stateless_policy,
+        AdmissionError, ParsedRequestBody, StaticRoutingFacts, admit_compact_parsed_request,
+        admit_parsed_request, canonical_request_from_object, parse_request_body,
+        validate_responses_stateless_policy,
     },
     routing::{EligibilityPolicy, RoutingRouter},
     wire::{
@@ -401,11 +402,11 @@ pub struct VirtualResolution {
 }
 
 /// One resolved inference request: concrete body plus optional virtual facts.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ResolvedInference {
     pub concrete_body: Bytes,
     pub concrete_model: String,
-    pub admitted: crate::request::AdmittedRequest,
+    pub(crate) parsed: ParsedRequestBody,
     pub provider_id: Option<String>,
     pub virtual_resolution: Option<VirtualResolution>,
     pub selector_attempts: u32,
@@ -566,11 +567,10 @@ async fn resolve_concrete(
         } else {
             parsed.raw_body.clone()
         };
-        let admitted = admit_resolved(parsed, state, surface, concrete_body.clone())?;
         return Ok(ResolvedInference {
             concrete_body,
             concrete_model: model_id,
-            admitted,
+            parsed,
             provider_id,
             virtual_resolution: None,
             selector_attempts: 0,
@@ -681,7 +681,7 @@ async fn selector_affinity_selection(
 #[allow(clippy::too_many_arguments)]
 fn finish_virtual_resolution(
     state: &InferenceState,
-    surface: ClientSurface,
+    _surface: ClientSurface,
     mut parsed: ParsedRequestBody,
     router: &CompiledModelRouter,
     concrete_model: String,
@@ -712,11 +712,10 @@ fn finish_virtual_resolution(
         .insert("model".into(), Value::String(dispatch_model.clone()));
     let concrete_body = encode_resolved_value(&parsed.value)?;
     parsed.raw_body = concrete_body.clone();
-    let admitted = admit_resolved(parsed, state, surface, concrete_body.clone())?;
     Ok(ResolvedInference {
         concrete_body,
         concrete_model: dispatch_model,
-        admitted,
+        parsed,
         provider_id,
         virtual_resolution: Some(VirtualResolution {
             virtual_model: router.virtual_model.clone(),
@@ -783,12 +782,16 @@ pub async fn execute_endpoint(
         &proxy_request_id,
     )
     .await?;
-    if resolved.admitted.canonical.stream != stream {
+    let admitted = admit_resolved(
+        resolved.parsed,
+        state,
+        surface,
+        resolved.concrete_body.clone(),
+    )?;
+    if admitted.canonical.stream != stream {
         return Err(EndpointError::Admission);
     }
-    let mut routing_facts = resolved
-        .admitted
-        .routing_facts(state.routing_inputs(surface));
+    let mut routing_facts = admitted.routing_facts(state.routing_inputs(surface));
     routing_facts.provider_id = resolved.provider_id.clone();
     if stream {
         let request = StreamRequest::from_admitted(
@@ -796,7 +799,7 @@ pub async fn execute_endpoint(
             resolved.concrete_body,
             incoming_headers,
             surface,
-            resolved.admitted,
+            admitted,
             routing_facts,
         )
         .map_err(|_| EndpointError::Admission)?;
@@ -815,7 +818,7 @@ pub async fn execute_endpoint(
             resolved.concrete_body,
             incoming_headers,
             surface,
-            resolved.admitted,
+            admitted,
             routing_facts,
         )
         .map_err(|_| EndpointError::Admission)?;
@@ -870,17 +873,29 @@ pub async fn execute_compact_finite(
         &proxy_request_id,
     )
     .await?;
-    let mut request = FiniteRequest::new_compact(
-        proxy_request_id,
-        resolved.concrete_body.clone(),
-        incoming_headers,
-        static_routing_facts(&state.known_providers, SURFACE),
+    let compact = admit_compact_parsed_request(
+        resolved.parsed,
+        crate::request::AdmissionOptions {
+            max_body_bytes: state.max_body_bytes,
+            client_surface: SURFACE,
+            ..Default::default()
+        },
     )
-    .map_err(|_| EndpointError::Admission)?;
-    if request.admitted.canonical.model != resolved.concrete_model {
+    .map_err(EndpointError::from)?;
+    if compact.canonical.model != resolved.concrete_model {
         return Err(EndpointError::Admission);
     }
-    request.routing_facts.provider_id = resolved.provider_id.clone();
+    let mut routing_facts =
+        compact.routing_facts(&static_routing_facts(&state.known_providers, SURFACE));
+    routing_facts.provider_id = resolved.provider_id.clone();
+    let request = FiniteRequest::from_compact_admitted(
+        proxy_request_id,
+        resolved.concrete_body,
+        incoming_headers,
+        compact,
+        routing_facts,
+    )
+    .map_err(|_| EndpointError::Admission)?;
     let execution = state
         .finite
         .execute(request)

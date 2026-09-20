@@ -726,63 +726,9 @@ impl WireRuntime {
         raw_body: &[u8],
         context: &WireRuntimeContext,
     ) -> Result<PreparedRequest, WireRuntimeError> {
-        self.validate_context(context)?;
-        if context.client_surface != ClientSurface::Responses {
-            return Err(WireRuntimeError::RequestAdaptation(CodecError {
-                reason: CodecReasonCode::UnsupportedSemanticFeature,
-                field: Some("compact.client_surface".into()),
-                source_surface: Some(WireSurface::OpenaiResponses),
-                target_surface: Some(context.selected_profile.definition.surface),
-            }));
-        }
-        if context.selected_profile.definition.surface != WireSurface::OpenaiResponses {
-            return Err(WireRuntimeError::RequestAdaptation(CodecError {
-                reason: CodecReasonCode::UnsupportedSemanticFeature,
-                field: Some("compact.upstream_surface".into()),
-                source_surface: Some(WireSurface::OpenaiResponses),
-                target_surface: Some(context.selected_profile.definition.surface),
-            }));
-        }
-        if !context.compaction.native_v1_supported() {
-            return Err(WireRuntimeError::RequestAdaptation(CodecError {
-                reason: CodecReasonCode::UnsupportedSemanticFeature,
-                field: Some("compact.remote_compaction_v1".into()),
-                source_surface: Some(WireSurface::OpenaiResponses),
-                target_surface: Some(context.selected_profile.definition.surface),
-            }));
-        }
-        if admission.canonical.model != context.canonical_model_id {
-            return Err(self.profile_error(context, ProfileMismatchReason::CanonicalModelMismatch));
-        }
-        let model_rewrite_required = context.upstream_model_id != admission.canonical.model;
-        let body = if !model_rewrite_required {
-            EncodedWireBody {
-                value: None,
-                bytes: Bytes::copy_from_slice(raw_body),
-            }
-        } else {
-            let mut value = admission.native_preservation.parsed.clone();
-            value
-                .as_object_mut()
-                .expect("compact admission only retains an object")
-                .insert(
-                    "model".into(),
-                    Value::String(context.upstream_model_id.clone()),
-                );
-            let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes)
-                .map_err(|error| match error {
-                    crate::request::BodyEncodingError::TooLarge { .. } => {
-                        WireRuntimeError::BodyTooLarge
-                    }
-                    crate::request::BodyEncodingError::Serialize(_) => {
-                        WireRuntimeError::BodySerialization
-                    }
-                })?;
-            EncodedWireBody {
-                value: Some(value),
-                bytes: encoded.bytes,
-            }
-        };
+        self.validate_compact_context(&admission, context)?;
+        let body =
+            self.prepare_compact_body(&admission, Bytes::copy_from_slice(raw_body), context)?;
         let adapter = stream_adapter(context.selected_profile.definition.stream_codec)
             .map_err(|reason| self.profile_error(context, reason))?;
         let identity = WireRuntimeIdentity::from_context(context);
@@ -811,6 +757,97 @@ impl WireRuntime {
             },
             admission: admitted,
             body,
+        })
+    }
+
+    /// Prepare compact dispatch while retaining the caller-owned request
+    /// bytes. Native no-rewrite dispatch moves the `Bytes` handle directly;
+    /// model rewrites allocate only for the changed JSON representation.
+    pub(crate) fn prepare_compact_dispatch(
+        &self,
+        admission: &CompactAdmittedRequest,
+        raw_body: Bytes,
+        context: &WireRuntimeContext,
+    ) -> Result<PreparedWireDispatch, WireRuntimeError> {
+        self.validate_compact_context(admission, context)?;
+        let body = self.prepare_compact_body(admission, raw_body, context)?;
+        Ok(PreparedWireDispatch {
+            body: body.bytes,
+            adaptation: AdaptationSummary::from_notices(&[]),
+        })
+    }
+
+    fn validate_compact_context(
+        &self,
+        admission: &CompactAdmittedRequest,
+        context: &WireRuntimeContext,
+    ) -> Result<(), WireRuntimeError> {
+        self.validate_context(context)?;
+        if context.client_surface != ClientSurface::Responses {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.client_surface".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if context.selected_profile.definition.surface != WireSurface::OpenaiResponses {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.upstream_surface".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if !context.compaction.native_v1_supported() {
+            return Err(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::UnsupportedSemanticFeature,
+                field: Some("compact.remote_compaction_v1".into()),
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }));
+        }
+        if admission.canonical.model != context.canonical_model_id {
+            return Err(self.profile_error(context, ProfileMismatchReason::CanonicalModelMismatch));
+        }
+        let _ = stream_adapter(context.selected_profile.definition.stream_codec)
+            .map_err(|reason| self.profile_error(context, reason))?;
+        Ok(())
+    }
+
+    fn prepare_compact_body(
+        &self,
+        admission: &CompactAdmittedRequest,
+        raw_body: Bytes,
+        context: &WireRuntimeContext,
+    ) -> Result<EncodedWireBody, WireRuntimeError> {
+        if context.upstream_model_id == admission.canonical.model {
+            return Ok(EncodedWireBody {
+                value: None,
+                bytes: raw_body,
+            });
+        }
+        let mut value = admission.native_preservation.parsed.clone();
+        value
+            .as_object_mut()
+            .expect("compact admission only retains an object")
+            .insert(
+                "model".into(),
+                Value::String(context.upstream_model_id.clone()),
+            );
+        let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes).map_err(
+            |error| match error {
+                crate::request::BodyEncodingError::TooLarge { .. } => {
+                    WireRuntimeError::BodyTooLarge
+                }
+                crate::request::BodyEncodingError::Serialize(_) => {
+                    WireRuntimeError::BodySerialization
+                }
+            },
+        )?;
+        Ok(EncodedWireBody {
+            value: Some(value),
+            bytes: encoded.bytes,
         })
     }
 
@@ -1511,5 +1548,70 @@ fn map_admission_error(error: AdmissionError, context: &WireRuntimeContext) -> C
             ClientSurface::Messages => WireSurface::AnthropicMessages,
         }),
         target_surface: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::WireProfileDefinition;
+
+    fn compact_profile() -> ConfiguredWireProfile {
+        ConfiguredWireProfile {
+            definition: WireProfileDefinition {
+                surface: WireSurface::OpenaiResponses,
+                request_codec: WireCodecId::OpenaiResponses,
+                response_codec: WireCodecId::OpenaiResponses,
+                stream_codec: WireCodecId::OpenaiResponsesSse,
+            },
+            path_template: "/responses".into(),
+            stream_path_template: None,
+            priority: 0,
+        }
+    }
+
+    fn compact_context(model: &str) -> WireRuntimeContext {
+        WireRuntimeContext::new(ClientSurface::Responses, compact_profile(), model, model)
+            .with_compaction(super::super::CompactionCapabilities {
+                supports_remote_compaction_v1: true,
+                compact_path_template: Some("/responses/compact".into()),
+                supports_remote_compaction_v2: false,
+            })
+    }
+
+    #[test]
+    fn compact_dispatch_reuses_owned_bytes_without_model_rewrite() {
+        let body = Bytes::from_static(br#"{"model":"compact-model","input":"history"}"#);
+        let admission =
+            crate::request::admit_compact_request(body.as_ref(), AdmissionOptions::default())
+                .expect("compact admission");
+        let runtime = WireRuntime::embedded().expect("embedded registry");
+        let source_ptr = body.as_ptr();
+        let dispatch = runtime
+            .prepare_compact_dispatch(&admission, body, &compact_context("compact-model"))
+            .expect("compact dispatch");
+        assert_eq!(
+            dispatch.body.as_ref(),
+            br#"{"model":"compact-model","input":"history"}"#
+        );
+        assert_eq!(dispatch.body.as_ptr(), source_ptr);
+    }
+
+    #[test]
+    fn compact_dispatch_allocates_for_model_rewrite() {
+        let body = Bytes::from_static(br#"{"model":"compact-model","input":"history"}"#);
+        let admission =
+            crate::request::admit_compact_request(body.as_ref(), AdmissionOptions::default())
+                .expect("compact admission");
+        let mut context = compact_context("compact-model");
+        context.upstream_model_id = "provider-model".into();
+        let runtime = WireRuntime::embedded().expect("embedded registry");
+        let dispatch = runtime
+            .prepare_compact_dispatch(&admission, body.clone(), &context)
+            .expect("compact dispatch");
+        assert_ne!(dispatch.body.as_ptr(), body.as_ptr());
+        let value: Value = serde_json::from_slice(&dispatch.body).expect("rewritten JSON");
+        assert_eq!(value["model"], "provider-model");
+        assert_eq!(value["input"], "history");
     }
 }

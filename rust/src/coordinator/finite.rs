@@ -29,11 +29,11 @@ use crate::{
 };
 
 use super::{
-    AttemptBuilder, AttemptError, AttemptInput, AttemptPreparation, FailureCategory,
-    FailureDecisionEngine, FailureEffects, FailureObservation, FailureSource, FinalizationCommand,
-    FinalizationData, FinalizationError, FinalizationIdentity, FinalizationOutcome,
-    FinalizationResult, FinalizationSupervisor, PublicationError, PublicationInput,
-    PublicationOutcome, PublicationService, RetryPolicy, WireResolver,
+    AttemptBuilder, AttemptError, AttemptPreparation, FailureCategory, FailureDecisionEngine,
+    FailureEffects, FailureObservation, FailureSource, FinalizationCommand, FinalizationData,
+    FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
+    FinalizationSupervisor, PublicationError, PublicationInput, PublicationOutcome,
+    PublicationService, RetryPolicy, WireResolver,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -273,6 +273,49 @@ impl FiniteRequest {
             routing_inputs.requested_protocol = Some(ClientSurface::Responses.protocol().into());
         }
         let routing_facts = compact.routing_facts(&routing_inputs);
+        let admitted = AdmittedRequest {
+            canonical: compact.canonical.clone(),
+            native_preservation: Some(compact.native_preservation.clone()),
+            raw_body_bytes: compact.raw_body_bytes,
+            reservation_tokens: compact.reservation_tokens,
+            context_tokens: compact.context_tokens,
+        };
+        Ok(Self {
+            proxy_request_id: proxy_request_id.into(),
+            raw_body,
+            incoming_headers,
+            request_id: None,
+            correlation_id: None,
+            client_surface: ClientSurface::Responses,
+            admitted,
+            routing_facts,
+            operation: super::endpoints::InferenceOperation::Compact,
+            compact_admission: Some(compact),
+        })
+    }
+
+    /// Build a compact request from the final parsed admission. Production
+    /// endpoint code uses this constructor so compact admission is not
+    /// reparsed after model resolution; [`Self::new_compact`] remains the
+    /// slice-compatible compatibility constructor.
+    pub fn from_compact_admitted(
+        proxy_request_id: impl Into<String>,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        compact: crate::request::CompactAdmittedRequest,
+        mut routing_facts: RoutingRequestFacts,
+    ) -> Result<Self, FiniteCoordinatorError> {
+        if compact.canonical.client_surface != ClientSurface::Responses
+            || compact.canonical.stream
+            || routing_facts.canonical_model_id != compact.canonical.model
+            || routing_facts.request_surface != ClientSurface::Responses.as_str()
+            || compact.native_preservation.source_surface != ClientSurface::Responses
+        {
+            return Err(FiniteCoordinatorError::InvalidFacts);
+        }
+        if routing_facts.requested_protocol.is_none() {
+            routing_facts.requested_protocol = Some(ClientSurface::Responses.protocol().into());
+        }
         let admitted = AdmittedRequest {
             canonical: compact.canonical.clone(),
             native_preservation: Some(compact.native_preservation.clone()),
@@ -569,19 +612,18 @@ impl FiniteCoordinator {
             };
             last_identity = Some(published.identity.clone());
             let identity = published.identity.clone();
-            let account_key = self.credentials.get(&identity.account_name);
-            let attempt_input = AttemptInput {
-                identity: identity.clone(),
-                provider: provider.clone(),
-                account_api_key: account_key.map(str::to_owned),
-                incoming_headers: request.incoming_headers.clone(),
-                request_id: request.request_id.clone(),
-                correlation_id: request.correlation_id.clone(),
-                raw_body: request.raw_body.clone(),
+            let borrowed_input = AttemptPreparation {
+                identity: &identity,
+                provider: &provider,
+                account_api_key: self.credentials.get(&identity.account_name),
+                incoming_headers: &request.incoming_headers,
+                request_id: request.request_id.as_deref(),
+                correlation_id: request.correlation_id.as_deref(),
+                raw_body: &request.raw_body,
                 client_surface: request.client_surface,
-                profile: candidate.profile.clone(),
+                profile: &candidate.profile,
                 stream: false,
-                candidate_fingerprint: resolution.fingerprint.clone(),
+                candidate_fingerprint: &resolution.fingerprint,
             };
             // Compact operations prepare through the native compact path
             // (source-native preservation plus EggPool-owned model rewrite);
@@ -592,7 +634,7 @@ impl FiniteCoordinator {
                 };
                 match self
                     .attempts
-                    .prepare_compact(attempt_input, compact_admission)
+                    .prepare_compact_borrowed(borrowed_input, compact_admission)
                 {
                     Ok(value) => value,
                     Err(error) => {
@@ -620,19 +662,6 @@ impl FiniteCoordinator {
                     }
                 }
             } else {
-                let borrowed_input = AttemptPreparation {
-                    identity: &identity,
-                    provider: &provider,
-                    account_api_key: account_key,
-                    incoming_headers: &request.incoming_headers,
-                    request_id: request.request_id.as_deref(),
-                    correlation_id: request.correlation_id.as_deref(),
-                    raw_body: &request.raw_body,
-                    client_surface: request.client_surface,
-                    profile: &candidate.profile,
-                    stream: false,
-                    candidate_fingerprint: &resolution.fingerprint,
-                };
                 match self
                     .attempts
                     .prepare_borrowed(borrowed_input, &request.admitted)
