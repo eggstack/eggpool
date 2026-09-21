@@ -18,7 +18,7 @@ deep-dive detail into `AGENTS.md`.
 
 - Runtime (authority): `rust/src/` (`main.rs`/`cli.rs`/`lib.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` + `coordinator/streaming/` request lifecycle, `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` + `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity, `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` + `task_supervisor.rs`, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/` v1–v54).
 - Reusable policy crates: `rust/crates/eggpool-model-routing/` (`policy.rs`, `identity.rs`; neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`) and `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, V1/V2 renderers, TOML/JSONC-preserving mutation, variant selection, ownership captures; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`, including read-only `configremote` export and authenticated `GET /api/integrations/v1/profile`). Desktop helper: `rust/crates/eggpool-connect/` (narrow `eggpool-connect` binary over the portable crate: plan/install/verify/backups/restore/remove with byte-exact backups, atomic writes, and automatic rollback; no Axum/SQLite/Eggress, no proxy/agent/daemon). Reviewed bootstraps: `packaging/connect/eggpool-connect.sh` + `eggpool-connect.ps1` (version-pinned download, SHA-256 against release SHA256SUMS, no mutation logic). Helper release tooling: `scripts/build_connect_artifacts.py` + `scripts/inspect_connect_artifact.py`, manifest `connect_artifacts` section (proxy `artifacts` stays exactly three). A Windows helper never implies Windows proxy support.
-- Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. Native runtime tests live in `rust/tests/` (note: `coordinator_c012` does not exist; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
+- Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. `scripts/qualification_sbc.py` is the sole physical-SBC qualification/characterization runner; its optional `--benchmark-samples 1..=100` mode remains loopback-only, aggregate-only, and non-CI. Native runtime tests live in `rust/tests/` (note: `coordinator_c012` does not exist; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
 - Config examples: `config.example.toml`, `config.sbc.example.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`; API keys from environment/`.env`, never committed.
 - Plans: `plans/` is append-only history (~200 files, mostly closed). See the `plan` skill before adding one. `.agents/` holds no custom agent definitions.
 
@@ -52,6 +52,12 @@ cargo build --manifest-path rust/Cargo.toml --locked --release
 cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
+
+Plan 235's physical-SBC evidence is manual and descriptive: qualify a
+SHA-verified Linux/aarch64 release candidate, then repeat
+`qualification_sbc.py --benchmark-samples 30` three times from fresh roots.
+Hosted ARM, emulation, and cloud ARM results are not target-class evidence;
+record unavailable dimensions as `not measured`.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +

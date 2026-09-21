@@ -150,14 +150,22 @@ Comprehensive stats endpoints under `/api/stats/`.
 
 ### Manual SBC characterization
 
-Use the existing runtime snapshot after a short fixed stabilization window and
-pair it with standard process/socket tools. A provider-backed run requires a
-representative SBC and real configured accounts, uses synthetic non-sensitive
-requests, and keeps upstream latency separate from EggPool-local timing. It is
-descriptive and non-gating; unavailable dimensions are recorded as `not
-measured`, with no benchmark, soak, hardware-CI, or performance-threshold
-infrastructure. See [Plan 126](../plans/126-provider-backed-sbc-characterization.md)
-for the completed closure record.
+The existing `scripts/qualification_sbc.py` runner is the sole tooling
+boundary for target-class evidence. It refuses non-Linux/non-aarch64 hosts or
+hosts without a device-tree board model, uses a private temporary root and a
+loopback-only provider, and records no request/response content or
+credentials. The optional `--benchmark-samples 30` mode runs bounded native
+finite, native Responses streaming, accepted translated streaming, and fixed
+client-concurrency-4 finite observations, with aggregate timing, process CPU,
+RSS/VmHWM, database/WAL, and ownership-state snapshots. Run it three times
+from fresh roots on the same physical board; it is descriptive and non-gating.
+
+Hosted ARM VMs, emulation, Rosetta/translation, and cloud ARM instances are
+not physical SBC evidence. If the translated fixture route is not accepted or
+a measurement dimension is unavailable, record `not measured`; do not weaken
+the runtime capability contract. See [Plan 235](../plans/235-physical-sbc-target-class-benchmark-pass.md)
+for the fixed corpus and interpretation rules, and [Plan 126](../plans/126-provider-backed-sbc-characterization.md)
+for the earlier provider-backed closure.
 
 ## Backup
 

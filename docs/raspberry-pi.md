@@ -145,6 +145,26 @@ watch -n 5 vcgencmd measure_temp  # continuous
 Thermal throttling starts at 80°C — use a heatsink or fan if sustained
 loads are expected.
 
+## Optional Target-Class Characterization
+
+For a release candidate built on the Pi (or copied byte-for-byte from a
+qualified Linux/aarch64 build), run the existing guarded qualification first,
+then repeat the bounded benchmark three times from fresh temporary roots:
+
+```bash
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --candidate-origin on-device-release-build \
+  --benchmark-samples 30 \
+  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+```
+
+Use `q005-qualified-aarch64-copy` when the candidate was copied, and verify its
+SHA-256 before running. The provider stays on loopback; Ethernet is recommended
+for ordinary client use but is not part of the timing result. The report is
+descriptive and sanitized, not a hardware-CI gate or SLA. Never report a
+hosted ARM VM or cloud ARM instance as SBC evidence.
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`

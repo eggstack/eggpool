@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import platform
 import stat
 from pathlib import Path
 
+import pytest
+
 from scripts.qualification_sbc import (
+    BENCHMARK_MAX_SAMPLES,
     DEFAULT_FIXTURE,
     SCHEMA_VERSION,
+    _benchmark_sample_count,
+    _percentile,
     _root_block_device,
     _storage_device_class,
+    _timing_summary,
     bounded,
     main,
     run_qualification,
@@ -78,3 +85,19 @@ def test_q008_candidate_sha_is_checked_when_hardware_gate_is_available(
     if report["status"] != "blocked":
         assert report["status"] == "fail"
         assert "SHA-256" in report["reason"]
+
+
+def test_q008_benchmark_sample_contract_is_bounded_and_has_no_p99() -> None:
+    assert _benchmark_sample_count("1") == 1
+    assert _benchmark_sample_count(str(BENCHMARK_MAX_SAMPLES)) == BENCHMARK_MAX_SAMPLES
+    with pytest.raises(argparse.ArgumentTypeError):
+        _benchmark_sample_count("0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _benchmark_sample_count(str(BENCHMARK_MAX_SAMPLES + 1))
+
+    assert _percentile([1, 2, 3, 4], 50) == 2
+    assert _percentile([1, 2, 3, 4], 95) == 4
+    summary = _timing_summary([1, 2, 3, 4], [1, 2, 3, 4])
+    assert summary["sample_count"] == 4
+    assert "p99_elapsed_ms" not in summary
+    assert summary["p50_ttft_ms"] == 2

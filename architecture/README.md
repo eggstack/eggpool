@@ -188,8 +188,11 @@ dispatch; ordinary source-only CI remains network-light.
 
 The 2026 residual-efficiency closure (Plans 230–234) keeps the single SQLite
 gate, current-thread runtime, routing selection lock, and streaming handoff.
-Release qualification retains Maturin `--strip false`; a stripped or ThinLTO
-experiment must pass target qualification before changing the shipped profile.
+Plan 235 adds only an opt-in, tooling-owned physical-SBC characterization to
+the existing qualification runner; it does not add runtime metrics, a
+benchmark dependency, hardware CI, or a performance threshold. Release
+qualification retains Maturin `--strip false`; a stripped or ThinLTO experiment
+must pass target qualification before changing the shipped profile.
 
 Use the Python tooling environment only for release validators and tooling
 tests. Do not import, run, or recreate the retired application source tree.

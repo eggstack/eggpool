@@ -157,6 +157,21 @@ Mutation paths should carry the redacted transition into apply logic, while
 publication. Add deterministic transition coverage for no-op, live,
 restart-required, mixed, invalid, and secret-redaction cases.
 
+The optional physical-SBC target-class pass reuses
+`scripts/qualification_sbc.py`; it is not a CI or Rust-runtime benchmark:
+
+```bash
+uv run pytest tests/tooling/test_qualification_sbc.py -q
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --benchmark-samples 30 \
+  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+```
+
+Run the benchmark only on a physically attested Linux/aarch64 SBC, three times
+from fresh roots. Keep its sanitized aggregate output in the plan evidence;
+never substitute a hosted ARM VM or add a CI hardware job.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:

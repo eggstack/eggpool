@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,12 +46,17 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/sbc.toml"
 DEFAULT_OUTPUT = ROOT / "artifacts/qualification/008-run.json"
-SCHEMA_VERSION = "runtime-q008.v1"
+SCHEMA_VERSION = "runtime-q008.v2"
 MANIFEST_VERSION = "runtime-q001.v1"
 MAX_REASON_BYTES = 768
 MAX_HTTP_BODY_BYTES = 128 * 1024
 COMMAND_TIMEOUT = 45.0
 SAMPLE_SECONDS = 0.20
+BENCHMARK_MAX_SAMPLES = 100
+BENCHMARK_WARMUPS = 5
+CONCURRENCY_BATCH_SIZE = 32
+CONCURRENCY_WORKERS = 4
+STABILIZATION_SECONDS = 3.0
 MODELS = {
     "chat_completions": "q008-chat",
     "responses": "q008-responses",
@@ -116,6 +122,22 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _repository_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unavailable"
+    value = result.stdout.strip()
+    return value if re.fullmatch(r"[0-9a-f]{40}", value) else "unavailable"
 
 
 def free_port() -> int:
@@ -690,6 +712,7 @@ def resource_sample(
         "label": label,
         "sample_window_ms": round(duration * 1000),
         "rss_bytes": _proc_value(pid, "VmRSS"),
+        "peak_rss_bytes": _proc_value(pid, "VmHWM"),
         "virtual_bytes": _proc_value(pid, "VmSize"),
         "cpu_percent": cpu_percent,
         "open_fd_count": fd_count,
@@ -703,6 +726,164 @@ def resource_sample(
         **db,
     }
     return sample
+
+
+def _percentile(values: Sequence[int], percentile: int) -> int | None:
+    """Return a nearest-rank percentile without retaining benchmark samples."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, (len(ordered) * percentile + 99) // 100)
+    return ordered[min(rank - 1, len(ordered) - 1)]
+
+
+def _timing_summary(
+    elapsed_ms: Sequence[int], ttft_ms: Sequence[int]
+) -> dict[str, Any]:
+    """Return aggregate timing scalars and discard per-request observations."""
+    summary: dict[str, Any] = {
+        "sample_count": len(elapsed_ms),
+        "p50_elapsed_ms": _percentile(elapsed_ms, 50),
+        "p95_elapsed_ms": _percentile(elapsed_ms, 95),
+        "minimum_elapsed_ms": min(elapsed_ms) if elapsed_ms else None,
+        "maximum_elapsed_ms": max(elapsed_ms) if elapsed_ms else None,
+    }
+    if ttft_ms:
+        summary.update(
+            {
+                "p50_ttft_ms": _percentile(ttft_ms, 50),
+                "p95_ttft_ms": _percentile(ttft_ms, 95),
+            }
+        )
+    return summary
+
+
+def _cpu_batch_summary(
+    first: tuple[int, int] | None,
+    second: tuple[int, int] | None,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    """Summarize process CPU ticks observed over one request batch."""
+    if not first or not second or first[1] != second[1]:
+        return {
+            "cpu_ticks": None,
+            "cpu_time_ms": None,
+            "cpu_percent": None,
+        }
+    ticks = max(second[0] - first[0], 0)
+    clock_hz = first[1]
+    return {
+        "cpu_ticks": ticks,
+        "cpu_time_ms": round(ticks / clock_hz * 1000),
+        "cpu_percent": round(ticks / clock_hz / max(elapsed_seconds, 0.001) * 100, 2),
+    }
+
+
+def _benchmark_request(
+    port: int, model: str, streaming: bool
+) -> tuple[int, bytes, int, int | None]:
+    return _request_timed(port, "responses", model, streaming)
+
+
+def _sequential_benchmark(
+    process: subprocess.Popen[str],
+    port: int,
+    *,
+    model: str,
+    streaming: bool,
+    samples: int,
+    terminal_marker: bytes | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Run warm-ups and a sequential batch, retaining only aggregate scalars."""
+    for _ in range(BENCHMARK_WARMUPS):
+        status, body, _, _ = _benchmark_request(port, model, streaming)
+        if (
+            status != 200
+            or not body
+            or (terminal_marker is not None and terminal_marker not in body)
+        ):
+            return (
+                {
+                    "status": "not-measured",
+                    "reason": "fixture route was not accepted during warm-up",
+                    "warmup_http_status": status,
+                },
+                False,
+            )
+    first_cpu = _proc_cpu(process.pid)
+    started = time.monotonic()
+    elapsed_ms: list[int] = []
+    ttft_ms: list[int] = []
+    for _ in range(samples):
+        status, body, elapsed, ttft = _benchmark_request(port, model, streaming)
+        elapsed_ms.append(elapsed)
+        if ttft is not None:
+            ttft_ms.append(ttft)
+        if (
+            status != 200
+            or not body
+            or (terminal_marker is not None and terminal_marker not in body)
+        ):
+            raise QualificationError(
+                f"benchmark request returned HTTP {status} or lacked terminal evidence"
+            )
+    second_cpu = _proc_cpu(process.pid)
+    elapsed_seconds = max(time.monotonic() - started, 0.001)
+    return (
+        {
+            "status": "measured",
+            "model": model,
+            "streaming": streaming,
+            "warmup_count": BENCHMARK_WARMUPS,
+            "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+            **_timing_summary(elapsed_ms, ttft_ms),
+        },
+        True,
+    )
+
+
+def _concurrent_finite_benchmark(
+    process: subprocess.Popen[str], port: int
+) -> dict[str, Any]:
+    """Run the fixed contention observation at client concurrency four."""
+    first_cpu = _proc_cpu(process.pid)
+    started = time.monotonic()
+
+    def request_once(_item: int) -> tuple[int, bytes, int, int | None]:
+        return _benchmark_request(port, MODELS["responses"], False)
+
+    with ThreadPoolExecutor(max_workers=CONCURRENCY_WORKERS) as executor:
+        results = list(executor.map(request_once, range(CONCURRENCY_BATCH_SIZE)))
+    elapsed_seconds = max(time.monotonic() - started, 0.001)
+    second_cpu = _proc_cpu(process.pid)
+    elapsed_ms = [result[2] for result in results]
+    ttft_ms = [result[3] for result in results if result[3] is not None]
+    completed = sum(1 for status, body, _, _ in results if status == 200 and body)
+    return {
+        "status": "measured" if completed == CONCURRENCY_BATCH_SIZE else "fail",
+        "request_count": CONCURRENCY_BATCH_SIZE,
+        "client_concurrency": CONCURRENCY_WORKERS,
+        "completed_count": completed,
+        "failed_count": CONCURRENCY_BATCH_SIZE - completed,
+        "batch_elapsed_ms": round(elapsed_seconds * 1000),
+        "requests_per_second": round(CONCURRENCY_BATCH_SIZE / elapsed_seconds, 3),
+        "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+        "timings": _timing_summary(elapsed_ms, ttft_ms),
+    }
+
+
+def _benchmark_sample_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "benchmark samples must be an integer"
+        ) from error
+    if not 1 <= count <= BENCHMARK_MAX_SAMPLES:
+        raise argparse.ArgumentTypeError(
+            f"benchmark samples must be between 1 and {BENCHMARK_MAX_SAMPLES}"
+        )
+    return count
 
 
 def _render_fixture(
@@ -828,8 +1009,13 @@ def run_qualification(
     expected_sha256: str | None = None,
     candidate_origin: str = "supplied-candidate",
     build_elapsed_ms: int | None = None,
+    benchmark_samples: int = 0,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
+    if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
+        raise ValueError(
+            f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
+        )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "plan": "SBC qualification",
@@ -860,6 +1046,7 @@ def run_qualification(
         "build_profile": "release",
         "build_mode": candidate_origin,
         "binary_size_bytes": binary.stat().st_size,
+        "repository_commit_sha": _repository_commit(),
     }
     if build_elapsed_ms is not None:
         report["candidate"]["build_elapsed_ms"] = build_elapsed_ms
@@ -1081,6 +1268,111 @@ def run_qualification(
                         f"http://127.0.0.1:{port}/api/stats/runtime",
                     )
                 )
+                if benchmark_samples:
+                    benchmark_process = process
+                    benchmark: dict[str, Any] = {
+                        "sample_count": benchmark_samples,
+                        "concurrency_batch_size": CONCURRENCY_BATCH_SIZE,
+                        "client_concurrency": CONCURRENCY_WORKERS,
+                        "runs": {},
+                    }
+                    benchmark_snapshots: list[dict[str, Any]] = []
+
+                    def benchmark_sample(
+                        label: str, duration: float = SAMPLE_SECONDS
+                    ) -> None:
+                        benchmark_snapshots.append(
+                            resource_sample(
+                                label,
+                                benchmark_process,
+                                database,
+                                f"http://127.0.0.1:{port}/api/stats/runtime",
+                                duration=duration,
+                            )
+                        )
+                        samples.append(benchmark_snapshots[-1])
+
+                    benchmark_sample("benchmark-baseline")
+                    finite, finite_measured = _sequential_benchmark(
+                        benchmark_process,
+                        port,
+                        model=MODELS["responses"],
+                        streaming=False,
+                        samples=benchmark_samples,
+                    )
+                    if not finite_measured:
+                        raise QualificationError(
+                            "native finite benchmark warm-up failed"
+                        )
+                    benchmark["runs"]["native_responses_finite"] = finite
+                    benchmark_sample("after-native-responses-finite")
+                    streaming, streaming_measured = _sequential_benchmark(
+                        benchmark_process,
+                        port,
+                        model=MODELS["responses"],
+                        streaming=True,
+                        samples=benchmark_samples,
+                        terminal_marker=b"response.completed",
+                    )
+                    if not streaming_measured:
+                        raise QualificationError(
+                            "native streaming benchmark warm-up failed"
+                        )
+                    benchmark["runs"]["native_responses_streaming"] = streaming
+                    benchmark_sample("after-native-responses-streaming")
+                    translated, translated_measured = _sequential_benchmark(
+                        benchmark_process,
+                        port,
+                        model=MODELS["messages"],
+                        streaming=True,
+                        samples=benchmark_samples,
+                        terminal_marker=b"message_stop",
+                    )
+                    benchmark["runs"]["translated_responses_to_messages_streaming"] = (
+                        translated
+                    )
+                    if translated_measured:
+                        benchmark_sample("after-translated-streaming")
+                    concurrent = _concurrent_finite_benchmark(benchmark_process, port)
+                    if concurrent["status"] != "measured":
+                        raise QualificationError(
+                            "concurrency-4 benchmark did not complete all requests"
+                        )
+                    benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
+                    benchmark_sample("after-concurrency-4")
+                    benchmark_sample(
+                        "after-benchmark-stabilization", STABILIZATION_SECONDS
+                    )
+                    stabilized = benchmark_snapshots[-1]
+                    if stabilized["pending_requests"] not in {0, None} or stabilized[
+                        "active_reservations"
+                    ] not in {0, None}:
+                        raise QualificationError(
+                            "benchmark state did not converge after stabilization"
+                        )
+                    benchmark["resource_summary"] = {
+                        "baseline_rss_bytes": benchmark_snapshots[0]["rss_bytes"],
+                        "final_rss_bytes": stabilized["rss_bytes"],
+                        "baseline_peak_rss_bytes": benchmark_snapshots[0][
+                            "peak_rss_bytes"
+                        ],
+                        "peak_rss_bytes": max(
+                            (
+                                sample["peak_rss_bytes"]
+                                for sample in benchmark_snapshots
+                                if sample["peak_rss_bytes"] is not None
+                            ),
+                            default=None,
+                        ),
+                        "final_pending_requests": stabilized["pending_requests"],
+                        "final_active_reservations": stabilized["active_reservations"],
+                        "final_finalization_jobs": stabilized["finalization_jobs"],
+                    }
+                    benchmark["interpretation"] = (
+                        "descriptive loopback characterization; no performance "
+                        "threshold applied"
+                    )
+                    report["benchmark"] = benchmark
                 config.write_text(
                     content.replace("flush_interval_s = 2", "flush_interval_s = 3"),
                     encoding="utf-8",
@@ -1267,6 +1559,19 @@ def run_qualification(
         report["resource_samples"] = samples
         report["commands"] = [item.as_dict(root, binary) for item in commands]
         report["isolated_temporary_root"] = True
+        end_board, _ = board_metadata()
+        if end_board:
+            report["environment"]["power_thermal_mode_celsius_end"] = end_board.get(
+                "power_thermal_mode_celsius"
+            )
+            report["environment"]["cpu_frequency_policy_end"] = end_board.get(
+                "cpu_frequency_policy"
+            )
+            report["environment"]["cpu_governor_end"] = end_board.get("cpu_governor")
+            if report["environment"].get("cpu_governor") != end_board.get(
+                "cpu_governor"
+            ):
+                report["findings"].append("CPU frequency governor changed during run")
     return report
 
 
@@ -1287,6 +1592,13 @@ def _parser() -> argparse.ArgumentParser:
         help="How the release candidate was produced on or for the SBC.",
     )
     parser.add_argument("--timeout", type=float, default=COMMAND_TIMEOUT)
+    parser.add_argument(
+        "--benchmark-samples",
+        type=_benchmark_sample_count,
+        default=0,
+        metavar="N",
+        help="Run the optional physical-SBC benchmark with 1..100 samples.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
 
@@ -1301,6 +1613,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_sha256=args.expected_sha256,
             candidate_origin=args.candidate_origin,
             build_elapsed_ms=args.build_elapsed_ms,
+            benchmark_samples=args.benchmark_samples,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         report = {

@@ -463,7 +463,11 @@ authorities for inference execution and stream terminal semantics.
 The release footprint policy is qualification-driven. Maturin 1.14.1 is pinned
 with stripping disabled for the reviewed artifact contract; ThinLTO is not
 enabled by default. SBC measurements are descriptive and are recorded only for
-an actual Raspberry Pi-class target.
+an actual Raspberry Pi-class target. The guarded tooling runner can add a
+small loopback characterization with `--benchmark-samples 30`; repeat it three
+times from fresh temporary roots on the same physical board and retain only
+the sanitized aggregate report. Hosted ARM VMs and cloud ARM instances are not
+SBC evidence.
 
 ## Development
 
@@ -486,6 +490,24 @@ uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
+
+For the optional target-class evidence pass, build or copy a SHA-verified
+Linux/aarch64 release candidate to a physical SBC, run ordinary qualification,
+then repeat the benchmark three times:
+
+```bash
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --candidate-origin on-device-release-build \
+  --benchmark-samples 30 \
+  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+```
+
+The runner remains loopback-only and records bounded timing, process CPU,
+RSS/VmHWM, database/WAL, and ownership-state aggregates. It is descriptive,
+not a CI gate or performance SLA; if no physical Linux/aarch64 SBC is
+available, record the dimension as `not measured` rather than substituting a
+hosted ARM environment.
 
 Cancellation-path tests should wait for an observable fixture transition or
 invariant under a bounded timeout, not guess with fixed sleeps or yield-count
