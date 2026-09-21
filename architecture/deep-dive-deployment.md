@@ -176,6 +176,18 @@ direct control, and one RAM-backed temporary-root run removed the tail
 entirely. A narrow database/publication follow-up is the only justified next
 step; Tokio, routing-lock, and streaming keeps stand.
 
+Plan 238 provides that follow-up's diagnostic tooling without changing the
+runtime. `--diagnose-publication-storage 20..=200` uses the benchmark fixture
+without the standard benchmark corpus, waits for task quiescence, records
+bounded WAL-header/file-size and task-tick scalars, and preserves the same
+provider-boundary phases plus direct-provider control. Supplying
+`--diagnostic-database-dir DIR` places only the database, WAL, and SHM files
+in a temporary child of `DIR`; the runner cleans it up and does not publish
+the path. Run three fresh-root MMC passes first, then three database-only
+temporary-filesystem passes if the tail reproduces. Treat missing physical
+SBC or tmpfs dimensions as `not measured`; any runtime change requires a new
+plan.
+
 Hosted ARM VMs, emulation, Rosetta/translation, and cloud ARM instances are
 not physical SBC evidence. If the translated fixture route is not accepted or
 a measurement dimension is unavailable, record `not measured`; do not weaken

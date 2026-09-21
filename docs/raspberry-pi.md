@@ -203,6 +203,28 @@ entirely. See
 [Plan 237](../plans/237-raspberry-pi-finite-tail-diagnostic-pass.md) for the
 decision matrix and the sanitized aggregate artifact.
 
+### Publication/storage diagnostic
+
+Plan 238 keeps the diagnostic tooling separate from the normal benchmark
+corpus. With the benchmark fixture, run the physical-SBC-gated mode directly
+for a fresh-root MMC pass:
+
+```bash
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
+  --diagnose-publication-storage 60 \
+  --output artifacts/qualification/238-sbc-publication-storage-mmc-run-1.json
+```
+
+For the comparison, pass a directory on a mounted tmpfs with
+`--diagnostic-database-dir DIR`. Only the SQLite database/WAL/SHM move there;
+logs, config, runtime files, and backups remain in the qualification root.
+Repeat three fresh-root runs per class, retain only sanitized aggregate
+scalars, and record unavailable hardware/tmpfs dimensions as `not measured`.
+This mode is diagnostic-only and does not justify a production durability or
+publication change by itself.
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`

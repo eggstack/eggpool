@@ -20,6 +20,8 @@ from scripts.qualification_sbc import (
     DIRECT_CONTROL_SAMPLES,
     NATIVE_FINITE_CASE,
     NATIVE_STREAMING_CASE,
+    PUBLICATION_STORAGE_MAX_SAMPLES,
+    PUBLICATION_STORAGE_MIN_SAMPLES,
     SCHEMA_V1,
     SCHEMA_V2,
     SCHEMA_VERSION,
@@ -33,9 +35,13 @@ from scripts.qualification_sbc import (
     _direct_provider_control,
     _ns_to_ms,
     _percentile,
+    _publication_storage_sample_count,
     _root_block_device,
+    _runtime_task_snapshot,
     _storage_device_class,
+    _task_tick_deltas,
     _timing_summary,
+    _wal_snapshot,
     benchmark_cadence_facts,
     bounded,
     main,
@@ -296,6 +302,8 @@ def test_237_diagnostic_mode_defaults_off_and_keeps_schemas() -> None:
 
     args = _parser().parse_args(["--binary", "/not/a/candidate"])
     assert args.diagnose_finite_tail is None
+    assert args.diagnose_publication_storage is None
+    assert args.diagnostic_database_dir is None
     ordinary = run_qualification(binary=Path("/not/a/candidate"), benchmark_samples=0)
     assert ordinary["schema_version"] == SCHEMA_V1
     assert ordinary["schema_version"] == "runtime-q008.v1"
@@ -498,3 +506,126 @@ def test_237_plan_236_behavior_unchanged_when_diagnostic_off(tmp_path: Path) -> 
     assert "finite_tail_diagnostic" not in report
     assert "direct_provider_control" not in report
     assert "diagnose" not in json.dumps(report)
+
+
+def test_238_publication_storage_sample_bound_and_schema() -> None:
+    assert PUBLICATION_STORAGE_MIN_SAMPLES == 20
+    assert PUBLICATION_STORAGE_MAX_SAMPLES == 200
+    assert _publication_storage_sample_count("20") == 20
+    assert _publication_storage_sample_count("60") == 60
+    assert _publication_storage_sample_count("200") == 200
+    for invalid in ("19", "0", "201", "abc"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _publication_storage_sample_count(invalid)
+    report = run_qualification(
+        binary=Path("/not/a/candidate"),
+        config_fixture=BENCHMARK_FIXTURE,
+        diagnose_publication_storage=60,
+    )
+    assert report["schema_version"] == SCHEMA_V2
+    assert "benchmark" not in report
+    with pytest.raises(ValueError, match="does not run the benchmark corpus"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            config_fixture=BENCHMARK_FIXTURE,
+            benchmark_samples=30,
+            diagnose_publication_storage=60,
+        )
+
+
+def test_238_runtime_task_snapshot_is_fixed_name_and_scalar_only() -> None:
+    value = {
+        "background_tasks": [
+            {"name": "checkpoint", "tick_count": 2, "in_tick": False},
+            {"name": "metrics_flush", "tick_count": 1, "in_tick": True},
+            {"name": "secret-task", "tick_count": 99, "in_tick": False},
+        ]
+    }
+    snapshot = _runtime_task_snapshot(value)
+    assert snapshot == {
+        "checkpoint": {"tick_count": 2, "in_tick": False},
+        "metrics_flush": {"tick_count": 1, "in_tick": True},
+    }
+    deltas = _task_tick_deltas(
+        snapshot,
+        {
+            "checkpoint": {"tick_count": 3, "in_tick": False},
+            "metrics_flush": {"tick_count": 1, "in_tick": False},
+        },
+    )
+    assert deltas["checkpoint"]["tick_count_delta"] == 1
+    assert deltas["metrics_flush"]["tick_count_delta"] == 0
+    assert "secret-task" not in json.dumps(deltas)
+
+
+def test_238_wal_snapshot_is_bounded_and_invalid_headers_are_unavailable(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "usage.sqlite3"
+    wal = tmp_path / "usage.sqlite3-wal"
+    shm = tmp_path / "usage.sqlite3-shm"
+    database.write_bytes(b"db")
+    shm.write_bytes(b"shm")
+    wal.write_bytes(b"short")
+    invalid = _wal_snapshot(database)
+    assert invalid["database_bytes"] == 2
+    assert invalid["wal_bytes"] == 5
+    assert invalid["shm_bytes"] == 3
+    assert invalid["wal_page_size"] is None
+    assert invalid["wal_checkpoint_sequence"] is None
+
+    header = bytearray(32)
+    header[:4] = b"\x37\x7f\x06\x82"
+    header[8:12] = (4096).to_bytes(4, "big")
+    header[12:16] = (7).to_bytes(4, "big")
+    wal.write_bytes(header + b"ignored beyond fixed header")
+    valid = _wal_snapshot(database)
+    assert valid["wal_page_size"] == 4096
+    assert valid["wal_checkpoint_sequence"] == 7
+
+
+def test_238_diagnostic_summary_retains_wal_scalars_without_p99() -> None:
+    samples = [
+        DiagnosticSample(
+            sequence=1,
+            pre_provider_ms=10,
+            provider_service_ms=1,
+            post_provider_ttft_ms=1,
+            client_body_ms=1,
+            total_ms=13,
+            timed_out=False,
+            http_status=200,
+            last_phase="completed",
+            wal_bytes_before=100,
+            wal_bytes_after=120,
+            wal_bytes_delta=20,
+            wal_checkpoint_sequence_before=1,
+            wal_checkpoint_sequence_after=2,
+            wal_checkpoint_sequence_changed=True,
+        ),
+        DiagnosticSample(
+            sequence=2,
+            pre_provider_ms=2,
+            provider_service_ms=1,
+            post_provider_ttft_ms=1,
+            client_body_ms=1,
+            total_ms=5,
+            timed_out=False,
+            http_status=200,
+            last_phase="completed",
+            wal_bytes_before=120,
+            wal_bytes_after=120,
+            wal_bytes_delta=0,
+            wal_checkpoint_sequence_before=2,
+            wal_checkpoint_sequence_after=2,
+            wal_checkpoint_sequence_changed=False,
+        ),
+    ]
+    summary = _diagnostic_phase_summary(samples, include_wal=True)
+    assert summary["wal_checkpoint_sequence_change_count"] == 1
+    assert summary["maximum_total_ms_with_checkpoint_sequence_change"] == 13
+    assert summary["maximum_total_ms_without_checkpoint_sequence_change"] == 5
+    assert summary["slowest_five"][0]["wal_bytes_delta"] == 20
+    payload = json.dumps(summary, sort_keys=True)
+    assert "p99" not in payload
+    assert "usage.sqlite3" not in payload

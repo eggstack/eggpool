@@ -523,6 +523,13 @@ timing plus a 30-request direct-provider control. See
 [Plan 237](plans/237-raspberry-pi-finite-tail-diagnostic-pass.md) and the
 sanitized
 [237 artifact](artifacts/qualification/237-sbc-finite-tail-diagnostic.json).
+Plan 238 adds a separate diagnostic-only mode that runs before the standard
+benchmark corpus: `--diagnose-publication-storage 60` uses the benchmark
+fixture, waits for fixed database-task quiescence, samples only bounded WAL
+header/file-size scalars, and can place only the database/WAL/SHM in a
+temporary filesystem with `--diagnostic-database-dir DIR`. It does not change
+runtime behavior or claim physical-SBC evidence when the hardware gate is not
+available; record unavailable dimensions as `not measured`.
 
 Cancellation-path tests should wait for an observable fixture transition or
 invariant under a bounded timeout, not guess with fixed sleeps or yield-count

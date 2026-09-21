@@ -183,6 +183,13 @@ SQLite / storage path (stable direct control; one tmpfs run removed the
 tail), so only a narrow database/publication follow-up is justified — never a
 Tokio, routing-lock, or streaming change from this evidence.
 
+Plan 238's `--diagnose-publication-storage 20..=200` mode is separate from
+the Plan 236 benchmark corpus and uses the benchmark fixture directly. It
+waits for checkpoint/metrics/task quiescence, records only fixed-name task
+tick deltas and one bounded WAL-header read per request, and can place only
+the SQLite database/WAL/SHM in a caller-selected temporary filesystem. It is
+physical-SBC evidence only, never a CI benchmark or runtime optimization.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:

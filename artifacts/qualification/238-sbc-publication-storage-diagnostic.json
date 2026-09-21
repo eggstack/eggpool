@@ -1,0 +1,222 @@
+{
+  "plan": "238 — Narrow Publication/Storage Diagnostic",
+  "status": "pass",
+  "schema_version": "runtime-q008.v2",
+  "repository_sha": "a5819eaa135a5b1d6b24edbff9d8cf8d42daa0c2",
+  "candidate": {
+    "sha256": "4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8",
+    "binary_size_bytes": 30226744,
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "build_profile": "release",
+    "build_origin": "on-device-release-build"
+  },
+  "board": {
+    "model": "Raspberry Pi 5 Model B Rev 1.0",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1064-raspi",
+    "architecture": "aarch64",
+    "root_filesystem": "ext4",
+    "root_storage_device_class": "mmc",
+    "storage_medium_class": "non-rotational",
+    "cpu_governor": "ondemand",
+    "tmpfs": "available; database-only runs used an isolated temporary child",
+    "thermal_start_celsius": [45.8, 52.9, 48.5, 45.8, 46.3, 47.4],
+    "thermal_end_celsius": [44.6, 47.4, 44.6, 45.8, 45.2, 44.6]
+  },
+  "fixture": {
+    "path": "sbc-benchmark.toml",
+    "sample_count": 60,
+    "warmup_count": 5,
+    "direct_provider_warmup_count": 5,
+    "direct_provider_sample_count": 30,
+    "normal_benchmark_corpus_run": false,
+    "wal": true,
+    "synchronous": "NORMAL",
+    "database_worker_threads": 1,
+    "metrics_write_mode": "low_wear"
+  },
+  "structural_foreground_transaction_map": {
+    "pre_provider": {
+      "transaction_count": 1,
+      "transaction": [
+        "request",
+        "reservation",
+        "request_attempt",
+        "routing_decision"
+      ]
+    },
+    "post_provider": {
+      "transaction_count": 1,
+      "transaction": [
+        "request_terminal_update",
+        "request_attempt_terminal_update",
+        "reservation_release"
+      ]
+    },
+    "metrics": "buffered low-wear coalescer; periodic task is separate"
+  },
+  "task_quiescence": {
+    "fixed_task_names": [
+      "checkpoint",
+      "metrics_flush",
+      "catalog_refresh",
+      "retention_cleanup",
+      "automatic_backup"
+    ],
+    "criteria": [
+      "checkpoint tick_count >= 1",
+      "metrics_flush tick_count >= 1",
+      "all observed fixed-name tasks report in_tick = false",
+      "baseline tick counts captured immediately before measured requests"
+    ],
+    "all_runs_background_db_activity": false,
+    "all_runs_final_in_tick": false
+  },
+  "runs": {
+    "class_a_mmc": [
+      {
+        "run": 1,
+        "database_storage": "qualification-root",
+        "direct_provider": {"p50_total_ms": 1, "p95_total_ms": 1, "max_total_ms": 1},
+        "diagnostic": {
+          "p50_total_ms": 3,
+          "p95_total_ms": 7,
+          "max_total_ms": 3331,
+          "p50_pre_provider_ms": 2,
+          "p95_pre_provider_ms": 4,
+          "max_pre_provider_ms": 3310,
+          "p50_provider_service_ms": 0,
+          "p95_provider_service_ms": 0,
+          "max_provider_service_ms": 0,
+          "p50_post_provider_ttft_ms": 1,
+          "p95_post_provider_ttft_ms": 3,
+          "max_post_provider_ttft_ms": 20,
+          "timeouts": 0,
+          "failures": 0,
+          "wal_checkpoint_sequence_changes": 3,
+          "wal_checkpoint_sequence_unchanged": 57,
+          "max_total_with_checkpoint_change_ms": 3331,
+          "max_total_without_checkpoint_change_ms": 7
+        },
+        "slowest_five": [
+          {"sequence": 29, "total_ms": 3331, "pre_provider_ms": 3310, "provider_service_ms": 0, "post_provider_ttft_ms": 20, "wal_bytes_before": 4251872, "wal_bytes_after": 4272472, "wal_bytes_delta": 20600, "wal_checkpoint_sequence_before": 2, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 9, "total_ms": 3258, "pre_provider_ms": 3249, "provider_service_ms": 0, "post_provider_ttft_ms": 9, "wal_bytes_before": 4087072, "wal_bytes_after": 4251872, "wal_bytes_delta": 164800, "wal_checkpoint_sequence_before": 1, "wal_checkpoint_sequence_after": 2, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 49, "total_ms": 1808, "pre_provider_ms": 1802, "provider_service_ms": 0, "post_provider_ttft_ms": 7, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 4, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 21, "total_ms": 7, "pre_provider_ms": 4, "provider_service_ms": 0, "post_provider_ttft_ms": 3, "wal_bytes_before": 4251872, "wal_bytes_after": 4251872, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 2, "wal_checkpoint_sequence_after": 2, "wal_checkpoint_sequence_changed": false},
+          {"sequence": 24, "total_ms": 7, "pre_provider_ms": 4, "provider_service_ms": 0, "post_provider_ttft_ms": 2, "wal_bytes_before": 4251872, "wal_bytes_after": 4251872, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 2, "wal_checkpoint_sequence_after": 2, "wal_checkpoint_sequence_changed": false}
+        ],
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      },
+      {
+        "run": 2,
+        "database_storage": "qualification-root",
+        "direct_provider": {"p50_total_ms": 4, "p95_total_ms": 7, "max_total_ms": 8},
+        "diagnostic": {
+          "p50_total_ms": 11,
+          "p95_total_ms": 20,
+          "max_total_ms": 3626,
+          "p50_pre_provider_ms": 7,
+          "p95_pre_provider_ms": 13,
+          "max_pre_provider_ms": 3615,
+          "p50_provider_service_ms": 0,
+          "p95_provider_service_ms": 2,
+          "max_provider_service_ms": 4,
+          "p50_post_provider_ttft_ms": 4,
+          "p95_post_provider_ttft_ms": 8,
+          "max_post_provider_ttft_ms": 13,
+          "timeouts": 0,
+          "failures": 0,
+          "wal_checkpoint_sequence_changes": 3,
+          "wal_checkpoint_sequence_unchanged": 57,
+          "max_total_with_checkpoint_change_ms": 3626,
+          "max_total_without_checkpoint_change_ms": 20
+        },
+        "slowest_five": [
+          {"sequence": 9, "total_ms": 3626, "pre_provider_ms": 3615, "provider_service_ms": 2, "post_provider_ttft_ms": 8, "wal_bytes_before": 4087072, "wal_bytes_after": 4251872, "wal_bytes_delta": 164800, "wal_checkpoint_sequence_before": 1, "wal_checkpoint_sequence_after": 2, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 49, "total_ms": 2161, "pre_provider_ms": 2150, "provider_service_ms": 0, "post_provider_ttft_ms": 11, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 4, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 29, "total_ms": 211, "pre_provider_ms": 198, "provider_service_ms": 1, "post_provider_ttft_ms": 11, "wal_bytes_before": 4251872, "wal_bytes_after": 4272472, "wal_bytes_delta": 20600, "wal_checkpoint_sequence_before": 2, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 4, "total_ms": 20, "pre_provider_ms": 7, "provider_service_ms": 0, "post_provider_ttft_ms": 13, "wal_bytes_before": 3015872, "wal_bytes_after": 3238352, "wal_bytes_delta": 222480, "wal_checkpoint_sequence_before": 1, "wal_checkpoint_sequence_after": 1, "wal_checkpoint_sequence_changed": false},
+          {"sequence": 34, "total_ms": 18, "pre_provider_ms": 13, "provider_service_ms": 0, "post_provider_ttft_ms": 5, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": false}
+        ],
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      },
+      {
+        "run": 3,
+        "database_storage": "qualification-root",
+        "direct_provider": {"p50_total_ms": 1, "p95_total_ms": 1, "max_total_ms": 1},
+        "diagnostic": {
+          "p50_total_ms": 3,
+          "p95_total_ms": 7,
+          "max_total_ms": 4944,
+          "p50_pre_provider_ms": 2,
+          "p95_pre_provider_ms": 7,
+          "max_pre_provider_ms": 4906,
+          "p50_provider_service_ms": 0,
+          "p95_provider_service_ms": 0,
+          "max_provider_service_ms": 0,
+          "p50_post_provider_ttft_ms": 1,
+          "p95_post_provider_ttft_ms": 3,
+          "max_post_provider_ttft_ms": 38,
+          "timeouts": 0,
+          "failures": 0,
+          "wal_checkpoint_sequence_changes": 3,
+          "wal_checkpoint_sequence_unchanged": 57,
+          "max_total_with_checkpoint_change_ms": 4944,
+          "max_total_without_checkpoint_change_ms": 7
+        },
+        "slowest_five": [
+          {"sequence": 9, "total_ms": 4944, "pre_provider_ms": 4906, "provider_service_ms": 0, "post_provider_ttft_ms": 38, "wal_bytes_before": 4087072, "wal_bytes_after": 4251872, "wal_bytes_delta": 164800, "wal_checkpoint_sequence_before": 1, "wal_checkpoint_sequence_after": 2, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 29, "total_ms": 2050, "pre_provider_ms": 2043, "provider_service_ms": 0, "post_provider_ttft_ms": 6, "wal_bytes_before": 4251872, "wal_bytes_after": 4272472, "wal_bytes_delta": 20600, "wal_checkpoint_sequence_before": 2, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 49, "total_ms": 163, "pre_provider_ms": 156, "provider_service_ms": 0, "post_provider_ttft_ms": 7, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 4, "wal_checkpoint_sequence_changed": true},
+          {"sequence": 46, "total_ms": 7, "pre_provider_ms": 4, "provider_service_ms": 0, "post_provider_ttft_ms": 3, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": false},
+          {"sequence": 44, "total_ms": 5, "pre_provider_ms": 3, "provider_service_ms": 0, "post_provider_ttft_ms": 2, "wal_bytes_before": 4272472, "wal_bytes_after": 4272472, "wal_bytes_delta": 0, "wal_checkpoint_sequence_before": 3, "wal_checkpoint_sequence_after": 3, "wal_checkpoint_sequence_changed": false}
+        ],
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      }
+    ],
+    "class_b_database_only_tmpfs": [
+      {
+        "run": 1,
+        "database_storage": "isolated-filesystem",
+        "direct_provider": {"p50_total_ms": 1, "p95_total_ms": 1, "max_total_ms": 1},
+        "diagnostic": {"p50_total_ms": 3, "p95_total_ms": 3, "max_total_ms": 4, "max_pre_provider_ms": 2, "max_provider_service_ms": 0, "max_post_provider_ttft_ms": 1, "timeouts": 0, "failures": 0, "wal_checkpoint_sequence_changes": 3, "wal_checkpoint_sequence_unchanged": 57, "max_total_with_checkpoint_change_ms": 3, "max_total_without_checkpoint_change_ms": 4},
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      },
+      {
+        "run": 2,
+        "database_storage": "isolated-filesystem",
+        "direct_provider": {"p50_total_ms": 1, "p95_total_ms": 1, "max_total_ms": 1},
+        "diagnostic": {"p50_total_ms": 3, "p95_total_ms": 3, "max_total_ms": 4, "max_pre_provider_ms": 2, "max_provider_service_ms": 0, "max_post_provider_ttft_ms": 1, "timeouts": 0, "failures": 0, "wal_checkpoint_sequence_changes": 3, "wal_checkpoint_sequence_unchanged": 57, "max_total_with_checkpoint_change_ms": 4, "max_total_without_checkpoint_change_ms": 4},
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      },
+      {
+        "run": 3,
+        "database_storage": "isolated-filesystem",
+        "direct_provider": {"p50_total_ms": 1, "p95_total_ms": 1, "max_total_ms": 1},
+        "diagnostic": {"p50_total_ms": 3, "p95_total_ms": 3, "max_total_ms": 4, "max_pre_provider_ms": 2, "max_provider_service_ms": 0, "max_post_provider_ttft_ms": 1, "timeouts": 0, "failures": 0, "wal_checkpoint_sequence_changes": 3, "wal_checkpoint_sequence_unchanged": 57, "max_total_with_checkpoint_change_ms": 3, "max_total_without_checkpoint_change_ms": 4},
+        "task_tick_deltas": {"checkpoint": 0, "metrics_flush": 0, "catalog_refresh": 0, "retention_cleanup": 0},
+        "resource_convergence": {"pending_requests": 0, "active_reservations": 0, "finalization_jobs": 0}
+      }
+    ]
+  },
+  "classification": {
+    "decision": "G1",
+    "text": "Slow pre-provider requests coincided with WAL checkpoint-sequence changes, and moving only SQLite database/WAL/SHM to the temporary filesystem removed the tail.",
+    "pre_provider_owner": "SQLite publication/storage path",
+    "post_provider_owner": "No persistent post-provider tail localized; finite finalization remains durable and awaited",
+    "provider_control": "stable; direct maximum was 1–8 ms while MMC diagnostic maxima were 3331–4944 ms",
+    "background_task_contamination": false,
+    "production_follow_up_justified": true,
+    "follow_up": "Write a separate controlled checkpoint/gate-vs-transaction-vs-commit qualification plan; preserve WAL, synchronous=NORMAL, the single DB connection/gate, and finalization ownership."
+  },
+  "limitations": [
+    "A WAL checkpoint-sequence change correlates with a reset/checkpoint cycle but does not prove that no sync/writeback occurred when unchanged.",
+    "No Class C inverse control was required because Class B clearly removed the tail.",
+    "No runtime, API, configuration default, dependency, or durability behavior changed."
+  ]
+}

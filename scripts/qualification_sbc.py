@@ -62,12 +62,23 @@ CONCURRENCY_WORKERS = 4
 STABILIZATION_SECONDS = 3.0
 DIAGNOSTIC_MIN_SAMPLES = 10
 DIAGNOSTIC_MAX_SAMPLES = 200
+PUBLICATION_STORAGE_MIN_SAMPLES = 20
+PUBLICATION_STORAGE_MAX_SAMPLES = 200
 DIAGNOSTIC_WARMUPS = 5
 DIRECT_CONTROL_WARMUPS = 5
 DIRECT_CONTROL_SAMPLES = 30
 DIAGNOSTIC_TIMEOUT = 5.0
 DIAGNOSTIC_SLOWEST_RETAINED = 5
 DIAGNOSTIC_FIXTURE_PATH_SUFFIX = "/responses"
+WAL_HEADER_BYTES = 32
+DIAGNOSTIC_QUIESCENCE_TIMEOUT = 15.0
+DIAGNOSTIC_TASK_NAMES = (
+    "checkpoint",
+    "metrics_flush",
+    "catalog_refresh",
+    "retention_cleanup",
+    "automatic_backup",
+)
 MODELS = {
     "chat_completions": "q008-chat",
     "responses": "q008-responses",
@@ -135,6 +146,12 @@ class DiagnosticSample:
     timed_out: bool
     http_status: int | None
     last_phase: str | None
+    wal_bytes_before: int | None = None
+    wal_bytes_after: int | None = None
+    wal_bytes_delta: int | None = None
+    wal_checkpoint_sequence_before: int | None = None
+    wal_checkpoint_sequence_after: int | None = None
+    wal_checkpoint_sequence_changed: bool | None = None
 
 
 class QualificationError(RuntimeError):
@@ -841,6 +858,132 @@ def _runtime_observations(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_task_snapshot(value: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return only the fixed, database-relevant task scalars."""
+    manager = value.get("runtime_manager")
+    manager_map: dict[str, Any] = (
+        cast("dict[str, Any]", manager) if isinstance(manager, dict) else {}
+    )
+    tasks = manager_map.get("tasks") or value.get("background_tasks")
+    task_list: list[Any] = cast("list[Any]", tasks) if isinstance(tasks, list) else []
+    allowed = set(DIAGNOSTIC_TASK_NAMES)
+    snapshot: dict[str, dict[str, Any]] = {}
+    for raw_task in task_list:
+        if not isinstance(raw_task, dict):
+            continue
+        task = cast("dict[str, Any]", raw_task)
+        name = task.get("name")
+        if name in allowed:
+            snapshot[str(name)] = {
+                "tick_count": task.get("tick_count")
+                if isinstance(task.get("tick_count"), int)
+                else None,
+                "in_tick": task.get("in_tick")
+                if isinstance(task.get("in_tick"), bool)
+                else None,
+            }
+    return snapshot
+
+
+def _runtime_json(runtime_url: str, server_api_key: str) -> dict[str, Any] | None:
+    try:
+        status, body = _http(
+            runtime_url, headers={"Authorization": f"Bearer {server_api_key}"}
+        )
+        if status != 200:
+            return None
+        value = json.loads(body.decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else None
+
+
+def _wait_for_diagnostic_quiescence(
+    runtime_url: str,
+    *,
+    timeout: float = DIAGNOSTIC_QUIESCENCE_TIMEOUT,
+    server_api_key: str = "q008-server-key",
+) -> dict[str, dict[str, Any]]:
+    """Wait for startup checkpoint/metrics work and a quiescent task window."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = _runtime_json(runtime_url, server_api_key)
+        tasks = _runtime_task_snapshot(value or {})
+        checkpoint = tasks.get("checkpoint")
+        metrics_flush = tasks.get("metrics_flush")
+        if (
+            checkpoint is not None
+            and metrics_flush is not None
+            and isinstance(checkpoint.get("tick_count"), int)
+            and checkpoint["tick_count"] >= 1
+            and isinstance(metrics_flush.get("tick_count"), int)
+            and metrics_flush["tick_count"] >= 1
+            and all(task.get("in_tick") is False for task in tasks.values())
+        ):
+            return tasks
+        time.sleep(0.1)
+    raise QualificationError("database task quiescence was not reached")
+
+
+def _task_tick_deltas(
+    before: Mapping[str, Mapping[str, Any]],
+    after: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for name in DIAGNOSTIC_TASK_NAMES:
+        initial = before.get(name)
+        final = after.get(name)
+        if initial is None and final is None:
+            continue
+        initial_count = initial.get("tick_count") if initial else None
+        final_count = final.get("tick_count") if final else None
+        delta = (
+            final_count - initial_count
+            if isinstance(initial_count, int) and isinstance(final_count, int)
+            else None
+        )
+        result[name] = {
+            "baseline_tick_count": initial_count,
+            "final_tick_count": final_count,
+            "tick_count_delta": delta,
+            "final_in_tick": final.get("in_tick") if final else None,
+        }
+    return result
+
+
+def _wal_snapshot(database: Path) -> dict[str, Any]:
+    """Read bounded WAL/file metadata without opening SQLite or checkpointing."""
+    wal = database.with_name(database.name + "-wal")
+    shm = database.with_name(database.name + "-shm")
+    snapshot: dict[str, Any] = {
+        "database_present": database.is_file(),
+        "database_bytes": database.stat().st_size if database.is_file() else None,
+        "wal_present": wal.is_file(),
+        "wal_bytes": wal.stat().st_size if wal.is_file() else None,
+        "shm_present": shm.is_file(),
+        "shm_bytes": shm.stat().st_size if shm.is_file() else None,
+        "wal_page_size": None,
+        "wal_checkpoint_sequence": None,
+    }
+    if not wal.is_file():
+        return snapshot
+    try:
+        with wal.open("rb") as stream:
+            header = stream.read(WAL_HEADER_BYTES)
+    except OSError:
+        return snapshot
+    if len(header) < 16 or header[:4] not in {b"\x37\x7f\x06\x82", b"\x37\x7f\x06\x83"}:
+        return snapshot
+    page_size = int.from_bytes(header[8:12], "big")
+    if page_size == 1:
+        page_size = 65_536
+    if page_size < 512 or page_size > 65_536 or page_size & (page_size - 1):
+        return snapshot
+    snapshot["wal_page_size"] = page_size
+    snapshot["wal_checkpoint_sequence"] = int.from_bytes(header[12:16], "big")
+    return snapshot
+
+
 def resource_sample(
     label: str,
     process: subprocess.Popen[str],
@@ -1028,6 +1171,21 @@ def _diagnose_sample_count(value: str) -> int:
     return count
 
 
+def _publication_storage_sample_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "publication-storage diagnostic samples must be an integer"
+        ) from error
+    if not PUBLICATION_STORAGE_MIN_SAMPLES <= count <= PUBLICATION_STORAGE_MAX_SAMPLES:
+        raise argparse.ArgumentTypeError(
+            "publication-storage diagnostic samples must be between "
+            f"{PUBLICATION_STORAGE_MIN_SAMPLES} and {PUBLICATION_STORAGE_MAX_SAMPLES}"
+        )
+    return count
+
+
 def _ns_to_ms(earlier_ns: int | None, later_ns: int | None) -> int | None:
     if earlier_ns is None or later_ns is None:
         return None
@@ -1043,7 +1201,9 @@ def _phase_values(samples: Sequence[DiagnosticSample], field: str) -> list[int]:
     return values
 
 
-def _diagnostic_phase_summary(samples: Sequence[DiagnosticSample]) -> dict[str, Any]:
+def _diagnostic_phase_summary(
+    samples: Sequence[DiagnosticSample], *, include_wal: bool = False
+) -> dict[str, Any]:
     """Aggregate bounded scalar phase evidence; discard per-request detail.
 
     Retains sample counts, p50/p95/max per phase, and the five slowest
@@ -1066,6 +1226,21 @@ def _diagnostic_phase_summary(samples: Sequence[DiagnosticSample]) -> dict[str, 
                 "last_phase": item.last_phase,
             }
         )
+        if include_wal:
+            slowest[-1].update(
+                {
+                    "wal_bytes_before": item.wal_bytes_before,
+                    "wal_bytes_after": item.wal_bytes_after,
+                    "wal_bytes_delta": item.wal_bytes_delta,
+                    "wal_checkpoint_sequence_before": (
+                        item.wal_checkpoint_sequence_before
+                    ),
+                    "wal_checkpoint_sequence_after": item.wal_checkpoint_sequence_after,
+                    "wal_checkpoint_sequence_changed": (
+                        item.wal_checkpoint_sequence_changed
+                    ),
+                }
+            )
     total_values = [item.total_ms for item in samples]
     pre_values = _phase_values(samples, "pre_provider_ms")
     service_values = _phase_values(samples, "provider_service_ms")
@@ -1075,7 +1250,7 @@ def _diagnostic_phase_summary(samples: Sequence[DiagnosticSample]) -> dict[str, 
     completed_count = sum(
         1 for item in samples if not item.timed_out and item.http_status == 200
     )
-    return {
+    result: dict[str, Any] = {
         "sample_count": len(samples),
         "completed_count": completed_count,
         "timeout_count": timeout_count,
@@ -1099,6 +1274,30 @@ def _diagnostic_phase_summary(samples: Sequence[DiagnosticSample]) -> dict[str, 
         "maximum_client_body_ms": max(body_values) if body_values else None,
         "slowest_five": slowest,
     }
+    if include_wal:
+        checkpoint_changed = [
+            item.total_ms
+            for item in samples
+            if item.wal_checkpoint_sequence_changed is True
+        ]
+        checkpoint_unchanged = [
+            item.total_ms
+            for item in samples
+            if item.wal_checkpoint_sequence_changed is False
+        ]
+        result.update(
+            {
+                "wal_checkpoint_sequence_change_count": len(checkpoint_changed),
+                "wal_checkpoint_sequence_unchanged_count": len(checkpoint_unchanged),
+                "maximum_total_ms_with_checkpoint_sequence_change": max(
+                    checkpoint_changed, default=None
+                ),
+                "maximum_total_ms_without_checkpoint_sequence_change": max(
+                    checkpoint_unchanged, default=None
+                ),
+            }
+        )
+    return result
 
 
 def _diagnostic_timed_post(
@@ -1184,6 +1383,9 @@ def _combine_diagnostic_sample(
     status: int | None,
     timed_out: bool,
     last_phase: str | None,
+    *,
+    wal_before: Mapping[str, Any] | None = None,
+    wal_after: Mapping[str, Any] | None = None,
 ) -> DiagnosticSample:
     t1_ns = provider_timing[1] if provider_timing is not None else None
     t2_ns = provider_timing[2] if provider_timing is not None else None
@@ -1202,6 +1404,35 @@ def _combine_diagnostic_sample(
         timed_out=timed_out,
         http_status=status,
         last_phase=observed_phase,
+        wal_bytes_before=(
+            wal_before.get("wal_bytes") if wal_before is not None else None
+        ),
+        wal_bytes_after=(wal_after.get("wal_bytes") if wal_after is not None else None),
+        wal_bytes_delta=(
+            wal_after.get("wal_bytes", 0) - wal_before.get("wal_bytes", 0)
+            if wal_before is not None
+            and wal_after is not None
+            and isinstance(wal_before.get("wal_bytes"), int)
+            and isinstance(wal_after.get("wal_bytes"), int)
+            else None
+        ),
+        wal_checkpoint_sequence_before=(
+            wal_before.get("wal_checkpoint_sequence")
+            if wal_before is not None
+            else None
+        ),
+        wal_checkpoint_sequence_after=(
+            wal_after.get("wal_checkpoint_sequence") if wal_after is not None else None
+        ),
+        wal_checkpoint_sequence_changed=(
+            wal_before.get("wal_checkpoint_sequence")
+            != wal_after.get("wal_checkpoint_sequence")
+            if wal_before is not None
+            and wal_after is not None
+            and isinstance(wal_before.get("wal_checkpoint_sequence"), int)
+            and isinstance(wal_after.get("wal_checkpoint_sequence"), int)
+            else None
+        ),
     )
 
 
@@ -1267,13 +1498,26 @@ def _direct_provider_control(
     }
 
 
+def _diagnostic_finite_warmup(port: int) -> None:
+    for _ in range(DIAGNOSTIC_WARMUPS):
+        status, body, _, _ = _benchmark_request(
+            port, MODELS["responses"], False, "responses"
+        )
+        if status != 200 or not body:
+            raise QualificationError(
+                f"diagnostic warm-up returned HTTP {status} without a body"
+            )
+
+
 def _diagnostic_finite_batch(
     port: int,
     provider: LoopbackProvider,
     samples: int,
     process: subprocess.Popen[str] | None = None,
+    database: Path | None = None,
     *,
     timeout: float = DIAGNOSTIC_TIMEOUT,
+    warmup: bool = True,
 ) -> dict[str, Any]:
     """Run a sequential native-finite diagnostic batch with phase attribution.
 
@@ -1289,16 +1533,11 @@ def _diagnostic_finite_batch(
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = _finite_diagnostic_payload()
     headers = _diagnostic_headers()
-    for _ in range(DIAGNOSTIC_WARMUPS):
-        status, body, _, _ = _benchmark_request(
-            port, MODELS["responses"], False, "responses"
-        )
-        if status != 200 or not body:
-            raise QualificationError(
-                f"diagnostic warm-up returned HTTP {status} without a body"
-            )
+    if warmup:
+        _diagnostic_finite_warmup(port)
     provider.start_diagnostic(capacity=samples)
     observations: list[DiagnosticSample] = []
+    wal_before = _wal_snapshot(database) if database is not None else None
     first_cpu = _proc_cpu(process.pid) if process is not None else None
     started = time.monotonic()
     try:
@@ -1309,6 +1548,7 @@ def _diagnostic_finite_batch(
             )
             new_timings = _drain_new_provider_timings(provider, before)
             provider_timing = new_timings[-1] if new_timings else None
+            wal_after = _wal_snapshot(database) if database is not None else None
             observations.append(
                 _combine_diagnostic_sample(
                     sequence,
@@ -1319,13 +1559,16 @@ def _diagnostic_finite_batch(
                     status,
                     timed_out,
                     last_phase,
+                    wal_before=wal_before,
+                    wal_after=wal_after,
                 )
             )
+            wal_before = wal_after
     finally:
         provider.stop_diagnostic()
     elapsed_seconds = max(time.monotonic() - started, 0.001)
     second_cpu = _proc_cpu(process.pid) if process is not None else None
-    summary = _diagnostic_phase_summary(observations)
+    summary = _diagnostic_phase_summary(observations, include_wal=database is not None)
     return {
         "status": "measured",
         "model": MODELS["responses"],
@@ -1633,6 +1876,8 @@ def run_qualification(
     build_elapsed_ms: int | None = None,
     benchmark_samples: int = 0,
     diagnose_finite_tail: int | None = None,
+    diagnose_publication_storage: int | None = None,
+    diagnostic_database_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
     if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
@@ -1648,7 +1893,33 @@ def run_qualification(
         )
     if diagnose_finite_tail is not None and benchmark_samples <= 0:
         raise ValueError("diagnostic finite-tail mode requires benchmark mode")
-    benchmark_mode = benchmark_samples > 0
+    if diagnose_publication_storage is not None and not (
+        PUBLICATION_STORAGE_MIN_SAMPLES
+        <= diagnose_publication_storage
+        <= PUBLICATION_STORAGE_MAX_SAMPLES
+    ):
+        raise ValueError(
+            "publication-storage diagnostic sample count must be "
+            f"{PUBLICATION_STORAGE_MIN_SAMPLES}..{PUBLICATION_STORAGE_MAX_SAMPLES}"
+        )
+    if diagnose_publication_storage is not None and diagnose_finite_tail is not None:
+        raise ValueError(
+            "publication-storage and finite-tail diagnostics are exclusive"
+        )
+    if diagnose_publication_storage is not None and benchmark_samples > 0:
+        raise ValueError(
+            "publication-storage diagnostic mode does not run the benchmark corpus"
+        )
+    if diagnose_publication_storage is not None:
+        if config_fixture.resolve() != BENCHMARK_FIXTURE.resolve():
+            raise ValueError(
+                "publication-storage diagnostic mode requires the benchmark fixture"
+            )
+    elif diagnostic_database_dir is not None:
+        raise ValueError(
+            "diagnostic database directory requires publication-storage mode"
+        )
+    benchmark_mode = benchmark_samples > 0 or diagnose_publication_storage is not None
     report: dict[str, Any] = {
         "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
         "plan": "SBC qualification",
@@ -1730,7 +2001,25 @@ def run_qualification(
             "second_workload_elapsed_ms": [],
             "second_workload_ttft_ms": [],
         }
-        with LoopbackProvider() as provider:
+        with contextlib.ExitStack() as resources, LoopbackProvider() as provider:
+            if (
+                diagnose_publication_storage is not None
+                and diagnostic_database_dir is not None
+            ):
+                try:
+                    isolated_database_root = Path(
+                        resources.enter_context(
+                            tempfile.TemporaryDirectory(
+                                dir=str(diagnostic_database_dir),
+                                prefix="eggpool-q008-db-",
+                            )
+                        )
+                    )
+                except (OSError, TypeError) as error:
+                    raise QualificationError(
+                        "diagnostic database filesystem is unavailable"
+                    ) from error
+                database = isolated_database_root / "usage.sqlite3"
             content = _render_fixture(
                 config_fixture,
                 config,
@@ -1905,7 +2194,107 @@ def run_qualification(
                         include_peak=benchmark_mode,
                     )
                 )
-                if benchmark_samples:
+                if diagnose_publication_storage is not None:
+                    benchmark_process = process
+                    benchmark: dict[str, Any] = {
+                        "sample_count": diagnose_publication_storage,
+                        "config_fixture": Path(config_fixture).name,
+                        "diagnostic_mode": "publication_storage",
+                        "database_storage": (
+                            "isolated-filesystem"
+                            if diagnostic_database_dir is not None
+                            else "qualification-root"
+                        ),
+                        "cadence": benchmark_cadence_facts(content),
+                        "runs": {},
+                    }
+                    diagnostic_runtime_url = (
+                        f"http://127.0.0.1:{port}/api/stats/runtime"
+                    )
+                    samples.append(
+                        resource_sample(
+                            "publication-storage-before-quiescence",
+                            benchmark_process,
+                            database,
+                            diagnostic_runtime_url,
+                            include_peak=True,
+                        )
+                    )
+                    direct_control = _direct_provider_control(provider)
+                    benchmark["runs"]["direct_provider_control"] = direct_control
+                    _diagnostic_finite_warmup(port)
+                    baseline_tasks = _wait_for_diagnostic_quiescence(
+                        diagnostic_runtime_url
+                    )
+                    publication_storage = _diagnostic_finite_batch(
+                        port,
+                        provider,
+                        diagnose_publication_storage,
+                        benchmark_process,
+                        database,
+                        warmup=False,
+                    )
+                    benchmark["runs"]["publication_storage_diagnostic"] = (
+                        publication_storage
+                    )
+                    final_runtime = _runtime_json(
+                        diagnostic_runtime_url, "q008-server-key"
+                    )
+                    final_tasks = _runtime_task_snapshot(final_runtime or {})
+                    if not final_tasks:
+                        raise QualificationError(
+                            "runtime task snapshot was unavailable after diagnostic"
+                        )
+                    task_deltas = _task_tick_deltas(baseline_tasks, final_tasks)
+                    benchmark["task_quiescence"] = {
+                        "wait_timeout_s": DIAGNOSTIC_QUIESCENCE_TIMEOUT,
+                        "fixed_task_names": list(DIAGNOSTIC_TASK_NAMES),
+                        "baseline": baseline_tasks,
+                        "final": final_tasks,
+                        "deltas": task_deltas,
+                        "background_db_activity": any(
+                            value.get("tick_count_delta", 0) > 0
+                            for value in task_deltas.values()
+                            if isinstance(value.get("tick_count_delta"), int)
+                        ),
+                    }
+                    benchmark["interpretation"] = (
+                        "diagnostic-only publication/storage localization; no "
+                        "runtime change or performance threshold applied"
+                    )
+                    samples.append(
+                        resource_sample(
+                            "after-publication-storage-diagnostic",
+                            benchmark_process,
+                            database,
+                            diagnostic_runtime_url,
+                            include_peak=True,
+                        )
+                    )
+                    stabilized = resource_sample(
+                        "after-publication-storage-stabilization",
+                        benchmark_process,
+                        database,
+                        diagnostic_runtime_url,
+                        duration=STABILIZATION_SECONDS,
+                        include_peak=True,
+                    )
+                    samples.append(stabilized)
+                    if stabilized["pending_requests"] not in {0, None} or stabilized[
+                        "active_reservations"
+                    ] not in {0, None}:
+                        raise QualificationError(
+                            "publication/storage diagnostic state did not converge"
+                        )
+                    benchmark["resource_summary"] = {
+                        "final_pending_requests": stabilized["pending_requests"],
+                        "final_active_reservations": stabilized["active_reservations"],
+                        "final_finalization_jobs": stabilized["finalization_jobs"],
+                        "final_rss_bytes": stabilized["rss_bytes"],
+                        "final_peak_rss_bytes": stabilized.get("peak_rss_bytes"),
+                    }
+                    report["benchmark"] = benchmark
+                elif benchmark_samples:
                     benchmark_process = process
                     benchmark: dict[str, Any] = {
                         "sample_count": benchmark_samples,
@@ -2275,6 +2664,26 @@ def _parser() -> argparse.ArgumentParser:
             "samples; requires --benchmark-samples and the benchmark fixture."
         ),
     )
+    parser.add_argument(
+        "--diagnose-publication-storage",
+        type=_publication_storage_sample_count,
+        default=None,
+        metavar="N",
+        help=(
+            "Run the Plan 238 publication/storage diagnostic with 20..200 "
+            "samples; requires the benchmark fixture and physical SBC gate."
+        ),
+    )
+    parser.add_argument(
+        "--diagnostic-database-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Create only the diagnostic SQLite files in a temporary child of "
+            "DIR; requires --diagnose-publication-storage."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
 
@@ -2291,13 +2700,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_elapsed_ms=args.build_elapsed_ms,
             benchmark_samples=args.benchmark_samples,
             diagnose_finite_tail=args.diagnose_finite_tail,
+            diagnose_publication_storage=args.diagnose_publication_storage,
+            diagnostic_database_dir=args.diagnostic_database_dir,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
-        requested_benchmark = False
-        try:
-            requested_benchmark = int(str(args.benchmark_samples)) > 0
-        except (TypeError, ValueError):
-            requested_benchmark = False
+        requested_benchmark = args.diagnose_publication_storage is not None
+        with contextlib.suppress(TypeError, ValueError):
+            requested_benchmark = (
+                requested_benchmark or int(str(args.benchmark_samples)) > 0
+            )
         report = {
             "schema_version": SCHEMA_V2 if requested_benchmark else SCHEMA_V1,
             "plan": "SBC qualification",

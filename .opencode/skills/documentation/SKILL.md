@@ -50,6 +50,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   Responses observation fold, intentionally retained SQLite/current-thread/
   routing-lock/stream-handoff boundaries, and any stripping or ThinLTO keep/
   change decision. Mark unavailable SBC dimensions as `not measured`.
+  Plan 238's publication/storage diagnostic is tooling-only: document its
+  fixed task-quiescence gate, scalar WAL observation, database-only temporary
+  filesystem comparison, and `not measured` outcome when physical SBC or
+  tmpfs dimensions are unavailable. Do not imply that it changes SQLite
+  durability or production storage placement.
 - Never document Python-era runtime details as current: no ASGI server, no
   `yield`/`json.dumps`/`_execute_streaming`/`_build_stream_generator` internals,
   no `self._`-style Python fields, no `tests/unit/*.py` paths. The streaming

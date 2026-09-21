@@ -19,3 +19,21 @@ Compatibility fixtures under `tests/fixtures/` are test-only and are never
 loaded by the production executable.
 
 See `rust/src/db/connection.rs`, `migrations.rs`, and `repositories.rs`.
+
+## Publication/storage qualification diagnostic
+
+The tooling-only Plan 238 mode in `scripts/qualification_sbc.py` is not a
+database runtime authority. On a physical Linux/aarch64 SBC it waits for the
+fixed checkpoint, metrics-flush, catalog-refresh, retention-cleanup, and
+automatic-backup task names to be quiescent, captures baseline/final tick
+counts, and runs bounded sequential native finite requests. It reads file
+sizes and at most the first 32 bytes of the WAL file after each request; the
+report retains only scalar page-size/checkpoint-sequence facts and no database
+path or raw header.
+
+An optional diagnostic database directory puts only `usage.sqlite3` and its
+WAL/SHM siblings on that filesystem while config, logs, runtime files, and
+backup/recovery roots remain in the qualification root. This is a diagnostic
+comparison, not a production placement recommendation or a durability
+change. The mode uses the benchmark fixture directly and does not run the
+ordinary benchmark corpus.

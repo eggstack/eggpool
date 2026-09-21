@@ -201,5 +201,12 @@ benchmark dependency, hardware CI, or a performance threshold. Release
 qualification retains Maturin `--strip false`; a stripped or ThinLTO experiment
 must pass target qualification before changing the shipped profile.
 
+Plan 238 extends the tooling-only path with a separate publication/storage
+diagnostic. It waits for the fixed database-task quiescence window, samples
+only bounded database/WAL/SHM file scalars and one WAL header per measured
+request, and optionally moves only those SQLite files to a temporary
+filesystem. It does not alter SQLite durability, production storage, or any
+runtime ownership boundary.
+
 Use the Python tooling environment only for release validators and tooling
 tests. Do not import, run, or recreate the retired application source tree.

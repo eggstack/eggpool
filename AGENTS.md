@@ -70,6 +70,11 @@ single tmpfs run removed the tail entirely (Outcome 1: durable publication /
 SQLite / storage path; narrow follow-up only, no Tokio/routing/streaming
 change). Hosted ARM, emulation, and cloud ARM results are not target-class evidence;
 record unavailable dimensions as `not measured`.
+Plan 238 adds diagnostic-only `--diagnose-publication-storage 20..=200` using
+the benchmark fixture without the normal benchmark corpus. It waits for the
+fixed database-task quiescence window, records bounded WAL header/file-size
+scalars, and optionally isolates only database/WAL/SHM under
+`--diagnostic-database-dir`; it does not authorize Rust/runtime changes.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +

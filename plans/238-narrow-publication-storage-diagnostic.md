@@ -1,7 +1,7 @@
 # Plan 238 — Narrow Publication/Storage Diagnostic
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: `6b25f4fbbab1e216363852b749e267bf4b05d241`
 Follows: `plans/237-raspberry-pi-finite-tail-diagnostic-pass.md`
 Priority: P1 narrow publication/storage localization
@@ -822,3 +822,64 @@ evidence.
 10. Aggregate the evidence and classify using G1–G5.
 11. Commit the sanitized Plan 238 artifact and append closure evidence here.
 12. Stop. Do not implement the production optimization in this plan.
+
+## Closure — 2026-09-21
+
+The tooling-only diagnostic was implemented without any `rust/src/`, Cargo,
+API, configuration-default, durability, or dependency change. The candidate
+was built on the physical target:
+
+- repository SHA used for the release candidate: `a5819eaa135a5b1d6b24edbff9d8cf8d42daa0c2`;
+- candidate SHA-256: `4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8`;
+- candidate size: `30,226,744` bytes;
+- board: Raspberry Pi 5 Model B Rev 1.0, Ubuntu 24.04.4 LTS, Linux
+  `6.8.0-1064-raspi`, ext4/non-rotational MMC, `ondemand` governor.
+
+The runner now provides `--diagnose-publication-storage 20..=200` using the
+benchmark fixture directly, fixed database-task quiescence/tick evidence,
+one bounded WAL header read per request, scalar WAL/checkpoint correlation,
+and `--diagnostic-database-dir DIR` for database-only temporary-filesystem
+isolation. Default Q008 and Plan 237 behavior remain unchanged; the new mode
+does not run the normal benchmark corpus.
+
+Three accepted fresh-root MMC runs and three accepted fresh-root database-only
+temporary-filesystem runs completed. A first MMC attempt with shutdown cleanup
+failure and a later MMC attempt with one client timeout were not counted;
+both were rerun from fresh roots. All accepted runs had zero background task
+tick deltas, zero timeouts/failures, and converged with zero pending requests,
+active reservations, and finalization jobs.
+
+| Class | Diagnostic total p50/p95/max | Pre-provider max | Provider max | Post-provider max | Direct max |
+|---|---:|---:|---:|---:|---:|
+| MMC 1 | 3 / 7 / 3331 ms | 3310 ms | 0 ms | 20 ms | 1 ms |
+| MMC 2 | 11 / 20 / 3626 ms | 3615 ms | 4 ms | 13 ms | 8 ms |
+| MMC 3 | 3 / 7 / 4944 ms | 4906 ms | 0 ms | 38 ms | 1 ms |
+| DB/WAL/SHM temporary filesystem 1 | 3 / 3 / 4 ms | 2 ms | 0 ms | 1 ms | 1 ms |
+| DB/WAL/SHM temporary filesystem 2 | 3 / 3 / 4 ms | 2 ms | 0 ms | 1 ms | 1 ms |
+| DB/WAL/SHM temporary filesystem 3 | 3 / 3 / 4 ms | 2 ms | 0 ms | 1 ms | 1 ms |
+
+Each run observed three checkpoint-sequence changes and 57 unchanged samples;
+the slow MMC samples with the largest tails coincided with sequence changes,
+while the temporary-filesystem runs retained the same bounded checkpoint
+observations without the multi-second tail. The direct provider control stayed
+at 1–8 ms, and no supervised database task ticked during any measured batch.
+The sanitized aggregate is
+[`artifacts/qualification/238-sbc-publication-storage-diagnostic.json`](../artifacts/qualification/238-sbc-publication-storage-diagnostic.json).
+
+Classification: **G1 — SQLite WAL checkpoint/reset activity is strongly
+correlated with the foreground storage stall.** The database-only temporary
+filesystem comparison localizes the pre-provider tail to the SQLite
+publication/storage path. No Class C inverse control was required. A separate
+controlled checkpoint/gate-vs-transaction-vs-commit qualification plan is
+justified; this plan does not implement that production change.
+
+Validation evidence:
+
+- `cargo build --manifest-path rust/Cargo.toml --locked --release`: pass;
+- `uv sync --frozen`: pass;
+- `uv run --frozen ruff format --check scripts/ tests/tooling/`: pass;
+- `uv run --frozen ruff check scripts/ tests/tooling/`: pass;
+- `uv run --frozen pyright scripts/`: pass;
+- `uv run --frozen pytest tests/tooling/test_qualification_sbc.py -q`: pass
+  (`28 passed`);
+- six accepted physical Plan 238 runs: pass (`runtime-q008.v2`).
