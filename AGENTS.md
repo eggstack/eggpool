@@ -56,6 +56,12 @@ cargo tree --manifest-path rust/Cargo.toml --duplicates
 Plan 235's physical-SBC evidence is manual and descriptive: qualify a
 SHA-verified Linux/aarch64 release candidate, then repeat
 `qualification_sbc.py --benchmark-samples 30` three times from fresh roots.
+Plan 236 corrects that pass tooling/evidence-only: benchmark runs must use
+`tests/tooling/fixtures/qualification/sbc-benchmark.toml` (low-wear
+steady-state cadence), translated streams require downstream
+`response.completed` plus fixture Messages-path proof, default mode stays on
+`runtime-q008.v1` while benchmark mode uses `runtime-q008.v2`, and Plan 236's
+corrected timing supersedes Plan 235's timing/translated interpretation.
 Hosted ARM, emulation, and cloud ARM results are not target-class evidence;
 record unavailable dimensions as `not measured`.
 

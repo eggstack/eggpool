@@ -45,8 +45,11 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/sbc.toml"
+BENCHMARK_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/sbc-benchmark.toml"
 DEFAULT_OUTPUT = ROOT / "artifacts/qualification/008-run.json"
-SCHEMA_VERSION = "runtime-q008.v2"
+SCHEMA_V1 = "runtime-q008.v1"
+SCHEMA_V2 = "runtime-q008.v2"
+SCHEMA_VERSION = SCHEMA_V1
 MANIFEST_VERSION = "runtime-q001.v1"
 MAX_REASON_BYTES = 768
 MAX_HTTP_BODY_BYTES = 128 * 1024
@@ -62,6 +65,49 @@ MODELS = {
     "responses": "q008-responses",
     "messages": "q008-messages",
 }
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    """One typed benchmark case: client surface plus terminal expectations.
+
+    The translated case keeps the Responses client surface while requiring
+    proof that the loopback fixture observed the Anthropic Messages upstream
+    path, so an accidental native Responses route cannot pass as translated.
+    """
+
+    key: str
+    client_surface: str
+    model: str
+    streaming: bool
+    terminal_marker: bytes | None
+    expected_upstream_path: str | None
+
+
+NATIVE_FINITE_CASE = BenchmarkCase(
+    key="native_responses_finite",
+    client_surface="responses",
+    model=MODELS["responses"],
+    streaming=False,
+    terminal_marker=None,
+    expected_upstream_path=None,
+)
+NATIVE_STREAMING_CASE = BenchmarkCase(
+    key="native_responses_streaming",
+    client_surface="responses",
+    model=MODELS["responses"],
+    streaming=True,
+    terminal_marker=b"response.completed",
+    expected_upstream_path=None,
+)
+TRANSLATED_STREAMING_CASE = BenchmarkCase(
+    key="translated_responses_to_messages_streaming",
+    client_surface="responses",
+    model=MODELS["messages"],
+    streaming=True,
+    terminal_marker=b"response.completed",
+    expected_upstream_path="/messages",
+)
 
 
 class QualificationError(RuntimeError):
@@ -321,7 +367,7 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(min(length, MAX_HTTP_BODY_BYTES))
-        self.owner.requests += 1
+        self.owner.record(self.path)
         streaming = b'"stream":true' in body.replace(b" ", b"")
         if self.path.endswith("/chat/completions"):
             response = (
@@ -391,13 +437,36 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
 
 
 class LoopbackProvider:
-    """Threaded loopback-only provider with structural request counters."""
+    """Threaded loopback-only provider with fixed-bucket request counters."""
 
     def __init__(self) -> None:
         self.requests = 0
+        self._lock = threading.Lock()
+        self._path_counts = {
+            "/chat/completions": 0,
+            "/responses": 0,
+            "/messages": 0,
+        }
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _LoopbackHandler)
         _LoopbackHandler.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def record(self, path: str) -> None:
+        """Count one loopback request in a fixed bucket; no URLs retained."""
+        with self._lock:
+            self.requests += 1
+            for bucket in self._path_counts:
+                if path.endswith(bucket):
+                    self._path_counts[bucket] += 1
+                    break
+
+    def path_counts(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._path_counts)
+
+    def upstream_count(self, suffix: str) -> int:
+        with self._lock:
+            return int(self._path_counts.get(suffix, 0))
 
     @property
     def base_url(self) -> str:
@@ -679,8 +748,14 @@ def resource_sample(
     *,
     duration: float = SAMPLE_SECONDS,
     server_api_key: str = "q008-server-key",
+    include_peak: bool = False,
 ) -> dict[str, Any]:
-    """Capture a bounded procfs/runtime/database snapshot."""
+    """Capture a bounded procfs/runtime/database snapshot.
+
+    Ordinary Q008 qualification keeps the pre-benchmark shape without
+    ``peak_rss_bytes``. Benchmark mode sets ``include_peak`` to capture
+    ``VmHWM`` alongside the existing RSS snapshot.
+    """
     pid = process.pid
     first = _proc_cpu(pid)
     started = time.monotonic()
@@ -712,7 +787,6 @@ def resource_sample(
         "label": label,
         "sample_window_ms": round(duration * 1000),
         "rss_bytes": _proc_value(pid, "VmRSS"),
-        "peak_rss_bytes": _proc_value(pid, "VmHWM"),
         "virtual_bytes": _proc_value(pid, "VmSize"),
         "cpu_percent": cpu_percent,
         "open_fd_count": fd_count,
@@ -725,7 +799,66 @@ def resource_sample(
         **_runtime_observations(runtime),
         **db,
     }
+    if include_peak:
+        sample["peak_rss_bytes"] = _proc_value(pid, "VmHWM")
     return sample
+
+
+def _cadence_scalar(content: str, section: str, key: str) -> str | None:
+    """Extract one bounded scalar from a rendered TOML section, if present."""
+    section_match = re.search(
+        rf"(?ms)^\[{re.escape(section)}\]\s*(.*?)(?=^\[|\Z)", content
+    )
+    if not section_match:
+        return None
+    match = re.search(rf"(?m)^{re.escape(key)}\s*=\s*(.+?)\s*$", section_match.group(1))
+    if not match:
+        return None
+    return match.group(1).strip()[:64]
+
+
+def benchmark_cadence_facts(content: str) -> dict[str, Any]:
+    """Record background cadence/enablement scalars for benchmark reports."""
+    return {
+        "server_access_log": _cadence_scalar(content, "server", "access_log"),
+        "server_threads": _cadence_scalar(content, "server", "threads"),
+        "database_busy_timeout_ms": _cadence_scalar(
+            content, "database", "busy_timeout_ms"
+        ),
+        "database_wal": _cadence_scalar(content, "database", "wal"),
+        "database_synchronous": _cadence_scalar(content, "database", "synchronous"),
+        "database_worker_threads": _cadence_scalar(
+            content, "database", "worker_threads"
+        ),
+        "models_refresh_interval_s": _cadence_scalar(
+            content, "models", "refresh_interval_s"
+        ),
+        "models_startup_refresh": _cadence_scalar(content, "models", "startup_refresh"),
+        "model_info_enabled": _cadence_scalar(content, "model_info", "enabled"),
+        "model_info_startup_refresh": _cadence_scalar(
+            content, "model_info", "startup_refresh"
+        ),
+        "metrics_write_mode": _cadence_scalar(content, "metrics", "write_mode"),
+        "metrics_flush_interval_s": _cadence_scalar(
+            content, "metrics", "flush_interval_s"
+        ),
+        "metrics_aggregate_only": _cadence_scalar(content, "metrics", "aggregate_only"),
+        "metrics_max_buffered_events": _cadence_scalar(
+            content, "metrics", "max_buffered_events"
+        ),
+        "metrics_event_loop_lag_enabled": _cadence_scalar(
+            content, "metrics", "event_loop_lag_enabled"
+        ),
+        "metrics_cleanup_interval_s": _cadence_scalar(
+            content, "metrics", "cleanup_interval_s"
+        ),
+        "routing_trace_mode": _cadence_scalar(content, "routing.trace", "mode"),
+        "routing_trace_sample_rate": _cadence_scalar(
+            content, "routing.trace", "sample_rate"
+        ),
+        "backup_enabled": _cadence_scalar(content, "backup", "enabled"),
+        "backup_interval_s": _cadence_scalar(content, "backup", "interval_s"),
+    }
 
 
 def _percentile(values: Sequence[int], percentile: int) -> int | None:
@@ -780,33 +913,65 @@ def _cpu_batch_summary(
 
 
 def _benchmark_request(
-    port: int, model: str, streaming: bool
+    port: int,
+    model: str,
+    streaming: bool,
+    client_surface: str = "responses",
 ) -> tuple[int, bytes, int, int | None]:
-    return _request_timed(port, "responses", model, streaming)
+    return _request_timed(port, client_surface, model, streaming)
 
 
 def _sequential_benchmark(
     process: subprocess.Popen[str],
     port: int,
-    *,
-    model: str,
-    streaming: bool,
+    case: BenchmarkCase,
     samples: int,
+    provider: LoopbackProvider | None = None,
+    *,
+    # Backward-compatible keyword spellings retained for tooling callers.
+    model: str | None = None,
+    streaming: bool | None = None,
     terminal_marker: bytes | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Run warm-ups and a sequential batch, retaining only aggregate scalars."""
+    """Run warm-ups and a sequential batch, retaining only aggregate scalars.
+
+    The typed ``case`` carries the client surface, model, stream flag, expected
+    client-side terminal marker, and expected fixture upstream path. Legacy
+    ``model``/``streaming``/``terminal_marker`` keywords override the case when
+    supplied so older ad-hoc invocations keep working.
+    """
+    active_model = model if model is not None else case.model
+    active_streaming = streaming if streaming is not None else case.streaming
+    legacy_override = (
+        model is not None or streaming is not None or terminal_marker is not None
+    )
+    active_marker = terminal_marker if legacy_override else case.terminal_marker
+    expected_upstream = None if legacy_override else case.expected_upstream_path
+    upstream_before = (
+        provider.upstream_count(expected_upstream)
+        if provider is not None and expected_upstream is not None
+        else None
+    )
     for _ in range(BENCHMARK_WARMUPS):
-        status, body, _, _ = _benchmark_request(port, model, streaming)
+        status, body, _, _ = _benchmark_request(
+            port, active_model, active_streaming, case.client_surface
+        )
         if (
             status != 200
             or not body
-            or (terminal_marker is not None and terminal_marker not in body)
+            or (active_marker is not None and active_marker not in body)
         ):
             return (
                 {
                     "status": "not-measured",
-                    "reason": "fixture route was not accepted during warm-up",
+                    "reason": (
+                        "fixture route was not accepted during warm-up"
+                        if active_marker is None
+                        else "fixture warm-up lacked expected client terminal evidence"
+                    ),
                     "warmup_http_status": status,
+                    "model": active_model,
+                    "streaming": active_streaming,
                 },
                 False,
             )
@@ -815,31 +980,57 @@ def _sequential_benchmark(
     elapsed_ms: list[int] = []
     ttft_ms: list[int] = []
     for _ in range(samples):
-        status, body, elapsed, ttft = _benchmark_request(port, model, streaming)
+        status, body, elapsed, ttft = _benchmark_request(
+            port, active_model, active_streaming, case.client_surface
+        )
         elapsed_ms.append(elapsed)
         if ttft is not None:
             ttft_ms.append(ttft)
         if (
             status != 200
             or not body
-            or (terminal_marker is not None and terminal_marker not in body)
+            or (active_marker is not None and active_marker not in body)
         ):
             raise QualificationError(
                 f"benchmark request returned HTTP {status} or lacked terminal evidence"
             )
     second_cpu = _proc_cpu(process.pid)
     elapsed_seconds = max(time.monotonic() - started, 0.001)
-    return (
-        {
-            "status": "measured",
-            "model": model,
-            "streaming": streaming,
-            "warmup_count": BENCHMARK_WARMUPS,
-            "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
-            **_timing_summary(elapsed_ms, ttft_ms),
-        },
-        True,
-    )
+    result: dict[str, Any] = {
+        "status": "measured",
+        "model": active_model,
+        "streaming": active_streaming,
+        "warmup_count": BENCHMARK_WARMUPS,
+        "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+        **_timing_summary(elapsed_ms, ttft_ms),
+    }
+    if expected_upstream is not None:
+        if provider is None or upstream_before is None:
+            raise QualificationError(
+                "translated benchmark requires a loopback upstream proof"
+            )
+        upstream_after = provider.upstream_count(expected_upstream)
+        upstream_delta = upstream_after - upstream_before
+        expected_minimum = BENCHMARK_WARMUPS + samples
+        result["expected_upstream_path"] = expected_upstream
+        result["upstream_request_delta"] = upstream_delta
+        if upstream_delta < expected_minimum:
+            return (
+                {
+                    "status": "not-measured",
+                    "reason": (
+                        "translated samples did not reach the fixture "
+                        f"{expected_upstream} path"
+                    ),
+                    "model": active_model,
+                    "streaming": active_streaming,
+                    "expected_upstream_path": expected_upstream,
+                    "upstream_request_delta": upstream_delta,
+                },
+                False,
+            )
+        result["upstream_proof"] = "fixture Messages path observed"
+    return (result, True)
 
 
 def _concurrent_finite_benchmark(
@@ -1016,8 +1207,9 @@ def run_qualification(
         raise ValueError(
             f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
         )
+    benchmark_mode = benchmark_samples > 0
     report: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
         "plan": "SBC qualification",
         "manifest": MANIFEST_VERSION,
         "status": "blocked",
@@ -1046,8 +1238,9 @@ def run_qualification(
         "build_profile": "release",
         "build_mode": candidate_origin,
         "binary_size_bytes": binary.stat().st_size,
-        "repository_commit_sha": _repository_commit(),
     }
+    if benchmark_mode:
+        report["candidate"]["repository_commit_sha"] = _repository_commit()
     if build_elapsed_ms is not None:
         report["candidate"]["build_elapsed_ms"] = build_elapsed_ms
     if expected_sha256 and candidate_hash != expected_sha256.lower():
@@ -1161,6 +1354,7 @@ def run_qualification(
                         process,
                         database,
                         f"http://127.0.0.1:{port}/api/stats/runtime",
+                        include_peak=benchmark_mode,
                     )
                 )
                 time.sleep(2.25)
@@ -1170,6 +1364,7 @@ def run_qualification(
                         process,
                         database,
                         f"http://127.0.0.1:{port}/api/stats/runtime",
+                        include_peak=benchmark_mode,
                     )
                 )
                 for surface, model in MODELS.items():
@@ -1266,6 +1461,7 @@ def run_qualification(
                         process,
                         database,
                         f"http://127.0.0.1:{port}/api/stats/runtime",
+                        include_peak=benchmark_mode,
                     )
                 )
                 if benchmark_samples:
@@ -1274,6 +1470,8 @@ def run_qualification(
                         "sample_count": benchmark_samples,
                         "concurrency_batch_size": CONCURRENCY_BATCH_SIZE,
                         "client_concurrency": CONCURRENCY_WORKERS,
+                        "config_fixture": Path(config_fixture).name,
+                        "cadence": benchmark_cadence_facts(content),
                         "runs": {},
                     }
                     benchmark_snapshots: list[dict[str, Any]] = []
@@ -1288,6 +1486,7 @@ def run_qualification(
                                 database,
                                 f"http://127.0.0.1:{port}/api/stats/runtime",
                                 duration=duration,
+                                include_peak=True,
                             )
                         )
                         samples.append(benchmark_snapshots[-1])
@@ -1296,9 +1495,9 @@ def run_qualification(
                     finite, finite_measured = _sequential_benchmark(
                         benchmark_process,
                         port,
-                        model=MODELS["responses"],
-                        streaming=False,
-                        samples=benchmark_samples,
+                        NATIVE_FINITE_CASE,
+                        benchmark_samples,
+                        provider,
                     )
                     if not finite_measured:
                         raise QualificationError(
@@ -1309,10 +1508,9 @@ def run_qualification(
                     streaming, streaming_measured = _sequential_benchmark(
                         benchmark_process,
                         port,
-                        model=MODELS["responses"],
-                        streaming=True,
-                        samples=benchmark_samples,
-                        terminal_marker=b"response.completed",
+                        NATIVE_STREAMING_CASE,
+                        benchmark_samples,
+                        provider,
                     )
                     if not streaming_measured:
                         raise QualificationError(
@@ -1323,10 +1521,9 @@ def run_qualification(
                     translated, translated_measured = _sequential_benchmark(
                         benchmark_process,
                         port,
-                        model=MODELS["messages"],
-                        streaming=True,
-                        samples=benchmark_samples,
-                        terminal_marker=b"message_stop",
+                        TRANSLATED_STREAMING_CASE,
+                        benchmark_samples,
+                        provider,
                     )
                     benchmark["runs"]["translated_responses_to_messages_streaming"] = (
                         translated
@@ -1350,20 +1547,21 @@ def run_qualification(
                         raise QualificationError(
                             "benchmark state did not converge after stabilization"
                         )
+                    peak_values = [
+                        int(value)
+                        for value in (
+                            sample.get("peak_rss_bytes")
+                            for sample in benchmark_snapshots
+                        )
+                        if isinstance(value, int)
+                    ]
                     benchmark["resource_summary"] = {
                         "baseline_rss_bytes": benchmark_snapshots[0]["rss_bytes"],
                         "final_rss_bytes": stabilized["rss_bytes"],
-                        "baseline_peak_rss_bytes": benchmark_snapshots[0][
+                        "baseline_peak_rss_bytes": benchmark_snapshots[0].get(
                             "peak_rss_bytes"
-                        ],
-                        "peak_rss_bytes": max(
-                            (
-                                sample["peak_rss_bytes"]
-                                for sample in benchmark_snapshots
-                                if sample["peak_rss_bytes"] is not None
-                            ),
-                            default=None,
                         ),
+                        "peak_rss_bytes": max(peak_values, default=None),
                         "final_pending_requests": stabilized["pending_requests"],
                         "final_active_reservations": stabilized["active_reservations"],
                         "final_finalization_jobs": stabilized["finalization_jobs"],
@@ -1415,6 +1613,7 @@ def run_qualification(
                         process,
                         database,
                         f"http://127.0.0.1:{port}/api/stats/runtime",
+                        include_peak=benchmark_mode,
                     )
                 )
                 _stop(process, min(timeout, 10))
@@ -1501,6 +1700,7 @@ def run_qualification(
                         process,
                         database,
                         f"http://127.0.0.1:{port}/api/stats/runtime",
+                        include_peak=benchmark_mode,
                     )
                 )
                 result = _command(
@@ -1556,22 +1756,29 @@ def run_qualification(
                 log_out.close()
                 log_err.close()
             environment["loopback_provider_requests"] = provider.requests
+            if benchmark_mode:
+                environment["loopback_provider_path_counts"] = provider.path_counts()
         report["resource_samples"] = samples
         report["commands"] = [item.as_dict(root, binary) for item in commands]
         report["isolated_temporary_root"] = True
-        end_board, _ = board_metadata()
-        if end_board:
-            report["environment"]["power_thermal_mode_celsius_end"] = end_board.get(
-                "power_thermal_mode_celsius"
-            )
-            report["environment"]["cpu_frequency_policy_end"] = end_board.get(
-                "cpu_frequency_policy"
-            )
-            report["environment"]["cpu_governor_end"] = end_board.get("cpu_governor")
-            if report["environment"].get("cpu_governor") != end_board.get(
-                "cpu_governor"
-            ):
-                report["findings"].append("CPU frequency governor changed during run")
+        if benchmark_mode:
+            end_board, _ = board_metadata()
+            if end_board:
+                report["environment"]["power_thermal_mode_celsius_end"] = end_board.get(
+                    "power_thermal_mode_celsius"
+                )
+                report["environment"]["cpu_frequency_policy_end"] = end_board.get(
+                    "cpu_frequency_policy"
+                )
+                report["environment"]["cpu_governor_end"] = end_board.get(
+                    "cpu_governor"
+                )
+                if report["environment"].get("cpu_governor") != end_board.get(
+                    "cpu_governor"
+                ):
+                    report["findings"].append(
+                        "CPU frequency governor changed during run"
+                    )
     return report
 
 
@@ -1616,8 +1823,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             benchmark_samples=args.benchmark_samples,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
+        requested_benchmark = False
+        try:
+            requested_benchmark = int(str(args.benchmark_samples)) > 0
+        except (TypeError, ValueError):
+            requested_benchmark = False
         report = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": SCHEMA_V2 if requested_benchmark else SCHEMA_V1,
             "plan": "SBC qualification",
             "manifest": MANIFEST_VERSION,
             "status": "fail",

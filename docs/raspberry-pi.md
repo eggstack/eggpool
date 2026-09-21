@@ -148,16 +148,26 @@ loads are expected.
 ## Optional Target-Class Characterization
 
 For a release candidate built on the Pi (or copied byte-for-byte from a
-qualified Linux/aarch64 build), run the existing guarded qualification first,
-then repeat the bounded benchmark three times from fresh temporary roots:
+qualified Linux/aarch64 build), run the existing guarded qualification first
+(ordinary Q008 contract, `runtime-q008.v1`), then repeat the bounded benchmark
+three times from fresh temporary roots with the benchmark-only fixture:
 
 ```bash
 uv run python scripts/qualification_sbc.py \
   --binary rust/target/release/eggpool \
   --candidate-origin on-device-release-build \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
   --benchmark-samples 30 \
-  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+  --output artifacts/qualification/236-sbc-benchmark-run-1.json
 ```
+
+The ordinary fixture (`sbc.toml`) keeps its aggressive lifecycle cadence for
+Q008 coverage; the benchmark fixture (`sbc-benchmark.toml`) mirrors the
+low-wear steady-state profile so timing batches are not contaminated. The
+translated Responses-client stream requires downstream `response.completed`
+evidence plus proof that the fixture observed the Anthropic Messages upstream
+path. Benchmark mode emits the extended `runtime-q008.v2` contract with
+cadence facts; default mode stays on `runtime-q008.v1`.
 
 Use `q005-qualified-aarch64-copy` when the candidate was copied, and verify its
 SHA-256 before running. The provider stays on loopback; Ethernet is recommended

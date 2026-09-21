@@ -164,12 +164,15 @@ The optional physical-SBC target-class pass reuses
 uv run pytest tests/tooling/test_qualification_sbc.py -q
 uv run python scripts/qualification_sbc.py \
   --binary rust/target/release/eggpool \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
   --benchmark-samples 30 \
-  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+  --output artifacts/qualification/236-sbc-benchmark-run-1.json
 ```
 
-Run the benchmark only on a physically attested Linux/aarch64 SBC, three times
-from fresh roots. Keep its sanitized aggregate output in the plan evidence;
+Run ordinary qualification first without benchmark mode (`runtime-q008.v1`),
+then run the benchmark only on a physically attested Linux/aarch64 SBC, three
+times from fresh roots with the benchmark-only low-wear fixture
+(`runtime-q008.v2`). Keep its sanitized aggregate output in the plan evidence;
 never substitute a hosted ARM VM or add a CI hardware job.
 
 For native dependency or feature changes, Cargo is the authority. Review both

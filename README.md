@@ -492,19 +492,22 @@ uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
 For the optional target-class evidence pass, build or copy a SHA-verified
-Linux/aarch64 release candidate to a physical SBC, run ordinary qualification,
-then repeat the benchmark three times:
+Linux/aarch64 release candidate to a physical SBC, run ordinary qualification
+(`runtime-q008.v1`), then repeat the benchmark three times with the
+benchmark-only fixture:
 
 ```bash
 uv run python scripts/qualification_sbc.py \
   --binary rust/target/release/eggpool \
   --candidate-origin on-device-release-build \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
   --benchmark-samples 30 \
-  --output artifacts/qualification/235-sbc-target-benchmark-run-1.json
+  --output artifacts/qualification/236-sbc-benchmark-run-1.json
 ```
 
 The runner remains loopback-only and records bounded timing, process CPU,
-RSS/VmHWM, database/WAL, and ownership-state aggregates. It is descriptive,
+RSS/VmHWM, database/WAL, cadence facts, and ownership-state aggregates under
+the extended `runtime-q008.v2` contract. It is descriptive,
 not a CI gate or performance SLA; if no physical Linux/aarch64 SBC is
 available, record the dimension as `not measured` rather than substituting a
 hosted ARM environment.

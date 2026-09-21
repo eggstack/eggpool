@@ -154,17 +154,27 @@ The existing `scripts/qualification_sbc.py` runner is the sole tooling
 boundary for target-class evidence. It refuses non-Linux/non-aarch64 hosts or
 hosts without a device-tree board model, uses a private temporary root and a
 loopback-only provider, and records no request/response content or
-credentials. The optional `--benchmark-samples 30` mode runs bounded native
-finite, native Responses streaming, accepted translated streaming, and fixed
+credentials. Ordinary qualification (default, no `--benchmark-samples`) keeps
+the Q008 `runtime-q008.v1` contract with the aggressive lifecycle fixture
+(`tests/tooling/fixtures/qualification/sbc.toml`). The optional
+`--benchmark-samples 30` mode must use the benchmark-only fixture
+(`tests/tooling/fixtures/qualification/sbc-benchmark.toml`), which mirrors the
+low-wear steady-state profile; it runs bounded native finite, native Responses
+streaming, translated Responses-client streaming requiring downstream
+`response.completed` plus fixture Messages-path proof, and fixed
 client-concurrency-4 finite observations, with aggregate timing, process CPU,
-RSS/VmHWM, database/WAL, and ownership-state snapshots. Run it three times
+RSS/VmHWM, database/WAL, cadence facts, and ownership-state snapshots under
+the extended `runtime-q008.v2` contract. Run it three times
 from fresh roots on the same physical board; it is descriptive and non-gating.
 
 Hosted ARM VMs, emulation, Rosetta/translation, and cloud ARM instances are
 not physical SBC evidence. If the translated fixture route is not accepted or
 a measurement dimension is unavailable, record `not measured`; do not weaken
 the runtime capability contract. See [Plan 235](../plans/235-physical-sbc-target-class-benchmark-pass.md)
-for the fixed corpus and interpretation rules, and [Plan 126](../plans/126-provider-backed-sbc-characterization.md)
+for the fixed corpus and historical numbers, and [Plan 236](../plans/236-physical-sbc-benchmark-evidence-corrective-pass.md)
+for the corrected fixture/terminal/schema pass that supersedes Plan 235's
+timing and translated-stream interpretation while preserving its
+resource-convergence evidence. See [Plan 126](../plans/126-provider-backed-sbc-characterization.md)
 for the earlier provider-backed closure.
 
 ## Backup
