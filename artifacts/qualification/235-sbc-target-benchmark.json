@@ -1,0 +1,230 @@
+{
+  "schema_version": "runtime-q008.v2",
+  "plan": "235 physical SBC target-class benchmark",
+  "status": "pass",
+  "candidate": {
+    "repository_commit_sha": "27c21945913f3fb4783982c64d6e3776a0cec999",
+    "build_mode": "on-device-release-build",
+    "build_profile": "release",
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "sha256": "4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8",
+    "binary_size_bytes": 30226744
+  },
+  "environment": {
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "soc_cpu_core_count": 4,
+    "ram_bytes": 8322752512,
+    "cpu_frequency_policy_start": "2400000",
+    "cpu_governor": "ondemand",
+    "root_storage_device_class": "mmc",
+    "storage_medium_class": "non-rotational",
+    "filesystem": "ext4",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1064-raspi",
+    "thermal_reading_celsius_start": [49.0, 48.5, 48.5],
+    "thermal_reading_celsius_end": [46.9, 46.9, 46.3],
+    "thermal_interpretation": "temperature fell during each run; no thermal-throttle evidence observed",
+    "frequency_interpretation": "governor remained ondemand; dynamic end frequency varied by run"
+  },
+  "repeatability": {
+    "run_count": 3,
+    "sample_count_per_sequential_batch": 30,
+    "warmup_count_per_sequential_batch": 5,
+    "concurrency_batch_size": 32,
+    "client_concurrency": 4,
+    "runs": [
+      {
+        "run": 1,
+        "cpu_frequency_policy_end": "1500000",
+        "finite": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 1791,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 1790,
+          "cpu_percent": 2.22,
+          "cpu_time_ms": 120
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 3,
+          "p50_ttft_ms": 2,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 5.48,
+          "cpu_time_ms": 70,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "not measured",
+          "reason": "fixture warm-up returned HTTP 200 without message_stop evidence"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 1953,
+          "requests_per_second": 16.385,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 5.12,
+          "cpu_time_ms": 100,
+          "p50_elapsed_ms": 7,
+          "p95_elapsed_ms": 1877
+        },
+        "resources": {
+          "baseline_rss_bytes": 19021824,
+          "final_rss_bytes": 19886080,
+          "peak_rss_bytes": 20316160,
+          "final_db_bytes": 712704,
+          "final_wal_bytes": 4260112,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      },
+      {
+        "run": 2,
+        "cpu_frequency_policy_end": "2000000",
+        "finite": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 2160,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 2160,
+          "cpu_percent": 2.35,
+          "cpu_time_ms": 110
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 2,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 18.82,
+          "cpu_time_ms": 80,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "not measured",
+          "reason": "fixture warm-up returned HTTP 200 without message_stop evidence"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 260,
+          "requests_per_second": 122.858,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 30.71,
+          "cpu_time_ms": 80,
+          "p50_elapsed_ms": 6,
+          "p95_elapsed_ms": 214
+        },
+        "resources": {
+          "baseline_rss_bytes": 19013632,
+          "final_rss_bytes": 19865600,
+          "peak_rss_bytes": 19992576,
+          "final_db_bytes": 712704,
+          "final_wal_bytes": 4260112,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      },
+      {
+        "run": 3,
+        "cpu_frequency_policy_end": "2300000",
+        "finite": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 164,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 164,
+          "cpu_percent": 12.66,
+          "cpu_time_ms": 80
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 2,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 25.93,
+          "cpu_time_ms": 70,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "not measured",
+          "reason": "fixture warm-up returned HTTP 200 without message_stop evidence"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 1853,
+          "requests_per_second": 17.268,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 4.32,
+          "cpu_time_ms": 80,
+          "p50_elapsed_ms": 7,
+          "p95_elapsed_ms": 1803
+        },
+        "resources": {
+          "baseline_rss_bytes": 18993152,
+          "final_rss_bytes": 19886080,
+          "peak_rss_bytes": 20369408,
+          "final_db_bytes": 712704,
+          "final_wal_bytes": 4260112,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      }
+    ],
+    "median_of_runs": {
+      "finite": {
+        "p50_elapsed_ms": 3,
+        "p95_elapsed_ms": 1791,
+        "p50_ttft_ms": 3,
+        "p95_ttft_ms": 1790,
+        "cpu_percent": 2.35,
+        "cpu_time_ms": 110
+      },
+      "native_streaming": {
+        "p50_elapsed_ms": 3,
+        "p95_elapsed_ms": 4,
+        "p50_ttft_ms": 2,
+        "p95_ttft_ms": 3,
+        "cpu_percent": 18.82,
+        "cpu_time_ms": 70
+      },
+      "translated_streaming": "not measured",
+      "concurrency_4": {
+        "batch_elapsed_ms": 1853,
+        "requests_per_second": 17.268,
+        "cpu_percent": 5.12,
+        "cpu_time_ms": 80,
+        "p50_elapsed_ms": 7,
+        "p95_elapsed_ms": 1803
+      },
+      "baseline_rss_bytes": 19013632,
+      "final_rss_bytes": 19886080,
+      "peak_rss_bytes": 20316160,
+      "final_db_bytes": 712704,
+      "final_wal_bytes": 4260112,
+      "final_pending_requests": 0,
+      "final_active_reservations": 0,
+      "final_finalization_jobs": 0
+    }
+  },
+  "decisions": {
+    "tokio_current_thread": "keep",
+    "single_sqlite_gate": "keep",
+    "routing_selection_lock": "keep",
+    "streaming_handoff": "keep",
+    "interpretation": "No repeatable localized bottleneck justifies a follow-up architecture change; finite and concurrency tails varied materially across runs, while all runs converged without retained ownership state."
+  },
+  "limitations": [
+    "Translated Responses-to-Anthropic streaming was not measured because the existing fixture returned HTTP 200 without Anthropic message_stop terminal evidence; routing/capability checks were not weakened.",
+    "The report is loopback-only and descriptive; no performance SLA or CI threshold is inferred."
+  ]
+}

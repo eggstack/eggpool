@@ -1,7 +1,7 @@
 # Plan 235 — Physical SBC Target-Class Benchmark Pass
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: `b4fea290f1c46209e8c275936f87c1826ee1a4d8`
 Parent closure: `plans/234-sbc-performance-and-release-footprint-closure.md`
 Priority: P2 evidence-only target-class characterization
@@ -374,3 +374,63 @@ Do not change defaults to improve benchmark numbers.
 7. Commit the sanitized report and append this plan's closure evidence.
 8. Stop. If evidence suggests a runtime change, write a new narrowly scoped
    plan rather than implementing it here.
+
+## Closure — 2026-09-21
+
+The physical target-class pass completed on a Raspberry Pi 5. The exact
+on-device release candidate was qualified before benchmark mode and was used
+for all three fresh-root runs:
+
+- repository commit: `27c21945913f3fb4783982c64d6e3776a0cec999`;
+- candidate SHA-256: `4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8`;
+- candidate size: `30,226,744` bytes;
+- Rust: `rustc 1.98.1 (48a229cea 2026-09-01)`;
+- board: Raspberry Pi 5 Model B Rev 1.0, four cores, 7.75 GiB reported RAM;
+- OS/kernel: Ubuntu 24.04.4 LTS / Linux `6.8.0-1064-raspi`;
+- root storage: non-rotational MMC, ext4;
+- CPU governor: `ondemand` for all runs; observed end frequency policy varied
+  from `1500000` to `2300000` across runs;
+- temperature: `48.5 °C` median at start and `46.9 °C` median at end, with no
+  thermal-throttle evidence.
+
+The ordinary Q008 qualification passed, then `--benchmark-samples 30` passed
+three times with the expected five warm-ups per sequential batch. Median of
+the three runs:
+
+| Batch | p50 elapsed | p95 elapsed | p50 TTFT | p95 TTFT | CPU | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Native Responses finite | 3 ms | 1791 ms | 3 ms | 1790 ms | 110 ms batch CPU | measured |
+| Native Responses streaming | 3 ms | 4 ms | 2 ms | 3 ms | 70 ms batch CPU | 30 terminal-complete streams |
+| Responses → Anthropic streaming | — | — | — | — | — | `not measured` |
+
+The translated fixture path returned HTTP 200 during warm-up but did not emit
+Anthropic `message_stop` evidence, so it was recorded as `not measured`; no
+routing or capability checks were weakened. The fixed concurrency-4 batch
+completed `32/32` requests in a median `1853 ms` (`17.268` requests/s), with
+median `80 ms` process CPU and p50/p95 request timing of `7/1803 ms`.
+
+Across runs, baseline RSS was `19,013,632` bytes median, final stabilized RSS
+was `19,886,080` bytes median, and peak `VmHWM` was `20,316,160` bytes median.
+Final database/WAL sizes were consistently `712,704` / `4,260,112` bytes.
+The three-second stabilization samples reported zero pending requests, active
+reservations, finalization jobs, active leases, retiring leases, and terminal
+references in every run. The sanitized aggregate report is
+[`artifacts/qualification/235-sbc-target-benchmark.json`](../artifacts/qualification/235-sbc-target-benchmark.json).
+
+Decisions: keep the Tokio `current_thread` runtime, single SQLite gate,
+routing selection lock, and streaming handoff. The run-to-run finite and
+concurrency tails were variable rather than a repeatable localized bottleneck,
+and resource ownership converged cleanly; no follow-up architecture plan is
+justified by this evidence.
+
+Validation evidence:
+
+- `uv run python scripts/qualification_sbc.py ...` ordinary qualification:
+  pass;
+- three `--benchmark-samples 30` runs with `--expected-sha256`: pass;
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`: pass;
+- default and `--no-default-features` Clippy/checks: pass;
+- serial `CARGO_BUILD_JOBS=1 cargo test --manifest-path rust/Cargo.toml
+  --workspace --all-targets -- --test-threads=1`: pass;
+- `uv sync --frozen`, Ruff, Pyright, and tooling tests: pass (`82 passed,
+  3 skipped`).
