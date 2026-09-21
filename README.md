@@ -466,7 +466,13 @@ enabled by default. SBC measurements are descriptive and are recorded only for
 an actual Raspberry Pi-class target. The guarded tooling runner can add a
 small loopback characterization with `--benchmark-samples 30`; repeat it three
 times from fresh temporary roots on the same physical board and retain only
-the sanitized aggregate report. Hosted ARM VMs and cloud ARM instances are not
+the sanitized aggregate report. The diagnostic-only
+`--diagnose-finite-tail 60` flag (requires benchmark mode, sequential
+native-finite phase timing plus a direct-provider control) localized the
+remaining finite tail to the pre-provider durable publication / SQLite /
+storage path on Pi 5: the slowest request in all three 60-sample runs was
+pre-provider dominated with a stable direct control, and one tmpfs run
+removed the tail entirely. Hosted ARM VMs and cloud ARM instances are not
 SBC evidence.
 
 ## Development
@@ -510,7 +516,13 @@ RSS/VmHWM, database/WAL, cadence facts, and ownership-state aggregates under
 the extended `runtime-q008.v2` contract. It is descriptive,
 not a CI gate or performance SLA; if no physical Linux/aarch64 SBC is
 available, record the dimension as `not measured` rather than substituting a
-hosted ARM environment.
+hosted ARM environment. For finite-tail localization, append
+`--diagnose-finite-tail 60` (10–200, default off) to the benchmark command:
+it runs 60 sequential native finite requests with provider-boundary phase
+timing plus a 30-request direct-provider control. See
+[Plan 237](plans/237-raspberry-pi-finite-tail-diagnostic-pass.md) and the
+sanitized
+[237 artifact](artifacts/qualification/237-sbc-finite-tail-diagnostic.json).
 
 Cancellation-path tests should wait for an observable fixture transition or
 invariant under a bounded timeout, not guess with fixed sleeps or yield-count

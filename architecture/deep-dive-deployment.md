@@ -166,6 +166,15 @@ client-concurrency-4 finite observations, with aggregate timing, process CPU,
 RSS/VmHWM, database/WAL, cadence facts, and ownership-state snapshots under
 the extended `runtime-q008.v2` contract. Run it three times
 from fresh roots on the same physical board; it is descriptive and non-gating.
+The diagnostic-only `--diagnose-finite-tail 10..=200` flag (default off,
+requires benchmark mode) appends 60 sequential native finite requests with
+monotonic provider-boundary phase timing plus a 30-request direct-provider
+control, scalar-only with no p99. On Pi 5 it localized the finite tail to the
+pre-provider durable publication / SQLite / storage path (Outcome 1): the
+slowest request was pre-provider dominated in all three runs with a stable
+direct control, and one RAM-backed temporary-root run removed the tail
+entirely. A narrow database/publication follow-up is the only justified next
+step; Tokio, routing-lock, and streaming keeps stand.
 
 Hosted ARM VMs, emulation, Rosetta/translation, and cloud ARM instances are
 not physical SBC evidence. If the translated fixture route is not accepted or

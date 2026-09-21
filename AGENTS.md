@@ -62,7 +62,13 @@ steady-state cadence), translated streams require downstream
 `response.completed` plus fixture Messages-path proof, default mode stays on
 `runtime-q008.v1` while benchmark mode uses `runtime-q008.v2`, and Plan 236's
 corrected timing supersedes Plan 235's timing/translated interpretation.
-Hosted ARM, emulation, and cloud ARM results are not target-class evidence;
+Plan 237 adds diagnostic-only `--diagnose-finite-tail 10..=200` (requires
+benchmark mode; sequential native-finite phase timing plus a direct-provider
+control, scalar-only, no p99): on Pi 5 the slowest request in all three
+60-sample runs was pre-provider dominated with a stable direct control, and a
+single tmpfs run removed the tail entirely (Outcome 1: durable publication /
+SQLite / storage path; narrow follow-up only, no Tokio/routing/streaming
+change). Hosted ARM, emulation, and cloud ARM results are not target-class evidence;
 record unavailable dimensions as `not measured`.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local

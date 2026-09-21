@@ -192,7 +192,11 @@ Plan 235 adds only an opt-in, tooling-owned physical-SBC characterization to
 the existing qualification runner; Plan 236 corrects that pass tooling-only
 (benchmark-only low-wear fixture, downstream `response.completed` plus Messages-path
 proof for translated streams, `runtime-q008.v1` default vs `runtime-q008.v2`
-benchmark contracts). Neither adds runtime metrics, a
+benchmark contracts). Plan 237 adds diagnostic-only finite-tail phase timing
+plus a direct-provider control and localizes the remaining finite tail to the
+pre-provider durable publication / SQLite / storage path (slowest request
+pre-provider dominated in all three Pi 5 runs with a stable direct control;
+one tmpfs run removes the tail). None adds runtime metrics, a
 benchmark dependency, hardware CI, or a performance threshold. Release
 qualification retains Maturin `--strip false`; a stripped or ThinLTO experiment
 must pass target qualification before changing the shipped profile.

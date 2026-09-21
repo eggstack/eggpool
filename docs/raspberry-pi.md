@@ -175,6 +175,34 @@ for ordinary client use but is not part of the timing result. The report is
 descriptive and sanitized, not a hardware-CI gate or SLA. Never report a
 hosted ARM VM or cloud ARM instance as SBC evidence.
 
+### Optional Finite-Tail Diagnostic
+
+To localize a finite-request tail, append the diagnostic-only flag to the
+benchmark command (10–200 samples, default off; requires benchmark mode):
+
+```bash
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --candidate-origin on-device-release-build \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
+  --benchmark-samples 30 \
+  --diagnose-finite-tail 60 \
+  --output artifacts/qualification/237-sbc-finite-tail-run-1.json
+```
+
+It runs 60 sequential native finite requests with monotonic
+provider-boundary phase timing (client start, provider receive/finish,
+first byte, done) plus a 30-request direct-provider control, all
+scalar-only with no p99. If the slowest request is pre-provider dominated,
+repeat once with the temporary root on a RAM-backed filesystem (for
+example `TMPDIR=/dev/shm/eggpool-qual`) keeping all EggPool settings
+identical; record the storage class. On Pi 5 this localized the tail to the
+durable publication / SQLite / storage path: pre-provider dominated in all
+three runs with a stable direct control, and the tmpfs run removed the tail
+entirely. See
+[Plan 237](../plans/237-raspberry-pi-finite-tail-diagnostic-pass.md) for the
+decision matrix and the sanitized aggregate artifact.
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`

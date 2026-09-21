@@ -1,0 +1,548 @@
+{
+  "candidate": {
+    "binary_size_bytes": 30226744,
+    "build_mode": "on-device-release-build",
+    "build_profile": "release",
+    "repository_commit_sha": "5506cebb70bf092ed3f30fdf4d21cb5acd5c95cf",
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "sha256": "4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8"
+  },
+  "classification": {
+    "evidence": "slowest diagnostic request in all three normal-storage runs is pre-provider dominated (3467/2006/1778 ms with provider-service max 0-1 ms and direct-provider control max 1-2 ms); the same batch on tmpfs contracts to max 4 ms with pre-provider max 3 ms",
+    "outcome": "Outcome 1 - pre-provider delay dominates; tmpfs removes it",
+    "owner": "durable publication / SQLite / storage path",
+    "secondary_observation": "runs 1-2 also showed an intermittent post-provider second-slowest (584/1776 ms) that did not repeat in run 3 (post max 7 ms); reported as observed without an invented cause"
+  },
+  "diagnostic": {
+    "client_surface": "responses",
+    "config_fixture": "sbc-benchmark.toml",
+    "direct_control_sample_count": 30,
+    "direct_control_warmups": 5,
+    "run_count": 3,
+    "sample_count_per_batch": 60,
+    "sequential": true,
+    "streaming": false,
+    "warmup_count_per_batch": 5
+  },
+  "environment": {
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu_governor": "ondemand",
+    "filesystem": "ext4",
+    "frequency_interpretation": "governor remained ondemand; end frequency varied by run",
+    "kernel": "6.8.0-1064-raspi",
+    "os": "Ubuntu 24.04.4 LTS",
+    "os_version_id": "24.04",
+    "ram_bytes": 8322752512,
+    "root_storage_device_class": "mmc",
+    "soc_cpu_core_count": 4,
+    "storage_medium_class": "non-rotational",
+    "thermal_celsius_end": [
+      50.7,
+      49.6,
+      45.8
+    ],
+    "thermal_celsius_start": [
+      50.7,
+      50.1,
+      49.6
+    ],
+    "thermal_interpretation": "no thermal-throttle evidence; readings stayed near 46-51 C"
+  },
+  "follow_up": {
+    "do_not_change": [
+      "current-thread Tokio runtime",
+      "routing selection lock"
+    ],
+    "justified": true,
+    "runtime_change_in_this_plan": false,
+    "scope": "separate narrow database/publication diagnostic or implementation plan; inspect transaction count and durability boundaries before considering any connection-count change"
+  },
+  "limitations": [
+    "Loopback-only descriptive evidence; no performance SLA or CI threshold is inferred.",
+    "Two attempts under shared-board load were retried from fresh roots; only the three passing fresh-root runs are recorded.",
+    "Single tmpfs comparison run; storage attribution is localization, not a durability redesign."
+  ],
+  "plan": "237 Raspberry Pi finite-tail diagnostic pass",
+  "resource_convergence": {
+    "final_active_leases": 0,
+    "final_active_reservations": 0,
+    "final_finalization_jobs": 0,
+    "final_pending_requests": 0,
+    "final_retiring_leases": 0,
+    "final_terminal_references": 0
+  },
+  "runs": [
+    {
+      "concurrent_4_batch_elapsed_ms": 766,
+      "concurrent_4_requests_per_second": 41.767,
+      "cpu_frequency_policy_end": "2400000",
+      "direct_provider_control_30": {
+        "completed_count": 30,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 1,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 1,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 1,
+        "sample_count": 30,
+        "timeout_count": 0
+      },
+      "finite_tail_diagnostic_60": {
+        "batch_cpu_percent": 4.21,
+        "batch_cpu_time_ms": 200,
+        "batch_elapsed_ms": 4755,
+        "completed_count": 60,
+        "failed_count": 0,
+        "maximum_client_body_ms": 0,
+        "maximum_post_provider_ttft_ms": 584,
+        "maximum_pre_provider_ms": 3467,
+        "maximum_provider_service_ms": 1,
+        "maximum_total_ms": 3473,
+        "p50_client_body_ms": 0,
+        "p50_post_provider_ttft_ms": 1,
+        "p50_pre_provider_ms": 3,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 4,
+        "p95_client_body_ms": 0,
+        "p95_post_provider_ttft_ms": 6,
+        "p95_pre_provider_ms": 7,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 144,
+        "sample_count": 60,
+        "slowest_five": [
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 6,
+            "pre_provider_ms": 3467,
+            "provider_service_ms": 0,
+            "sequence": 24,
+            "timed_out": false,
+            "total_ms": 3473
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 584,
+            "pre_provider_ms": 3,
+            "provider_service_ms": 0,
+            "sequence": 42,
+            "timed_out": false,
+            "total_ms": 587
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 47,
+            "pre_provider_ms": 224,
+            "provider_service_ms": 0,
+            "sequence": 60,
+            "timed_out": false,
+            "total_ms": 271
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 142,
+            "pre_provider_ms": 2,
+            "provider_service_ms": 0,
+            "sequence": 5,
+            "timed_out": false,
+            "total_ms": 144
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 1,
+            "pre_provider_ms": 35,
+            "provider_service_ms": 0,
+            "sequence": 43,
+            "timed_out": false,
+            "total_ms": 37
+          }
+        ],
+        "timeout_count": 0
+      },
+      "native_finite_30": {
+        "p50_elapsed_ms": 4,
+        "p95_elapsed_ms": 137
+      },
+      "resources": {
+        "baseline_rss_bytes": 17215488,
+        "final_active_leases": 0,
+        "final_active_reservations": 0,
+        "final_finalization_jobs": 0,
+        "final_pending_requests": 0,
+        "final_retiring_leases": 0,
+        "final_rss_bytes": 18534400,
+        "final_terminal_references": 0,
+        "peak_rss_bytes": 18534400
+      },
+      "run": 1,
+      "thermal_celsius_end": 50.7,
+      "thermal_celsius_start": 50.7
+    },
+    {
+      "concurrent_4_batch_elapsed_ms": 5320,
+      "concurrent_4_requests_per_second": 6.015,
+      "cpu_frequency_policy_end": "1900000",
+      "direct_provider_control_30": {
+        "completed_count": 30,
+        "maximum_provider_service_ms": 1,
+        "maximum_total_ms": 2,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 1,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 2,
+        "sample_count": 30,
+        "timeout_count": 0
+      },
+      "finite_tail_diagnostic_60": {
+        "batch_cpu_percent": 3.38,
+        "batch_cpu_time_ms": 190,
+        "batch_elapsed_ms": 5622,
+        "completed_count": 60,
+        "failed_count": 0,
+        "maximum_client_body_ms": 0,
+        "maximum_post_provider_ttft_ms": 1776,
+        "maximum_pre_provider_ms": 2006,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 2036,
+        "p50_client_body_ms": 0,
+        "p50_post_provider_ttft_ms": 1,
+        "p50_pre_provider_ms": 2,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 4,
+        "p95_client_body_ms": 0,
+        "p95_post_provider_ttft_ms": 9,
+        "p95_pre_provider_ms": 10,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 359,
+        "sample_count": 60,
+        "slowest_five": [
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 30,
+            "pre_provider_ms": 2006,
+            "provider_service_ms": 0,
+            "sequence": 23,
+            "timed_out": false,
+            "total_ms": 2036
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 1776,
+            "pre_provider_ms": 2,
+            "provider_service_ms": 0,
+            "sequence": 41,
+            "timed_out": false,
+            "total_ms": 1779
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 9,
+            "pre_provider_ms": 1217,
+            "provider_service_ms": 0,
+            "sequence": 4,
+            "timed_out": false,
+            "total_ms": 1226
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 14,
+            "pre_provider_ms": 345,
+            "provider_service_ms": 0,
+            "sequence": 59,
+            "timed_out": false,
+            "total_ms": 359
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 1,
+            "pre_provider_ms": 10,
+            "provider_service_ms": 0,
+            "sequence": 42,
+            "timed_out": false,
+            "total_ms": 12
+          }
+        ],
+        "timeout_count": 0
+      },
+      "native_finite_30": {
+        "p50_elapsed_ms": 4,
+        "p95_elapsed_ms": 304
+      },
+      "resources": {
+        "baseline_rss_bytes": 17235968,
+        "final_active_leases": 0,
+        "final_active_reservations": 0,
+        "final_finalization_jobs": 0,
+        "final_pending_requests": 0,
+        "final_retiring_leases": 0,
+        "final_rss_bytes": 18550784,
+        "final_terminal_references": 0,
+        "peak_rss_bytes": 18550784
+      },
+      "run": 2,
+      "thermal_celsius_end": 49.6,
+      "thermal_celsius_start": 50.1
+    },
+    {
+      "concurrent_4_batch_elapsed_ms": 3293,
+      "concurrent_4_requests_per_second": 9.717,
+      "cpu_frequency_policy_end": "1900000",
+      "direct_provider_control_30": {
+        "completed_count": 30,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 2,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 1,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 2,
+        "sample_count": 30,
+        "timeout_count": 0
+      },
+      "finite_tail_diagnostic_60": {
+        "batch_cpu_percent": 5.19,
+        "batch_cpu_time_ms": 170,
+        "batch_elapsed_ms": 3278,
+        "completed_count": 60,
+        "failed_count": 0,
+        "maximum_client_body_ms": 0,
+        "maximum_post_provider_ttft_ms": 7,
+        "maximum_pre_provider_ms": 1778,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 1785,
+        "p50_client_body_ms": 0,
+        "p50_post_provider_ttft_ms": 1,
+        "p50_pre_provider_ms": 2,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 4,
+        "p95_client_body_ms": 0,
+        "p95_post_provider_ttft_ms": 1,
+        "p95_pre_provider_ms": 3,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 4,
+        "sample_count": 60,
+        "slowest_five": [
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 7,
+            "pre_provider_ms": 1778,
+            "provider_service_ms": 0,
+            "sequence": 5,
+            "timed_out": false,
+            "total_ms": 1785
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 6,
+            "pre_provider_ms": 982,
+            "provider_service_ms": 0,
+            "sequence": 24,
+            "timed_out": false,
+            "total_ms": 988
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 4,
+            "pre_provider_ms": 295,
+            "provider_service_ms": 0,
+            "sequence": 43,
+            "timed_out": false,
+            "total_ms": 299
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 1,
+            "pre_provider_ms": 3,
+            "provider_service_ms": 0,
+            "sequence": 1,
+            "timed_out": false,
+            "total_ms": 4
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 1,
+            "pre_provider_ms": 2,
+            "provider_service_ms": 0,
+            "sequence": 2,
+            "timed_out": false,
+            "total_ms": 4
+          }
+        ],
+        "timeout_count": 0
+      },
+      "native_finite_30": {
+        "p50_elapsed_ms": 3,
+        "p95_elapsed_ms": 397
+      },
+      "resources": {
+        "baseline_rss_bytes": 17219584,
+        "final_active_leases": 0,
+        "final_active_reservations": 0,
+        "final_finalization_jobs": 0,
+        "final_pending_requests": 0,
+        "final_retiring_leases": 0,
+        "final_rss_bytes": 18530304,
+        "final_terminal_references": 0,
+        "peak_rss_bytes": 18530304
+      },
+      "run": 3,
+      "thermal_celsius_end": 45.8,
+      "thermal_celsius_start": 49.6
+    }
+  ],
+  "schema_version": "runtime-q008.v2",
+  "status": "pass",
+  "timeouts": {
+    "interpretation": "two fresh-root attempts under shared-board load did not pass and were retried; only the three passing fresh-root runs above are recorded",
+    "passing_runs_last_known_phase": "completed",
+    "passing_runs_timeout_count": 0,
+    "retried_attempts": 2,
+    "retried_reasons": [
+      "benchmark state did not converge after stabilization",
+      "client timeout under shared-board load"
+    ]
+  },
+  "tmpfs_comparison": {
+    "concurrent_4_batch_elapsed_ms": 64,
+    "diagnostic_60": {
+      "batch_cpu_percent": 77.98,
+      "batch_cpu_time_ms": 160,
+      "batch_elapsed_ms": 205,
+      "completed_count": 60,
+      "failed_count": 0,
+      "maximum_client_body_ms": 0,
+      "maximum_post_provider_ttft_ms": 2,
+      "maximum_pre_provider_ms": 3,
+      "maximum_provider_service_ms": 0,
+      "maximum_total_ms": 4,
+      "p50_client_body_ms": 0,
+      "p50_post_provider_ttft_ms": 1,
+      "p50_pre_provider_ms": 2,
+      "p50_provider_service_ms": 0,
+      "p50_total_ms": 3,
+      "p95_client_body_ms": 0,
+      "p95_post_provider_ttft_ms": 1,
+      "p95_pre_provider_ms": 2,
+      "p95_provider_service_ms": 0,
+      "p95_total_ms": 4,
+      "sample_count": 60,
+      "slowest_five": [
+        {
+          "client_body_ms": 0,
+          "http_status": 200,
+          "last_phase": "completed",
+          "post_provider_ttft_ms": 1,
+          "pre_provider_ms": 2,
+          "provider_service_ms": 0,
+          "sequence": 1,
+          "timed_out": false,
+          "total_ms": 4
+        },
+        {
+          "client_body_ms": 0,
+          "http_status": 200,
+          "last_phase": "completed",
+          "post_provider_ttft_ms": 1,
+          "pre_provider_ms": 2,
+          "provider_service_ms": 0,
+          "sequence": 4,
+          "timed_out": false,
+          "total_ms": 4
+        },
+        {
+          "client_body_ms": 0,
+          "http_status": 200,
+          "last_phase": "completed",
+          "post_provider_ttft_ms": 2,
+          "pre_provider_ms": 2,
+          "provider_service_ms": 0,
+          "sequence": 5,
+          "timed_out": false,
+          "total_ms": 4
+        },
+        {
+          "client_body_ms": 0,
+          "http_status": 200,
+          "last_phase": "completed",
+          "post_provider_ttft_ms": 1,
+          "pre_provider_ms": 2,
+          "provider_service_ms": 0,
+          "sequence": 8,
+          "timed_out": false,
+          "total_ms": 4
+        },
+        {
+          "client_body_ms": 0,
+          "http_status": 200,
+          "last_phase": "completed",
+          "post_provider_ttft_ms": 1,
+          "pre_provider_ms": 3,
+          "provider_service_ms": 0,
+          "sequence": 9,
+          "timed_out": false,
+          "total_ms": 4
+        }
+      ],
+      "timeout_count": 0
+    },
+    "direct_provider_control_30": {
+      "completed_count": 30,
+      "maximum_provider_service_ms": 0,
+      "maximum_total_ms": 1,
+      "p50_provider_service_ms": 0,
+      "p50_total_ms": 1,
+      "p95_provider_service_ms": 0,
+      "p95_total_ms": 1,
+      "sample_count": 30,
+      "timeout_count": 0
+    },
+    "interpretation": "finite pre-provider tail disappears on tmpfs; diagnostic max 4 ms vs 1785-3473 ms on MMC storage",
+    "native_finite_30": {
+      "p50_elapsed_ms": 3,
+      "p95_elapsed_ms": 4
+    },
+    "settings_identical": [
+      "SQLite WAL enabled",
+      "synchronous = \"NORMAL\"",
+      "one database worker",
+      "same low-wear benchmark cadence",
+      "same provider fixture",
+      "same candidate binary",
+      "same request corpus"
+    ],
+    "temporary_root": "RAM-backed filesystem",
+    "temporary_root_storage_class": "tmpfs",
+    "thermal_celsius_end": 42.5,
+    "thermal_celsius_start": 44.1
+  }
+}

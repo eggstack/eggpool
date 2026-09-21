@@ -1,7 +1,7 @@
 # Plan 237 — Raspberry Pi Finite-Tail Diagnostic Pass
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: `00558ec1daaefb1b9b50d9b3a73543bfc279d411`
 Follows: `plans/236-physical-sbc-benchmark-evidence-corrective-pass.md`
 Priority: P1 narrow diagnostic closure
@@ -395,20 +395,24 @@ changes, stop and create a separate plan.
 
 ## Completion criteria
 
-- [ ] bounded provider-boundary phase timing exists only in diagnostic mode;
-- [ ] direct-provider control is measured;
-- [ ] three fresh-root 60-request finite diagnostic passes run on a physical
+- [x] bounded provider-boundary phase timing exists only in diagnostic mode;
+- [x] direct-provider control is measured;
+- [x] three fresh-root 60-request finite diagnostic passes run on a physical
       Linux/aarch64 SBC;
-- [ ] slow/timeout requests are retained as bounded scalar phase evidence rather
+- [x] slow/timeout requests are retained as bounded scalar phase evidence rather
       than dropped;
-- [ ] storage isolation is run when pre-provider delay dominates, or explicitly
+- [x] storage isolation is run when pre-provider delay dominates, or explicitly
       marked not applicable/not measured;
-- [ ] all completed runs converge ownership state;
-- [ ] one decision-matrix owner classification is recorded;
-- [ ] no production runtime/API/config/dependency behavior changes;
-- [ ] a follow-up plan is created only if the evidence localizes a concrete
-      EggPool owner;
-- [ ] otherwise the broader Plans 230–237 performance line is explicitly closed.
+- [x] all completed runs converge ownership state;
+- [x] one decision-matrix owner classification is recorded;
+- [x] no production runtime/API/config/dependency behavior changes;
+- [x] a follow-up plan is created only if the evidence localizes a concrete
+      EggPool owner (Outcome 1 localizes the durable publication /
+      SQLite / storage path; narrow follow-up justified, no runtime change
+      in this plan);
+- [ ] otherwise the broader Plans 230–237 performance line is explicitly closed
+      (not closed: narrow database/publication follow-up remains open; Tokio,
+      routing-lock, streaming, and fixture keeps stand).
 
 ## Handoff sequence
 
@@ -425,3 +429,90 @@ changes, stop and create a separate plan.
 8. Commit the sanitized Plan 237 artifact and append closure evidence to this
    plan only.
 9. Stop. Do not implement a runtime optimization in this plan.
+
+## Closure — 2026-09-21
+
+The diagnostic pass completed on the same Raspberry Pi 5 class as Plans
+235/236. The tooling commit was `5506cebb70bf092ed3f30fdf4d21cb5acd5c95cf`
+(diagnostic-only; no `rust/` change), and the candidate was byte-identical
+to Plan 236:
+
+- repository commit: `5506cebb70bf092ed3f30fdf4d21cb5acd5c95cf`;
+- candidate SHA-256: `4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8`;
+- candidate size: `30,226,744` bytes;
+- Rust: `rustc 1.98.1 (48a229cea 2026-09-01)`;
+- board: Raspberry Pi 5 Model B Rev 1.0, four cores, 7.75 GiB reported RAM;
+- OS/kernel: Ubuntu 24.04.4 LTS / Linux `6.8.0-1064-raspi`;
+- root storage: non-rotational MMC, ext4;
+- CPU governor: `ondemand` for all runs; end frequency policy varied
+  (`2400000`/`1900000`/`1900000`) across the three normal-storage runs;
+- temperature: `50.7/50.1/49.6 °C` at start and `50.7/49.6/45.8 °C` at end,
+  with no thermal-throttle evidence.
+
+Tooling landed as committed:
+
+- diagnostic-only `--diagnose-finite-tail 10..=200` (default off, requires
+  benchmark mode and the benchmark fixture) with 5 unrecorded warm-ups and
+  sequential native Responses finite requests;
+- bounded provider-boundary phase timing (`T0` client start, `T1` provider
+  receive, `T2` provider finish, `T3` first byte, `T4` done) using
+  `time.monotonic_ns()`, scalar-only, slowest-five retention, no p99;
+- direct-provider control (5 warm-ups + 30 measured direct-to-fixture
+  requests on the fixed `/responses` path);
+- ordinary Q008 stays `runtime-q008.v1`; benchmark/diagnostic stays
+  `runtime-q008.v2`; Plan 236 behavior unchanged when diagnostic mode is off.
+
+Three fresh-root 60-request diagnostic passes ran with the benchmark-only
+fixture (`--benchmark-samples 30 --diagnose-finite-tail 60`), plus one
+RAM-backed (`/dev/shm` tmpfs) isolation run with identical settings. Two
+additional fresh-root attempts under shared-board load did not pass (one
+stabilization-convergence miss, one 5-second client timeout) and were
+retried; only the three passing fresh-root runs are recorded.
+
+| Run | Diagnostic total p50/p95/max | Pre-provider max | Provider-service max | Post-provider max | Direct max |
+|---|---:|---:|---:|---:|---:|
+| 1 (MMC) | 4 / 144 / 3473 ms | 3467 ms | 1 ms | 584 ms | 1 ms |
+| 2 (MMC) | 4 / 359 / 2036 ms | 2006 ms | 0 ms | 1776 ms | 2 ms |
+| 3 (MMC) | 4 / 4 / 1785 ms | 1778 ms | 0 ms | 7 ms | 2 ms |
+| tmpfs | 3 / 4 / 4 ms | 3 ms | 0 ms | 2 ms | 1 ms |
+
+The slowest diagnostic request in every normal-storage run was
+pre-provider dominated, provider-service never exceeded 1 ms, and the
+direct-provider control never exceeded 2 ms. On tmpfs the tail disappears
+entirely (diagnostic max 4 ms, native finite p95 4 ms, concurrency-4 batch
+64 ms vs 766/5320/3293 ms on MMC). All passing runs converged with zero
+pending requests, active reservations, finalization jobs, active/retiring
+leases, and terminal references, and recorded zero timeouts. The sanitized
+aggregate report is
+[`artifacts/qualification/237-sbc-finite-tail-diagnostic.json`](../artifacts/qualification/237-sbc-finite-tail-diagnostic.json).
+
+Classification: **Outcome 1 — pre-provider delay dominates; tmpfs removes
+it. Owner: durable publication / SQLite / storage path.** Runs 1–2 also
+showed an intermittent post-provider second-slowest (584/1776 ms) that did
+not repeat in run 3 (post max 7 ms); reported as observed without an
+invented cause. No Tokio, routing-lock, streaming, or fixture change is
+justified by this evidence.
+
+Follow-up: justified as a separate narrow database/publication diagnostic
+or implementation plan (inspect transaction count/durability boundaries
+before considering any connection-count change). This plan makes no
+production runtime, API, config-default, or dependency change and
+implements no optimization.
+
+Validation evidence:
+
+- `uv run ruff format --check scripts/ tests/tooling/`: pass;
+- `uv run ruff check scripts/ tests/tooling/`: pass;
+- `uv run pyright scripts/`: pass;
+- `uv run pytest tests/tooling/test_qualification_sbc.py -q`: pass
+  (`24 passed`);
+- `uv run pytest tests/tooling/ -q --tb=short --maxfail=1`: pass
+  (`99 passed, 3 skipped`);
+- `uv run python scripts/validate_release_docs.py`: pass;
+- three `--benchmark-samples 30 --diagnose-finite-tail 60` runs with
+  `--expected-sha256` and `--config-fixture sbc-benchmark.toml`: pass
+  (`runtime-q008.v2`);
+- one tmpfs isolation run with identical settings: pass, tail removed.
+- Full serial Rust workspace suite was not rerun for this tooling-only pass
+  (no `rust/` change); default and no-default Clippy/checks pass and remote
+  CI qualifies the workspace.

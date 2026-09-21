@@ -175,6 +175,14 @@ times from fresh roots with the benchmark-only low-wear fixture
 (`runtime-q008.v2`). Keep its sanitized aggregate output in the plan evidence;
 never substitute a hosted ARM VM or add a CI hardware job.
 
+The diagnostic-only `--diagnose-finite-tail 60` flag (10–200, default off,
+requires benchmark mode) appends sequential native-finite phase timing plus a
+direct-provider control for tail localization; it is scalar-only with no p99.
+On Pi 5 it localized the finite tail to the pre-provider durable publication /
+SQLite / storage path (stable direct control; one tmpfs run removed the
+tail), so only a narrow database/publication follow-up is justified — never a
+Tokio, routing-lock, or streaming change from this evidence.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:
