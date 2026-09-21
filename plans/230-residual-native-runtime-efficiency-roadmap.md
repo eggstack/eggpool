@@ -159,3 +159,5 @@ handoff, unstripped reviewed release profile, and no ThinLTO after local
 qualification. SBC and loopback percentile data were not measured on the
 available host; this campaign added no benchmark framework, hardware CI,
 second parser, or concurrency authority.
+
+Implementation and validation commit: `30d2ba7`.

@@ -230,3 +230,5 @@ Focused evidence: `canonical_request`, `codex_compaction_compat`,
 `coordinator_c009`, `coordinator_c011`, and `coordinator_boundaries` all pass
 with serial tests. No public request/routing type or selection-lock boundary
 changed.
+
+Implementation and validation commit: `30d2ba7`.

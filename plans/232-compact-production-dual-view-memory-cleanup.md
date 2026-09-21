@@ -220,3 +220,5 @@ Focused evidence: `codex_compaction_compat`, `codex_responses_compat`,
 `coordinator_publication`, `wire_runtime`, and `wire_qualification` all pass
 with serial tests. The ownership boundary is structural; no pointer-identity
 assertion or public field-type change was introduced.
+
+Implementation and validation commit: `30d2ba7`.

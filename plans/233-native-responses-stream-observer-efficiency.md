@@ -235,3 +235,5 @@ stateful encoder. An in-module equivalence test compares split-frame public
 collection with native observation for unknown events, usage, and completion;
 the focused wire and coordinator suites cover malformed, EOF, post-terminal,
 and cancellation behavior.
+
+Implementation and validation commit: `30d2ba7`.

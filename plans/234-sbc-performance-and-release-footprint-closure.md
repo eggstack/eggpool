@@ -260,3 +260,5 @@ runtime, single SQLite gate, routing selection lock, bounded stream bridge and
 post-handoff owner, native byte forwarding, and no permanent benchmark or
 hardware-CI infrastructure. Packaging/workflow and runtime-boundary validators
 passed; the full local CI matrix is the final campaign gate.
+
+Implementation and validation commit: `30d2ba7`.
