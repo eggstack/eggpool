@@ -1,7 +1,7 @@
 # Plan 236 — Physical SBC Benchmark Evidence Corrective Pass
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: `4208a3ca3ef131aa29ba3b00b217bbe4ffe23735`
 Corrects: `plans/235-physical-sbc-target-class-benchmark-pass.md`
 Priority: P1 narrow qualification/evidence correction
@@ -407,21 +407,21 @@ Stop and write a separate implementation plan if correction would require:
 
 ## Completion criteria
 
-- [ ] ordinary Q008 default report compatibility is restored and tested;
-- [ ] ordinary Q008 fixture is unchanged;
-- [ ] benchmark-only fixture reflects current low-wear SBC steady-state cadence;
-- [ ] translated stream validates downstream `response.completed` and proves
+- [x] ordinary Q008 default report compatibility is restored and tested;
+- [x] ordinary Q008 fixture is unchanged;
+- [x] benchmark-only fixture reflects current low-wear SBC steady-state cadence;
+- [x] translated stream validates downstream `response.completed` and proves
       Anthropic Messages upstream routing;
-- [ ] ordinary physical-SBC qualification passes;
-- [ ] three corrected 30-sample benchmark runs complete on a physical
+- [x] ordinary physical-SBC qualification passes;
+- [x] three corrected 30-sample benchmark runs complete on a physical
       Linux/aarch64 SBC;
-- [ ] corrected aggregate evidence is committed under the Plan 236 artifact
+- [x] corrected aggregate evidence is committed under the Plan 236 artifact
       path;
-- [ ] resource ownership converges after every run;
-- [ ] Plan 235 timing/translated evidence is explicitly superseded, not erased;
-- [ ] current-thread/SQLite/routing-lock/stream-handoff decisions are
+- [x] resource ownership converges after every run;
+- [x] Plan 235 timing/translated evidence is explicitly superseded, not erased;
+- [x] current-thread/SQLite/routing-lock/stream-handoff decisions are
       re-evaluated from corrected evidence;
-- [ ] no production runtime/API/capability behavior changes.
+- [x] no production runtime/API/capability behavior changes.
 
 ## Handoff sequence
 
@@ -436,3 +436,90 @@ Stop and write a separate implementation plan if correction would require:
 9. Commit the corrected aggregate artifact and append closure evidence to this
    Plan 236 only.
 10. Stop; create a separate plan for any actual runtime bottleneck.
+
+## Closure — 2026-09-21
+
+The corrective pass completed on the same Raspberry Pi 5 class as Plan 235.
+The corrected checkout was committed as `3290256a` before the physical runs,
+then built on-device with no Rust changes (candidate byte-identical to Plan
+235):
+
+- repository commit: `3290256a5bbd10b680c6ac70cd50666626416250`;
+- candidate SHA-256: `4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8`;
+- candidate size: `30,226,744` bytes;
+- Rust: `rustc 1.98.1 (48a229cea 2026-09-01)`;
+- board: Raspberry Pi 5 Model B Rev 1.0, four cores, 7.75 GiB reported RAM;
+- OS/kernel: Ubuntu 24.04.4 LTS / Linux `6.8.0-1064-raspi`;
+- root storage: non-rotational MMC, ext4;
+- CPU governor: `ondemand` for all runs; observed end frequency policy varied
+  from `1800000` to `1900000` across runs;
+- temperature: `49.0–50.1 °C` at start and `46.3–48.0 °C` at end, with no
+  thermal-throttle evidence.
+
+Tooling corrections landed as committed:
+
+- ordinary/default mode emits the Q008 `runtime-q008.v1` contract with no
+  benchmark-only fields (no `peak_rss_bytes`, no repository SHA, no
+  end-of-run thermal/frequency projection); benchmark mode emits the extended
+  `runtime-q008.v2` contract with cadence facts and the benchmark section;
+- ordinary fixture `sbc.toml` unchanged (1s refresh, 2s flush, 2s backup);
+- new `sbc-benchmark.toml` mirrors the low-wear steady-state profile (300s
+  refresh, 120s flush, backup disabled, trace off);
+- translated benchmark requires downstream `response.completed` and proves
+  `35` fixture `/messages` observations per batch (5 warm-ups + 30 samples).
+
+The ordinary Q008 qualification passed (`runtime-q008.v1`, 24 functional
+checks), then `--benchmark-samples 30` with the benchmark-only fixture passed
+three times from fresh roots. Median of the three runs:
+
+| Batch | p50 elapsed | p95 elapsed | p50 TTFT | p95 TTFT | CPU | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Native Responses finite | 4 ms | 2370 ms | 3 ms | 2370 ms | 100 ms batch CPU | measured |
+| Native Responses streaming | 3 ms | 4 ms | 3 ms | 3 ms | 90 ms batch CPU | 30 terminal-complete streams |
+| Responses → Anthropic streaming | 4 ms | 4 ms | 3 ms | 4 ms | 90 ms batch CPU | measured, Messages-path proof |
+
+The translated path now measures at native-streaming cost in every run. Finite
+p95 (`166/2397/2370 ms`) and concurrency-4 batches (`438/3988/753 ms`,
+`73.051/8.024/42.509` requests/s) remain variable run to run even without the
+aggressive Q008 background cadence; this is reported as observed without an
+invented runtime cause. All runs converged with zero pending requests, active
+reservations, finalization jobs, active leases, retiring leases, and terminal
+references. Baseline RSS was `17,227,776` bytes median, final stabilized RSS
+`18,235,392` bytes median, peak `VmHWM` `18,235,392` bytes median. Final
+database/WAL sizes were `868,352` / `4,231,272` bytes median. The sanitized
+aggregate report is
+[`artifacts/qualification/236-sbc-target-benchmark-corrected.json`](../artifacts/qualification/236-sbc-target-benchmark-corrected.json).
+
+Supersession statement: Plan 235's resource-convergence evidence remains
+valid. Plan 235's translated-stream result (`not measured`) and its
+finite/concurrency timing interpretation are superseded by the corrected Plan
+236 measurements above; Plan 235 and its artifact are preserved unchanged as
+historical evidence.
+
+Decisions: keep the Tokio `current_thread` runtime, single SQLite gate,
+routing selection lock, and streaming handoff. The corrected evidence shows
+the translated path costs no more than the native streaming path, and the
+remaining tail variance is not a repeatable localized bottleneck; no
+follow-up architecture plan is justified. No production runtime, API,
+capability, config-default, or dependency behavior was changed.
+
+Validation evidence:
+
+- `uv run ruff format --check scripts/ tests/tooling/`: pass;
+- `uv run ruff check scripts/ tests/tooling/`: pass;
+- `uv run pyright scripts/`: pass;
+- `uv run pytest tests/tooling/test_qualification_sbc.py -q`: pass (`16 passed`);
+- `uv run pytest tests/tooling/ -q --tb=short --maxfail=1`: pass (`91 passed,
+  3 skipped`);
+- `uv run python scripts/validate_release_docs.py`: pass;
+- `cargo fmt --manifest-path rust/Cargo.toml --all -- --check`: pass;
+- `cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets
+  -- -D warnings` (default and `--no-default-features`): pass;
+- `cargo check --manifest-path rust/Cargo.toml --workspace --all-targets
+  --no-default-features`: pass;
+- ordinary qualification on the Pi: pass (`runtime-q008.v1`);
+- three `--benchmark-samples 30` runs with `--expected-sha256` and
+  `--config-fixture sbc-benchmark.toml`: pass (`runtime-q008.v2`).
+- Full serial Rust workspace suite was not rerun for this tooling-only pass
+  (no `rust/` change); default and no-default Clippy/checks pass and remote
+  CI qualifies the workspace.

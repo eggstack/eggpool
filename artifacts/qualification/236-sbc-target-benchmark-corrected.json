@@ -1,0 +1,295 @@
+{
+  "schema_version": "runtime-q008.v2",
+  "plan": "236 physical SBC benchmark evidence corrective pass",
+  "status": "pass",
+  "candidate": {
+    "repository_commit_sha": "3290256a5bbd10b680c6ac70cd50666626416250",
+    "build_mode": "on-device-release-build",
+    "build_profile": "release",
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "sha256": "4b58060caebd6158a0e1d05762c17d4989c50e4d991eadfaee4c2e222a8b48f8",
+    "binary_size_bytes": 30226744
+  },
+  "environment": {
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "soc_cpu_core_count": 4,
+    "ram_bytes": 8322752512,
+    "cpu_frequency_policy_start": "2400000",
+    "cpu_governor": "ondemand",
+    "root_storage_device_class": "mmc",
+    "storage_medium_class": "non-rotational",
+    "filesystem": "ext4",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1064-raspi",
+    "thermal_reading_celsius_start": [50.1, 49.0, 49.0],
+    "thermal_reading_celsius_end": [47.4, 48.0, 46.3],
+    "thermal_interpretation": "temperature fell during each run; no thermal-throttle evidence observed",
+    "frequency_interpretation": "governor remained ondemand; dynamic end frequency varied by run"
+  },
+  "benchmark_fixture": {
+    "config_fixture": "sbc-benchmark.toml",
+    "cadence": {
+      "server_access_log": "false",
+      "server_threads": "1",
+      "database_busy_timeout_ms": "10000",
+      "database_wal": "true",
+      "database_synchronous": "NORMAL",
+      "database_worker_threads": "1",
+      "models_startup_refresh": "true",
+      "models_refresh_interval_s": "300",
+      "model_info_enabled": "false",
+      "model_info_startup_refresh": "false",
+      "metrics_write_mode": "low_wear",
+      "metrics_flush_interval_s": "120",
+      "metrics_max_buffered_events": "250",
+      "metrics_aggregate_only": "true",
+      "metrics_event_loop_lag_enabled": "false",
+      "metrics_cleanup_interval_s": "86400",
+      "routing_trace_mode": "off",
+      "routing_trace_sample_rate": "0.0",
+      "backup_enabled": "false",
+      "backup_interval_s": "86400"
+    },
+    "ordinary_fixture": "sbc.toml (aggressive Q008 lifecycle cadence: 1s model refresh, 2s metrics flush, 2s backup) retained for ordinary qualification; ordinary mode emits runtime-q008.v1"
+  },
+  "repeatability": {
+    "run_count": 3,
+    "sample_count_per_sequential_batch": 30,
+    "warmup_count_per_sequential_batch": 5,
+    "concurrency_batch_size": 32,
+    "client_concurrency": 4,
+    "runs": [
+      {
+        "run": 1,
+        "cpu_frequency_policy_end": "1900000",
+        "finite": {
+          "p50_elapsed_ms": 4,
+          "p95_elapsed_ms": 166,
+          "p50_ttft_ms": 4,
+          "p95_ttft_ms": 166,
+          "cpu_percent": 9.04,
+          "cpu_time_ms": 100
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 3.06,
+          "cpu_time_ms": 80,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "measured",
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 4,
+          "cpu_percent": 4.2,
+          "cpu_time_ms": 80,
+          "terminal_evidence": "response.completed",
+          "expected_upstream_path": "/messages",
+          "upstream_request_delta": 35,
+          "upstream_proof": "fixture Messages path observed"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 438,
+          "requests_per_second": 73.051,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 25.11,
+          "cpu_time_ms": 110,
+          "p50_elapsed_ms": 8,
+          "p95_elapsed_ms": 249
+        },
+        "resources": {
+          "baseline_rss_bytes": 17227776,
+          "final_rss_bytes": 18235392,
+          "peak_rss_bytes": 18235392,
+          "final_db_bytes": 868352,
+          "final_wal_bytes": 4272472,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      },
+      {
+        "run": 2,
+        "cpu_frequency_policy_end": "1800000",
+        "finite": {
+          "p50_elapsed_ms": 4,
+          "p95_elapsed_ms": 2397,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 2397,
+          "cpu_percent": 1.39,
+          "cpu_time_ms": 90
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 23.95,
+          "cpu_time_ms": 90,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "measured",
+          "p50_elapsed_ms": 4,
+          "p95_elapsed_ms": 5,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 5,
+          "cpu_percent": 3.89,
+          "cpu_time_ms": 90,
+          "terminal_evidence": "response.completed",
+          "expected_upstream_path": "/messages",
+          "upstream_request_delta": 35,
+          "upstream_proof": "fixture Messages path observed"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 3988,
+          "requests_per_second": 8.024,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 2.76,
+          "cpu_time_ms": 110,
+          "p50_elapsed_ms": 9,
+          "p95_elapsed_ms": 2109
+        },
+        "resources": {
+          "baseline_rss_bytes": 17227776,
+          "final_rss_bytes": 18231296,
+          "peak_rss_bytes": 18231296,
+          "final_db_bytes": 864256,
+          "final_wal_bytes": 4231272,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      },
+      {
+        "run": 3,
+        "cpu_frequency_policy_end": "1900000",
+        "finite": {
+          "p50_elapsed_ms": 4,
+          "p95_elapsed_ms": 2370,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 2370,
+          "cpu_percent": 1.55,
+          "cpu_time_ms": 100
+        },
+        "native_streaming": {
+          "p50_elapsed_ms": 3,
+          "p95_elapsed_ms": 5,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 4,
+          "cpu_percent": 24.48,
+          "cpu_time_ms": 90,
+          "terminal_evidence": "response.completed"
+        },
+        "translated_streaming": {
+          "status": "measured",
+          "p50_elapsed_ms": 4,
+          "p95_elapsed_ms": 4,
+          "p50_ttft_ms": 3,
+          "p95_ttft_ms": 3,
+          "cpu_percent": 2.34,
+          "cpu_time_ms": 90,
+          "terminal_evidence": "response.completed",
+          "expected_upstream_path": "/messages",
+          "upstream_request_delta": 35,
+          "upstream_proof": "fixture Messages path observed"
+        },
+        "concurrency_4": {
+          "batch_elapsed_ms": 753,
+          "requests_per_second": 42.509,
+          "completed_count": 32,
+          "failed_count": 0,
+          "cpu_percent": 13.28,
+          "cpu_time_ms": 100,
+          "p50_elapsed_ms": 9,
+          "p95_elapsed_ms": 450
+        },
+        "resources": {
+          "baseline_rss_bytes": 17219584,
+          "final_rss_bytes": 18239488,
+          "peak_rss_bytes": 18239488,
+          "final_db_bytes": 868352,
+          "final_wal_bytes": 4231272,
+          "final_pending_requests": 0,
+          "final_active_reservations": 0,
+          "final_finalization_jobs": 0,
+          "final_active_leases": 0,
+          "final_retiring_leases": 0,
+          "final_terminal_references": 0
+        }
+      }
+    ],
+    "median_of_runs": {
+      "finite": {
+        "p50_elapsed_ms": 4,
+        "p95_elapsed_ms": 2370,
+        "p50_ttft_ms": 3,
+        "p95_ttft_ms": 2370,
+        "cpu_percent": 1.55,
+        "cpu_time_ms": 100
+      },
+      "native_streaming": {
+        "p50_elapsed_ms": 3,
+        "p95_elapsed_ms": 4,
+        "p50_ttft_ms": 3,
+        "p95_ttft_ms": 3,
+        "cpu_percent": 23.95,
+        "cpu_time_ms": 90
+      },
+      "translated_streaming": {
+        "status": "measured",
+        "p50_elapsed_ms": 4,
+        "p95_elapsed_ms": 4,
+        "p50_ttft_ms": 3,
+        "p95_ttft_ms": 4,
+        "cpu_percent": 3.89,
+        "cpu_time_ms": 90,
+        "terminal_evidence": "response.completed",
+        "expected_upstream_path": "/messages",
+        "upstream_proof": "fixture Messages path observed"
+      },
+      "concurrency_4": {
+        "batch_elapsed_ms": 753,
+        "requests_per_second": 42.509,
+        "cpu_percent": 13.28,
+        "cpu_time_ms": 100,
+        "p50_elapsed_ms": 9,
+        "p95_elapsed_ms": 450
+      },
+      "baseline_rss_bytes": 17227776,
+      "final_rss_bytes": 18235392,
+      "peak_rss_bytes": 18235392,
+      "final_db_bytes": 868352,
+      "final_wal_bytes": 4231272,
+      "final_pending_requests": 0,
+      "final_active_reservations": 0,
+      "final_finalization_jobs": 0
+    }
+  },
+  "decisions": {
+    "tokio_current_thread": "keep",
+    "single_sqlite_gate": "keep",
+    "routing_selection_lock": "keep",
+    "streaming_handoff": "keep",
+    "interpretation": "Translated streaming now measures at native-streaming cost with Messages-path proof in all runs. Finite and concurrency tails remain variable run to run under the steady-state fixture, with no repeatable localized bottleneck; resource ownership converges cleanly, so no follow-up architecture plan is justified by this evidence."
+  },
+  "limitations": [
+    "Finite p95 (166/2397/2370 ms) and concurrency-4 batch (438/3988/753 ms) tails varied materially across runs even without the aggressive Q008 background cadence; reported as observed without an invented runtime cause.",
+    "Two benchmark attempts during this pass hit a transient 5s client timeout under shared-board load and were retried from fresh roots; only the three passing fresh-root runs above are recorded.",
+    "The report is loopback-only and descriptive; no performance SLA or CI threshold is inferred."
+  ]
+}
