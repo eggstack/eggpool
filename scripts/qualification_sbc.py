@@ -60,6 +60,14 @@ BENCHMARK_WARMUPS = 5
 CONCURRENCY_BATCH_SIZE = 32
 CONCURRENCY_WORKERS = 4
 STABILIZATION_SECONDS = 3.0
+DIAGNOSTIC_MIN_SAMPLES = 10
+DIAGNOSTIC_MAX_SAMPLES = 200
+DIAGNOSTIC_WARMUPS = 5
+DIRECT_CONTROL_WARMUPS = 5
+DIRECT_CONTROL_SAMPLES = 30
+DIAGNOSTIC_TIMEOUT = 5.0
+DIAGNOSTIC_SLOWEST_RETAINED = 5
+DIAGNOSTIC_FIXTURE_PATH_SUFFIX = "/responses"
 MODELS = {
     "chat_completions": "q008-chat",
     "responses": "q008-responses",
@@ -108,6 +116,25 @@ TRANSLATED_STREAMING_CASE = BenchmarkCase(
     terminal_marker=b"response.completed",
     expected_upstream_path="/messages",
 )
+
+
+@dataclass(frozen=True)
+class DiagnosticSample:
+    """One bounded scalar-only finite-tail diagnostic observation.
+
+    Only sequence numbers and millisecond phase durations are retained.
+    Prompts, bodies, headers, credentials, paths, and URLs are never stored.
+    """
+
+    sequence: int
+    pre_provider_ms: int | None
+    provider_service_ms: int | None
+    post_provider_ttft_ms: int | None
+    client_body_ms: int | None
+    total_ms: int
+    timed_out: bool
+    http_status: int | None
+    last_phase: str | None
 
 
 class QualificationError(RuntimeError):
@@ -365,65 +392,93 @@ class _LoopbackHandler(BaseHTTPRequestHandler):
         self._respond(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:  # noqa: N802
-        length = int(self.headers.get("content-length", "0"))
-        body = self.rfile.read(min(length, MAX_HTTP_BODY_BYTES))
-        self.owner.record(self.path)
-        streaming = b'"stream":true' in body.replace(b" ", b"")
-        if self.path.endswith("/chat/completions"):
-            response = (
-                b'data: {"id":"q008-stream","choices":[{"delta":{"content":"ok"}}]}\n\n'
-                b"data: [DONE]\n\n"
-                if streaming
-                else b'{"id":"q008-chat","object":"chat.completion",'
-                b'"model":"q008-chat",'
-                b'"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},'
-                b'"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
-            )
-            self._respond(
-                200, response, "text/event-stream" if streaming else "application/json"
-            )
-            return
-        if self.path.endswith("/responses"):
-            response = (
-                b"event: response.output_text.delta\n"
-                b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
-                b"event: response.completed\n"
-                b'data: {"type":"response.completed","response":{"id":"q008-stream",'
-                b'"status":"completed","usage":{"input_tokens":1,"output_tokens":1,'
-                b'"total_tokens":2}}}\n\n'
-                if streaming
-                else b'{"id":"q008-responses","object":"response","status":"completed",'
-                b'"error":null,'
-                b'"model":"q008-responses","output":[{"type":"message","id":"msg",'
-                b'"status":"completed","role":"assistant","content":[{"type":"output_text",'
-                b'"text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}'
-            )
-            self._respond(
-                200, response, "text/event-stream" if streaming else "application/json"
-            )
-            return
-        if self.path.endswith("/messages"):
-            response = (
-                b"event: message_start\n"
-                b'data: {"type":"message_start","message":{"id":"q008-stream"}}\n\n'
-                b"event: content_block_delta\n"
-                b'data: {"type":"content_block_delta","index":0,'
-                b'"delta":{"type":"text_delta","text":"ok"}}\n\n'
-                b"event: message_delta\n"
-                b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
-                b'"usage":{"input_tokens":1,"output_tokens":1}}\n\n'
-                b"event: message_stop\n"
-                b'data: {"type":"message_stop"}\n\n'
-                if streaming
-                else b'{"id":"q008-messages","type":"message","role":"assistant",'
-                b'"model":"q008-messages","content":[{"type":"text","text":"ok"}],'
-                b'"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}'
-            )
-            self._respond(
-                200, response, "text/event-stream" if streaming else "application/json"
-            )
-            return
-        self._respond(404, b"not found", "text/plain")
+        diagnostic = self.owner.diagnostic_begin()
+        try:
+            length = int(self.headers.get("content-length", "0"))
+            body = self.rfile.read(min(length, MAX_HTTP_BODY_BYTES))
+            self.owner.record(self.path)
+            streaming = b'"stream":true' in body.replace(b" ", b"")
+            if self.path.endswith("/chat/completions"):
+                response = (
+                    b'data: {"id":"q008-stream","choices":'
+                    b'[{"delta":{"content":"ok"}}]}\n\n'
+                    b"data: [DONE]\n\n"
+                    if streaming
+                    else b'{"id":"q008-chat","object":"chat.completion",'
+                    b'"model":"q008-chat",'
+                    b'"choices":[{"index":0,"message":{"role":"assistant",'
+                    b'"content":"ok"},'
+                    b'"finish_reason":"stop"}],"usage":{"prompt_tokens":1,'
+                    b'"completion_tokens":1,"total_tokens":2}}'
+                )
+                self._respond(
+                    200,
+                    response,
+                    "text/event-stream" if streaming else "application/json",
+                )
+                return
+            if self.path.endswith("/responses"):
+                response = (
+                    b"event: response.output_text.delta\n"
+                    b'data: {"type":"response.output_text.delta",'
+                    b'"delta":"ok"}\n\n'
+                    b"event: response.completed\n"
+                    b'data: {"type":"response.completed","response":'
+                    b'{"id":"q008-stream",'
+                    b'"status":"completed","usage":{"input_tokens":1,'
+                    b'"output_tokens":1,'
+                    b'"total_tokens":2}}}\n\n'
+                    if streaming
+                    else b'{"id":"q008-responses","object":"response",'
+                    b'"status":"completed",'
+                    b'"error":null,'
+                    b'"model":"q008-responses","output":[{"type":"message",'
+                    b'"id":"msg",'
+                    b'"status":"completed","role":"assistant","content":'
+                    b'[{"type":"output_text",'
+                    b'"text":"ok","annotations":[]}]}],"usage":'
+                    b'{"input_tokens":1,"output_tokens":1,"total_tokens":2}}'
+                )
+                self._respond(
+                    200,
+                    response,
+                    "text/event-stream" if streaming else "application/json",
+                )
+                return
+            if self.path.endswith("/messages"):
+                response = (
+                    b"event: message_start\n"
+                    b'data: {"type":"message_start","message":'
+                    b'{"id":"q008-stream"}}\n\n'
+                    b"event: content_block_delta\n"
+                    b'data: {"type":"content_block_delta","index":0,'
+                    b'"delta":{"type":"text_delta","text":"ok"}}\n\n'
+                    b"event: message_delta\n"
+                    b'data: {"type":"message_delta","delta":'
+                    b'{"stop_reason":"end_turn"},'
+                    b'"usage":{"input_tokens":1,"output_tokens":1}}\n\n'
+                    b"event: message_stop\n"
+                    b'data: {"type":"message_stop"}\n\n'
+                    if streaming
+                    else b'{"id":"q008-messages","type":"message",'
+                    b'"role":"assistant",'
+                    b'"model":"q008-messages","content":[{"type":"text",'
+                    b'"text":"ok"}],'
+                    b'"stop_reason":"end_turn","stop_sequence":null,'
+                    b'"usage":{"input_tokens":1,"output_tokens":1}}'
+                )
+                self._respond(
+                    200,
+                    response,
+                    "text/event-stream" if streaming else "application/json",
+                )
+                return
+            self._respond(404, b"not found", "text/plain")
+        finally:
+            if diagnostic is not None:
+                self.owner.diagnostic_end(
+                    diagnostic[0], diagnostic[1], time.monotonic_ns()
+                )
 
     def _respond(
         self, status: int, body: bytes, content_type: str = "application/json"
@@ -447,6 +502,10 @@ class LoopbackProvider:
             "/responses": 0,
             "/messages": 0,
         }
+        self._diagnostic_enabled = False
+        self._diagnostic_sequence = 0
+        self._diagnostic_timings: list[tuple[int, int, int]] = []
+        self._diagnostic_capacity = DIAGNOSTIC_MAX_SAMPLES
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _LoopbackHandler)
         _LoopbackHandler.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -467,6 +526,48 @@ class LoopbackProvider:
     def upstream_count(self, suffix: str) -> int:
         with self._lock:
             return int(self._path_counts.get(suffix, 0))
+
+    def start_diagnostic(self, capacity: int = DIAGNOSTIC_MAX_SAMPLES) -> None:
+        """Enable bounded provider-boundary timing for one diagnostic batch.
+
+        Only integer sequence numbers and monotonic-nanosecond timestamps are
+        retained. Bodies, paths, headers, credentials, and URLs are never
+        stored.
+        """
+        with self._lock:
+            self._diagnostic_enabled = True
+            self._diagnostic_sequence = 0
+            self._diagnostic_timings = []
+            self._diagnostic_capacity = max(1, min(capacity, DIAGNOSTIC_MAX_SAMPLES))
+
+    def stop_diagnostic(self) -> None:
+        with self._lock:
+            self._diagnostic_enabled = False
+
+    def diagnostic_begin(self) -> tuple[int, int] | None:
+        """Assign a diagnostic sequence number and receive timestamp, if armed."""
+        with self._lock:
+            if not self._diagnostic_enabled:
+                return None
+            self._diagnostic_sequence += 1
+            return (self._diagnostic_sequence, time.monotonic_ns())
+
+    def diagnostic_end(self, sequence: int, received_ns: int, finished_ns: int) -> None:
+        """Retain one bounded timing tuple of integers only."""
+        with self._lock:
+            if not self._diagnostic_enabled:
+                return
+            self._diagnostic_timings.append((sequence, received_ns, finished_ns))
+            while len(self._diagnostic_timings) > self._diagnostic_capacity:
+                self._diagnostic_timings.pop(0)
+
+    def diagnostic_timings(self) -> list[tuple[int, int, int]]:
+        with self._lock:
+            return list(self._diagnostic_timings)
+
+    def diagnostic_timing_count(self) -> int:
+        with self._lock:
+            return len(self._diagnostic_timings)
 
     @property
     def base_url(self) -> str:
@@ -912,6 +1013,336 @@ def _cpu_batch_summary(
     }
 
 
+def _diagnose_sample_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "diagnostic samples must be an integer"
+        ) from error
+    if not DIAGNOSTIC_MIN_SAMPLES <= count <= DIAGNOSTIC_MAX_SAMPLES:
+        raise argparse.ArgumentTypeError(
+            "diagnostic samples must be between "
+            f"{DIAGNOSTIC_MIN_SAMPLES} and {DIAGNOSTIC_MAX_SAMPLES}"
+        )
+    return count
+
+
+def _ns_to_ms(earlier_ns: int | None, later_ns: int | None) -> int | None:
+    if earlier_ns is None or later_ns is None:
+        return None
+    return max(0, round((later_ns - earlier_ns) / 1_000_000))
+
+
+def _phase_values(samples: Sequence[DiagnosticSample], field: str) -> list[int]:
+    values: list[int] = []
+    for sample in samples:
+        value = getattr(sample, field)
+        if isinstance(value, int):
+            values.append(value)
+    return values
+
+
+def _diagnostic_phase_summary(samples: Sequence[DiagnosticSample]) -> dict[str, Any]:
+    """Aggregate bounded scalar phase evidence; discard per-request detail.
+
+    Retains sample counts, p50/p95/max per phase, and the five slowest
+    scalar-only records. Never emits p99 and never retains bodies, headers,
+    paths, credentials, or URLs.
+    """
+    ordered = sorted(samples, key=lambda item: item.total_ms, reverse=True)
+    slowest: list[dict[str, Any]] = []
+    for item in ordered[:DIAGNOSTIC_SLOWEST_RETAINED]:
+        slowest.append(
+            {
+                "sequence": item.sequence,
+                "pre_provider_ms": item.pre_provider_ms,
+                "provider_service_ms": item.provider_service_ms,
+                "post_provider_ttft_ms": item.post_provider_ttft_ms,
+                "client_body_ms": item.client_body_ms,
+                "total_ms": item.total_ms,
+                "timed_out": item.timed_out,
+                "http_status": item.http_status,
+                "last_phase": item.last_phase,
+            }
+        )
+    total_values = [item.total_ms for item in samples]
+    pre_values = _phase_values(samples, "pre_provider_ms")
+    service_values = _phase_values(samples, "provider_service_ms")
+    post_values = _phase_values(samples, "post_provider_ttft_ms")
+    body_values = _phase_values(samples, "client_body_ms")
+    timeout_count = sum(1 for item in samples if item.timed_out)
+    completed_count = sum(
+        1 for item in samples if not item.timed_out and item.http_status == 200
+    )
+    return {
+        "sample_count": len(samples),
+        "completed_count": completed_count,
+        "timeout_count": timeout_count,
+        "failed_count": len(samples) - completed_count - timeout_count,
+        "p50_total_ms": _percentile(total_values, 50),
+        "p95_total_ms": _percentile(total_values, 95),
+        "maximum_total_ms": max(total_values) if total_values else None,
+        "p50_pre_provider_ms": _percentile(pre_values, 50),
+        "p95_pre_provider_ms": _percentile(pre_values, 95),
+        "maximum_pre_provider_ms": max(pre_values) if pre_values else None,
+        "p50_provider_service_ms": _percentile(service_values, 50),
+        "p95_provider_service_ms": _percentile(service_values, 95),
+        "maximum_provider_service_ms": (
+            max(service_values) if service_values else None
+        ),
+        "p50_post_provider_ttft_ms": _percentile(post_values, 50),
+        "p95_post_provider_ttft_ms": _percentile(post_values, 95),
+        "maximum_post_provider_ttft_ms": max(post_values) if post_values else None,
+        "p50_client_body_ms": _percentile(body_values, 50),
+        "p95_client_body_ms": _percentile(body_values, 95),
+        "maximum_client_body_ms": max(body_values) if body_values else None,
+        "slowest_five": slowest,
+    }
+
+
+def _diagnostic_timed_post(
+    url: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    timeout: float,
+) -> tuple[int | None, bytes, int, int | None, int, bool, str | None]:
+    """POST with monotonic T0/T3/T4 capture using the shared urllib client.
+
+    Returns ``(status, body, t0_ns, t3_ns, t4_ns, timed_out, last_phase)``.
+    Timeouts preserve whatever phase timestamps exist; they are never
+    silently discarded.
+    """
+    payload = urllib.request.Request(
+        url, data=body, headers=dict(headers), method="POST"
+    )
+    started_ns = time.monotonic_ns()
+    try:
+        with urllib.request.urlopen(payload, timeout=timeout) as response:
+            first = response.read(1)
+            first_ns: int | None = time.monotonic_ns() if first else None
+            rest = response.read(MAX_HTTP_BODY_BYTES - len(first))
+            finished_ns = time.monotonic_ns()
+            last_phase: str | None = "completed" if first else "provider_finished"
+            return (
+                response.status,
+                first + rest,
+                started_ns,
+                first_ns,
+                finished_ns,
+                False,
+                last_phase,
+            )
+    except urllib.error.HTTPError as error:
+        finished_ns = time.monotonic_ns()
+        try:
+            error_body = error.read(MAX_HTTP_BODY_BYTES)
+        except OSError:
+            error_body = b""
+        return (
+            error.code,
+            error_body,
+            started_ns,
+            None,
+            finished_ns,
+            False,
+            "http_error",
+        )
+    except (OSError, TimeoutError) as error:
+        finished_ns = time.monotonic_ns()
+        timed_out = isinstance(error, TimeoutError) or "timed out" in str(error).lower()
+        return (
+            None,
+            b"",
+            started_ns,
+            None,
+            finished_ns,
+            timed_out,
+            "timeout" if timed_out else "client_start",
+        )
+
+
+def _finite_diagnostic_payload() -> bytes:
+    return json.dumps(
+        {"model": MODELS["responses"], "input": "ping", "store": False}
+    ).encode()
+
+
+def _diagnostic_headers() -> dict[str, str]:
+    return {
+        "Authorization": "Bearer q008-server-key",
+        "Content-Type": "application/json",
+    }
+
+
+def _combine_diagnostic_sample(
+    sequence: int,
+    t0_ns: int,
+    provider_timing: tuple[int, int, int] | None,
+    t3_ns: int | None,
+    t4_ns: int,
+    status: int | None,
+    timed_out: bool,
+    last_phase: str | None,
+) -> DiagnosticSample:
+    t1_ns = provider_timing[1] if provider_timing is not None else None
+    t2_ns = provider_timing[2] if provider_timing is not None else None
+    observed_phase = last_phase
+    if provider_timing is None and not timed_out and observed_phase == "completed":
+        observed_phase = "completed"
+    elif provider_timing is None and timed_out:
+        observed_phase = "timeout"
+    return DiagnosticSample(
+        sequence=sequence,
+        pre_provider_ms=_ns_to_ms(t0_ns, t1_ns),
+        provider_service_ms=_ns_to_ms(t1_ns, t2_ns),
+        post_provider_ttft_ms=_ns_to_ms(t2_ns, t3_ns),
+        client_body_ms=_ns_to_ms(t3_ns, t4_ns),
+        total_ms=max(0, round((t4_ns - t0_ns) / 1_000_000)),
+        timed_out=timed_out,
+        http_status=status,
+        last_phase=observed_phase,
+    )
+
+
+def _drain_new_provider_timings(
+    provider: LoopbackProvider, before: int
+) -> list[tuple[int, int, int]]:
+    return provider.diagnostic_timings()[before:]
+
+
+def _direct_provider_control(
+    provider: LoopbackProvider,
+    *,
+    timeout: float = DIAGNOSTIC_TIMEOUT,
+) -> dict[str, Any]:
+    """Issue a matched finite corpus directly to the fixture provider.
+
+    Uses the same Python HTTP client and the same loopback provider as the
+    EggPool path, with fixed fixture paths only. Five warm-ups are
+    unrecorded; 30 requests are measured. This is a fixture/host control,
+    never a benchmark score comparison.
+    """
+    target = provider.base_url + DIAGNOSTIC_FIXTURE_PATH_SUFFIX
+    payload = _finite_diagnostic_payload()
+    headers = _diagnostic_headers()
+    for _ in range(DIRECT_CONTROL_WARMUPS):
+        with contextlib.suppress(OSError):
+            _diagnostic_timed_post(target, payload, headers, timeout)
+    provider.start_diagnostic(capacity=DIRECT_CONTROL_SAMPLES)
+    samples: list[DiagnosticSample] = []
+    try:
+        for sequence in range(1, DIRECT_CONTROL_SAMPLES + 1):
+            before = provider.diagnostic_timing_count()
+            status, _, t0_ns, t3_ns, t4_ns, timed_out, last_phase = (
+                _diagnostic_timed_post(target, payload, headers, timeout)
+            )
+            new_timings = _drain_new_provider_timings(provider, before)
+            provider_timing = new_timings[-1] if new_timings else None
+            samples.append(
+                _combine_diagnostic_sample(
+                    sequence,
+                    t0_ns,
+                    provider_timing,
+                    t3_ns,
+                    t4_ns,
+                    status,
+                    timed_out,
+                    last_phase,
+                )
+            )
+    finally:
+        provider.stop_diagnostic()
+    summary = _diagnostic_phase_summary(samples)
+    return {
+        "status": "measured",
+        "request_target": "fixture-provider-direct",
+        "fixture_path_suffix": DIAGNOSTIC_FIXTURE_PATH_SUFFIX,
+        "warmup_count": DIRECT_CONTROL_WARMUPS,
+        "interpretation": (
+            "fixture/host control only; do not compare absolute latency "
+            "to EggPool as a benchmark score"
+        ),
+        **summary,
+    }
+
+
+def _diagnostic_finite_batch(
+    port: int,
+    provider: LoopbackProvider,
+    samples: int,
+    process: subprocess.Popen[str] | None = None,
+    *,
+    timeout: float = DIAGNOSTIC_TIMEOUT,
+) -> dict[str, Any]:
+    """Run a sequential native-finite diagnostic batch with phase attribution.
+
+    Five warm-ups are unrecorded. The measured batch contains only sequential
+    native Responses finite requests so provider-boundary correlation does
+    not require propagating an ID through production headers.
+    """
+    if not DIAGNOSTIC_MIN_SAMPLES <= samples <= DIAGNOSTIC_MAX_SAMPLES:
+        raise ValueError(
+            "diagnostic sample count must be "
+            f"{DIAGNOSTIC_MIN_SAMPLES}..{DIAGNOSTIC_MAX_SAMPLES}"
+        )
+    url = f"http://127.0.0.1:{port}/v1/responses"
+    payload = _finite_diagnostic_payload()
+    headers = _diagnostic_headers()
+    for _ in range(DIAGNOSTIC_WARMUPS):
+        status, body, _, _ = _benchmark_request(
+            port, MODELS["responses"], False, "responses"
+        )
+        if status != 200 or not body:
+            raise QualificationError(
+                f"diagnostic warm-up returned HTTP {status} without a body"
+            )
+    provider.start_diagnostic(capacity=samples)
+    observations: list[DiagnosticSample] = []
+    first_cpu = _proc_cpu(process.pid) if process is not None else None
+    started = time.monotonic()
+    try:
+        for sequence in range(1, samples + 1):
+            before = provider.diagnostic_timing_count()
+            status, _, t0_ns, t3_ns, t4_ns, timed_out, last_phase = (
+                _diagnostic_timed_post(url, payload, headers, timeout)
+            )
+            new_timings = _drain_new_provider_timings(provider, before)
+            provider_timing = new_timings[-1] if new_timings else None
+            observations.append(
+                _combine_diagnostic_sample(
+                    sequence,
+                    t0_ns,
+                    provider_timing,
+                    t3_ns,
+                    t4_ns,
+                    status,
+                    timed_out,
+                    last_phase,
+                )
+            )
+    finally:
+        provider.stop_diagnostic()
+    elapsed_seconds = max(time.monotonic() - started, 0.001)
+    second_cpu = _proc_cpu(process.pid) if process is not None else None
+    summary = _diagnostic_phase_summary(observations)
+    return {
+        "status": "measured",
+        "model": MODELS["responses"],
+        "client_surface": "responses",
+        "streaming": False,
+        "warmup_count": DIAGNOSTIC_WARMUPS,
+        "sequential": True,
+        "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
+        "batch_elapsed_ms": round(elapsed_seconds * 1000),
+        "interpretation": (
+            "bounded provider-boundary phase attribution; T0 client start, "
+            "T1 provider receive, T2 provider finish, T3 first byte, T4 done"
+        ),
+        **summary,
+    }
+
+
 def _benchmark_request(
     port: int,
     model: str,
@@ -1201,12 +1632,22 @@ def run_qualification(
     candidate_origin: str = "supplied-candidate",
     build_elapsed_ms: int | None = None,
     benchmark_samples: int = 0,
+    diagnose_finite_tail: int | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
     if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
         raise ValueError(
             f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
         )
+    if diagnose_finite_tail is not None and not (
+        DIAGNOSTIC_MIN_SAMPLES <= diagnose_finite_tail <= DIAGNOSTIC_MAX_SAMPLES
+    ):
+        raise ValueError(
+            "diagnostic sample count must be "
+            f"{DIAGNOSTIC_MIN_SAMPLES}..{DIAGNOSTIC_MAX_SAMPLES}"
+        )
+    if diagnose_finite_tail is not None and benchmark_samples <= 0:
+        raise ValueError("diagnostic finite-tail mode requires benchmark mode")
     benchmark_mode = benchmark_samples > 0
     report: dict[str, Any] = {
         "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
@@ -1536,6 +1977,24 @@ def run_qualification(
                             "concurrency-4 benchmark did not complete all requests"
                         )
                     benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
+                    if diagnose_finite_tail is not None:
+                        benchmark_sample("before-finite-tail-diagnostic")
+                        direct_control = _direct_provider_control(provider)
+                        benchmark["runs"]["direct_provider_control"] = direct_control
+                        finite_tail = _diagnostic_finite_batch(
+                            port,
+                            provider,
+                            diagnose_finite_tail,
+                            benchmark_process,
+                        )
+                        benchmark["runs"]["finite_tail_diagnostic"] = finite_tail
+                        benchmark["finite_tail_diagnostic"] = {
+                            "diagnostic_sample_count": diagnose_finite_tail,
+                            "config_fixture": Path(config_fixture).name,
+                            "direct_control_sample_count": DIRECT_CONTROL_SAMPLES,
+                            "direct_control_warmups": DIRECT_CONTROL_WARMUPS,
+                        }
+                        benchmark_sample("after-finite-tail-diagnostic")
                     benchmark_sample("after-concurrency-4")
                     benchmark_sample(
                         "after-benchmark-stabilization", STABILIZATION_SECONDS
@@ -1806,6 +2265,16 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Run the optional physical-SBC benchmark with 1..100 samples.",
     )
+    parser.add_argument(
+        "--diagnose-finite-tail",
+        type=_diagnose_sample_count,
+        default=None,
+        metavar="N",
+        help=(
+            "Run the diagnostic-only sequential finite-tail batch with 10..200 "
+            "samples; requires --benchmark-samples and the benchmark fixture."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
 
@@ -1821,6 +2290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             candidate_origin=args.candidate_origin,
             build_elapsed_ms=args.build_elapsed_ms,
             benchmark_samples=args.benchmark_samples,
+            diagnose_finite_tail=args.diagnose_finite_tail,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         requested_benchmark = False
