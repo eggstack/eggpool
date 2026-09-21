@@ -151,7 +151,7 @@ impl RoutingRouter {
             self.state.health.as_ref(),
             self.state.quarantine.as_ref(),
             facts,
-            self.state.policy.clone(),
+            &self.state.policy,
             &active,
         );
         drop(catalog);
@@ -319,7 +319,7 @@ impl RoutingRouter {
             self.state.health.as_ref(),
             self.state.quarantine.as_ref(),
             facts,
-            self.state.policy.clone(),
+            &self.state.policy,
             &active,
         );
         candidates.retain(|candidate| !exclude_accounts.contains(&candidate.account_name));

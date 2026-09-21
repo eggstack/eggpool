@@ -92,7 +92,7 @@ cargo test --manifest-path rust/Cargo.toml --test provider_transport -- --test-t
 cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads=1
 ```
 
-Plans 226–228 require comparable release/loopback evidence for parse and
+Plans 230–234 require comparable release/loopback evidence for parse and
 body-copy work. Treat dashboard SQLite, the streaming mpsc bridge, the
 current-thread runtime, and the routing selection lock as measurement targets;
 do not add a second database connection, runtime worker pool, broad queue, or
@@ -116,6 +116,9 @@ before the workspace suite. For Responses streaming changes, also verify native
 unknown-event preservation, item-id/call-id mapping, authoritative
 `response.output_item.done` synthesis, bounded encoder overflow, and strict
 `response.completed`/EOF behavior in `wire_stream` and `wire_runtime`.
+Native observer changes must additionally compare the internal fold summary with
+the public collecting decoder on split frames, unknown events, usage, terminal
+failure, malformed input, and EOF; do not add a second SSE parser.
 Codex compatibility changes additionally run the deterministic
 `codex_responses_compat` target. It covers native request preservation,
 function/freeform/deferred-search wrapper round trips, interleaved
@@ -136,6 +139,17 @@ when live credentials are unavailable.
 Keep post-handoff execution single-owner and incremental while refactoring;
 transparent upstream replay is only valid before `StreamingExecution` is
 returned.
+
+For compact production ownership changes, run `codex_compaction_compat`, the
+finite coordinator C008/C009/C011 plus boundary/finalization/publication
+suites, and verify that public `FiniteRequest` compatibility constructors are
+unchanged. The production endpoint may use a private single-owner compact
+input to avoid duplicating the preserved JSON tree.
+
+Plan 234 release qualification is evidence-gated: confirm Maturin 1.14.1's
+explicit `--strip false` semantics, run the locked release build and artifact
+validators, and treat ThinLTO/stripping as ephemeral experiments unless every
+published target qualifies.
 
 Configuration changes must use `config_reload_policy::classify_transition`.
 Mutation paths should carry the redacted transition into apply logic, while

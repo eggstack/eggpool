@@ -887,17 +887,15 @@ pub async fn execute_compact_finite(
     }
     let mut routing_facts = compact.routing_facts(state.routing_inputs(SURFACE));
     routing_facts.provider_id = resolved.provider_id.clone();
-    let request = FiniteRequest::from_compact_admitted(
-        proxy_request_id,
-        resolved.concrete_body,
-        incoming_headers,
-        compact,
-        routing_facts,
-    )
-    .map_err(|_| EndpointError::Admission)?;
     let execution = state
         .finite
-        .execute(request)
+        .execute_compact_admitted(
+            proxy_request_id,
+            resolved.concrete_body,
+            incoming_headers,
+            compact,
+            routing_facts,
+        )
         .await
         .map_err(map_finite_error)?;
     Ok((execution, resolved.virtual_resolution))

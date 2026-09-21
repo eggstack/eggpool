@@ -46,6 +46,14 @@ portability, and qualification tooling. The most relevant commands are
 `build_connect_artifacts.py`, `create_release_manifest.py`,
 `validate_release_artifacts.py`, and `verify_published_release.py`.
 
+Release footprint qualification keeps the reviewed Maturin 1.14.1 setting
+`strip = false` / `--strip false` unless an otherwise equivalent stripped
+artifact passes executable, wheel, runtime, manifest, and target qualification.
+ThinLTO is an ephemeral comparison only; it is not enabled in the Cargo release
+profile without reproducible size/runtime benefit and complete supported-target
+qualification. SBC characterization is descriptive, not hardware-CI or a
+release threshold.
+
 ## Desktop helper release pipeline
 
 The release workflow builds the proxy wheel/raw pairs (Linux x86_64/aarch64,

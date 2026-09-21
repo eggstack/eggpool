@@ -33,6 +33,11 @@ composition. Start at `architecture/deep-dive-deployment.md` and
 operator procedures. Config examples are `config.example.toml` (full) and
 `config.sbc.example.toml` (low-wear SBC profile).
 
+The reviewed Maturin 1.14.1 release build passes `--strip false` and the
+packaging manifest sets `strip = false`. Stripping or ThinLTO may be adopted
+only after equivalent executable/wheel/runtime and every supported-target
+qualification; a local macOS host is not SBC or Linux target evidence.
+
 ## Safe checks
 
 ```bash

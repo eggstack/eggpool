@@ -180,14 +180,7 @@ pub struct CompactAdmittedRequest {
 
 impl CompactAdmittedRequest {
     pub fn routing_facts(&self, inputs: &StaticRoutingFacts) -> RoutingRequestFacts {
-        let admitted = AdmittedRequest {
-            canonical: self.canonical.clone(),
-            native_preservation: Some(self.native_preservation.clone()),
-            raw_body_bytes: self.raw_body_bytes,
-            reservation_tokens: self.reservation_tokens,
-            context_tokens: self.context_tokens,
-        };
-        routing_request_facts(&admitted, inputs)
+        routing_request_facts_from_parts(&self.canonical, self.reservation_tokens, inputs)
     }
 
     pub fn affinity_identity(&self, explicit_session: Option<&str>) -> AffinityIdentityInput {
@@ -391,15 +384,23 @@ pub fn routing_request_facts(
     admitted: &AdmittedRequest,
     inputs: &StaticRoutingFacts,
 ) -> RoutingRequestFacts {
+    routing_request_facts_from_parts(&admitted.canonical, admitted.reservation_tokens, inputs)
+}
+
+fn routing_request_facts_from_parts(
+    canonical: &CanonicalRequest,
+    reservation_tokens: u64,
+    inputs: &StaticRoutingFacts,
+) -> RoutingRequestFacts {
     let mut facts =
-        RoutingRequestFacts::from_model_id(&admitted.canonical.model, &inputs.known_provider_ids);
+        RoutingRequestFacts::from_model_id(&canonical.model, &inputs.known_provider_ids);
     facts.requested_protocol = inputs.requested_protocol.clone();
-    facts.client_protocol = Some(admitted.canonical.client_surface.protocol().into());
-    facts.request_surface = admitted.canonical.client_surface.as_str().into();
+    facts.client_protocol = Some(canonical.client_surface.protocol().into());
+    facts.request_surface = canonical.client_surface.as_str().into();
     facts.transcode_protocols = inputs.transcode_protocols.clone();
-    facts.projected_tokens = admitted.reservation_tokens.min(i64::MAX as u64) as i64;
+    facts.projected_tokens = reservation_tokens.min(i64::MAX as u64) as i64;
     facts.catalog_stale_after_s = inputs.catalog_stale_after_s;
-    facts.thinking = admitted.canonical.reasoning.to_thinking_requirement();
+    facts.thinking = canonical.reasoning.to_thinking_requirement();
     facts.capability_policy = inputs.capability_policy.clone();
     facts.now = inputs.now;
     facts
@@ -2248,5 +2249,26 @@ mod tests {
         let parsed = parse_request_body(body, options.max_body_bytes).expect("parsed body");
         let from_parsed = admit_compact_parsed_request(parsed, options).expect("parsed admission");
         assert_eq!(from_slice, from_parsed);
+    }
+
+    #[test]
+    fn compact_routing_facts_do_not_depend_on_native_preservation() {
+        let body = bytes::Bytes::from_static(
+            br#"{"model":"compact-model","input":"history","reasoning":{"effort":"high"}}"#,
+        );
+        let compact = admit_compact_request(body.as_ref(), AdmissionOptions::default())
+            .expect("compact admission");
+        let equivalent = AdmittedRequest {
+            canonical: compact.canonical.clone(),
+            native_preservation: Some(compact.native_preservation.clone()),
+            raw_body_bytes: compact.raw_body_bytes,
+            reservation_tokens: compact.reservation_tokens,
+            context_tokens: compact.context_tokens,
+        };
+        let inputs = StaticRoutingFacts::default();
+        assert_eq!(
+            compact.routing_facts(&inputs),
+            equivalent.routing_facts(&inputs)
+        );
     }
 }

@@ -172,6 +172,9 @@ convergence), `attempt.rs` (single prepared/submitted attempt), `failure.rs`
 (`FailureDecisionEngine`, retry legality), `wire_resolver.rs` (bounded
 process-owned wire candidate ordering), `endpoints.rs`/`semantic.rs`/
 `reconciliation.rs` (surface detection, semantic helpers, crash repair hooks).
+The production compact endpoint uses a private single-owner execution input so
+the preserved JSON tree is not duplicated, while public finite constructors
+remain unchanged.
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Retry](deep-dive-retry.md).

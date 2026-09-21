@@ -80,9 +80,15 @@ provider adaptation in `rust/src/wire/ir.rs`; all alternate targets encode
 from that source rather than chaining translated payloads. Native stream
 adapters require provider terminal evidence and never synthesize a terminal
 event from transport EOF. Responses same-surface streams use an incremental
-observer plus raw-byte forwarding so unknown valid events survive unchanged;
+observer/fold sink plus raw-byte forwarding so unknown valid events survive
+unchanged without constructing an unused canonical-event batch;
 cross-surface Responses streams use bounded per-stream encoder state for
 message, reasoning, and function-call item completion.
+
+Remote compaction keeps the public `FiniteRequest` compatibility shape, but the
+production endpoint hands `CompactAdmittedRequest` directly to a private finite
+execution input. This prevents a second source-native JSON tree while sharing
+the ordinary finite retry, publication, wire, and finalization loop.
 
 ## Subsystem ownership
 
@@ -179,6 +185,11 @@ gate, not a substitute for strict Clippy, serial tests, release builds, or
 owner-specific Eggfetch/Eggress/Hyper/Rustls/SQLite qualification. The dedicated
 dependency workflow runs on Cargo/policy changes, weekly, and by manual
 dispatch; ordinary source-only CI remains network-light.
+
+The 2026 residual-efficiency closure (Plans 230–234) keeps the single SQLite
+gate, current-thread runtime, routing selection lock, and streaming handoff.
+Release qualification retains Maturin `--strip false`; a stripped or ThinLTO
+experiment must pass target qualification before changing the shipped profile.
 
 Use the Python tooling environment only for release validators and tooling
 tests. Do not import, run, or recreate the retired application source tree.

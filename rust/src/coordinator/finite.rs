@@ -20,7 +20,9 @@ use crate::{
     accounts::CredentialStore,
     config::ProviderConfig,
     providers::TransportError,
-    request::{AdmissionError, AdmittedRequest, StaticRoutingFacts, admit_request},
+    request::{
+        AdmissionError, AdmittedRequest, CompactAdmittedRequest, StaticRoutingFacts, admit_request,
+    },
     routing::{RoutingRequestFacts, RoutingRouter, SelectionClaim},
     wire::{
         ConfiguredWireProfile, FiniteResponseOutcome, WireRuntime, WireRuntimeContext, WireSurface,
@@ -217,6 +219,85 @@ pub struct FiniteRequest {
     pub routing_facts: RoutingRequestFacts,
     pub operation: super::endpoints::InferenceOperation,
     pub compact_admission: Option<crate::request::CompactAdmittedRequest>,
+}
+
+enum FiniteAdmission {
+    Generate(AdmittedRequest),
+    Compact(Option<CompactAdmittedRequest>),
+}
+
+struct FiniteExecutionInput {
+    proxy_request_id: String,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    request_id: Option<String>,
+    correlation_id: Option<String>,
+    client_surface: ClientSurface,
+    routing_facts: RoutingRequestFacts,
+    operation: super::endpoints::InferenceOperation,
+    admission: FiniteAdmission,
+}
+
+impl FiniteExecutionInput {
+    fn from_public(request: FiniteRequest) -> Self {
+        let FiniteRequest {
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            request_id,
+            correlation_id,
+            client_surface,
+            admitted,
+            routing_facts,
+            operation,
+            compact_admission,
+        } = request;
+        let admission = match operation {
+            super::endpoints::InferenceOperation::Generate => FiniteAdmission::Generate(admitted),
+            super::endpoints::InferenceOperation::Compact => {
+                FiniteAdmission::Compact(compact_admission)
+            }
+        };
+        Self {
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            request_id,
+            correlation_id,
+            client_surface,
+            routing_facts,
+            operation,
+            admission,
+        }
+    }
+
+    fn compact(
+        proxy_request_id: String,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        compact: CompactAdmittedRequest,
+        routing_facts: RoutingRequestFacts,
+    ) -> Self {
+        Self {
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            request_id: None,
+            correlation_id: None,
+            client_surface: ClientSurface::Responses,
+            routing_facts,
+            operation: super::endpoints::InferenceOperation::Compact,
+            admission: FiniteAdmission::Compact(Some(compact)),
+        }
+    }
+
+    fn canonical(&self) -> Option<&crate::wire::ir::CanonicalRequest> {
+        match &self.admission {
+            FiniteAdmission::Generate(admitted) => Some(&admitted.canonical),
+            FiniteAdmission::Compact(Some(compact)) => Some(&compact.canonical),
+            FiniteAdmission::Compact(None) => None,
+        }
+    }
 }
 
 impl FiniteRequest {
@@ -449,8 +530,40 @@ impl FiniteCoordinator {
         &self,
         request: FiniteRequest,
     ) -> Result<FiniteExecution, FiniteCoordinatorError> {
-        if request.admitted.canonical.client_surface != request.client_surface
-            || request.routing_facts.canonical_model_id != request.admitted.canonical.model
+        self.execute_input(FiniteExecutionInput::from_public(request))
+            .await
+    }
+
+    /// Execute a production compact request without constructing the public
+    /// compatibility `FiniteRequest` view. The compact admission remains the
+    /// sole owner of the preserved source-native JSON tree for this path.
+    pub(crate) async fn execute_compact_admitted(
+        &self,
+        proxy_request_id: String,
+        raw_body: Bytes,
+        incoming_headers: HeaderMap,
+        compact: CompactAdmittedRequest,
+        routing_facts: RoutingRequestFacts,
+    ) -> Result<FiniteExecution, FiniteCoordinatorError> {
+        self.execute_input(FiniteExecutionInput::compact(
+            proxy_request_id,
+            raw_body,
+            incoming_headers,
+            compact,
+            routing_facts,
+        ))
+        .await
+    }
+
+    async fn execute_input(
+        &self,
+        request: FiniteExecutionInput,
+    ) -> Result<FiniteExecution, FiniteCoordinatorError> {
+        let Some(canonical) = request.canonical() else {
+            return Err(FiniteCoordinatorError::InvalidFacts);
+        };
+        if canonical.client_surface != request.client_surface
+            || request.routing_facts.canonical_model_id != canonical.model
         {
             return Err(FiniteCoordinatorError::InvalidFacts);
         }
@@ -629,7 +742,7 @@ impl FiniteCoordinator {
             // (source-native preservation plus EggPool-owned model rewrite);
             // unsupported targets fail here, before submission.
             let prepared = if is_compact {
-                let Some(compact_admission) = request.compact_admission.as_ref() else {
+                let FiniteAdmission::Compact(Some(compact_admission)) = &request.admission else {
                     return Err(FiniteCoordinatorError::InvalidFacts);
                 };
                 match self
@@ -662,10 +775,10 @@ impl FiniteCoordinator {
                     }
                 }
             } else {
-                match self
-                    .attempts
-                    .prepare_borrowed(borrowed_input, &request.admitted)
-                {
+                let FiniteAdmission::Generate(admitted) = &request.admission else {
+                    return Err(FiniteCoordinatorError::InvalidFacts);
+                };
+                match self.attempts.prepare_borrowed(borrowed_input, admitted) {
                     Ok(value) => value,
                     Err(error) => {
                         let response = self.error_response(
@@ -1118,7 +1231,7 @@ impl FiniteCoordinator {
                 upstream.status.as_u16(),
                 &context,
                 true,
-                &request.admitted.canonical,
+                canonical,
             ) {
                 Ok(value) => value,
                 Err(error) => {

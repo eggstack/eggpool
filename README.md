@@ -29,6 +29,13 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).
 
+The native hot path is deliberately allocation-aware for lightweight hosts:
+compact routing facts borrow only canonical scalars, production compaction keeps
+one preserved request tree, and native Responses streams fold terminal/usage
+observation while forwarding the original SSE bytes. The single SQLite gate,
+Tokio `current_thread` runtime, routing selection lock, and post-handoff stream
+owner remain evidence-gated boundaries rather than tunable concurrency knobs.
+
 ## Quick Start
 
 ```bash
@@ -452,6 +459,11 @@ pre-handoff coordination, post-handoff execution, terminal classification,
 timeout policy, request types, and bounded diagnostics; its `mod.rs` preserves
 the public import facade. The coordinator and wire layers remain the
 authorities for inference execution and stream terminal semantics.
+
+The release footprint policy is qualification-driven. Maturin 1.14.1 is pinned
+with stripping disabled for the reviewed artifact contract; ThinLTO is not
+enabled by default. SBC measurements are descriptive and are recorded only for
+an actual Raspberry Pi-class target.
 
 ## Development
 

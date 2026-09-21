@@ -1,7 +1,7 @@
 # Plan 231 — Compact Routing and Selection Allocation Cleanup
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: 3b9b63861e554161c152520491e0bd050c864f02
 Parent roadmap: plans/230-residual-native-runtime-efficiency-roadmap.md
 Priority: P1 deterministic request-path allocation reduction
@@ -206,11 +206,27 @@ Stop rather than widening the plan if:
 
 ## Completion criteria
 
-- [ ] compact routing-fact construction no longer clones NativeRequestPreservation;
-- [ ] existing public routing/admission methods remain source compatible;
-- [ ] effective capability policy is selected once by reference;
-- [ ] EligibilityPolicy is not cloned unnecessarily on the hot selection path where a borrow is sufficient;
-- [ ] any additional scoring collection cleanup is small and parity-proven, or explicitly deferred;
-- [ ] routing/fairness/quota/compact tests pass;
-- [ ] no HTTP, CLI, config, persistence, provider, retry, or health contract changes;
-- [ ] closure evidence records the removed allocations and final commit SHA.
+- [x] compact routing-fact construction no longer clones NativeRequestPreservation;
+- [x] existing public routing/admission methods remain source compatible;
+- [x] effective capability policy is selected once by reference;
+- [x] EligibilityPolicy is not cloned unnecessarily on the hot selection path where a borrow is sufficient;
+- [x] additional scoring collection cleanup was deferred to preserve the deterministic public scorer contract;
+- [x] routing/fairness/quota/compact tests pass;
+- [x] no HTTP, CLI, config, persistence, provider, retry, or health contract changes;
+- [x] closure evidence records the removed allocations and implementation commit.
+
+## Closure evidence
+
+The compact helper now derives routing facts directly from canonical request
+and token fields; it never clones `NativeRequestPreservation`. Eligibility
+selects one borrowed effective capability policy before iterating accounts, and
+the router borrows its immutable `EligibilityPolicy` instead of cloning it per
+selection call. The transient scoring collections remain unchanged because
+their ordered public behavior is already covered and a broader rewrite was not
+justified.
+
+Focused evidence: `canonical_request`, `codex_compaction_compat`,
+`routing_domain`, `routing_domain_d008`, `routing_claims`, `quota`,
+`coordinator_c009`, `coordinator_c011`, and `coordinator_boundaries` all pass
+with serial tests. No public request/routing type or selection-lock boundary
+changed.

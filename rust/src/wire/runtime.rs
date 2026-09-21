@@ -1347,6 +1347,14 @@ impl WireStream {
         })
     }
 
+    pub(crate) fn observe_native_push(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<super::stream::NativeStreamObservation, WireRuntimeError> {
+        self.bytes_observed = self.bytes_observed.saturating_add(bytes.len());
+        self.decoder.observe_native_push(bytes).map_err(Into::into)
+    }
+
     pub fn finalize(&mut self) -> Result<StreamFinalization, WireRuntimeError> {
         let (events, terminal) = self.decoder.finalize_events()?;
         Ok(StreamFinalization {
@@ -1360,6 +1368,10 @@ impl WireStream {
             },
             terminal,
         })
+    }
+
+    pub(crate) fn finalize_native(&mut self) -> Result<StreamTerminalSummary, WireRuntimeError> {
+        self.decoder.finalize_observed().map_err(Into::into)
     }
 
     pub fn usage(&self) -> Option<CanonicalUsage> {

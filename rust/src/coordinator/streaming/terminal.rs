@@ -284,32 +284,42 @@ pub(crate) fn store_eof(
     let summary = if let Some(stream) = parts.stream.as_mut()
         && let Some(wire) = stream.wire.as_mut()
     {
-        match wire.finalize() {
-            Ok(finalization) => {
-                tail_usage = finalization.usage.clone();
-                for event in &finalization.events {
-                    if matches!(
-                        event.event_type,
-                        CanonicalEventType::ResponseComplete
-                            | CanonicalEventType::ResponseIncomplete
-                            | CanonicalEventType::Error
-                    ) {
-                        stream.saw_terminal_event = true;
-                    }
-                    if wire.forwarding_mode() == StreamForwardingMode::Translated
-                        && let Ok(bytes) = wire.encode_client_event_stateful(event)
-                        && !bytes.is_empty()
-                    {
-                        stream.events_forwarded = stream.events_forwarded.saturating_add(1);
-                        tail_bytes.extend_from_slice(&bytes);
-                    }
+        if wire.forwarding_mode() == StreamForwardingMode::NativeObserved {
+            match wire.finalize_native() {
+                Ok(summary) => {
+                    tail_usage = summary.usage.clone();
+                    stream.saw_terminal_event |= summary.saw_terminal_event;
+                    Some(summary)
                 }
-                if !tail_bytes.is_empty() {
-                    stream.client_bytes = stream.client_bytes.saturating_add(tail_bytes.len());
-                }
-                Some(finalization.terminal.clone())
+                Err(_) => None,
             }
-            Err(_) => None,
+        } else {
+            match wire.finalize() {
+                Ok(finalization) => {
+                    tail_usage = finalization.usage.clone();
+                    for event in &finalization.events {
+                        if matches!(
+                            event.event_type,
+                            CanonicalEventType::ResponseComplete
+                                | CanonicalEventType::ResponseIncomplete
+                                | CanonicalEventType::Error
+                        ) {
+                            stream.saw_terminal_event = true;
+                        }
+                        if let Ok(bytes) = wire.encode_client_event_stateful(event)
+                            && !bytes.is_empty()
+                        {
+                            stream.events_forwarded = stream.events_forwarded.saturating_add(1);
+                            tail_bytes.extend_from_slice(&bytes);
+                        }
+                    }
+                    if !tail_bytes.is_empty() {
+                        stream.client_bytes = stream.client_bytes.saturating_add(tail_bytes.len());
+                    }
+                    Some(finalization.terminal.clone())
+                }
+                Err(_) => None,
+            }
         }
     } else {
         None

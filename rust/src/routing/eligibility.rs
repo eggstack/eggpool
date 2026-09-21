@@ -214,11 +214,16 @@ pub fn build_eligible_candidates(
     health: Option<&HealthManager>,
     quarantine: Option<&ModelQuarantine>,
     facts: &RoutingRequestFacts,
-    policy: EligibilityPolicy,
+    policy: &EligibilityPolicy,
     active_requests: &BTreeMap<String, i64>,
 ) -> (Vec<RoutingCandidate>, Vec<RoutingExclusion>) {
     let mut eligible = Vec::new();
     let mut exclusions = Vec::new();
+    let capability_policy = if facts.capability_policy.is_empty() {
+        &policy.capability_policy
+    } else {
+        &facts.capability_policy
+    };
     for identity in registry.all() {
         let Some(candidate) = candidate_for_account(
             identity,
@@ -228,11 +233,7 @@ pub fn build_eligible_candidates(
             quarantine,
             facts,
             policy.local_quota_mode,
-            &if facts.capability_policy.is_empty() {
-                policy.capability_policy.clone()
-            } else {
-                facts.capability_policy.clone()
-            },
+            capability_policy,
             &mut exclusions,
         ) else {
             continue;

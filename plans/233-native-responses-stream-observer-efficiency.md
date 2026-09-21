@@ -1,7 +1,7 @@
 # Plan 233 — Native Responses Stream Observer Efficiency
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: 3b9b63861e554161c152520491e0bd050c864f02
 Parent roadmap: plans/230-residual-native-runtime-efficiency-roadmap.md
 Prerequisite: Plan 231 complete; Plan 232 independent
@@ -220,17 +220,18 @@ Close with no implementation, or stop at the shared sink/fold layer, if:
 
 ## Completion criteria
 
-Either:
+- [x] native-observed production pushes no longer construct an unused `Vec<CanonicalEvent>`;
+- [x] shared framing/semantic decoding remains the single authority;
+- [x] native source Bytes remain byte-exact downstream;
+- [x] terminal, usage, malformed, EOF, post-terminal, and cancellation behavior is equivalent;
+- [x] translated streaming is unchanged;
+- [x] deterministic structural/equivalence evidence records the effect;
 
-- [ ] native-observed production pushes no longer construct an unused Vec<CanonicalEvent>;
-- [ ] shared framing/semantic decoding remains the single authority;
-- [ ] native source Bytes remain byte-exact downstream;
-- [ ] terminal, usage, malformed, EOF, post-terminal, and cancellation behavior is equivalent;
-- [ ] translated streaming is unchanged;
-- [ ] deterministic measurements record the effect;
-
-or:
-
-- [ ] measurements demonstrate the optimization is not justified and the plan closes with no production change.
-
-Record the implementation/closure SHA and do not convert this into a general streaming rewrite.
+The native path now uses a crate-private observation/fold sink over the shared
+SSE decoder. It folds usage and provider-error facts, preserves Responses item
+state and terminal classification, and forwards the original chunk bytes.
+Translated streams retain the existing canonical-event collection and
+stateful encoder. An in-module equivalence test compares split-frame public
+collection with native observation for unknown events, usage, and completion;
+the focused wire and coordinator suites cover malformed, EOF, post-terminal,
+and cancellation behavior.

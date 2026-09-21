@@ -45,6 +45,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   migration scaffolding; current docs must describe the shipped Rust runtime.
   New plans follow the `plans/` lifecycle in the `plan` skill; do not invent a
   second numbering or status scheme.
+- Record performance-closure decisions in the relevant plan and current
+  architecture/deployment docs: the compact private ownership boundary, native
+  Responses observation fold, intentionally retained SQLite/current-thread/
+  routing-lock/stream-handoff boundaries, and any stripping or ThinLTO keep/
+  change decision. Mark unavailable SBC dimensions as `not measured`.
 - Never document Python-era runtime details as current: no ASGI server, no
   `yield`/`json.dumps`/`_execute_streaming`/`_build_stream_generator` internals,
   no `self._`-style Python fields, no `tests/unit/*.py` paths. The streaming

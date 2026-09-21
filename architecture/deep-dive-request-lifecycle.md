@@ -71,6 +71,12 @@ v2 capability and otherwise fail with `UnsupportedSemanticFeature`; they are
 never treated as user text. Native no-rewrite compact dispatch transfers the
 owned ingress `Bytes` handle; provider-qualified or virtual model resolution
 serializes once only when the EggPool-owned `model` field changes.
+The production compact endpoint then passes the single
+`CompactAdmittedRequest` into a crate-private finite execution input. The
+public `FiniteRequest::new_compact` and `from_compact_admitted` constructors
+retain their historical dual-view shape for compatibility callers, but the
+production path does not clone that preserved JSON tree into an
+`AdmittedRequest`.
 
 ### Streaming ownership
 
@@ -96,8 +102,10 @@ builds bounded finalization facts; it does not parse provider events itself.
 
 `WireStream` selects an explicit output mode from the client/upstream surface
 compatibility path. Native Responses-to-Responses streams feed each raw chunk
-through the incremental SSE observer, then forward the original bytes without
-reconstructing known events; valid unknown event types are therefore preserved.
+through the shared incremental SSE decoder's bounded observation sink, then
+forward the original bytes without reconstructing a discarded canonical-event
+batch; valid unknown event types are therefore preserved. Translated streams
+retain the collecting canonical-event sink and stateful encoder.
 Canonical adaptation uses a stateful encoder owned by that stream. It retains
 only bounded active message, reasoning, and tool-call buffers, allocates a
 stable response ID and output indexes, maps Responses item IDs back to

@@ -1,7 +1,7 @@
 # Plan 230 — Residual Native Runtime Efficiency Roadmap
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: 3b9b63861e554161c152520491e0bd050c864f02
 Parent context: completed Plans 225–229
 Priority: P1 residual allocation/CPU efficiency with evidence-gated streaming and packaging follow-up
@@ -147,3 +147,15 @@ This roadmap is complete when:
 ## Handoff note
 
 The correct result of this campaign may be small. EggPool is already past the stage where architectural complexity is justified by speculative throughput. Remove obvious ownership waste, measure the remaining hot spots, and stop when evidence no longer supports additional machinery.
+
+## Closure summary
+
+Plans 231–233 removed the proven compact routing and capability-policy clones,
+gave production compaction a single preserved-tree owner behind a private
+finite-input boundary, and replaced the native Responses stream's discarded
+canonical-event batch with a shared decoder observation sink. Plan 234 retained
+the current-thread runtime, SQLite gate, routing selection lock, bounded stream
+handoff, unstripped reviewed release profile, and no ThinLTO after local
+qualification. SBC and loopback percentile data were not measured on the
+available host; this campaign added no benchmark framework, hardware CI,
+second parser, or concurrency authority.

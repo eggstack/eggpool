@@ -1,7 +1,7 @@
 # Plan 232 — Compact Production Dual-View Memory Cleanup
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: 3b9b63861e554161c152520491e0bd050c864f02
 Parent roadmap: plans/230-residual-native-runtime-efficiency-roadmap.md
 Prerequisite: Plan 231 complete
@@ -202,16 +202,21 @@ Do not use Arc<Value> in public structures as a shortcut.
 
 ## Completion criteria
 
-Either:
+- [x] production compact execution owns one preserved parsed JSON tree;
+- [x] the public FiniteRequest compatibility surface is unchanged;
+- [x] ordinary finite execution remains unchanged;
+- [x] Plan 229 native Bytes ownership remains true;
+- [x] compact routing/retry/finalization/wire tests pass;
 
-- [ ] production compact execution owns one preserved parsed JSON tree;
-- [ ] the public FiniteRequest compatibility surface is unchanged;
-- [ ] ordinary finite execution remains unchanged;
-- [ ] Plan 229 native Bytes ownership remains true;
-- [ ] compact routing/retry/finalization/wire tests pass;
+The production endpoint now transfers `CompactAdmittedRequest` to a private
+`FiniteExecutionInput` admission enum. The public `FiniteRequest` fields and
+constructors remain unchanged and still provide the historical compatibility
+view, while production compact retries, publication, wire preparation, and
+finalization share one finite loop without cloning the preserved JSON tree.
 
-or:
-
-- [ ] the plan closes with evidence explaining why removing the duplicate would require disproportionate public/lifecycle change and no implementation is justified.
-
-In both cases record the final commit/evidence and do not leave an ambiguous partially migrated execution representation.
+Focused evidence: `codex_compaction_compat`, `codex_responses_compat`,
+`coordinator_c008`, `coordinator_c009`, `coordinator_c011`,
+`coordinator_boundaries`, `coordinator_finalization`,
+`coordinator_publication`, `wire_runtime`, and `wire_qualification` all pass
+with serial tests. The ownership boundary is structural; no pointer-identity
+assertion or public field-type change was introduced.

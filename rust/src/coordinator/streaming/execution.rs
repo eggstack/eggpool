@@ -377,6 +377,21 @@ impl ActiveStream {
             self.client_bytes = self.client_bytes.saturating_add(chunk.len());
             return ChunkDecode::Forward(chunk, false);
         };
+        if wire.forwarding_mode() == StreamForwardingMode::NativeObserved {
+            let observed = match wire.observe_native_push(&chunk) {
+                Ok(observed) => observed,
+                Err(_) => {
+                    // Malformed provider chunk: skip it without forwarding,
+                    // keep the bounded error count, and let EOF
+                    // classification report malformed.
+                    self.malformed_chunks = self.malformed_chunks.saturating_add(1);
+                    return ChunkDecode::Skip;
+                }
+            };
+            self.saw_terminal_event |= observed.saw_terminal_event;
+            self.client_bytes = self.client_bytes.saturating_add(chunk.len());
+            return ChunkDecode::Forward(chunk, observed.saw_terminal_event);
+        }
         let pushed = match wire.push(&chunk) {
             Ok(pushed) => pushed,
             Err(_) => {
@@ -388,19 +403,6 @@ impl ActiveStream {
                 return ChunkDecode::Skip;
             }
         };
-        if wire.forwarding_mode() == StreamForwardingMode::NativeObserved {
-            let saw_terminal = pushed.events.iter().any(|event| {
-                matches!(
-                    event.event_type,
-                    CanonicalEventType::ResponseComplete
-                        | CanonicalEventType::ResponseIncomplete
-                        | CanonicalEventType::Error
-                )
-            });
-            self.saw_terminal_event |= saw_terminal;
-            self.client_bytes = self.client_bytes.saturating_add(chunk.len());
-            return ChunkDecode::Forward(chunk, saw_terminal);
-        }
         let mut out = Vec::new();
         let mut saw_terminal = false;
         for event in &pushed.events {

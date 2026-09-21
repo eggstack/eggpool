@@ -134,4 +134,12 @@ constructs finite/streaming requests through `from_admitted`. Borrowed
 `AttemptPreparation` values end before provider I/O; `PreparedUpstreamAttempt`
 must be fully owned at that boundary. `ProviderClientPool` uses an immutable
 nested topology with an atomic close swap. Keep SQLite, stream-bridge, Tokio
-runtime, and routing-lock changes evidence-gated under Plans 226–228.
+runtime, and routing-lock changes evidence-gated under Plans 230–234 (with
+Plans 226–229 as historical authority).
+
+Production compact execution is the exception to the public finite dual-view
+compatibility shape: the endpoint may hand one `CompactAdmittedRequest` to a
+private finite execution input, but public `FiniteRequest` constructors and
+field types stay unchanged. Native Responses streaming uses the shared SSE
+decoder with a bounded observation/fold sink and forwards the original bytes;
+translated streams retain canonical event collection and stateful encoding.

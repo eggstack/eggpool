@@ -85,10 +85,14 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   `ProviderClientPool` publishes an immutable nested provider/account topology
   and closes it atomically; do not reintroduce per-request topology mutexes or
   allocated tuple lookup keys.
-- The performance campaign in Plans 226–228 is evidence-gated. Keep the
+- The residual performance campaign in Plans 230–234 is evidence-gated. Keep the
   single SQLite gate, streaming mpsc bridge, Tokio `current_thread` runtime,
   and routing selection lock unless comparable loopback measurements justify a
-  narrowly scoped change.
+  narrowly scoped change. Compact production execution may use its private
+  single-owner admission representation, but public `FiniteRequest` and
+  `CompactAdmittedRequest` shapes remain compatibility surfaces. Native
+  Responses observation must share the canonical SSE decoder and fold bounded
+  terminal/usage facts without buffering arbitrary native streams.
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing. Default SSH is the root `ssh` capability forwarded to

@@ -18,6 +18,13 @@ Claims and reservations are released on every terminal path. Quarantine,
 backoff, and capability gates are evaluated before selection and remain scoped
 to the provider/model facts that produced them.
 
+Eligibility selects the effective capability policy once by reference before
+the account iteration. Request-provided policy overrides configured policy,
+empty request policy falls back to configuration, and deterministic scoring
+collections remain ordered `BTreeMap`-based. The selection lock still covers
+the synchronous claim/quota/fairness transaction; no provider or SQLite await
+enters it.
+
 ## Shared crate contract
 
 EggPool owns `eggpool-model-routing`; Codegg is a pinned downstream consumer.

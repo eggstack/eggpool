@@ -369,6 +369,39 @@ pub enum StreamError {
     MalformedEvent(CodecReasonCode),
 }
 
+trait CanonicalEventSink {
+    fn push(&mut self, event: CanonicalEvent);
+}
+
+impl CanonicalEventSink for Vec<CanonicalEvent> {
+    fn push(&mut self, event: CanonicalEvent) {
+        Vec::push(self, event);
+    }
+}
+
+#[derive(Debug, Default)]
+struct NativeObservationSink {
+    usage: UsageAccumulator,
+    saw_error: bool,
+}
+
+impl CanonicalEventSink for NativeObservationSink {
+    fn push(&mut self, event: CanonicalEvent) {
+        if let Some(usage) = event.usage.as_ref() {
+            self.usage
+                .merge(usage, matches!(event.event_type, CanonicalEventType::Usage));
+        }
+        self.saw_error |= event.event_type == CanonicalEventType::Error;
+    }
+}
+
+/// Bounded facts observed by the native Responses streaming path without
+/// materializing a discarded canonical-event batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeStreamObservation {
+    pub(crate) saw_terminal_event: bool,
+}
+
 /// Incremental canonical event decoder and usage/terminal observer.
 pub struct StreamEventDecoder {
     adapter: StreamAdapterKind,
@@ -444,9 +477,44 @@ impl StreamEventDecoder {
         self.decode_frames(frames)
     }
 
+    pub(crate) fn observe_native_push(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<NativeStreamObservation, StreamError> {
+        if self.finalized {
+            return Err(StreamError::Framing(SseDecodeError::Finished));
+        }
+        self.bytes_observed = self.bytes_observed.saturating_add(bytes.len());
+        let frames = match self.framing.feed(bytes) {
+            Ok(frames) => frames,
+            Err(error) => {
+                self.framing_error = true;
+                return Err(error.into());
+            }
+        };
+        let saw_terminal_event = self.observe_frames(frames)?;
+        Ok(NativeStreamObservation { saw_terminal_event })
+    }
+
     pub fn finalize(&mut self) -> Result<StreamTerminalSummary, StreamError> {
         let (_, summary) = self.finalize_events()?;
         Ok(summary)
+    }
+
+    pub(crate) fn finalize_observed(&mut self) -> Result<StreamTerminalSummary, StreamError> {
+        if self.finalized {
+            return Ok(self.summary(false));
+        }
+        self.finalized = true;
+        let result = match self.framing.finish() {
+            Ok(result) => result,
+            Err(error) => {
+                self.framing_error = true;
+                return Err(error.into());
+            }
+        };
+        let _ = self.observe_frames(result.frames)?;
+        Ok(self.summary(result.incomplete_frame))
     }
 
     /// Flush framing and return events found in the final partial record.
@@ -519,6 +587,40 @@ impl StreamEventDecoder {
         Ok(events)
     }
 
+    fn observe_frames(&mut self, frames: Vec<SseFrame>) -> Result<bool, StreamError> {
+        let mut saw_terminal_event = false;
+        for frame in frames {
+            if frame.is_comment_only || !frame.fields.iter().any(|(name, _)| name == "data") {
+                continue;
+            }
+            if !frame.data.is_empty() {
+                self.saw_payload = true;
+            }
+            if self.saw_terminal_event && !frame.data.is_empty() {
+                self.post_terminal_data = true;
+            }
+            let mut frame_value = Map::new();
+            frame_value.insert("data".into(), Value::String(frame.data.clone()));
+            if let Some(event) = &frame.event {
+                frame_value.insert("event".into(), Value::String(event.clone()));
+            }
+            let mut sink = NativeObservationSink::default();
+            if let Err(error) = decode_stream_event_into(
+                self.adapter,
+                &Value::Object(frame_value),
+                self.responses.as_mut(),
+                &mut sink,
+            ) {
+                self.parser_error_count += 1;
+                self.framing_error = true;
+                return Err(StreamError::MalformedEvent(error.reason));
+            }
+            self.usage.absorb(&sink.usage);
+            saw_terminal_event |= self.observe_native_terminal(&frame, sink.saw_error);
+        }
+        Ok(saw_terminal_event)
+    }
+
     fn observe_terminal(&mut self, frame: &SseFrame, events: &[CanonicalEvent]) {
         let event_name = frame.event.as_deref().unwrap_or_default();
         let data_done = frame.data.trim() == "[DONE]";
@@ -574,6 +676,31 @@ impl StreamEventDecoder {
             self.evidence = Some(TerminalEvidence::ProviderError);
             self.saw_terminal_event = true;
         }
+    }
+
+    fn observe_native_terminal(&mut self, frame: &SseFrame, saw_error: bool) -> bool {
+        let event_name = frame.event.as_deref().unwrap_or_default();
+        let evidence = match event_name {
+            "response.completed" => Some(TerminalEvidence::ResponsesCompleted),
+            "response.incomplete" => Some(TerminalEvidence::ResponsesIncomplete),
+            "response.failed" => Some(TerminalEvidence::ResponsesFailed),
+            "error" => Some(TerminalEvidence::ProviderError),
+            _ => None,
+        };
+        let observed = evidence.is_some() || saw_error;
+        if let Some(evidence) = evidence {
+            if self.saw_terminal_event {
+                self.post_terminal_data = true;
+            } else {
+                self.evidence = Some(evidence);
+                self.saw_terminal_event = true;
+            }
+        }
+        if saw_error {
+            self.evidence = Some(TerminalEvidence::ProviderError);
+            self.saw_terminal_event = true;
+        }
+        observed
     }
 
     fn summary(&self, incomplete_frame_at_eof: bool) -> StreamTerminalSummary {
@@ -653,6 +780,13 @@ impl UsageAccumulator {
 
     fn value(&self) -> Option<CanonicalUsage> {
         self.present.then(|| self.value.clone())
+    }
+
+    fn absorb(&mut self, incoming: &Self) {
+        if !incoming.present {
+            return;
+        }
+        self.merge(&incoming.value, incoming.complete);
     }
 }
 
@@ -876,41 +1010,47 @@ fn decode_stream_event_with_state(
     frame: &Value,
     responses: Option<&mut ResponsesDecoderState>,
 ) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
+    let mut events = Vec::new();
+    decode_stream_event_into(adapter, frame, responses, &mut events)?;
+    Ok(CodecOutput::new(events))
+}
+
+fn decode_stream_event_into<S: CanonicalEventSink>(
+    adapter: StreamAdapterKind,
+    frame: &Value,
+    responses: Option<&mut ResponsesDecoderState>,
+    events: &mut S,
+) -> Result<(), CodecError> {
     let frame_object = frame
         .as_object()
         .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))?;
     let (payload, marker) = payload_value(frame)?;
     let name = event_name(frame_object, &payload);
-    let mut events = Vec::new();
     if marker.as_deref() == Some("[DONE]") {
         if adapter == StreamAdapterKind::OpenaiChatSse {
             events.push(canonical_event(CanonicalEventType::ResponseComplete));
         }
-        return Ok(CodecOutput::new(events));
+        return Ok(());
     }
     match adapter {
-        StreamAdapterKind::OpenaiChatSse => decode_openai_chat(frame_object, &payload, &mut events),
+        StreamAdapterKind::OpenaiChatSse => decode_openai_chat(frame_object, &payload, events),
         StreamAdapterKind::OpenaiResponsesSse => {
-            decode_openai_responses(frame_object, &payload, &mut events, responses)
+            decode_openai_responses(frame_object, &payload, events, responses)
         }
-        StreamAdapterKind::AnthropicMessagesSse => {
-            decode_anthropic(frame_object, &payload, &mut events)
-        }
+        StreamAdapterKind::AnthropicMessagesSse => decode_anthropic(frame_object, &payload, events),
         StreamAdapterKind::GeminiInteractionsSse => {
-            decode_interactions(frame_object, &payload, &mut events)
+            decode_interactions(frame_object, &payload, events)
         }
-        StreamAdapterKind::GeminiGenerateContentSse => {
-            decode_generate_content(&payload, &mut events)
-        }
+        StreamAdapterKind::GeminiGenerateContentSse => decode_generate_content(&payload, events),
     }
     let _ = name;
-    Ok(CodecOutput::new(events))
+    Ok(())
 }
 
-fn decode_openai_chat(
+fn decode_openai_chat<S: CanonicalEventSink>(
     frame: &Map<String, Value>,
     payload: &Map<String, Value>,
-    events: &mut Vec<CanonicalEvent>,
+    events: &mut S,
 ) {
     if frame.get("data").and_then(Value::as_str) == Some("[DONE]") {
         return;
@@ -987,10 +1127,10 @@ fn decode_openai_chat(
     }
 }
 
-fn decode_openai_responses(
+fn decode_openai_responses<S: CanonicalEventSink>(
     _frame: &Map<String, Value>,
     payload: &Map<String, Value>,
-    events: &mut Vec<CanonicalEvent>,
+    events: &mut S,
     state: Option<&mut ResponsesDecoderState>,
 ) {
     let name = string(_frame.get("event"))
@@ -1100,10 +1240,10 @@ fn decode_openai_responses(
     }
 }
 
-fn decode_anthropic(
+fn decode_anthropic<S: CanonicalEventSink>(
     frame: &Map<String, Value>,
     payload: &Map<String, Value>,
-    events: &mut Vec<CanonicalEvent>,
+    events: &mut S,
 ) {
     let name = string(frame.get("event"))
         .or_else(|| string(payload.get("type")))
@@ -1177,10 +1317,10 @@ fn decode_anthropic(
     }
 }
 
-fn decode_interactions(
+fn decode_interactions<S: CanonicalEventSink>(
     frame: &Map<String, Value>,
     payload: &Map<String, Value>,
-    events: &mut Vec<CanonicalEvent>,
+    events: &mut S,
 ) {
     let name = string(frame.get("event"))
         .or_else(|| string(payload.get("event_type")))
@@ -1257,7 +1397,7 @@ fn decode_interactions(
     }
 }
 
-fn decode_generate_content(payload: &Map<String, Value>, events: &mut Vec<CanonicalEvent>) {
+fn decode_generate_content<S: CanonicalEventSink>(payload: &Map<String, Value>, events: &mut S) {
     if let Some(candidate) = array(payload.get("candidates"))
         .and_then(|items| items.first())
         .and_then(Value::as_object)
@@ -2228,5 +2368,32 @@ fn canonical_event_name(event_type: CanonicalEventType) -> &'static str {
 impl fmt::Display for TerminalEvidence {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{:?}", self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome};
+
+    #[test]
+    fn native_observation_matches_public_responses_terminal_and_usage_state() {
+        let source = concat!(
+            "event: response.future_event\n",
+            "data: {\"type\":\"response.future_event\",\"future\":true}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n",
+        );
+        let mut public = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+        let mut native = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+        for chunk in source.as_bytes().chunks(7) {
+            let _ = public.push(chunk).expect("public decoder");
+            native.observe_native_push(chunk).expect("native observer");
+        }
+        let public_summary = public.finalize().expect("public finalize");
+        let native_summary = native.finalize_observed().expect("native finalize");
+        assert_eq!(public_summary.outcome, StreamTerminalOutcome::Success);
+        assert_eq!(native_summary, public_summary);
     }
 }

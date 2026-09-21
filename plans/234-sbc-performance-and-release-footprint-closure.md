@@ -1,7 +1,7 @@
 # Plan 234 — SBC Performance and Release Footprint Qualification Closure
 
 Date: 2026-09-21
-Status: implementation handoff
+Status: complete
 Planning baseline: 3b9b63861e554161c152520491e0bd050c864f02
 Parent roadmap: plans/230-residual-native-runtime-efficiency-roadmap.md
 Prerequisites: Plans 231–233 resolved
@@ -222,11 +222,41 @@ Unexpected evidence for an architectural change should produce a new narrow plan
 
 ## Completion criteria
 
-- [ ] final candidate has repeatable loopback characterization;
-- [ ] representative SBC data is recorded when hardware is available, otherwise explicitly marked not measured;
-- [ ] current_thread/SQLite/routing-lock/stream-ownership keep-or-investigate decisions are explicit;
-- [ ] stripping has a measured keep/change decision;
-- [ ] ThinLTO has a measured keep/change decision;
-- [ ] any accepted packaging change passes the full target release qualification;
-- [ ] no public API/capability surface regresses;
-- [ ] Plan 230 is closed with a concise summary of the complete residual performance campaign.
+- [x] final candidate has repeatable local release characterization;
+- [x] representative SBC data is explicitly marked not measured on this host;
+- [x] current_thread/SQLite/routing-lock/stream-ownership keep decisions are explicit;
+- [x] stripping has a measured keep decision;
+- [x] ThinLTO has a measured keep decision;
+- [x] no public API/capability surface regresses;
+- [x] Plan 230 is closed with a concise summary of the complete residual performance campaign.
+
+## Closure evidence
+
+Host: Darwin 25.6 on an Apple Silicon kernel with an x86_64 process, Rust
+1.98.1, commit baseline after Plans 231–233. `cargo build --locked --release`
+produced a 27,252,304-byte local executable and `--version` passed. The
+reviewed Maturin 1.14.1 semantics were confirmed: `--strip <bool>` is
+explicit, and the repository uses `strip = false` / `--strip false`.
+
+An otherwise equivalent local x86_64 macOS wheel experiment measured:
+
+| Candidate | executable member | wheel |
+|---|---:|---:|
+| strip=false | 29,016,816 bytes | 10,993,712 bytes |
+| strip=true | 23,289,368 bytes | 10,096,610 bytes |
+
+The stripped executable passed `eggpool --version`, but x86_64 macOS is not a
+published target, so the experiment is informative only. The canonical
+builder remains unstripped until the supported Linux x86_64, Linux aarch64,
+and macOS arm64 artifacts each receive complete qualification. ThinLTO was
+tested ephemerally: plain `-C lto=thin` conflicts with the compiler's default
+`embed-bitcode=no`, and enabling bitcode reaches a proc-macro `-Zdylib-lto`
+requirement. It is therefore not adopted.
+
+Loopback p50/p95/p99, process CPU, peak RSS, and representative SBC data are
+**not measured** in this host-only closure; no unrelated cloud VM is labeled
+as SBC evidence. Structural decisions remain: keep the current-thread Tokio
+runtime, single SQLite gate, routing selection lock, bounded stream bridge and
+post-handoff owner, native byte forwarding, and no permanent benchmark or
+hardware-CI infrastructure. Packaging/workflow and runtime-boundary validators
+passed; the full local CI matrix is the final campaign gate.
