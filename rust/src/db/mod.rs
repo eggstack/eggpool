@@ -5,12 +5,20 @@
 
 mod connection;
 pub mod migrations;
+#[cfg(feature = "qualification-db-diagnostics")]
+mod qualification;
 pub mod repositories;
 
 pub use connection::{
     Database, DatabaseConfig, DatabaseError, DatabaseStats, DatabaseTransaction,
     RetentionCleanupPolicy, RetentionCleanupReport,
 };
+#[cfg(feature = "qualification-db-diagnostics")]
+pub use qualification::{
+    QualificationDbSnapshot, QualificationEffectivePragmas, QualificationTransactionRecord,
+};
+
+pub(crate) use connection::TransactionKind;
 pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{
     Account, AccountConfig, AccountModelSupport, AccountRepository, CatalogModel,

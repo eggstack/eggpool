@@ -188,6 +188,15 @@ temporary-filesystem passes if the tail reproduces. Treat missing physical
 SBC or tmpfs dimensions as `not measured`; any runtime change requires a new
 plan.
 
+Plan 239's publication-phase mode is also qualification-only. Build a separate
+candidate with the non-default `qualification-db-diagnostics` feature, run
+`--diagnose-publication-phases` for the 60-request H0 baseline, and use
+`--qualification-wal-autocheckpoint-pages 0` for H1. H2 at `256` is conditional
+on the observed H0/H1 result. The feature is never enabled by release/package
+workflows; its in-memory records and authenticated runtime projection are not
+operator capabilities. Preserve the ordinary release candidate separately and
+record unavailable physical dimensions as `not measured`.
+
 Hosted ARM VMs, emulation, Rosetta/translation, and cloud ARM instances are
 not physical SBC evidence. If the translated fixture route is not accepted or
 a measurement dimension is unavailable, record `not measured`; do not weaken

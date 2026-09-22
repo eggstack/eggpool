@@ -531,6 +531,17 @@ temporary filesystem with `--diagnostic-database-dir DIR`. It does not change
 runtime behavior or claim physical-SBC evidence when the hardware gate is not
 available; record unavailable dimensions as `not measured`.
 
+Plan 239 adds a separate qualification-feature build for transaction-phase
+localization. Build it with
+`--features qualification-db-diagnostics`, then run
+`--diagnose-publication-phases` with the benchmark fixture for the 60-request
+H0 baseline. The optional
+`--qualification-wal-autocheckpoint-pages 0` or `256` flags set the
+feature-only startup experiment on the existing SQLite connection. The mode
+reports bounded in-memory gate/worker/BEGIN/body/COMMIT/return scalars and
+effective pragma facts through the authenticated runtime projection; it is
+not included in release artifacts, normal runtime JSON, or CI benchmarks.
+
 Cancellation-path tests should wait for an observable fixture transition or
 invariant under a bounded timeout, not guess with fixed sleeps or yield-count
 loops. See `AGENTS.md` for focused native test targets and stress guidance.

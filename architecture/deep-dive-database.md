@@ -37,3 +37,33 @@ backup/recovery roots remain in the qualification root. This is a diagnostic
 comparison, not a production placement recommendation or a durability
 change. The mode uses the benchmark fixture directly and does not run the
 ordinary benchmark corpus.
+
+## Publication commit/checkpoint phase diagnostic
+
+Plan 239's `qualification-db-diagnostics` Cargo feature is a non-default,
+dependency-free qualification boundary. It adds a single bounded in-memory
+collector to the existing `DatabaseInner`; records are limited to 256 fixed
+scalar entries with monotonic sequence numbers and the fixed transaction kinds
+`publication`, `finalization`, and `other`. The public
+`Database::with_transaction` API and the single semaphore/connection remain
+unchanged. Publication and durable finalization use named internal entry
+points solely to label their records.
+
+In a feature build, `Database::configure` queries effective `journal_mode`,
+`synchronous`, `page_size`, and `wal_autocheckpoint` on that same connection.
+The feature-only `EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES` startup
+override accepts `0..=100000`; it is applied once during configuration and is
+never part of `Config`, reload policy, CLI help, or production defaults. The
+authenticated `/api/stats/runtime` projection exposes the bounded snapshot
+only in this qualification build. Ordinary builds neither collect records nor
+consult the environment variable.
+
+`scripts/qualification_sbc.py --diagnose-publication-phases` waits for fixed
+database-task quiescence, captures a record-sequence baseline, runs exactly 60
+sequential native finite requests, and requires one successful publication and
+finalization record per request. It retains phase summaries and correlated
+scalars for only the five slowest requests; it rejects missing/duplicate
+foreground records, failed requests, background task ticks, and ownership
+non-convergence. H0 uses the effective default, H1 uses `0`, and H2 uses `256`
+only when H0/H1 satisfy Plan 239's predicate. Neither override is a production
+recommendation, and no explicit checkpoint is run inside the measured batch.

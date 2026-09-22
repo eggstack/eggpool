@@ -146,6 +146,47 @@ struct DatabaseInner {
     calls: AtomicU64,
     transactions: AtomicU64,
     config: DatabaseConfig,
+    #[cfg(feature = "qualification-db-diagnostics")]
+    qualification: super::qualification::QualificationCollector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransactionKind {
+    Publication,
+    Finalization,
+    Other,
+}
+
+impl TransactionKind {
+    #[cfg(feature = "qualification-db-diagnostics")]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Publication => "publication",
+            Self::Finalization => "finalization",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+struct TransactionEnvelope<R> {
+    outcome: TransactionCallResult<R>,
+    phase: TransactionPhase,
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+enum TransactionCallResult<R> {
+    Begin(SqliteError),
+    Completed(Result<R, TransactionResult>),
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+struct TransactionPhase {
+    worker_queue_us: u64,
+    begin_us: u64,
+    body_us: u64,
+    commit_us: Option<u64>,
+    worker_finished_at: Instant,
 }
 
 /// One async SQLite connection with a single serialized operation gate.
@@ -192,6 +233,8 @@ impl Database {
                 calls: AtomicU64::new(0),
                 transactions: AtomicU64::new(0),
                 config,
+                #[cfg(feature = "qualification-db-diagnostics")]
+                qualification: super::qualification::QualificationCollector::new(),
             }),
         };
         if let Err(error) = database.configure().await {
@@ -210,6 +253,11 @@ impl Database {
             calls: self.inner.calls.load(Ordering::Relaxed),
             transactions: self.inner.transactions.load(Ordering::Relaxed),
         }
+    }
+
+    #[cfg(feature = "qualification-db-diagnostics")]
+    pub fn qualification_snapshot(&self) -> crate::db::QualificationDbSnapshot {
+        self.inner.qualification.snapshot()
     }
 
     pub async fn close(&self) -> Result<(), DatabaseError> {
@@ -268,54 +316,240 @@ impl Database {
         F: FnOnce(&mut SqliteConnection) -> Result<R, SqliteError> + Send + 'static,
         R: Send + 'static,
     {
+        self.with_transaction_kind(TransactionKind::Other, operation)
+            .await
+    }
+
+    pub(crate) async fn with_named_transaction<F, R>(
+        &self,
+        kind: TransactionKind,
+        operation: F,
+    ) -> Result<R, DatabaseError>
+    where
+        F: FnOnce(&mut SqliteConnection) -> Result<R, SqliteError> + Send + 'static,
+        R: Send + 'static,
+    {
+        self.with_transaction_kind(kind, operation).await
+    }
+
+    async fn with_transaction_kind<F, R>(
+        &self,
+        kind: TransactionKind,
+        operation: F,
+    ) -> Result<R, DatabaseError>
+    where
+        F: FnOnce(&mut SqliteConnection) -> Result<R, SqliteError> + Send + 'static,
+        R: Send + 'static,
+    {
+        #[cfg(not(feature = "qualification-db-diagnostics"))]
+        let _ = kind;
         if self.inner.config.read_only {
             return Err(DatabaseError::ReadOnly);
         }
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let started_at = Instant::now();
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let gate_started_at = Instant::now();
         let permit = self.acquire_permit().await?;
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let gate_wait_us = elapsed_us(gate_started_at);
         self.inner.calls.fetch_add(1, Ordering::Relaxed);
         self.inner.transactions.fetch_add(1, Ordering::Relaxed);
         let timeout = self.inner.config.busy_timeout_ms;
-        let result =
-            self.inner
-                .connection
-                .call(
-                    move |connection| -> Result<Result<R, TransactionResult>, SqliteError> {
-                        connection.execute_batch("BEGIN IMMEDIATE")?;
-                        let result = match operation(connection) {
-                            Ok(value) => connection
-                                .execute_batch("COMMIT")
-                                .map(|()| value)
-                                .map_err(|commit| {
-                                    let rollback_error = connection.execute_batch("ROLLBACK").err();
-                                    TransactionResult::Commit {
-                                        commit,
-                                        rollback_error,
-                                    }
-                                }),
-                            Err(operation_error) => match connection.execute_batch("ROLLBACK") {
-                                Ok(()) => Err(TransactionResult::Body {
-                                    operation: operation_error,
-                                }),
-                                Err(rollback) => Err(TransactionResult::Rollback {
-                                    operation: operation_error,
-                                    rollback,
-                                }),
-                            },
-                        };
-                        Ok(result)
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let call_started_at = Instant::now();
+        let result = self
+            .inner
+            .connection
+            .call(move |connection| {
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let worker_started_at = Instant::now();
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let worker_queue_us = elapsed_us(call_started_at);
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let begin_started_at = Instant::now();
+                let begin_result = connection.execute_batch("BEGIN IMMEDIATE");
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let begin_us = elapsed_us(begin_started_at);
+                #[cfg(not(feature = "qualification-db-diagnostics"))]
+                begin_result?;
+                #[cfg(feature = "qualification-db-diagnostics")]
+                if let Err(source) = begin_result {
+                    #[cfg(feature = "qualification-db-diagnostics")]
+                    let phase = TransactionPhase {
+                        worker_queue_us,
+                        begin_us,
+                        body_us: 0,
+                        commit_us: None,
+                        worker_finished_at: Instant::now(),
+                    };
+                    #[cfg(feature = "qualification-db-diagnostics")]
+                    return Ok(TransactionEnvelope {
+                        outcome: TransactionCallResult::Begin(source),
+                        phase,
+                    });
+                }
+
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let body_started_at = Instant::now();
+                let body_result = operation(connection);
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let body_us = elapsed_us(body_started_at);
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let mut commit_us = None;
+                let transaction_result = match body_result {
+                    Ok(value) => {
+                        #[cfg(feature = "qualification-db-diagnostics")]
+                        let commit_started_at = Instant::now();
+                        let commit_result = connection.execute_batch("COMMIT");
+                        #[cfg(feature = "qualification-db-diagnostics")]
+                        {
+                            commit_us = Some(elapsed_us(commit_started_at));
+                        }
+                        match commit_result {
+                            Ok(()) => Ok(value),
+                            Err(commit) => {
+                                let rollback_error = connection.execute_batch("ROLLBACK").err();
+                                Err(TransactionResult::Commit {
+                                    commit,
+                                    rollback_error,
+                                })
+                            }
+                        }
+                    }
+                    Err(operation_error) => match connection.execute_batch("ROLLBACK") {
+                        Ok(()) => Err(TransactionResult::Body {
+                            operation: operation_error,
+                        }),
+                        Err(rollback) => Err(TransactionResult::Rollback {
+                            operation: operation_error,
+                            rollback,
+                        }),
                     },
-                )
-                .await;
+                };
+                #[cfg(feature = "qualification-db-diagnostics")]
+                let phase = TransactionPhase {
+                    worker_queue_us,
+                    begin_us,
+                    body_us,
+                    commit_us,
+                    worker_finished_at: Instant::now(),
+                };
+                #[cfg(feature = "qualification-db-diagnostics")]
+                {
+                    let _ = worker_started_at;
+                    Ok(TransactionEnvelope {
+                        outcome: TransactionCallResult::Completed(transaction_result),
+                        phase,
+                    })
+                }
+                #[cfg(not(feature = "qualification-db-diagnostics"))]
+                {
+                    Ok(transaction_result)
+                }
+            })
+            .await;
         drop(permit);
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let total_us = elapsed_us(started_at);
         match result {
             Err(AsyncSqliteError::ConnectionClosed) => Err(DatabaseError::Closed),
             Err(AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source)) => {
+                #[cfg(feature = "qualification-db-diagnostics")]
+                self.inner
+                    .qualification
+                    .record(super::qualification::QualificationRecordInput {
+                        kind,
+                        gate_wait_us,
+                        worker_queue_us: 0,
+                        begin_us: 0,
+                        body_us: 0,
+                        commit_us: None,
+                        worker_return_us: 0,
+                        total_us,
+                        success: false,
+                    });
                 Err(map_sqlite("transaction", timeout, source))
             }
-            Err(_) => Err(DatabaseError::WorkerClosed),
+            Err(_) => {
+                #[cfg(feature = "qualification-db-diagnostics")]
+                self.inner
+                    .qualification
+                    .record(super::qualification::QualificationRecordInput {
+                        kind,
+                        gate_wait_us,
+                        worker_queue_us: 0,
+                        begin_us: 0,
+                        body_us: 0,
+                        commit_us: None,
+                        worker_return_us: 0,
+                        total_us,
+                        success: false,
+                    });
+                Err(DatabaseError::WorkerClosed)
+            }
+            #[cfg(feature = "qualification-db-diagnostics")]
+            Ok(envelope) => {
+                let success = matches!(&envelope.outcome, TransactionCallResult::Completed(Ok(_)));
+                self.inner
+                    .qualification
+                    .record(super::qualification::QualificationRecordInput {
+                        kind,
+                        gate_wait_us,
+                        worker_queue_us: envelope.phase.worker_queue_us,
+                        begin_us: envelope.phase.begin_us,
+                        body_us: envelope.phase.body_us,
+                        commit_us: envelope.phase.commit_us,
+                        worker_return_us: elapsed_us(envelope.phase.worker_finished_at),
+                        total_us,
+                        success,
+                    });
+                match envelope.outcome {
+                    TransactionCallResult::Begin(source) => {
+                        Err(map_sqlite("transaction", timeout, source))
+                    }
+                    TransactionCallResult::Completed(Ok(value)) => Ok(value),
+                    TransactionCallResult::Completed(Err(TransactionResult::Body {
+                        operation,
+                    })) => Err(map_sqlite("transaction body", timeout, operation)),
+                    TransactionCallResult::Completed(Err(TransactionResult::Rollback {
+                        operation,
+                        rollback,
+                    })) => {
+                        self.inner.closed.store(true, Ordering::Release);
+                        let error = DatabaseError::RollbackFailed {
+                            source: Box::new(rollback),
+                            operation: Box::new(DatabaseError::Transaction {
+                                source: Box::new(operation),
+                            }),
+                        };
+                        let _ = self.close().await;
+                        Err(error)
+                    }
+                    TransactionCallResult::Completed(Err(TransactionResult::Commit {
+                        commit,
+                        rollback_error,
+                    })) => {
+                        let rollback_failed = rollback_error.is_some();
+                        let error = DatabaseError::CommitFailed {
+                            source: Box::new(commit),
+                            rollback_error: rollback_error.map(Box::new),
+                        };
+                        if rollback_failed {
+                            self.inner.closed.store(true, Ordering::Release);
+                            let _ = self.close().await;
+                        }
+                        Err(error)
+                    }
+                }
+            }
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
+            Ok(Ok(value)) => Ok(value),
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
             Ok(Err(TransactionResult::Body { operation })) => {
                 Err(map_sqlite("transaction body", timeout, operation))
             }
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
             Ok(Err(TransactionResult::Rollback {
                 operation,
                 rollback,
@@ -330,6 +564,7 @@ impl Database {
                 let _ = self.close().await;
                 Err(error)
             }
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
             Ok(Err(TransactionResult::Commit {
                 commit,
                 rollback_error,
@@ -345,7 +580,6 @@ impl Database {
                 }
                 Err(error)
             }
-            Ok(Ok(value)) => Ok(value),
         }
     }
 
@@ -551,6 +785,8 @@ impl Database {
 
     async fn configure(&self) -> Result<(), DatabaseError> {
         let config = self.inner.config.clone();
+        #[cfg(feature = "qualification-db-diagnostics")]
+        let wal_autocheckpoint_override = qualification_wal_autocheckpoint_override()?;
         self.call(move |connection| {
             connection.execute_batch("PRAGMA foreign_keys = ON")?;
             connection.pragma_update(None, "busy_timeout", config.busy_timeout_ms)?;
@@ -561,9 +797,42 @@ impl Database {
             if let Some(limit) = config.journal_size_limit {
                 connection.pragma_update(None, "journal_size_limit", limit)?;
             }
-            Ok(())
+            #[cfg(feature = "qualification-db-diagnostics")]
+            {
+                if let Some(pages) = wal_autocheckpoint_override {
+                    connection.pragma_update(None, "wal_autocheckpoint", pages)?;
+                }
+                let effective = super::qualification::QualificationEffectivePragmas {
+                    journal_mode: connection
+                        .query_row("PRAGMA journal_mode", [], |row| row.get(0))?,
+                    synchronous: synchronous_name(connection.query_row(
+                        "PRAGMA synchronous",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )?),
+                    page_size: connection
+                        .query_row("PRAGMA page_size", [], |row| row.get::<_, i64>(0))?
+                        as u64,
+                    wal_autocheckpoint_pages: connection.query_row(
+                        "PRAGMA wal_autocheckpoint",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )? as u64,
+                };
+                Ok(Some(effective))
+            }
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
+            Ok(None::<()>)
         })
         .await
+        .map(|effective| {
+            #[cfg(feature = "qualification-db-diagnostics")]
+            if let Some(effective) = effective {
+                self.inner.qualification.set_effective(effective);
+            }
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
+            let _ = effective;
+        })
     }
 
     async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, DatabaseError> {
@@ -577,6 +846,51 @@ impl Database {
             .await
             .map_err(|_| DatabaseError::WorkerClosed)
     }
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn qualification_wal_autocheckpoint_override() -> Result<Option<u32>, DatabaseError> {
+    let Some(value) = std::env::var_os("EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES") else {
+        return Ok(None);
+    };
+    let value = value.to_str().ok_or_else(|| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES must be ASCII digits".to_owned(),
+    })?;
+    parse_qualification_wal_autocheckpoint(value).map(Some)
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn parse_qualification_wal_autocheckpoint(value: &str) -> Result<u32, DatabaseError> {
+    let pages = value.parse::<u32>().map_err(|_| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES must be an integer in 0..=100000"
+            .to_owned(),
+    })?;
+    if pages <= 100_000 {
+        Ok(pages)
+    } else {
+        Err(DatabaseError::Integrity {
+            detail:
+                "EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES must be an integer in 0..=100000"
+                    .to_owned(),
+        })
+    }
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn synchronous_name(value: i64) -> String {
+    match value {
+        0 => "OFF",
+        1 => "NORMAL",
+        2 => "FULL",
+        3 => "EXTRA",
+        _ => "UNKNOWN",
+    }
+    .to_owned()
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn elapsed_us(started_at: Instant) -> u64 {
+    started_at.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn delete_old(
@@ -774,4 +1088,49 @@ fn percent_encode_path(path: &str) -> String {
             other => format!("%{other:02X}").chars().collect(),
         })
         .collect()
+}
+
+#[cfg(all(test, feature = "qualification-db-diagnostics"))]
+mod qualification_tests {
+    use super::*;
+
+    #[test]
+    fn wal_autocheckpoint_override_accepts_only_bounded_integers() {
+        assert_eq!(parse_qualification_wal_autocheckpoint("0").unwrap(), 0);
+        assert_eq!(
+            parse_qualification_wal_autocheckpoint("100000").unwrap(),
+            100000
+        );
+        for value in ["", "-1", "100001", "1.5", "secret"] {
+            assert!(
+                parse_qualification_wal_autocheckpoint(value).is_err(),
+                "{value}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transaction_records_capture_success_and_rollback_phases() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE diagnostic_test (id INTEGER)")
+            })
+            .await
+            .expect("transaction commits");
+        database
+            .with_transaction(|_connection| Err::<(), _>(SqliteError::InvalidQuery))
+            .await
+            .expect_err("transaction rolls back");
+        let snapshot = database.qualification_snapshot();
+        assert_eq!(snapshot.effective.journal_mode, "memory");
+        assert_eq!(snapshot.records.len(), 2);
+        assert!(snapshot.records[0].success);
+        assert!(snapshot.records[0].commit_us.is_some());
+        assert!(!snapshot.records[1].success);
+        assert_eq!(snapshot.records[1].commit_us, None);
+        database.close().await.expect("database closes");
+    }
 }

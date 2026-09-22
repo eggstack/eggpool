@@ -418,7 +418,7 @@ impl PublicationService {
         let injector = self.fault_injector.clone();
         let transaction_injector = injector.clone();
         let result = database
-            .with_transaction(move |connection| {
+            .with_named_transaction(crate::db::TransactionKind::Publication, move |connection| {
                 let existing = connection
                     .query_row(
                         "SELECT id, account_id, model_id, provider_id, protocol, streamed, status\n\
@@ -662,7 +662,7 @@ impl PublicationService {
     ) -> Result<(), PublicationError> {
         let identity = identity.clone();
         self.database
-            .with_transaction(move |connection| {
+            .with_named_transaction(crate::db::TransactionKind::Other, move |connection| {
                 connection.execute(
                     "UPDATE request_attempts SET error_class = 'PublicationInterrupted',\n\
                      release_reason = 'publication_interrupted',\n\

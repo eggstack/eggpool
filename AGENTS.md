@@ -76,6 +76,16 @@ fixed database-task quiescence window, records bounded WAL header/file-size
 scalars, and optionally isolates only database/WAL/SHM under
 `--diagnostic-database-dir`; it does not authorize Rust/runtime changes.
 
+Plan 239 adds non-default, dependency-free `qualification-db-diagnostics`
+instrumentation only. Its `--diagnose-publication-phases` harness mode
+requires the benchmark fixture, runs exactly 60 sequential native finite
+requests, and correlates bounded publication/finalization phase scalars from
+the authenticated runtime projection. H0 uses the effective default, H1 uses
+`--qualification-wal-autocheckpoint-pages 0`, and H2 uses `256` only when the
+plan's predicate is met. Build ordinary and feature release candidates
+separately; the feature is never a release/package capability and its
+environment variable is never part of production config or reload policy.
+
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only

@@ -64,10 +64,13 @@ DIAGNOSTIC_MIN_SAMPLES = 10
 DIAGNOSTIC_MAX_SAMPLES = 200
 PUBLICATION_STORAGE_MIN_SAMPLES = 20
 PUBLICATION_STORAGE_MAX_SAMPLES = 200
+PUBLICATION_PHASE_SAMPLES = 60
 DIAGNOSTIC_WARMUPS = 5
 DIRECT_CONTROL_WARMUPS = 5
 DIRECT_CONTROL_SAMPLES = 30
-DIAGNOSTIC_TIMEOUT = 5.0
+# The phase corpus must remain exactly 60 successful requests even when the
+# effective SQLite autocheckpoint produces a multi-second commit tail.
+DIAGNOSTIC_TIMEOUT = 30.0
 DIAGNOSTIC_SLOWEST_RETAINED = 5
 DIAGNOSTIC_FIXTURE_PATH_SUFFIX = "/responses"
 WAL_HEADER_BYTES = 32
@@ -1186,6 +1189,20 @@ def _publication_storage_sample_count(value: str) -> int:
     return count
 
 
+def _qualification_wal_autocheckpoint_pages(value: str) -> int:
+    try:
+        pages = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "qualification wal_autocheckpoint must be an integer in 0..100000"
+        ) from error
+    if not 0 <= pages <= 100_000:
+        raise argparse.ArgumentTypeError(
+            "qualification wal_autocheckpoint must be an integer in 0..100000"
+        )
+    return pages
+
+
 def _ns_to_ms(earlier_ns: int | None, later_ns: int | None) -> int | None:
     if earlier_ns is None or later_ns is None:
         return None
@@ -1298,6 +1315,224 @@ def _diagnostic_phase_summary(
             }
         )
     return result
+
+
+def _qualification_database_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and project the feature-only runtime database snapshot."""
+    snapshot_value = value.get("database_qualification")
+    snapshot = (
+        cast("dict[str, Any]", snapshot_value)
+        if isinstance(snapshot_value, dict)
+        else None
+    )
+    if not isinstance(snapshot, dict):
+        raise QualificationError(
+            "Plan 239 requires a qualification-db-diagnostics candidate build"
+        )
+    effective_value = snapshot.get("effective")
+    effective = (
+        cast("dict[str, Any]", effective_value)
+        if isinstance(effective_value, dict)
+        else None
+    )
+    if not isinstance(effective, dict):
+        raise QualificationError("qualification database pragma snapshot is missing")
+    required_effective: dict[str, Any] = {
+        "journal_mode": effective.get("journal_mode"),
+        "synchronous": effective.get("synchronous"),
+        "page_size": effective.get("page_size"),
+        "wal_autocheckpoint_pages": effective.get("wal_autocheckpoint_pages"),
+    }
+    if not isinstance(required_effective["journal_mode"], str) or not isinstance(
+        required_effective["synchronous"], str
+    ):
+        raise QualificationError("qualification pragma names are not scalar")
+    page_size = required_effective["page_size"]
+    autocheckpoint_pages = required_effective["wal_autocheckpoint_pages"]
+    if not (
+        isinstance(page_size, int)
+        and page_size >= 0
+        and isinstance(autocheckpoint_pages, int)
+        and autocheckpoint_pages >= 0
+    ):
+        raise QualificationError("qualification pragma values are not scalar")
+    latest = snapshot.get("latest_record_seq")
+    capacity = snapshot.get("collector_capacity")
+    if (
+        not isinstance(latest, int)
+        or latest < 0
+        or not isinstance(capacity, int)
+        or not 1 <= capacity <= 256
+    ):
+        raise QualificationError("qualification collector metadata is invalid")
+    return {
+        "schema_version": snapshot.get("schema_version"),
+        "collector_capacity": capacity,
+        "effective": required_effective,
+        "latest_record_seq": latest,
+    }
+
+
+def _qualification_records_after(
+    value: Mapping[str, Any], baseline_sequence: int
+) -> list[dict[str, Any]]:
+    """Return only bounded, fixed-shape records newer than the baseline."""
+    snapshot_value = value.get("database_qualification")
+    snapshot = (
+        cast("dict[str, Any]", snapshot_value)
+        if isinstance(snapshot_value, dict)
+        else None
+    )
+    if snapshot is None or not isinstance(snapshot.get("records"), list):
+        raise QualificationError("qualification database records are missing")
+    records: list[dict[str, Any]] = []
+    previous_sequence = baseline_sequence
+    raw_records = cast("list[Any]", snapshot["records"])
+    for raw_value in raw_records:
+        if not isinstance(raw_value, dict):
+            raise QualificationError("qualification database record is not an object")
+        raw = cast("dict[str, Any]", raw_value)
+        record = {
+            "record_seq": raw.get("record_seq"),
+            "kind": raw.get("kind"),
+            "gate_wait_us": raw.get("gate_wait_us"),
+            "worker_queue_us": raw.get("worker_queue_us"),
+            "begin_us": raw.get("begin_us"),
+            "body_us": raw.get("body_us"),
+            "commit_us": raw.get("commit_us"),
+            "worker_return_us": raw.get("worker_return_us"),
+            "total_us": raw.get("total_us"),
+            "success": raw.get("success"),
+        }
+        sequence = record["record_seq"]
+        if not isinstance(sequence, int) or sequence <= baseline_sequence:
+            continue
+        if sequence <= previous_sequence or record["kind"] not in {
+            "publication",
+            "finalization",
+            "other",
+        }:
+            raise QualificationError("qualification database records are not ordered")
+        phase_values = [
+            record[name]
+            for name in (
+                "gate_wait_us",
+                "worker_queue_us",
+                "begin_us",
+                "body_us",
+                "worker_return_us",
+                "total_us",
+            )
+        ]
+        if not all(
+            isinstance(phase_value, int) and phase_value >= 0
+            for phase_value in phase_values
+        ):
+            raise QualificationError("qualification database phase is not scalar")
+        if record["commit_us"] is not None and (
+            not isinstance(record["commit_us"], int) or record["commit_us"] < 0
+        ):
+            raise QualificationError("qualification database commit phase is invalid")
+        if not isinstance(record["success"], bool):
+            raise QualificationError("qualification database success flag is invalid")
+        records.append(record)
+        previous_sequence = sequence
+    return records
+
+
+def _transaction_phase_summary(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {"sample_count": len(records)}
+    for field in (
+        "gate_wait_us",
+        "worker_queue_us",
+        "begin_us",
+        "body_us",
+        "commit_us",
+        "worker_return_us",
+        "total_us",
+    ):
+        values = [value[field] for value in records if isinstance(value[field], int)]
+        result[f"p50_{field}"] = _percentile(values, 50)
+        result[f"p95_{field}"] = _percentile(values, 95)
+        result[f"maximum_{field}"] = max(values) if values else None
+    return result
+
+
+def _correlate_transaction_phases(
+    run: Mapping[str, Any], records: Sequence[Mapping[str, Any]], sample_count: int
+) -> dict[str, Any]:
+    foreground: list[dict[str, Any]] = [
+        dict(record)
+        for record in records
+        if record["kind"] in {"publication", "finalization"}
+    ]
+    if len(foreground) != sample_count * 2:
+        raise QualificationError(
+            "Plan 239 expected exactly one publication and finalization "
+            "record per request"
+        )
+    if any(not record["success"] for record in foreground):
+        raise QualificationError("Plan 239 foreground transaction did not succeed")
+    publication: list[dict[str, Any]] = [
+        record for record in foreground if record["kind"] == "publication"
+    ]
+    finalization: list[dict[str, Any]] = [
+        record for record in foreground if record["kind"] == "finalization"
+    ]
+    if len(publication) != sample_count or len(finalization) != sample_count:
+        raise QualificationError(
+            "Plan 239 foreground records are missing or duplicated"
+        )
+
+    slowest: list[dict[str, Any]] = []
+    slowest_value = run.get("slowest_five", [])
+    if not isinstance(slowest_value, list):
+        raise QualificationError("Plan 239 slowest request evidence is invalid")
+    for item_value in cast("list[Any]", slowest_value):
+        if not isinstance(item_value, dict):
+            raise QualificationError("Plan 239 slowest request evidence is invalid")
+        item = cast("dict[str, Any]", item_value)
+        if not isinstance(item.get("sequence"), int):
+            raise QualificationError("Plan 239 slowest request evidence is invalid")
+        request_sequence = item["sequence"]
+        if not 1 <= request_sequence <= sample_count:
+            raise QualificationError("Plan 239 request sequence is out of bounds")
+        publication_record = cast("dict[str, Any]", publication[request_sequence - 1])
+        finalization_record = cast("dict[str, Any]", finalization[request_sequence - 1])
+        pre_provider = item.get("pre_provider_ms")
+        post_provider = item.get("post_provider_ttft_ms")
+        slowest.append(
+            {
+                "request_sequence": request_sequence,
+                "pre_provider_ms": pre_provider,
+                "provider_service_ms": item.get("provider_service_ms"),
+                "post_provider_ttft_ms": post_provider,
+                "total_ms": item.get("total_ms"),
+                "wal_checkpoint_sequence_changed": item.get(
+                    "wal_checkpoint_sequence_changed"
+                ),
+                "publication": dict(publication_record),
+                "finalization": dict(finalization_record),
+                "pre_provider_unattributed_us": (
+                    max(pre_provider * 1000 - publication_record["total_us"], 0)
+                    if isinstance(pre_provider, int)
+                    else None
+                ),
+                "post_provider_unattributed_us": (
+                    max(post_provider * 1000 - finalization_record["total_us"], 0)
+                    if isinstance(post_provider, int)
+                    else None
+                ),
+            }
+        )
+    publication_records = publication
+    finalization_records = finalization
+    return {
+        "foreground_record_count": len(foreground),
+        "publication_phase_summary": _transaction_phase_summary(publication_records),
+        "finalization_phase_summary": _transaction_phase_summary(finalization_records),
+        "slowest_five_correlated": slowest,
+    }
 
 
 def _diagnostic_timed_post(
@@ -1877,6 +2112,8 @@ def run_qualification(
     benchmark_samples: int = 0,
     diagnose_finite_tail: int | None = None,
     diagnose_publication_storage: int | None = None,
+    diagnose_publication_phases: bool = False,
+    qualification_wal_autocheckpoint_pages: int | None = None,
     diagnostic_database_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
@@ -1906,6 +2143,26 @@ def run_qualification(
         raise ValueError(
             "publication-storage and finite-tail diagnostics are exclusive"
         )
+    if diagnose_publication_phases and (
+        diagnose_finite_tail is not None or diagnose_publication_storage is not None
+    ):
+        raise ValueError(
+            "Plan 239 phase diagnostics are exclusive with other diagnostics"
+        )
+    if diagnose_publication_phases and benchmark_samples > 0:
+        raise ValueError("Plan 239 phase diagnostics do not run the benchmark corpus")
+    if (
+        diagnose_publication_phases
+        and config_fixture.resolve() != BENCHMARK_FIXTURE.resolve()
+    ):
+        raise ValueError("Plan 239 phase diagnostics require the benchmark fixture")
+    if (
+        qualification_wal_autocheckpoint_pages is not None
+        and not diagnose_publication_phases
+    ):
+        raise ValueError(
+            "qualification wal_autocheckpoint requires Plan 239 phase diagnostics"
+        )
     if diagnose_publication_storage is not None and benchmark_samples > 0:
         raise ValueError(
             "publication-storage diagnostic mode does not run the benchmark corpus"
@@ -1915,11 +2172,16 @@ def run_qualification(
             raise ValueError(
                 "publication-storage diagnostic mode requires the benchmark fixture"
             )
-    elif diagnostic_database_dir is not None:
+    elif diagnostic_database_dir is not None and not diagnose_publication_phases:
         raise ValueError(
-            "diagnostic database directory requires publication-storage mode"
+            "diagnostic database directory requires publication-phase or "
+            "publication-storage mode"
         )
-    benchmark_mode = benchmark_samples > 0 or diagnose_publication_storage is not None
+    benchmark_mode = (
+        benchmark_samples > 0
+        or diagnose_publication_storage is not None
+        or diagnose_publication_phases
+    )
     report: dict[str, Any] = {
         "schema_version": SCHEMA_V2 if benchmark_mode else SCHEMA_V1,
         "plan": "SBC qualification",
@@ -1991,6 +2253,10 @@ def run_qualification(
         recovery_root.mkdir(exist_ok=True)
         port = free_port()
         env = _environment(root, config)
+        if qualification_wal_autocheckpoint_pages is not None:
+            env["EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES"] = str(
+                qualification_wal_autocheckpoint_pages
+            )
         commands: list[CommandResult] = []
         samples: list[dict[str, Any]] = []
         workload_timings: dict[str, list[int]] = {
@@ -2003,9 +2269,8 @@ def run_qualification(
         }
         with contextlib.ExitStack() as resources, LoopbackProvider() as provider:
             if (
-                diagnose_publication_storage is not None
-                and diagnostic_database_dir is not None
-            ):
+                diagnose_publication_storage is not None or diagnose_publication_phases
+            ) and diagnostic_database_dir is not None:
                 try:
                     isolated_database_root = Path(
                         resources.enter_context(
@@ -2194,7 +2459,150 @@ def run_qualification(
                         include_peak=benchmark_mode,
                     )
                 )
-                if diagnose_publication_storage is not None:
+                if diagnose_publication_phases:
+                    benchmark_process = process
+                    benchmark: dict[str, Any] = {
+                        "sample_count": PUBLICATION_PHASE_SAMPLES,
+                        "config_fixture": Path(config_fixture).name,
+                        "diagnostic_mode": "publication_commit_checkpoint_phase",
+                        "wal_autocheckpoint_override_pages": (
+                            qualification_wal_autocheckpoint_pages
+                        ),
+                        "cadence": benchmark_cadence_facts(content),
+                        "runs": {},
+                    }
+                    diagnostic_runtime_url = (
+                        f"http://127.0.0.1:{port}/api/stats/runtime"
+                    )
+                    samples.append(
+                        resource_sample(
+                            "publication-phases-before-quiescence",
+                            benchmark_process,
+                            database,
+                            diagnostic_runtime_url,
+                            include_peak=True,
+                        )
+                    )
+                    benchmark["runs"]["direct_provider_control"] = (
+                        _direct_provider_control(provider)
+                    )
+                    _diagnostic_finite_warmup(port)
+                    baseline_tasks = _wait_for_diagnostic_quiescence(
+                        diagnostic_runtime_url
+                    )
+                    baseline_runtime = _runtime_json(
+                        diagnostic_runtime_url, "q008-server-key"
+                    )
+                    if baseline_runtime is None:
+                        raise QualificationError(
+                            "runtime snapshot was unavailable before Plan 239 batch"
+                        )
+                    baseline_database = _qualification_database_snapshot(
+                        baseline_runtime
+                    )
+                    baseline_sequence = baseline_database["latest_record_seq"]
+                    phase_run = _diagnostic_finite_batch(
+                        port,
+                        provider,
+                        PUBLICATION_PHASE_SAMPLES,
+                        benchmark_process,
+                        database,
+                        warmup=False,
+                    )
+                    if (
+                        phase_run["completed_count"] != PUBLICATION_PHASE_SAMPLES
+                        or phase_run["timeout_count"] != 0
+                        or phase_run["failed_count"] != 0
+                    ):
+                        raise QualificationError(
+                            "Plan 239 measured batch did not contain 60 "
+                            "successful requests: "
+                            f"completed={phase_run['completed_count']}, "
+                            f"timeouts={phase_run['timeout_count']}, "
+                            f"failed={phase_run['failed_count']}"
+                        )
+                    final_runtime = _runtime_json(
+                        diagnostic_runtime_url, "q008-server-key"
+                    )
+                    if final_runtime is None:
+                        raise QualificationError(
+                            "runtime snapshot was unavailable after Plan 239 batch"
+                        )
+                    final_database = _qualification_database_snapshot(final_runtime)
+                    records = _qualification_records_after(
+                        final_runtime, baseline_sequence
+                    )
+                    correlation = _correlate_transaction_phases(
+                        phase_run, records, PUBLICATION_PHASE_SAMPLES
+                    )
+                    benchmark["effective"] = final_database["effective"]
+                    benchmark["collector"] = {
+                        "schema_version": final_database["schema_version"],
+                        "capacity": final_database["collector_capacity"],
+                        "baseline_record_seq": baseline_sequence,
+                        "final_record_seq": final_database["latest_record_seq"],
+                        "records_after_baseline": len(records),
+                    }
+                    benchmark["runs"]["publication_phase_diagnostic"] = {
+                        **phase_run,
+                        **correlation,
+                    }
+                    final_tasks = _runtime_task_snapshot(final_runtime)
+                    task_deltas = _task_tick_deltas(baseline_tasks, final_tasks)
+                    benchmark["task_quiescence"] = {
+                        "wait_timeout_s": DIAGNOSTIC_QUIESCENCE_TIMEOUT,
+                        "fixed_task_names": list(DIAGNOSTIC_TASK_NAMES),
+                        "baseline": baseline_tasks,
+                        "final": final_tasks,
+                        "deltas": task_deltas,
+                        "background_db_activity": any(
+                            value.get("tick_count_delta", 0) > 0
+                            for value in task_deltas.values()
+                            if isinstance(value.get("tick_count_delta"), int)
+                        ),
+                    }
+                    if benchmark["task_quiescence"]["background_db_activity"]:
+                        raise QualificationError(
+                            "Plan 239 measured batch was contaminated by a "
+                            "background task"
+                        )
+                    samples.append(
+                        resource_sample(
+                            "after-publication-phases-diagnostic",
+                            benchmark_process,
+                            database,
+                            diagnostic_runtime_url,
+                            include_peak=True,
+                        )
+                    )
+                    stabilized = resource_sample(
+                        "after-publication-phases-stabilization",
+                        benchmark_process,
+                        database,
+                        diagnostic_runtime_url,
+                        duration=STABILIZATION_SECONDS,
+                        include_peak=True,
+                    )
+                    samples.append(stabilized)
+                    if stabilized["pending_requests"] not in {0, None} or stabilized[
+                        "active_reservations"
+                    ] not in {0, None}:
+                        raise QualificationError(
+                            "Plan 239 request/reservation state did not converge"
+                        )
+                    benchmark["resource_summary"] = {
+                        "final_pending_requests": stabilized["pending_requests"],
+                        "final_active_reservations": stabilized["active_reservations"],
+                        "final_finalization_jobs": stabilized["finalization_jobs"],
+                        "final_rss_bytes": stabilized["rss_bytes"],
+                        "final_peak_rss_bytes": stabilized.get("peak_rss_bytes"),
+                    }
+                    benchmark["interpretation"] = (
+                        "qualification-only transaction phase correlation; no "
+                        "production SQLite policy or performance threshold applied"
+                    )
+                    report["benchmark"] = benchmark
+                elif diagnose_publication_storage is not None:
                     benchmark_process = process
                     benchmark: dict[str, Any] = {
                         "sample_count": diagnose_publication_storage,
@@ -2675,13 +3083,32 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--diagnose-publication-phases",
+        action="store_true",
+        help=(
+            "Run the Plan 239 qualification-only 60-request publication/"
+            "finalization phase diagnostic; requires the benchmark fixture."
+        ),
+    )
+    parser.add_argument(
+        "--qualification-wal-autocheckpoint-pages",
+        type=_qualification_wal_autocheckpoint_pages,
+        default=None,
+        metavar="N",
+        help=(
+            "Set the feature-only startup wal_autocheckpoint override for "
+            "Plan 239 phase diagnostics (0..100000)."
+        ),
+    )
+    parser.add_argument(
         "--diagnostic-database-dir",
         type=Path,
         default=None,
         metavar="DIR",
         help=(
             "Create only the diagnostic SQLite files in a temporary child of "
-            "DIR; requires --diagnose-publication-storage."
+            "DIR; requires --diagnose-publication-phases or "
+            "--diagnose-publication-storage."
         ),
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
@@ -2701,10 +3128,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             benchmark_samples=args.benchmark_samples,
             diagnose_finite_tail=args.diagnose_finite_tail,
             diagnose_publication_storage=args.diagnose_publication_storage,
+            diagnose_publication_phases=args.diagnose_publication_phases,
+            qualification_wal_autocheckpoint_pages=(
+                args.qualification_wal_autocheckpoint_pages
+            ),
             diagnostic_database_dir=args.diagnostic_database_dir,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
-        requested_benchmark = args.diagnose_publication_storage is not None
+        requested_benchmark = (
+            args.diagnose_publication_storage is not None
+            or args.diagnose_publication_phases
+        )
         with contextlib.suppress(TypeError, ValueError):
             requested_benchmark = (
                 requested_benchmark or int(str(args.benchmark_samples)) > 0

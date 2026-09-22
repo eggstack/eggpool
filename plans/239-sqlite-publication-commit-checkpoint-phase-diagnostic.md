@@ -871,3 +871,38 @@ Plan 239 must not:
 14. Append closure evidence to Plan 239 and commit the sanitized artifact.
 15. Stop. Do not implement the production checkpoint/storage policy in this
     plan.
+
+---
+
+## Closure pass — 2026-09-21
+
+Status: complete.
+
+- Added the non-default, dependency-free `qualification-db-diagnostics`
+  feature with a bounded 256-record in-memory collector, named publication and
+  finalization transaction phases, same-connection effective pragma capture,
+  and the authenticated qualification-only runtime projection.
+- Added the sequential 60-request phase corpus, scalar correlation checks,
+  feature-only `wal_autocheckpoint` override, database-only tmpfs control, and
+  tooling coverage. The diagnostic request timeout is 30 seconds so an
+  accepted corpus is not truncated by the expected multi-second MMC tail.
+- Built ordinary and feature release binaries on the physical Raspberry Pi 5.
+  Ordinary SHA-256: `cc7e614b43cdeb877b9df025a69835d7a71045454f7f7a0c86be29cb6b779cb1`.
+  Feature SHA-256: `1fde022cc183d9607a61e067a281b38fd086ac5a9d7cec5b02571a80af9ef6b9`.
+- Accepted three H0 runs at the effective 1000-page threshold, three H1 runs
+  with the feature-only override `0`, three H2 runs at `256` after the H0/H1
+  predicate was satisfied, one database-only tmpfs run, and one ordinary
+  release baseline. Every accepted phase run completed 60/60 requests with
+  120 foreground records, quiescent fixed database tasks, and converged
+  durable ownership.
+- H0 publication `COMMIT` maxima were 3.65 s, 12.00 s, and 14.89 s. H1
+  publication `COMMIT` maxima were 808, 592, and 687 microseconds with no
+  checkpoint-sequence changes. H2 reduced publication tails but introduced
+  smaller/frequent pauses, including finalization. The tmpfs control had a
+  3 ms p95 and 4 ms maximum total request time.
+- The sanitized aggregate is
+  `artifacts/qualification/239-sbc-db-phase-checkpoint-diagnostic.json`.
+  Classification is I1: foreground SQLite automatic-checkpoint work is the
+  localized owner of the MMC tail.
+- Created Plan 240 as the separate production design handoff. No production
+  SQLite policy was changed in this plan.

@@ -190,6 +190,25 @@ tick deltas and one bounded WAL-header read per request, and can place only
 the SQLite database/WAL/SHM in a caller-selected temporary filesystem. It is
 physical-SBC evidence only, never a CI benchmark or runtime optimization.
 
+Plan 239 adds a separate feature-enabled qualification build:
+
+```bash
+cargo build --manifest-path rust/Cargo.toml --locked --release \
+  --features qualification-db-diagnostics
+uv run python scripts/qualification_sbc.py \
+  --binary rust/target/release/eggpool \
+  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
+  --diagnose-publication-phases \
+  --output artifacts/qualification/239-h0-run-1.json
+```
+
+The mode requires a physical Linux/aarch64 SBC, captures exactly 60 sequential
+native finite requests, and rejects missing/duplicate foreground records,
+background task ticks, and non-convergence. H1 adds
+`--qualification-wal-autocheckpoint-pages 0`; H2 at `256` is conditional on
+the plan predicate. The collector and runtime field are absent from ordinary
+builds; do not treat this mode as CI or a production SQLite recommendation.
+
 For native dependency or feature changes, Cargo is the authority. Review both
 the source/build/test owners and the resolved graph before removing a direct
 crate or feature:

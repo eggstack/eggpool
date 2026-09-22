@@ -15,6 +15,9 @@ members = [
 
 [features]
 default = ["ssh"]
+# Repository-only physical qualification instrumentation.  This is never
+# selected by release/package workflows and adds no dependencies.
+qualification-db-diagnostics = []
 # Test-only constructor for deterministic local TLS proxy peers.  The normal
 # provider transport keeps Eggress's production-owned TLS configuration.
 test-support = [

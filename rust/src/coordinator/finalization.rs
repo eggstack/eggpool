@@ -297,7 +297,9 @@ impl DurableFinalizer {
         let data = data.clone();
         let target_status = data.outcome.request_status().to_owned();
         let detail = data.error_detail.as_deref().map(sanitize_detail);
-        let result = self.database.with_transaction(move |connection| {
+        let result = self.database.with_named_transaction(
+            crate::db::TransactionKind::Finalization,
+            move |connection| {
             let request = connection
                 .query_row(
                     "SELECT account_id, model_id, provider_id, protocol, streamed, status
@@ -548,7 +550,8 @@ impl DurableFinalizer {
                 attempt_transitioned: attempt_changed == 1,
                 reservation_transitioned: reservation_changed == 1,
             })
-        }).await?;
+            },
+        ).await?;
         match result {
             TxnResult::Conflict(status) => Err(FinalizationError::TerminalConflict { status }),
             TxnResult::Invariant { entity, id, reason } => {

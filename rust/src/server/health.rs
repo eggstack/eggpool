@@ -164,59 +164,72 @@ pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
     let runtime_manager = diagnostics
         .as_ref()
         .and_then(|snapshot| serde_json::to_value(snapshot).ok());
-    json_response(
-        StatusCode::OK,
-        json!({
-            "server": {
-                "pid": std::process::id(),
-                "ppid": parent_pid(),
-                "uptime_seconds": state.server.started_at.elapsed().as_secs_f64(),
-                "configured_server_threads": state.server.configured_server_threads,
-                "python_version": serde_json::Value::Null,
-                "rust_version": env!("CARGO_PKG_VERSION"),
-            },
-            "memory": {
-                "rss_bytes": serde_json::Value::Null,
-                "vms_bytes": serde_json::Value::Null,
-                "open_fd_count": serde_json::Value::Null,
-                "thread_count": 1,
-            },
-            "processes": {
-                "eggpool_process_count": 1,
-                "expected_worker_process_count": 1,
-                "process_count_warning": false,
-            },
-            "background_tasks": tasks,
-            "db": {
-                "path": db_path,
-                "is_memory_db": db_path == ":memory:",
-                "file_size_bytes": file_size_bytes,
-                "wal_size_bytes": wal_size_bytes,
-            },
-            "routing_runtime": {
-                "active_requests_total": 0,
-                "active_requests_by_account": serde_json::Value::Null,
-                "pending_count": 0,
-                "oldest_pending_age_seconds": serde_json::Value::Null,
-                "active_reservations_count": active_jobs,
-                "reserved_microdollars": 0,
-                "health_states_by_account": serde_json::Value::Null,
-                "active_backoff_count": 0,
-            },
-            "outbound_client": {
-                "build_count": 0,
-                "request_count": 0,
-                "error_count": 0,
-                "has_client": false,
-            },
-            "provider_client_pool": {
-                "build_count": 0,
-                "providers": {},
-            },
-            "runtime_manager": runtime_manager,
-            "probe_errors": [],
-        }),
-    )
+    let body = json!({
+        "server": {
+            "pid": std::process::id(),
+            "ppid": parent_pid(),
+            "uptime_seconds": state.server.started_at.elapsed().as_secs_f64(),
+            "configured_server_threads": state.server.configured_server_threads,
+            "python_version": serde_json::Value::Null,
+            "rust_version": env!("CARGO_PKG_VERSION"),
+        },
+        "memory": {
+            "rss_bytes": serde_json::Value::Null,
+            "vms_bytes": serde_json::Value::Null,
+            "open_fd_count": serde_json::Value::Null,
+            "thread_count": 1,
+        },
+        "processes": {
+            "eggpool_process_count": 1,
+            "expected_worker_process_count": 1,
+            "process_count_warning": false,
+        },
+        "background_tasks": tasks,
+        "db": {
+            "path": db_path,
+            "is_memory_db": db_path == ":memory:",
+            "file_size_bytes": file_size_bytes,
+            "wal_size_bytes": wal_size_bytes,
+        },
+        "routing_runtime": {
+            "active_requests_total": 0,
+            "active_requests_by_account": serde_json::Value::Null,
+            "pending_count": 0,
+            "oldest_pending_age_seconds": serde_json::Value::Null,
+            "active_reservations_count": active_jobs,
+            "reserved_microdollars": 0,
+            "health_states_by_account": serde_json::Value::Null,
+            "active_backoff_count": 0,
+        },
+        "outbound_client": {
+            "build_count": 0,
+            "request_count": 0,
+            "error_count": 0,
+            "has_client": false,
+        },
+        "provider_client_pool": {
+            "build_count": 0,
+            "providers": {},
+        },
+        "runtime_manager": runtime_manager,
+        "probe_errors": [],
+    });
+    #[cfg(feature = "qualification-db-diagnostics")]
+    {
+        let mut body = body;
+        if let Value::Object(object) = &mut body {
+            object.insert(
+                "database_qualification".to_owned(),
+                serde_json::to_value(state.database.qualification_snapshot())
+                    .expect("qualification snapshot serializes"),
+            );
+        }
+        json_response(StatusCode::OK, body)
+    }
+    #[cfg(not(feature = "qualification-db-diagnostics"))]
+    {
+        json_response(StatusCode::OK, body)
+    }
 }
 
 pub(super) async fn update_status(State(state): State<AppState>) -> Response {

@@ -1,0 +1,86 @@
+{
+  "schema_version": "sqlite-db-phase-diagnostic.v1",
+  "plan": "239",
+  "repository_head_before_changes": "c41d3533cd8398d9483be2f3cd8e0b3d6e0bd500",
+  "target": {
+    "board": "Raspberry Pi 5 Model B Rev 1.0",
+    "architecture": "aarch64",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1064-raspi",
+    "filesystem": "ext4",
+    "storage": "MMC/non-rotational",
+    "feature_binary_sha256": "1fde022cc183d9607a61e067a281b38fd086ac5a9d7cec5b02571a80af9ef6b9",
+    "feature_binary_bytes": 30178176,
+    "ordinary_binary_sha256": "cc7e614b43cdeb877b9df025a69835d7a71045454f7f7a0c86be29cb6b779cb1",
+    "ordinary_binary_bytes": 30288168
+  },
+  "method": {
+    "fixture": "sbc-benchmark.toml",
+    "measured_requests_per_run": 60,
+    "sequence": "native Responses finite, sequential",
+    "transaction_records": "exactly one publication and one finalization per request",
+    "collector_capacity": 256,
+    "effective_pragmas": {
+      "journal_mode": "wal",
+      "synchronous": "NORMAL",
+      "page_size": 4096
+    },
+    "background_db_activity": false,
+    "ownership_convergence": {
+      "accepted_runs": 10,
+      "pending_requests": 0,
+      "active_reservations": 0,
+      "request_statuses": "completed only"
+    },
+    "direct_provider_control_maximum_total_ms": 1
+  },
+  "runs": {
+    "H0_default_1000_pages": [
+      {"run": 1, "wal_autocheckpoint_pages": 1000, "p50_total_ms": 5, "p95_total_ms": 3276, "maximum_total_ms": 4009, "publication_commit_us": [395, 1658424, 3651875], "finalization_commit_us": [130, 336452, 2017598], "wal_sequence_changes": 3},
+      {"run": 2, "wal_autocheckpoint_pages": 1000, "p50_total_ms": 3, "p95_total_ms": 4, "maximum_total_ms": 12012, "publication_commit_us": [280, 537, 12001983], "finalization_commit_us": [93, 166, 98302], "wal_sequence_changes": 3},
+      {"run": 3, "wal_autocheckpoint_pages": 1000, "p50_total_ms": 3, "p95_total_ms": 4, "maximum_total_ms": 14903, "publication_commit_us": [275, 580, 14894080], "finalization_commit_us": [93, 202, 81308], "wal_sequence_changes": 3}
+    ],
+    "H1_disabled_0_pages": [
+      {"run": 1, "wal_autocheckpoint_pages": 0, "p50_total_ms": 4, "p95_total_ms": 11, "maximum_total_ms": 14, "publication_commit_us": [446, 701, 808], "finalization_commit_us": [155, 267, 302], "wal_sequence_changes": 0},
+      {"run": 2, "wal_autocheckpoint_pages": 0, "p50_total_ms": 3, "p95_total_ms": 5, "maximum_total_ms": 5, "publication_commit_us": [431, 540, 592], "finalization_commit_us": [140, 178, 202], "wal_sequence_changes": 0},
+      {"run": 3, "wal_autocheckpoint_pages": 0, "p50_total_ms": 3, "p95_total_ms": 4, "maximum_total_ms": 4, "publication_commit_us": [434, 513, 687], "finalization_commit_us": [142, 188, 235], "wal_sequence_changes": 0}
+    ],
+    "H2_256_pages": [
+      {"run": 1, "wal_autocheckpoint_pages": 256, "p50_total_ms": 4, "p95_total_ms": 170, "maximum_total_ms": 826, "publication_commit_us": [302, 6288, 26921], "finalization_commit_us": [105, 167108, 823085], "wal_sequence_changes": 12},
+      {"run": 2, "wal_autocheckpoint_pages": 256, "p50_total_ms": 3, "p95_total_ms": 514, "maximum_total_ms": 2830, "publication_commit_us": [307, 12023, 28157], "finalization_commit_us": [106, 510650, 2827061], "wal_sequence_changes": 12},
+      {"run": 3, "wal_autocheckpoint_pages": 256, "p50_total_ms": 4, "p95_total_ms": 1927, "maximum_total_ms": 3042, "publication_commit_us": [297, 23582, 42337], "finalization_commit_us": [109, 1923776, 3038252], "wal_sequence_changes": 12}
+    ],
+    "tmpfs_database_only": {
+      "run": 1,
+      "wal_autocheckpoint_pages": 1000,
+      "p50_total_ms": 3,
+      "p95_total_ms": 3,
+      "maximum_total_ms": 4,
+      "publication_commit_us": [186, 303, 631],
+      "finalization_commit_us": [60, 84, 90],
+      "wal_sequence_changes": 3,
+      "interpretation": "database/WAL/SHM only on tmpfs; remaining process files stayed on MMC"
+    },
+    "ordinary_release_baseline": {
+      "benchmark_samples": 30,
+      "status": "pass",
+      "schema": "runtime-q008.v2",
+      "interpretation": "ordinary release path remained functional; no diagnostic field was required"
+    }
+  },
+  "correlated_slowest_h0_scalars": [
+    {"run": 1, "request_sequence": 30, "total_ms": 4009, "wal_sequence_changed": false, "publication_commit_us": 3651875, "finalization_commit_us": 353221},
+    {"run": 2, "request_sequence": 9, "total_ms": 12012, "wal_sequence_changed": true, "publication_commit_us": 12001983, "finalization_commit_us": 6749},
+    {"run": 3, "request_sequence": 9, "total_ms": 14903, "wal_sequence_changed": true, "publication_commit_us": 14894080, "finalization_commit_us": 5521}
+  ],
+  "classification": {
+    "owner": "I1",
+    "finding": "foreground SQLite automatic-checkpoint work is the localized owner of the MMC tail",
+    "basis": "H0 publication COMMIT dominates the worst pre-provider samples; H1 removes the multi-second tail and all measured checkpoint-sequence changes; H2 trades it for smaller but still visible pauses, including finalization",
+    "recommendation": "Create a separate production implementation plan for bounded passive checkpoint work away from request COMMIT while preserving one DB connection, WAL, NORMAL durability, and bounded WAL growth. Do not change production policy in Plan 239."
+  },
+  "sanitization": {
+    "retained": "bounded scalar phase summaries, effective pragmas, run counts, convergence facts, and hashes",
+    "omitted": "prompts, bodies, credentials, headers, URLs, filesystem paths, request IDs, raw WAL data, p99"
+  }
+}

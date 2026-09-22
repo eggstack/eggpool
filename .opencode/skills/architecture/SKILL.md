@@ -143,3 +143,10 @@ private finite execution input, but public `FiniteRequest` constructors and
 field types stay unchanged. Native Responses streaming uses the shared SSE
 decoder with a bounded observation/fold sink and forwards the original bytes;
 translated streams retain canonical event collection and stateful encoding.
+
+Plan 239's `qualification-db-diagnostics` feature is qualification tooling,
+not runtime policy: it is non-default and dependency-free, labels only the
+foreground publication/finalization transactions, and reports bounded scalar
+phase records through the existing authenticated runtime projection. It must
+not add a second SQLite connection, change WAL/NORMAL defaults, or expose its
+startup override through production configuration.

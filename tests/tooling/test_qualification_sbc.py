@@ -20,6 +20,7 @@ from scripts.qualification_sbc import (
     DIRECT_CONTROL_SAMPLES,
     NATIVE_FINITE_CASE,
     NATIVE_STREAMING_CASE,
+    PUBLICATION_PHASE_SAMPLES,
     PUBLICATION_STORAGE_MAX_SAMPLES,
     PUBLICATION_STORAGE_MIN_SAMPLES,
     SCHEMA_V1,
@@ -28,14 +29,19 @@ from scripts.qualification_sbc import (
     TRANSLATED_STREAMING_CASE,
     DiagnosticSample,
     LoopbackProvider,
+    QualificationError,
     _benchmark_sample_count,
     _combine_diagnostic_sample,
+    _correlate_transaction_phases,
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
     _ns_to_ms,
     _percentile,
     _publication_storage_sample_count,
+    _qualification_database_snapshot,
+    _qualification_records_after,
+    _qualification_wal_autocheckpoint_pages,
     _root_block_device,
     _runtime_task_snapshot,
     _storage_device_class,
@@ -531,6 +537,129 @@ def test_238_publication_storage_sample_bound_and_schema() -> None:
             benchmark_samples=30,
             diagnose_publication_storage=60,
         )
+
+
+def _qualification_record(sequence: int, kind: str) -> dict[str, object]:
+    return {
+        "record_seq": sequence,
+        "kind": kind,
+        "gate_wait_us": 1,
+        "worker_queue_us": 2,
+        "begin_us": 3,
+        "body_us": 4,
+        "commit_us": 5,
+        "worker_return_us": 6,
+        "total_us": 7,
+        "success": True,
+    }
+
+
+def test_239_phase_mode_is_bounded_and_feature_only(tmp_path: Path) -> None:
+    assert PUBLICATION_PHASE_SAMPLES == 60
+    assert _qualification_wal_autocheckpoint_pages("0") == 0
+    assert _qualification_wal_autocheckpoint_pages("100000") == 100000
+    for invalid in ("-1", "100001", "1.5", "secret"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _qualification_wal_autocheckpoint_pages(invalid)
+    with pytest.raises(ValueError, match="benchmark fixture"):
+        run_qualification(
+            binary=Path("/not/a/candidate"), diagnose_publication_phases=True
+        )
+    with pytest.raises(ValueError, match="do not run the benchmark corpus"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            config_fixture=BENCHMARK_FIXTURE,
+            benchmark_samples=30,
+            diagnose_publication_phases=True,
+        )
+    phase_tmpfs = run_qualification(
+        binary=Path("/not/a/candidate"),
+        config_fixture=BENCHMARK_FIXTURE,
+        diagnose_publication_phases=True,
+        diagnostic_database_dir=tmp_path,
+    )
+    assert phase_tmpfs["schema_version"] == SCHEMA_V2
+    with pytest.raises(ValueError, match="publication-phase or publication-storage"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            diagnostic_database_dir=tmp_path,
+        )
+
+
+def test_239_phase_records_correlate_exactly_and_remain_scalar_only() -> None:
+    records: list[dict[str, object]] = []
+    for request in range(1, PUBLICATION_PHASE_SAMPLES + 1):
+        records.append(_qualification_record(request * 2 - 1, "publication"))
+        records.append(_qualification_record(request * 2, "finalization"))
+    runtime = {
+        "database_qualification": {
+            "schema_version": "sqlite-db-phase.v1",
+            "collector_capacity": 256,
+            "effective": {
+                "journal_mode": "wal",
+                "synchronous": "NORMAL",
+                "page_size": 4096,
+                "wal_autocheckpoint_pages": 777,
+            },
+            "latest_record_seq": 120,
+            "records": records,
+        }
+    }
+    snapshot = _qualification_database_snapshot(runtime)
+    assert snapshot["effective"]["wal_autocheckpoint_pages"] == 777
+    retained = _qualification_records_after(runtime, 0)
+    run = {
+        "slowest_five": [
+            {
+                "sequence": sequence,
+                "pre_provider_ms": 10,
+                "provider_service_ms": 1,
+                "post_provider_ttft_ms": 2,
+                "total_ms": 13,
+                "wal_checkpoint_sequence_changed": sequence == 60,
+            }
+            for sequence in range(60, 55, -1)
+        ]
+    }
+    correlated = _correlate_transaction_phases(run, retained, PUBLICATION_PHASE_SAMPLES)
+    assert correlated["foreground_record_count"] == 120
+    assert correlated["publication_phase_summary"]["sample_count"] == 60
+    assert correlated["finalization_phase_summary"]["sample_count"] == 60
+    assert len(correlated["slowest_five_correlated"]) == 5
+    assert correlated["slowest_five_correlated"][0]["request_sequence"] == 60
+    payload = json.dumps(correlated, sort_keys=True)
+    assert "p99" not in payload
+    assert "sql" not in payload.lower()
+    assert "request_id" not in payload
+    assert "secret" not in payload
+
+
+def test_239_phase_records_reject_missing_or_duplicate_foreground_records() -> None:
+    records = [
+        _qualification_record(1, "publication"),
+        _qualification_record(2, "finalization"),
+    ]
+    run = {"slowest_five": []}
+    with pytest.raises(QualificationError, match="exactly one publication"):
+        _correlate_transaction_phases(run, records, PUBLICATION_PHASE_SAMPLES)
+    records = [
+        _qualification_record(1, "publication"),
+        _qualification_record(1, "finalization"),
+    ]
+    runtime = {
+        "database_qualification": {
+            "effective": {
+                "journal_mode": "wal",
+                "synchronous": "NORMAL",
+                "page_size": 4096,
+                "wal_autocheckpoint_pages": 1000,
+            },
+            "latest_record_seq": 1,
+            "records": records,
+        }
+    }
+    with pytest.raises(QualificationError, match="ordered"):
+        _qualification_records_after(runtime, 0)
 
 
 def test_238_runtime_task_snapshot_is_fixed_name_and_scalar_only() -> None:

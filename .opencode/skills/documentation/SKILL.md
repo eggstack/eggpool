@@ -55,6 +55,12 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   filesystem comparison, and `not measured` outcome when physical SBC or
   tmpfs dimensions are unavailable. Do not imply that it changes SQLite
   durability or production storage placement.
+  Plan 239's `qualification-db-diagnostics` build is likewise tooling-only:
+  it captures bounded transaction-phase scalars and same-connection effective
+  pragma facts, exposes them only in the authenticated runtime projection for
+  that feature build, and never changes ordinary release JSON or SQLite
+  defaults. H0/H1/H2 experiment outcomes must be recorded as measured or
+  `not measured`, never inferred from a non-SBC host.
 - Never document Python-era runtime details as current: no ASGI server, no
   `yield`/`json.dumps`/`_execute_streaming`/`_build_stream_generator` internals,
   no `self._`-style Python fields, no `tests/unit/*.py` paths. The streaming
