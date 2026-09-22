@@ -572,7 +572,7 @@ only when the provider behavior and resolved feature graph are requalified.
 
 ## Completion note — 2026-09-22
 
-- Implementation commit: `551fbd9e` (`Adopt eggfetch-core 0.2.0 and requalify
+- Implementation commit: `524fc956` (`Adopt eggfetch-core 0.2.0 and requalify
   provider transport`).
 - `rust/Cargo.toml` exact-pins `eggfetch-core =0.2.0` (`native-http1`,
   `tls-rustls`); `rust/Cargo.lock` resolves the crates.io 0.2.0 package
