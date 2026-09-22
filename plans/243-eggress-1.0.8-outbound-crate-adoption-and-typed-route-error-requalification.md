@@ -1,7 +1,7 @@
 # Plan 243 — Eggress 1.0.8 Outbound-Crate Adoption and Typed Route-Error Requalification
 
 Date: 2026-09-22
-Status: implementation handoff
+Status: complete
 Planning baseline: d2942e50511cf11d5b016a0cb46de9c7c88cefc3 (main, Eggpool 0.8.0)
 
 Upstream release baseline:
@@ -742,3 +742,81 @@ completion record containing:
 Do not claim closure from compilation alone. The line is complete only when the
 typed failure semantics, fail-closed route behavior, feature graph, and normal
 release dependency boundary are requalified.
+
+## Completion record (2026-09-22)
+
+- Implementation commit SHA: `0c68fed8` (main).
+- Final exact Eggress package versions: every live `eggress-*` entry resolves
+  to crates.io `=1.0.8` (`eggress-outbound`, `eggress-core`, `eggress-config`,
+  `eggress-pproxy-compat`, `eggress-protocol-shadowsocks`,
+  `eggress-protocol-socks`, `eggress-protocol-trojan`,
+  `eggress-protocol-websocket`, `eggress-protocol-http`, `eggress-uri`,
+  `eggress-routing`, `eggress-relay`, `eggress-transport-ssh`,
+  `eggress-transport-tls`, `eggress-server`, `eggress-config`); no git/path
+  override. `russh` stays `0.62.7`, `rsa` stays `0.10.0-rc.18`.
+- `eggress-embed` no longer exists in the graph: the facade closure
+  (`eggress-embed`, `eggress-runtime`, `eggress-metrics`,
+  `prometheus-client` + derive, `parking_lot` + core, `lock_api`,
+  `scopeguard`, `redox_syscall`, `dtoa`) left, while the only additions are
+  `eggress-outbound`, `eggfetch-http-connect` (new
+  `eggress-protocol-http 1.0.8` dependency), and `base64 0.23.1` beside the
+  existing 0.22.1 line. No unrelated crate was upgraded.
+- Final `eggress-outbound` feature set: `pproxy-compat`, `pproxy-legacy`,
+  `legacy-crypto` (hence `extended`), plus `ssh` only under the default root
+  capability. `toml`/`udp`/`quic`/`insecure-tls` are absent from the resolved
+  outbound closure.
+- `provider_transport` outcomes: 34/34 default, 40/40 with `test-support`.
+- Focused typed-error cases and outcomes:
+  - unauthenticated HTTP CONNECT rejection now asserts deterministically
+    `ProxyAuthentication` (previously accepted `ProxyAuthentication |
+    ProxyConnect`);
+  - wrong-credential HTTP CONNECT maps to `ProxyAuthentication`;
+  - SOCKS5 protocol target refusal maps to `ProxyTargetConnect`;
+  - closed proxy endpoint maps to `ProxyConnect` (typed
+    `ConnectionRefused`/`HopConnect`, proved at unit level too);
+  - blackholed route maps to `ProxyConnectTimeout` via Eggfetch's connect
+    timeout;
+  - untrusted Trojan route TLS maps to `ProxyConnect`, never `Tls`;
+  - malformed expressions fail construction as `ProxyConfiguration`;
+  - all failure Displays/Debugs assert secret-free; no failed route reaches
+    the provider; cancellation/recovery tests pass unchanged.
+- Coordinator focused targets: `coordinator_c008` 29/29, `coordinator_c009`
+  13/13, `coordinator_c011` 17/17, `coordinator_boundaries` 5/5,
+  `coordinator_finalization` 10/10, `coordinator_publication` 6/6,
+  `wire_runtime` 8/8.
+- No-default qualification: `cargo check`, strict Clippy, and the full
+  no-default suite (56 result groups, 0 failures) pass; SSH proxy config is
+  rejected pre-dial and the no-default graph contains zero `ssh` features.
+- Serial workspace suite: 60 suites, 708 passed, 0 failed. Strict Clippy
+  passes on default and no-default graphs.
+- `cargo deny check`: advisories, bans, licenses, sources all ok.
+- RSA advisory path: `RUSTSEC-2023-0071` exception retained; rationale
+  corrected from the stale 1.0.2 stack to the live Eggress 1.0.8 /
+  `russh` 0.62.7 path with the existing re-review rule.
+- Normal release dependency comparison (Rust 1.98.1, x86_64-apple-darwin,
+  default features, unstripped release profile):
+  - artifact bytes: 27,268,944 → 27,250,640 (-18,304, -0.07%);
+  - `Cargo.lock` entries: 386 → 378 (-8);
+  - non-dev tree lines: 428 → 414 (-14);
+  - `eggress-runtime`/`eggress-server` no longer linked into the normal
+    release; string classifier removed.
+- Current-authority files updated: `README.md`, `rust/README.md`,
+  `docs/proxy.md` (also corrected the stale `eggress-ssh-fallback` feature
+  name), `AGENTS.md` (Plan 243 paragraph + 1.0.8 SSH bullet),
+  `architecture/overview.md`, `architecture/deep-dive-providers.md` (boundary
+  refresh + dated 1.0.8 adoption subsection),
+  `.opencode/skills/development/SKILL.md`,
+  `.opencode/skills/documentation/SKILL.md`, `deny.toml` rationale,
+  `transport.rs` boundary comments. No change needed in
+  `.opencode/skills/architecture/SKILL.md` (no version-specific Eggress
+  claim). Historical plans untouched.
+- Deviations from the expected source-change set (all conservative):
+  1. root `ssh` is `["eggress-outbound/ssh", "eggress-pproxy-compat/ssh"]`:
+     pproxy-style SSH needs both upstream cfg gates, and a weak `?` edge
+     cannot fire because the compat package reaches production through
+     outbound rather than the optional test-support edge;
+  2. `test-support` uses `eggress-server/ssh` to match the outbound flag
+     (eggress-server 1.0.8 re-exports the outbound executor whose arity
+     follows the outbound `ssh` gate; mismatched flags fail compilation);
+  3. `deny.toml` names `russh 0.62.7` (actual resolved version) rather than
+     the plan's `0.62.6`.
