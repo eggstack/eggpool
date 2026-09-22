@@ -1,7 +1,7 @@
 # Plan 242 — Plan 240 Database Documentation Deduplication Corrective Pass
 
 Date: 2026-09-22
-Status: implementation handoff
+Status: complete
 Planning baseline: `961c0158eadd0a536d1ae02772bd910bbd93a566` (`main`, Eggpool 0.8.0)
 Corrects: documentation state introduced alongside `524fc95614f3699d8c7a180b1c36265a986a99a4`
 Related plans:
@@ -213,6 +213,18 @@ for this cleanup.
 - [ ] The final diff is a small documentation-only deletion/consolidation.
 
 ## Completion record
+
+Implemented 2026-09-22.
+
+- implementation commit: `5f96e1a3f622582f3b84c3322bee058703ddb825` (collapse triplicate Plan 240 section in `architecture/deep-dive-database.md`);
+- final Plan 240 heading count in `architecture/deep-dive-database.md`: 1 (`rg -n '^## Passive-checkpoint production follow-up \(Plan 240, design only\)$'`);
+- `uv run python scripts/validate_release_docs.py`: pass;
+- `uv run python scripts/validate_runtime_package_boundary.py`: pass;
+- `git diff --check`: pass;
+- no Rust, Cargo, migration, configuration, or qualification-tooling files changed (diff is `architecture/deep-dive-database.md` only, 11 insertions / 31 deletions);
+- Plans 239, 240, 241 untouched; current Eggfetch authority remains `eggfetch-core =0.2.0` with `native-http1,tls-rustls`;
+- bounded cross-document scan (`README.md`, `rust/README.md`, `AGENTS.md`, `architecture/overview.md`, `architecture/deep-dive-providers.md`, `architecture/deep-dive-database.md`, `.opencode/skills/{architecture,development,documentation}/SKILL.md`): no second mechanically duplicated current-authority block; sole `0.1.7` hit is the historical `Eggfetch 0.1.7 adoption measurement` subsection in `architecture/deep-dive-providers.md`;
+- full local CI-equivalent matrix also passes (fmt check, strict clippy, no-default check/clippy, serial workspace tests, `uv sync --frozen`, ruff format/check, pyright, `pytest tests/tooling/` 108 passed 1 skipped).
 
 When the corrective edit lands, change this plan's status to `complete` and
 append:
