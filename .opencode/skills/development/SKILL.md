@@ -236,8 +236,12 @@ cargo test --manifest-path rust/Cargo.toml --no-default-features
 
 No-default builds must preserve direct and non-SSH proxy construction while
 returning `TransportError::ProxyConfiguration` for SSH proxy configuration.
-Default SSH uses Eggress 1.0.7's stable `OutboundConnector`; no Eggpool-owned
-SSH executor fallback is permitted.
+Default SSH uses the root `ssh` capability forwarded to Eggress 1.0.8
+(`eggress-outbound/ssh` plus the compatibility crate's SSH translation
+support; pproxy-style SSH needs both); no Eggpool-owned
+SSH executor fallback is permitted. The production dial path uses
+`connect_tcp_detailed` with a typed kind/stage adapter; no message-string
+error classifier is permitted.
 
 `cargo deny` checks RustSec advisories, the reviewed license allowlist, allowed
 registry/git sources, and duplicate-version warnings from `deny.toml`. It does

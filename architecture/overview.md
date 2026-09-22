@@ -207,17 +207,22 @@ Deep dive: [Transcoding](deep-dive-transcoder.md).
 (`ProviderHttpClient`, `ProviderBody`, `ProviderResponse`, `TransportError`),
 `client_pool.rs` (generation-owned per-account pool). No auth/wire/retry here;
 credentials render only at dispatch-header construction. Proxy construction
-crosses the stable `eggress-embed` boundary (`OutboundConnector::from_pproxy_uri`
-for single-hop and `__`-separated multi-hop; explicit `direct://` validated
-through Eggress but using the direct Eggfetch client). The root `ssh`
-capability enables Eggress 1.0.7's native SSH session ownership;
+crosses the listener-free `eggress-outbound` boundary
+(`OutboundConnector::from_pproxy_uri` for single-hop and `__`-separated
+multi-hop; explicit `direct://` validated through Eggress but using the
+direct Eggfetch client). The root `ssh` capability forwards to
+`eggress-outbound/ssh` plus the compatibility crate's SSH translation support
+(pproxy-style SSH needs both);
 `--no-default-features` keeps direct/non-SSH proxy paths and rejects SSH proxy
 config as `TransportError::ProxyConfiguration` before dialing. Underlying HTTP
 is Eggfetch (`eggfetch-core` 0.2.0 with
 `native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
 WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
 add only a thin Eggress `Dialer` supplying the raw route stream, with origin
-TLS still owned by Eggfetch. The native profile deliberately excludes
+TLS still owned by Eggfetch. Route failures arrive as typed
+`OutboundConnectError` kind/stage facts mapped into the stable proxy
+`TransportError` categories without message-string inspection. The native
+profile deliberately excludes
 Eggfetch's `http1` high-level alias, URL/retry/redirect/Basic-auth policy, and
 built-in proxy support. `rust/Cargo.toml` plus `cargo tree -e features` is the
 dependency authority; `deny.toml` + `cargo deny check` gates
@@ -399,11 +404,12 @@ Deep dives: [Observability](deep-dive-observability.md),
 Eggfetch (`eggfetch-core` 0.2.0 `native-http1` + `tls-rustls`, provider
 transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
-`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.7
+`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.8
 (optional SSH capability), plus the path crates `eggpool-model-routing`,
 `eggpool-client-config`, and the `eggpool-connect` desktop binary (narrow
 Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `ssh`
-supports SSH upstreams through the facade; `--no-default-features` still
+supports SSH upstreams through the listener-free outbound connector;
+`--no-default-features` still
 compiles/tests, keeps direct/non-SSH proxy, and rejects SSH proxy config
 pre-dial. Test-only `test-support` adds deterministic local TLS peers through
 the private non-SSH test-root adapter; protocol fixture crates stay dev-only.

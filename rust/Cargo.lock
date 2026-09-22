@@ -317,6 +317,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -876,12 +882,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dtoa"
-version = "1.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
-
-[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -954,6 +954,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eggfetch-http-connect"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b16f85a1fdbc2deb5c705001a1d8ec4c05934175262a62664e634bd09043fde0"
+dependencies = [
+ "base64 0.23.1",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "eggpool"
 version = "0.8.0"
 dependencies = [
@@ -966,7 +977,7 @@ dependencies = [
  "eggpool-model-routing",
  "eggress-config",
  "eggress-core",
- "eggress-embed",
+ "eggress-outbound",
  "eggress-pproxy-compat",
  "eggress-protocol-shadowsocks",
  "eggress-protocol-trojan",
@@ -1002,7 +1013,7 @@ dependencies = [
 name = "eggpool-client-config"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1039,9 +1050,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-config"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d59df31e02c7f4cb23e645ad1ce3464dc16a45c9d06f1e3a54ea8da225ad9fe"
+checksum = "a9d6a1788134bc40f8ee3cf13737d43e0aef6699a004d478d2791ef0ab7edac4"
 dependencies = [
  "eggress-core",
  "eggress-routing",
@@ -1059,9 +1070,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-core"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a67518877ef4e84165b18bd11a48161bd1049bef6863701b21861c75e373333"
+checksum = "b60c0f191c351fd9814190b4b18c20b3e93cda2c014a4a9b2ccc4d463b77cb22"
 dependencies = [
  "bytes",
  "eggress-relay",
@@ -1078,48 +1089,39 @@ dependencies = [
 ]
 
 [[package]]
-name = "eggress-embed"
-version = "1.0.7"
+name = "eggress-outbound"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e6bb9f85caa25bce2da333b920a1fc03d4ddb5f986cb69305a0b4d9424a6523"
+checksum = "fcafe5aff5f17439ff8baabf8458c390a7df31ac4859c90340f54fa88835b104"
 dependencies = [
- "eggress-config",
+ "bytes",
  "eggress-core",
- "eggress-metrics",
  "eggress-pproxy-compat",
+ "eggress-protocol-http",
+ "eggress-protocol-shadowsocks",
  "eggress-protocol-socks",
- "eggress-routing",
- "eggress-runtime",
- "eggress-server",
+ "eggress-protocol-trojan",
+ "eggress-protocol-websocket",
  "eggress-transport-ssh",
- "eggress-udp",
+ "eggress-transport-tls",
  "eggress-uri",
+ "h2",
+ "http",
+ "libc",
+ "rustls",
+ "subtle",
  "thiserror",
  "tokio",
  "tokio-util",
- "toml",
  "tracing",
-]
-
-[[package]]
-name = "eggress-metrics"
-version = "1.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5e311142eb454710ca94336d01c90f98aaaf74c2c52972d662eb71fde1e491c"
-dependencies = [
- "eggress-protocol-http",
- "eggress-protocol-shadowsocks",
- "eggress-server",
- "eggress-udp",
- "prometheus-client",
- "thiserror",
+ "zeroize",
 ]
 
 [[package]]
 name = "eggress-pproxy-compat"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3fdbb317a203931b8a6635991584fa6320d0bd34caf0bdce1121b3ee4bed7df"
+checksum = "db7c6e3ba19b15b17c545aeab4a0d463f31749caf96a0107e594df90331db9c1"
 dependencies = [
  "eggress-config",
  "eggress-uri",
@@ -1133,12 +1135,13 @@ dependencies = [
 
 [[package]]
 name = "eggress-protocol-http"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23c66e496e5442c0d18944d986ccffddfdd4390274f0f7ac743fc9c0a8b8f4ad"
+checksum = "f3d5cf7962e39d8b4951c5ebfc2e3c32a3583a85c92e9a7f1c622cc1f3907bf8"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
+ "eggfetch-http-connect",
  "eggress-core",
  "h2",
  "http",
@@ -1154,9 +1157,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-protocol-shadowsocks"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d0e24a45bf191411f1248d2130c8f146f123da0dbf38b3a1e7b9207db8a52f3"
+checksum = "8e5b0f142c66954423152f077e3f6af0354c830a99a9dc0ccff8780efbd48967"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -1184,9 +1187,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-protocol-socks"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bfeb636b6841f89b300faab18d938a52a5d0cea3560594288e3446112adc26b"
+checksum = "a570ea8456428d0c4e18b4f7cf6b98979f8c0e056101efaf341150cd397f3c63"
 dependencies = [
  "bytes",
  "eggress-core",
@@ -1198,9 +1201,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-protocol-trojan"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6571d771ba0ec2123aa6a4e081d6dd89996d77061b6e1ffbb82cd56e9f1b46b1"
+checksum = "59a4b25071c1cf3e591b1c165acb677c8ad1d40a6202c8a8e4b3dabb5dd535b9"
 dependencies = [
  "bytes",
  "eggress-core",
@@ -1216,11 +1219,11 @@ dependencies = [
 
 [[package]]
 name = "eggress-protocol-websocket"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8b23bb4405f377fb9a58d303d37da047b7d3cd844419b1ad12f51b6d5027215"
+checksum = "6b00fe9b1836b4afc3463dece3ec7f8a6b647f0b72f718f587396d8709bed982"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "eggress-core",
  "futures-util",
@@ -1234,18 +1237,18 @@ dependencies = [
 
 [[package]]
 name = "eggress-relay"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8636f96ea09f431f6ebe08e65be7372cfd8ee4de60b736bd90a5c48b56d0d51e"
+checksum = "a041efae61fefdd9f32350f918896f982d663298eda4739b3fe5fbf9d87a4586"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "eggress-routing"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da1ab1456fdf4d6bc928e6661926f050e7a325729a471a8946393b0590838c08"
+checksum = "34a05dc558deb4ecb043bfe55f6aea353f8456a2fb20fc68c1b1d004b56ad377"
 dependencies = [
  "arc-swap",
  "eggress-core",
@@ -1263,40 +1266,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "eggress-runtime"
-version = "1.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a3ff9e9f6a0ad5359269f70abf71726320272380e53fa63a68fe8b0d39dfc05"
-dependencies = [
- "arc-swap",
- "eggress-config",
- "eggress-core",
- "eggress-metrics",
- "eggress-protocol-http",
- "eggress-protocol-shadowsocks",
- "eggress-routing",
- "eggress-server",
- "eggress-transport-ssh",
- "eggress-transport-tls",
- "eggress-udp",
- "eggress-uri",
- "fastrand",
- "rustls",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "eggress-server"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17ee75a1501be03ec0dee7086b632e3d9c286066506bb31d6c63e5387e170a50"
+checksum = "9efa680845ff9a82a145abbf8d763e166cfe7d4f2640b8d51f2d2ba16094a7bd"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "bytes",
  "eggress-core",
+ "eggress-outbound",
  "eggress-protocol-http",
  "eggress-protocol-shadowsocks",
  "eggress-protocol-socks",
@@ -1321,9 +1299,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-transport-ssh"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5858d8aec31738a08fc0d5701484a33214cd08c54e976c883a2a975351ed6d5d"
+checksum = "5d0c22f25b052f01b2d6666c1cdef472a19831ccb562059f4a4473adfc3ad317"
 dependencies = [
  "eggress-core",
  "russh",
@@ -1334,9 +1312,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-transport-tls"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "598e181fd86d749284c84eab3a71e2fc54849e6c03ef79e7d59333eff953fccf"
+checksum = "7473274e70ba449bd64eedb156bfb2cb6d87a917ca0cededc6239ef73a9324ff"
 dependencies = [
  "bytes",
  "eggress-core",
@@ -1351,9 +1329,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-udp"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48194efce8563b7d913f1a2752bf820cb74a30cd633c3afcf46cb574616b1f9a"
+checksum = "1e4c11626d783d5d6617adb3581cd5a907beaad3cdef122a67139f7f0faf1a1b"
 dependencies = [
  "bytes",
  "eggress-core",
@@ -1372,9 +1350,9 @@ dependencies = [
 
 [[package]]
 name = "eggress-uri"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f07c02021c7ba28a9754cc979fd930855b22b9c8b792117a1026b69d7f9bf93"
+checksum = "0703337615177ae5533a7e222d291c5fdf95201c0ce896859968f94f435975eb"
 dependencies = [
  "serde",
  "thiserror",
@@ -2062,15 +2040,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
-name = "lock_api"
-version = "0.4.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
-dependencies = [
- "scopeguard",
-]
-
-[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2307,29 +2276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parking_lot"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
-dependencies = [
- "lock_api",
- "parking_lot_core",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.9.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
-dependencies = [
- "cfg-if",
- "libc",
- "redox_syscall",
- "smallvec",
- "windows-link",
-]
-
-[[package]]
 name = "password-hash"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2354,7 +2300,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde_core",
 ]
 
@@ -2541,29 +2487,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prometheus-client"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "504ee9ff529add891127c4827eb481bd69dc0ebc72e9a682e187db4caa60c3ca"
-dependencies = [
- "dtoa",
- "itoa",
- "parking_lot",
- "prometheus-client-derive-encode",
-]
-
-[[package]]
-name = "prometheus-client-derive-encode"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "440f724eba9f6996b75d63681b0a92b06947f1457076d503a4d2e2c8f56442b8"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2672,15 +2595,6 @@ dependencies = [
  "time",
  "x509-parser",
  "yasna",
-]
-
-[[package]]
-name = "redox_syscall"
-version = "0.5.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
-dependencies = [
- "bitflags",
 ]
 
 [[package]]
@@ -2954,12 +2868,6 @@ dependencies = [
  "cfg-if",
  "cipher 0.5.2",
 ]
-
-[[package]]
-name = "scopeguard"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scrypt"

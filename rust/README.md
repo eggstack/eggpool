@@ -50,10 +50,15 @@ the native `Client::execute_http_body` API. Eggpool selects Eggfetch's
 `native-http1` profile (`transport-http1`, `standard-route`, and
 `advanced-routing`) rather than the high-level `http1` alias; redirects,
 logical retries, and built-in proxy support remain disabled. Proxied accounts install a thin
-`EggressDialer` implementing Eggfetch's custom `Dialer` interface over
-Eggress's raw TCP-route API; Eggfetch still performs origin TLS across the
+`EggressDialer` implementing Eggfetch's custom `Dialer` interface over the
+listener-free `eggress-outbound` 1.0.8 `OutboundConnector` route API;
+Eggfetch still performs origin TLS across the
 returned stream, so proxy and origin trust planes stay separate and a failed
-dial never falls back to direct networking. Physical live-connection
+dial never falls back to direct networking. Route failures arrive as typed
+`OutboundConnectError` kind/stage facts and map into `DialError` kinds
+without message-string inspection; proxy authentication, proxy-target
+refusal, proxy timeout, and generic proxy-connection failures stay distinct
+from origin TLS and direct connection categories. Physical live-connection
 admission uses `PhysicalConnectionPolicy` (`max_connections`/`pool_timeout`),
 idle reuse and expiry use the Eggfetch idle-pool policy
 (`max_keepalive`/`keepalive_timeout`), establishment uses the Eggfetch

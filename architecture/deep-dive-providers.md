@@ -80,8 +80,8 @@ planes. Each account client owns a distinct Eggfetch `Client`, so pools never
 collapse across accounts even for identical proxy URIs. A failed dial is the
 only physical route a proxied client owns: there is no direct fallback.
 
-Normal provider proxy construction crosses one stable Eggress boundary:
-`eggress_embed::outbound::OutboundConnector::from_pproxy_uri` parses and
+Normal provider proxy construction crosses one listener-free Eggress
+boundary: `eggress_outbound::OutboundConnector::from_pproxy_uri` parses and
 compiles single-hop and canonical `__`-separated multi-hop expressions, and
 the dialer passes the logical destination host/port through unchanged so
 domain names survive to SOCKS5 requests, proxy-side DNS, and origin SNI.
@@ -93,17 +93,22 @@ Route failures translate through typed `DialError` kinds into the stable
 `TransportError` proxy categories (`ProxyConnectTimeout`,
 `ProxyAuthentication`, `ProxyTargetConnect`, `ProxyConnect`); origin TLS
 failures stay `Tls` and physical admission timeout stays `PoolTimeout` on
-both routes. One deliberate limitation is documented in the adapter: the
-pinned embed facade renders typed route errors to redacted
-`EggressError::Runtime` strings, so that path classifies the route-failure
-bucket with conservative message predicates mirroring the previous transport
-behavior. The private test-root chain-executor path keeps fully typed
-`ChainError` classification. If a future Eggress embed API exposes the typed
-route error, the production predicates collapse to a direct match.
+both routes. The production dial path calls
+`OutboundConnector::connect_tcp_detailed` and maps the typed
+`OutboundConnectError` kind/stage facts directly: `Timeout` and
+`Authentication` select their categories on any stage, `ConnectionRefused`
+during `HopHandshake` is proxy-target rejection while the same kind at
+`DirectConnect`/`HopConnect` stays a proxy-endpoint failure, and route-level
+`Tls` never masquerades as origin `Tls`. The private test-root
+chain-executor path keeps its own fully typed `ChainError` classification.
+`Deadline` is not observable on this path because Eggpool never sets an outer
+route timeout; Eggfetch's connect timeout owns the provider deadline.
 
 Eggpool delegates provider proxy-chain construction and execution to
-`eggress-embed` 1.0.7. The root `ssh` capability enables the facade's native
-SSH session ownership by default; `--no-default-features` omits that capability
+`eggress-outbound` 1.0.8. The root `ssh` capability enables the outbound
+crate's native SSH session ownership plus the compatibility crate's SSH
+translation support by default (pproxy-style SSH expressions construct only
+when both cfg gates agree); `--no-default-features` omits that capability
 and rejects SSH-containing expressions as
 `TransportError::ProxyConfiguration` before dialing while retaining non-SSH
 proxy construction. There is no Eggpool SSH executor fallback and no direct
@@ -225,3 +230,74 @@ version comments: the existing provider, coordinator, and cancellation
 qualification passes unchanged, and one coordinator attempt still produces at
 most one transport submission. Plans 215–220 remain the historical
 migration/adoption evidence; the 0.1.7 measurement above stays historical.
+
+## Eggress 1.0.8 outbound-crate adoption measurement (2026-09-22)
+
+Plan 243 adopts the published Eggress `1.0.8` crate family and moves the
+normal listener-free provider proxy path from the full-service
+`eggress-embed` facade to the first-class `eggress-outbound` crate, which is
+Eggpool's actual use case (proxy-chained TCP without a listener service).
+The production dial path switches from `connect_tcp` to
+`connect_tcp_detailed`, and the message-string route-error classifier is
+deleted in favor of the typed `OutboundConnectErrorKind`/`OutboundConnectStage`
+adapter described above.
+
+The adoption compares the 1.0.7 baseline and the 1.0.8 candidate under the
+same local Rust `1.98.1` toolchain, `x86_64-apple-darwin` target, default
+features, normal release profile, and no stripping:
+
+| Measurement | 1.0.7 baseline | 1.0.8 candidate | Delta |
+|---|---:|---:|---|
+| final release artifact bytes | 27,268,944 | 27,250,640 | -18,304 (-0.07%) |
+| resolved packages (`Cargo.lock` entries) | 386 | 378 | -8 |
+| normal non-dev dependency lines (`cargo tree -e no-dev`) | 428 | 414 | -14 |
+| production Eggress entry crate | `eggress-embed` | `eggress-outbound` | facade removed |
+| selected outbound features | N/A | `pproxy-compat`, `pproxy-legacy`, `legacy-crypto` (+`ssh` under default) | minimal |
+| `eggress-runtime` in normal release | yes (via facade) | no (package gone) | removed |
+| `eggress-server` in normal release | yes (via facade) | no (test-support/dev only) | removed |
+| string route-error classifier | present | absent | removed |
+
+The result classifies as **smaller by a measured amount**, but the delta is
+not the acceptance criterion on its own. The structural win is the smaller
+dependency boundary plus the typed failure surface: the full-service closure
+(`eggress-embed`, `eggress-runtime`, `eggress-metrics`, `prometheus-client`,
+`parking_lot`, `dtoa`, and their platform shims) leaves the graph, while the
+only additions are `eggress-outbound`, `eggfetch-http-connect` (a new
+`eggress-protocol-http` 1.0.8 dependency), and `base64` 0.23.1 alongside the
+already-present 0.22.1 line. `cargo tree -e features` confirms the required
+`pproxy-compat`/`pproxy-legacy`/`legacy-crypto` profile with `ssh` only under
+the default root capability, and the forbidden `toml`/`udp`/`quic`/
+`insecure-tls` outbound features absent. No unrelated crate was upgraded:
+every other lockfile change is a `1.0.7` → `1.0.8` Eggress-family pin move,
+all still resolving to crates.io with no git/path override.
+
+Three deviations from the plan's expected shape were required during
+implementation, all conservative and all requalified:
+
+- Root `ssh` is `["eggress-outbound/ssh", "eggress-pproxy-compat/ssh"]`
+  rather than outbound alone. Upstream keeps `ssh` and `pproxy-compat` as
+  independent cfg gates, and 1.0.7's facade forwarded the compat-side gate
+  weakly from inside the facade; a weak edge from Eggpool cannot fire because
+  the compatibility package reaches the production graph through outbound,
+  not through the optional test-support edge. The strong edge flips only that
+  cfg flag (`ssh = []` adds no packages) and preserves SSH URI construction.
+- `test-support` enables `eggress-server/ssh` to match the outbound flag.
+  `eggress-server` 1.0.8 re-exports `eggress-outbound::build_chain_executor`,
+  whose arity follows the outbound `ssh` gate, while the server's internal
+  call site follows its own; building the server without `ssh` while outbound
+  has it is an upstream arity skew that fails compilation. The seam still
+  passes no SSH session cache and remains `cfg(test-support)`.
+- The RSA advisory exception (`RUSTSEC-2023-0071`) is retained with a
+  corrected rationale: the affected `rsa 0.10.0-rc.18` still resolves through
+  the live Eggress 1.0.8 / `russh` 0.62.7 SSH path.
+
+Focused qualification tightened one previously broad assertion (HTTP CONNECT
+rejection without credentials is now deterministically
+`ProxyAuthentication`) and added wrong-credential, SOCKS5 target-refusal
+(`ProxyTargetConnect`), closed-proxy-endpoint (`ProxyConnect`), blackholed
+route-timeout (`ProxyConnectTimeout`), and untrusted route-TLS
+(`ProxyConnect`, never `Tls`) coverage. Provider transport passes 34/34
+default and 40/40 with `test-support`; coordinator C008/C009/C011,
+boundaries, finalization, publication, and wire-runtime pass; no-default
+check/clippy/tests pass with SSH rejected pre-dial; `cargo deny` passes.
+Plans 215–220 and 241 remain historical evidence.

@@ -29,9 +29,11 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   claims. Do not document proxy, TLS, SQLite, or archive capabilities that are
   not present in the resolved Cargo feature graph.
 - When documenting an optional native capability, describe both its enabled
-  behavior and its disabled-feature behavior. Eggress 1.0.7 SSH is enabled by
-  the root `ssh` capability through the stable facade, while no-default builds
-  reject SSH configuration before dialing and retain non-SSH proxy support.
+  behavior and its disabled-feature behavior. Eggress 1.0.8 SSH is enabled by
+  the root `ssh` capability through the listener-free `eggress-outbound` crate
+  (plus the compatibility crate's SSH translation support), while no-default
+  builds reject SSH configuration before dialing and retain non-SSH proxy
+  support.
 - Keep provider transport documentation aligned with the exact Cargo profile:
   Eggfetch 0.2.0 uses `native-http1,tls-rustls`, while the high-level `http1`
   alias and `standard-http1` are intentionally not selected. Preserve the

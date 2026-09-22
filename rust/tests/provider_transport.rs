@@ -59,9 +59,16 @@ enum ResponseMode {
 
 #[derive(Clone, Copy)]
 enum ProxyMode {
-    HttpConnect { authenticated: bool },
+    HttpConnect {
+        authenticated: bool,
+    },
     Socks4,
-    Socks5 { authenticated: bool },
+    Socks5 {
+        authenticated: bool,
+    },
+    /// Complete SOCKS5 negotiation, then report a target connection refusal
+    /// instead of relaying. Exercises the typed proxy-target refusal bucket.
+    Socks5RefuseTarget,
 }
 
 struct ProxyFixture {
@@ -85,6 +92,10 @@ impl ProxyFixture {
 
     fn socks4(expected_connections: usize) -> Self {
         Self::start(ProxyMode::Socks4, expected_connections)
+    }
+
+    fn socks5_refuse_target(expected_connections: usize) -> Self {
+        Self::start(ProxyMode::Socks5RefuseTarget, expected_connections)
     }
 
     fn start(mode: ProxyMode, expected_connections: usize) -> Self {
@@ -151,6 +162,71 @@ impl Drop for ProxyFixture {
     fn drop(&mut self) {
         if let Some(thread) = self.thread.take() {
             thread.join().expect("proxy thread");
+        }
+    }
+}
+
+/// A proxy endpoint that accepts TCP and then never responds. The route
+/// handshake never completes, so Eggfetch's connect timeout owns the
+/// deadline and the failure must classify as a proxy route timeout.
+struct BlackholeProxy {
+    address: SocketAddr,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl BlackholeProxy {
+    fn start(expected_connections: usize) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("blackhole listener");
+        listener
+            .set_nonblocking(true)
+            .expect("blackhole listener nonblocking");
+        let address = listener.local_addr().expect("blackhole address");
+        let thread = thread::spawn(move || {
+            let mut workers = Vec::with_capacity(expected_connections);
+            for _ in 0..expected_connections {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return;
+                            }
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("blackhole accept: {error}"),
+                    }
+                };
+                stream
+                    .set_nonblocking(false)
+                    .expect("blackhole stream blocking mode");
+                workers.push(thread::spawn(move || {
+                    // Hold the connection without responding until the client
+                    // gives up and closes it; draining keeps the socket open
+                    // so the route genuinely stalls instead of resetting.
+                    let mut byte = [0u8; 64];
+                    while stream.read(&mut byte).is_ok_and(|read| read > 0) {}
+                }));
+            }
+            for worker in workers {
+                worker.join().expect("blackhole worker");
+            }
+        });
+        Self {
+            address,
+            thread: Some(thread),
+        }
+    }
+
+    fn uri(&self) -> String {
+        format!("127.0.0.1:{}", self.address.port())
+    }
+}
+
+impl Drop for BlackholeProxy {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("blackhole thread");
         }
     }
 }
@@ -743,7 +819,14 @@ fn handle_proxy_connection(
                 .expect("SOCKS4 connect response");
             (host, port)
         }
-        ProxyMode::Socks5 { authenticated } => {
+        ProxyMode::Socks5 { .. } | ProxyMode::Socks5RefuseTarget => {
+            let refusing = matches!(mode, ProxyMode::Socks5RefuseTarget);
+            let authenticated = matches!(
+                mode,
+                ProxyMode::Socks5 {
+                    authenticated: true
+                }
+            );
             let Some(header) = read_exact_bytes(&mut client, 2) else {
                 return;
             };
@@ -802,6 +885,14 @@ fn handle_proxy_connection(
                 return;
             };
             let port = u16::from_be_bytes([raw_port[0], raw_port[1]]);
+            if refusing {
+                // RFC 1928 connection-refused reply: the proxy was reached
+                // but reports that the requested target refused TCP.
+                client
+                    .write_all(&[5, 5, 0, 1, 127, 0, 0, 1, 0, 0])
+                    .expect("SOCKS refusal response");
+                return;
+            }
             targets.lock().unwrap().push(format!(
                 "{}:{}",
                 if request[3] == 3 { "domain" } else { "ip" },
@@ -1963,6 +2054,39 @@ async fn trojan_auth_failure_is_redacted_and_cannot_fall_back_direct() {
 
 #[cfg(feature = "test-support")]
 #[tokio::test(flavor = "current_thread")]
+async fn trojan_route_tls_failure_is_proxy_connect_not_origin_tls() {
+    install_test_crypto_provider();
+    let server = FixtureServer::http(ResponseMode::Normal, 0);
+    let mut proxy = TrojanProxyFixture::start("trojan-secret-marker", 1).await;
+    // The production constructor keeps system roots, which cannot verify the
+    // fixture CA: route-level TLS fails before any origin TLS is attempted.
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &proxy.uri("trojan-secret-marker"),
+    )
+    .expect("Trojan proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-bypass-trojan",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("untrusted route TLS must fail");
+    // Route TLS stays a proxy connection failure; TransportError::Tls is
+    // reserved for provider/origin TLS.
+    assert_eq!(error, TransportError::ProxyConnect);
+    assert!(!error.to_string().contains("trojan-secret-marker"));
+    assert!(!format!("{error:?}").contains("trojan-secret-marker"));
+    assert!(server.requests().is_empty());
+    drop(client);
+    proxy.shutdown().await;
+    assert!(proxy.targets().is_empty());
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test(flavor = "current_thread")]
 async fn ssh_proxy_reaches_the_target_with_the_eggress_compatibility_policy() {
     install_test_crypto_provider();
     let server =
@@ -2248,12 +2372,115 @@ async fn socks5_auth_preserves_domain_target_and_rejection_is_not_direct() {
         )
         .await
         .expect_err("proxy authentication rejection");
-    assert!(matches!(
-        error,
-        TransportError::ProxyAuthentication | TransportError::ProxyConnect
-    ));
+    // The typed 1.0.8 route error reports authentication deterministically;
+    // the previous string classifier accepted a broader outcome here.
+    assert_eq!(error, TransportError::ProxyAuthentication);
     assert!(rejecting_proxy.targets().is_empty());
     assert_eq!(server.requests().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wrong_http_connect_credentials_map_to_proxy_authentication() {
+    let server = FixtureServer::http(ResponseMode::Normal, 0);
+    let proxy = ProxyFixture::http_connect(true, 1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://{}#wrong-user:wrong-pass", proxy.uri()),
+    )
+    .expect("authenticated HTTP CONNECT client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-bypass",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("wrong proxy credentials must fail");
+    // The proxy answers 407, which the typed route error reports as
+    // authentication rather than a generic connection failure.
+    assert_eq!(error, TransportError::ProxyAuthentication);
+    assert!(!error.to_string().contains("wrong-pass"));
+    assert!(proxy.targets().is_empty());
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn socks5_target_refusal_maps_to_proxy_target_connect() {
+    let server = FixtureServer::http(ResponseMode::Normal, 0);
+    let proxy = ProxyFixture::socks5_refuse_target(1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("socks5://{}", proxy.uri()),
+    )
+    .expect("SOCKS5 client");
+    let error = client
+        .send(
+            Method::GET,
+            "/refused-target",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("refused target must fail");
+    // The proxy was reached and its protocol reported a target refusal, so
+    // the typed facts select proxy-target rejection rather than the generic
+    // proxy-connection bucket. No request may reach the provider directly.
+    assert_eq!(error, TransportError::ProxyTargetConnect);
+    assert!(proxy.targets().is_empty());
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refused_proxy_endpoint_is_proxy_connect_not_target_connect() {
+    let server = FixtureServer::http(ResponseMode::Normal, 0);
+    let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("loopback listener")
+        .local_addr()
+        .expect("loopback address")
+        .port();
+    // The listener is dropped here, so TCP to the proxy endpoint is refused
+    // before any proxy handshake can report a target problem.
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://127.0.0.1:{closed_port}"),
+    )
+    .expect("proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-not-be-direct",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("refused proxy endpoint must fail");
+    assert_eq!(error, TransportError::ProxyConnect);
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn blackholed_proxy_route_times_out_as_proxy_connect_timeout() {
+    let server = FixtureServer::http(ResponseMode::Normal, 0);
+    let proxy = BlackholeProxy::start(1);
+    let client = ProviderHttpClient::new_with_proxy(
+        proxy_test_config(&server.http_url()),
+        &format!("http://{}", proxy.uri()),
+    )
+    .expect("proxy client");
+    let error = client
+        .send(
+            Method::GET,
+            "/must-time-out",
+            HeaderMap::new(),
+            Bytes::new(),
+        )
+        .await
+        .expect_err("blackholed route must time out");
+    // The route handshake never completes, so Eggfetch's connect timeout
+    // owns the deadline on the proxied route.
+    assert_eq!(error, TransportError::ProxyConnectTimeout);
+    assert!(server.requests().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -101,6 +101,16 @@ coordinator C008/C009/C011/boundary/finalization/publication/wire-runtime,
 no-default build, `cargo deny`, feature graph, and footprint before closing;
 leave plans 215–220 historical.
 
+Plan 243 exact-pins the Eggress `1.0.8` family and moves the normal
+listener-free provider proxy path from the `eggress-embed` facade to
+`eggress-outbound` directly (`connect_tcp_detailed`, typed
+kind/stage → `DialError`, no message-string classifier). Root `ssh`
+forwards to `eggress-outbound/ssh` plus the compat crate's SSH translation
+support (both required for pproxy-style SSH); `test-support` aligns
+`eggress-server/ssh` with the outbound flag (upstream 1.0.8 arity skew
+workaround, still no SSH session cache). Requalify as in Plan 241; leave
+plans 215–220 and 241 historical.
+
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
@@ -144,7 +154,8 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing. Default SSH is the root `ssh` capability forwarded to
-  Eggress 1.0.7; there is no Eggpool SSH executor fallback.
+  Eggress 1.0.8 (`eggress-outbound/ssh` plus the compat crate's SSH
+  translation support); there is no Eggpool SSH executor fallback.
 - Cancellation-path tests must synchronize on an observable fixture boundary or
   invariant under a bounded timeout. Do not use fixed millisecond sleeps or
   yield-count loops to guess that a detached worker, proxy handshake, or pool

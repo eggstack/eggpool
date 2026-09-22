@@ -19,11 +19,11 @@ unused-ignored-advisory = "deny"
 
 ignore = [
     # RustSec reports no safe upgrade for rsa 0.10.0-rc.18. It is reachable
-    # only through the exact Eggress 1.0.2 SSH/russh stack that supplies the
-    # supported SSH proxy path. Re-review on any Eggress/russh/ssh-key change
-    # and no later than 2026-12-31; remove this exception when a safe upgrade
-    # or supported Eggress release is available.
-    { id = "RUSTSEC-2023-0071", reason = "No safe rsa upgrade is available; the affected rsa 0.10.0-rc.18 is transitive through the pinned Eggress 1.0.2 SSH transport. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
+    # only through the exact Eggress 1.0.8 SSH/russh 0.62.7 stack that supplies
+    # the supported SSH proxy path. Re-review on any Eggress/russh/ssh-key
+    # change and no later than 2026-12-31; remove this exception when a safe
+    # upgrade or supported Eggress release is available.
+    { id = "RUSTSEC-2023-0071", reason = "No safe rsa upgrade is available; the affected rsa 0.10.0-rc.18 is transitive through the pinned Eggress 1.0.8 SSH transport. Re-review on any Eggress/russh/ssh-key change and by 2026-12-31." },
 ]
 
 [licenses]

@@ -8,10 +8,13 @@
 //! pooling, physical admission, and transport-I/O machinery through
 //! `eggfetch-core` 0.2.0 native `Client::execute_http_body`. Proxied routes
 //! supply the physical byte stream through a thin `EggressDialer` adapter that
-//! implements Eggfetch's general custom `Dialer` interface over Eggress's
-//! existing raw TCP-route API. Eggress owns route/proxy handshakes and
-//! route-level TLS; Eggfetch still performs destination/origin TLS across the
-//! returned stream, so proxy and origin trust planes remain separate.
+//! implements Eggfetch's general custom `Dialer` interface over the
+//! listener-free `eggress-outbound` 1.0.8 `OutboundConnector` route API.
+//! Eggress owns route/proxy handshakes and route-level TLS; Eggfetch still
+//! performs destination/origin TLS across the returned stream, so proxy and
+//! origin trust planes remain separate. Route failures arrive as typed
+//! `OutboundConnectError` facts (`kind`/`stage`) and are mapped into
+//! `DialError` kinds without inspecting display strings.
 
 use std::{
     error::Error as StdError,
@@ -380,7 +383,7 @@ impl ProviderHttpClient {
 /// route/proxy handshake (including any route-level TLS such as a Trojan
 /// connection to the proxy), while Eggfetch performs destination/origin TLS
 /// across this stream for `https://` upstreams. The stream type stays generic
-/// so both the stable embed connector and the compatibility chain executor
+/// so both the outbound connector and the compatibility chain executor
 /// can supply routes without naming an optional dependency.
 struct EggressDialStream<S>(S);
 
@@ -440,7 +443,7 @@ struct EggressDialer {
 #[derive(Clone)]
 enum EggressDialerInner {
     Outbound {
-        connector: Arc<eggress_embed::outbound::OutboundConnector>,
+        connector: Arc<eggress_outbound::OutboundConnector>,
     },
     #[cfg(feature = "test-support")]
     TestRoot {
@@ -455,10 +458,10 @@ impl Dialer for EggressDialer {
         Box::pin(async move {
             match inner {
                 EggressDialerInner::Outbound { connector } => connector
-                    .connect_tcp(target.host(), target.port())
+                    .connect_tcp_detailed(target.host(), target.port())
                     .await
                     .map(|(stream, _)| dial_stream(stream))
-                    .map_err(map_egress_dial_error),
+                    .map_err(map_outbound_dial_error),
                 #[cfg(feature = "test-support")]
                 EggressDialerInner::TestRoot { executor, chain } => {
                     let target = target_addr_for_dial(target.host(), target.port());
@@ -564,8 +567,9 @@ fn build_test_root_proxy_dialer_inner(
         .next()
         .map(|upstream| upstream.chain.hops)
         .ok_or(TransportError::ProxyConfiguration)?;
-    // The facade's `ssh` capability unifies the server's cfg signature, but
-    // this adapter never supplies or owns an SSH session cache.
+    // `test-support` enables `eggress-server/ssh` to match the outbound
+    // crate's flag, but this adapter never supplies or owns an SSH session
+    // cache.
     let executor = eggress_server::build_chain_executor(tls_config, None, None);
     Ok(EggressDialer {
         inner: EggressDialerInner::TestRoot {
@@ -577,47 +581,64 @@ fn build_test_root_proxy_dialer_inner(
 
 fn build_egress_connector(
     proxy_url: &str,
-) -> Result<eggress_embed::outbound::OutboundConnector, eggress_embed::EggressError> {
-    eggress_embed::outbound::OutboundConnector::from_pproxy_uri(proxy_url)
+) -> Result<eggress_outbound::OutboundConnector, eggress_outbound::OutboundError> {
+    eggress_outbound::OutboundConnector::from_pproxy_uri(proxy_url)
 }
 
-/// Classify an Eggress embed route failure into an Eggfetch dial kind.
+/// Classify a typed listener-free route failure into an Eggfetch dial kind.
 ///
-/// The pinned embed API reports route execution as `EggressError::Runtime`
-/// with the typed `ChainError` already rendered to a redacted string, so the
-/// variant selects the category and only the route-failure bucket uses
-/// conservative message predicates. Those predicates mirror the previous
-/// transport classification exactly; if a future Eggress embed API exposes
-/// the typed route error here, replace the predicates with a direct match.
-/// The original error is retained as the `DialError` source. Eggress
-/// documents its messages as credential-redacted, and the fixed display
-/// message below carries no route input.
-fn map_egress_dial_error(error: eggress_embed::EggressError) -> DialError {
+/// The outbound connector reports `OutboundConnectError` facts, so this
+/// mapping matches on `kind()`/`stage()` only and never inspects display
+/// strings. The original error is retained as the `DialError` source; the
+/// fixed display message below carries no route input, and the typed error's
+/// own `Display`/`Debug` are redacted by Eggress.
+///
+/// Mapping contract:
+/// - `Timeout` (any stage) is a route timeout. `Deadline` is not observable
+///   on this path because Eggpool calls the non-outer-timeout detailed
+///   method and lets Eggfetch's connect timeout own the provider deadline;
+///   a `Timeout`/`Deadline` combination still maps to `Timeout` through the
+///   kind-first arm.
+/// - `Authentication` (any stage) is a proxy credential rejection.
+/// - `ConnectionRefused` during `HopHandshake` means Eggress reached the
+///   proxy and the proxy protocol reported a target refusal, which is the
+///   typed evidence for `Rejected`. The same kind at `DirectConnect` or
+///   `HopConnect` means the proxy endpoint itself refused TCP, which stays
+///   `Connection`.
+/// - `Dns`, `NetworkUnreachable`, `HostUnreachable`, and route-level `Tls`
+///   stay `Connection`: they are proxy-route failures, never provider/origin
+///   `Tls`.
+/// - `Protocol` and `Policy` stay `Other` rather than claiming a more
+///   specific cause; they remain fail-closed through the proxy error
+///   category.
+fn map_outbound_dial_error(error: eggress_outbound::OutboundConnectError) -> DialError {
+    use eggress_outbound::{OutboundConnectErrorKind, OutboundConnectStage};
+
     const MESSAGE: &str = "eggress route establishment failed";
-    match &error {
-        eggress_embed::EggressError::Runtime(detail) => {
-            let message = detail.to_ascii_lowercase();
-            if message.contains("timed out") || message.contains("timeout") {
-                DialError::with_source(DialErrorKind::Timeout, MESSAGE, error)
-            } else if message.contains("auth")
-                || message.contains("credential")
-                || message.contains("password")
-                || message.contains("407")
-            {
-                DialError::with_source(DialErrorKind::Authentication, MESSAGE, error)
-            } else if message.contains("target") || message.contains("destination") {
-                DialError::with_source(DialErrorKind::Rejected, MESSAGE, error)
-            } else {
-                DialError::with_source(DialErrorKind::Connection, MESSAGE, error)
-            }
+    let kind = match error.kind() {
+        OutboundConnectErrorKind::Timeout => DialErrorKind::Timeout,
+        OutboundConnectErrorKind::Authentication => DialErrorKind::Authentication,
+        OutboundConnectErrorKind::ConnectionRefused
+            if error.stage() == OutboundConnectStage::HopHandshake =>
+        {
+            DialErrorKind::Rejected
         }
-        _ => DialError::with_source(DialErrorKind::Other, MESSAGE, error),
-    }
+        OutboundConnectErrorKind::ConnectionRefused
+        | OutboundConnectErrorKind::Dns
+        | OutboundConnectErrorKind::NetworkUnreachable
+        | OutboundConnectErrorKind::HostUnreachable
+        | OutboundConnectErrorKind::Tls => DialErrorKind::Connection,
+        OutboundConnectErrorKind::Protocol
+        | OutboundConnectErrorKind::Policy
+        | OutboundConnectErrorKind::Other => DialErrorKind::Other,
+        _ => DialErrorKind::Other,
+    };
+    DialError::with_source(kind, MESSAGE, error)
 }
 
 /// Classify a typed chain-executor route failure into an Eggfetch dial kind.
 ///
-/// Unlike the embed facade path, the executor preserves `ChainError`
+/// Unlike the outbound detailed path, the executor preserves `ChainError`
 /// structure, so this mapping uses typed variants and predicates only. The
 /// original error is retained as the `DialError` source; the fixed display
 /// message carries no route input.
@@ -1169,67 +1190,78 @@ mod tests {
     }
 
     #[test]
-    fn egress_route_failures_classify_into_stable_dial_kinds() {
-        use super::{DialErrorKind, map_egress_dial_error};
-
-        let cases = [
-            (
-                eggress_embed::EggressError::Runtime("connection timed out".to_owned()),
-                DialErrorKind::Timeout,
-            ),
-            (
-                eggress_embed::EggressError::Runtime("proxy timeout".to_owned()),
-                DialErrorKind::Timeout,
-            ),
-            (
-                eggress_embed::EggressError::Runtime(
-                    "407 Proxy Authentication Required".to_owned(),
+    fn outbound_connector_construction_fails_closed_for_malformed_expressions() {
+        // Connector construction composes the route TLS stack, so select
+        // the pinned provider exactly as the client constructors do.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        assert!(super::build_egress_connector("direct://").is_ok());
+        assert!(
+            super::build_egress_connector("http://127.0.0.1:8080").is_ok(),
+            "single-hop proxy expression must construct"
+        );
+        for expression in [
+            "unsupported://127.0.0.1:1",
+            "http://127.0.0.1:1__redir://127.0.0.1:2",
+        ] {
+            assert!(
+                super::build_egress_connector(expression).is_err(),
+                "unsupported expression must fail construction: {expression}"
+            );
+            assert!(
+                matches!(
+                    super::build_eggress_dialer(Some(expression)),
+                    Err(TransportError::ProxyConfiguration)
                 ),
-                DialErrorKind::Authentication,
-            ),
-            (
-                eggress_embed::EggressError::Runtime("invalid credentials".to_owned()),
-                DialErrorKind::Authentication,
-            ),
-            (
-                eggress_embed::EggressError::Runtime(
-                    "proxy could not connect to the target".to_owned(),
-                ),
-                DialErrorKind::Rejected,
-            ),
-            (
-                eggress_embed::EggressError::Runtime("destination rejected".to_owned()),
-                DialErrorKind::Rejected,
-            ),
-            (
-                eggress_embed::EggressError::Runtime("connection refused".to_owned()),
-                DialErrorKind::Connection,
-            ),
-            (
-                eggress_embed::EggressError::Config("bad chain".to_owned()),
-                DialErrorKind::Other,
-            ),
-        ];
-        for (error, expected) in cases {
-            assert_eq!(map_egress_dial_error(error).kind(), expected);
+                "unsupported expression must fail before dialing: {expression}"
+            );
         }
     }
 
-    #[test]
-    fn egress_dial_errors_are_secret_free() {
-        use super::map_egress_dial_error;
+    #[tokio::test]
+    async fn outbound_route_refusal_classifies_from_typed_facts_without_secrets() {
+        use super::{DialErrorKind, map_outbound_dial_error};
+        use eggress_outbound::{OutboundConnectErrorKind, OutboundConnectStage};
 
+        // Connector construction composes the route TLS stack, so select
+        // the pinned provider exactly as the client constructors do.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        // Reserve a loopback port and release it so the proxy endpoint
+        // refuses TCP. The credential fragment exercises the redaction
+        // boundary: the typed error facts must not carry route secrets.
+        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("loopback listener")
+            .local_addr()
+            .expect("loopback address")
+            .port();
         let marker = "dial-secret-marker";
-        let error = map_egress_dial_error(eggress_embed::EggressError::Runtime(format!(
-            "route to proxy failed for caller {marker}"
-        )));
+        let connector = super::build_egress_connector(&format!(
+            "http://127.0.0.1:{closed_port}#{marker}-user:{marker}-pass"
+        ))
+        .expect("proxy connector");
+        let typed = match connector
+            .connect_tcp_detailed("provider.example", 443)
+            .await
+        {
+            Ok(_) => panic!("refused proxy endpoint must fail"),
+            Err(error) => error,
+        };
+        // The proxy endpoint refused TCP before any proxy handshake, so the
+        // typed facts stay in the endpoint-connection bucket rather than the
+        // proxy-target rejection bucket.
+        assert_eq!(typed.kind(), OutboundConnectErrorKind::ConnectionRefused);
+        assert_eq!(typed.stage(), OutboundConnectStage::HopConnect);
+        assert!(!format!("{typed}").contains(marker));
+        assert!(!format!("{typed:?}").contains(marker));
+
+        let dial = map_outbound_dial_error(typed);
+        assert_eq!(dial.kind(), DialErrorKind::Connection);
         // The fixed display message carries no route input; only the
         // redacted source chain may retain the detail, and `DialError`
         // redacts source `Debug` output by construction.
-        assert!(!error.message().contains(marker));
-        assert!(!format!("{error}").contains(marker));
-        assert!(!format!("{error:?}").contains(marker));
-        assert!(std::error::Error::source(&error).is_some());
+        assert!(!dial.message().contains(marker));
+        assert!(!format!("{dial}").contains(marker));
+        assert!(!format!("{dial:?}").contains(marker));
+        assert!(std::error::Error::source(&dial).is_some());
     }
 
     #[test]
