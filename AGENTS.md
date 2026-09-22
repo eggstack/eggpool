@@ -85,6 +85,21 @@ the authenticated runtime projection. H0 uses the effective default, H1 uses
 plan's predicate is met. Build ordinary and feature release candidates
 separately; the feature is never a release/package capability and its
 environment variable is never part of production config or reload policy.
+Plan 239 closed as I1 (foreground SQLite automatic-checkpoint work owns the
+Pi MMC tail).
+
+Plan 240 is the passive-checkpoint production design handoff only and
+authorizes no runtime change: single connection/gate, WAL/NORMAL, existing
+publication/finalization ownership, and the pre-existing passive maintenance
+checkpoint stay as-is until a reviewed design with restart/reload/backup/
+restore/recovery bounds and loopback evidence lands.
+
+Plan 241 exact-pins `eggfetch-core =0.2.0` (`native-http1,tls-rustls`,
+API-preserving vs 0.1.7; upstream issue #24 fix stays dormant, no
+compression/`Accept-Encoding` change). Requalify provider transport +
+coordinator C008/C009/C011/boundary/finalization/publication/wire-runtime,
+no-default build, `cargo deny`, feature graph, and footprint before closing;
+leave plans 215–220 historical.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
@@ -137,7 +152,7 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   release condition when it is the first direct observable.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
-- Provider transport is exact-pinned to `eggfetch-core =0.1.7` with
+- Provider transport is exact-pinned to `eggfetch-core =0.2.0` with
   `native-http1,tls-rustls`; do not substitute Eggfetch's `http1` alias or
   `standard-http1`, and keep the high-level URL/retry/redirect/Basic-auth,
   built-in proxy, and HTTP/2/3 features disabled. `operations/update.rs` is a

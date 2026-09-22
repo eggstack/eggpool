@@ -213,7 +213,7 @@ through Eggress but using the direct Eggfetch client). The root `ssh`
 capability enables Eggress 1.0.7's native SSH session ownership;
 `--no-default-features` keeps direct/non-SSH proxy paths and rejects SSH proxy
 config as `TransportError::ProxyConfiguration` before dialing. Underlying HTTP
-is Eggfetch (`eggfetch-core` 0.1.7 with
+is Eggfetch (`eggfetch-core` 0.2.0 with
 `native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
 WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
 add only a thin Eggress `Dialer` supplying the raw route stream, with origin
@@ -396,7 +396,7 @@ Deep dives: [Observability](deep-dive-observability.md),
 ### 14. Native dependencies and feature gates
 
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
-Eggfetch (`eggfetch-core` 0.1.7 `native-http1` + `tls-rustls`, provider
+Eggfetch (`eggfetch-core` 0.2.0 `native-http1` + `tls-rustls`, provider
 transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
 `tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.7

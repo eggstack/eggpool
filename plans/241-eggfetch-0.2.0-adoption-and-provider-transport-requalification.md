@@ -1,6 +1,6 @@
 # Eggfetch 0.2.0 Adoption and Provider-Transport Requalification
 
-Status: implementation handoff
+Status: complete
 
 Planning baseline: `f6799dcd50b790724257d37b99a1f40f91d87428` (`main`, Eggpool 0.8.0)
 
@@ -569,3 +569,39 @@ short completion note containing:
 
 Do not claim closure from compilation alone. The dependency change is closed
 only when the provider behavior and resolved feature graph are requalified.
+
+## Completion note — 2026-09-22
+
+- Implementation commit: `551fbd9e` (`Adopt eggfetch-core 0.2.0 and requalify
+  provider transport`).
+- `rust/Cargo.toml` exact-pins `eggfetch-core =0.2.0` (`native-http1`,
+  `tls-rustls`); `rust/Cargo.lock` resolves the crates.io 0.2.0 package
+  (`6cd254b8…`) with no git/path override. Narrow `cargo update -p
+  eggfetch-core --precise 0.2.0` moved only that package.
+- No executable provider change: the existing adapter compiled against 0.2.0
+  unchanged (only the version comment in `transport.rs` was updated).
+- Provider transport: default 30 passed; `test-support` 35 passed.
+- Coordinator: C008 29, C009 13, C011 17, boundaries 5, finalization 10,
+  publication 6, wire-runtime 8 — all pass; one attempt remains one upstream
+  submission with unchanged retry/failover and fail-closed proxy behavior.
+- No-default-features: serial suite passes (an early parallel run showed a
+  `database_compatibility` timing flake that passes serially and in
+  isolation; the repo mandates `--test-threads=1`).
+- Serial workspace suite: 704 passed, 0 failed. `cargo deny` passes
+  (advisories/bans/licenses/sources ok).
+- Feature graph: exactly `native-http1`, `transport-http1`,
+  `standard-route`, `advanced-routing`, `tls-rustls`; all forbidden families
+  absent. Resolved packages unchanged at 386.
+- Footprint (same host, Rust 1.98.1, `aarch64-apple-darwin`, default
+  features, release, no strip): 0.1.7 baseline 27,288,864 bytes vs 0.2.0
+  candidate 27,268,944 bytes (-0.07%, neutral).
+- `qualification-db-diagnostics` feature build still checks and its focused
+  targets pass; release workflows enable no Cargo features, so the
+  qualification feature cannot leak into artifacts.
+- Docs updated: `README.md`, `rust/README.md`, `AGENTS.md`,
+  `architecture/overview.md`, `architecture/deep-dive-providers.md` (dated
+  0.2.0 subsection), `.opencode/skills/{architecture,development,
+  documentation}/SKILL.md`, `transport.rs` comment. Plans 215–220 untouched.
+- No compression, protocol, routing, SQLite, or SBC-policy change bundled.
+  Upstream issue #24 fix stays dormant (no `compression-*` features, no
+  `Accept-Encoding` change).

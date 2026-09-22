@@ -37,7 +37,7 @@ request, and successful client reuse rather than an incidental handshake count.
 
 ## Native dependency boundaries
 
-Direct provider transport uses exact-pinned `eggfetch-core =0.1.7` with
+Direct provider transport uses exact-pinned `eggfetch-core =0.2.0` with
 `native-http1` + `tls-rustls` through the native
 `Client::execute_http_body` API. `native-http1` expands to
 `transport-http1`, `standard-route`, and `advanced-routing`: it supplies the
@@ -62,7 +62,7 @@ native roots, JSON, cookies, and multipart features disabled. Eggpool does not
 configure Eggfetch `Timeout.total`; connect and established read/write
 inactivity remain the separate Eggpool-owned timeout layers described below.
 
-Eggfetch 0.1.7 derives native origin facts directly from Eggpool's parsed
+Eggfetch 0.2.0 derives native origin facts directly from Eggpool's parsed
 `http::Uri`; the provider path does not serialize through `url::Url` or add
 IDNA conversion. `join_provider_target()` remains the boundary that validates
 the configured authority and rejects unsafe absolute or authority-form
@@ -193,3 +193,35 @@ queries for `url`, `idna`, `icu_provider`, `icu_normalizer`,
 URL/IDNA/ICU and DashMap closures are absent from the resolved Eggpool graph.
 The candidate still retains direct Hyper/Rustls dependencies for the updater,
 error-boundary inspection, and test-support owners documented above.
+
+## Eggfetch 0.2.0 adoption measurement (2026-09-22)
+
+Plan 241 adopts the published `eggfetch-core =0.2.0` crate with the unchanged
+`native-http1` + `tls-rustls` profile. Upstream 0.2.0 is API-preserving
+relative to 0.1.7 (same public Rust surface, feature graph, defaults, and
+MSRV Rust 1.89); the only Eggpool-visible upstream fix is the streaming-
+decompression chunk-boundary correction (issue #24), which stays dormant
+because EggPool does not enable any `compression-*` feature and keeps using
+the frame-preserving `Client::execute_http_body`/`NativeResponseBody` path
+with no injected `Accept-Encoding`.
+
+The adoption compares the 0.1.7 baseline and the 0.2.0 candidate under the
+same local Rust `1.98.1` toolchain, `aarch64-apple-darwin` target, default
+features, normal release profile, and no stripping:
+
+| Measurement | 0.1.7 baseline | 0.2.0 candidate | Delta |
+|---|---:|---:|---:|
+| final release artifact bytes | 27,288,864 | 27,268,944 | -19,920 (-0.07%) |
+| resolved packages (`cargo metadata`) | 386 | 386 | 0 |
+| direct Eggfetch feature profile | `native-http1`, `tls-rustls` | `native-http1`, `tls-rustls` | unchanged |
+| unexpected Eggfetch feature families | none | none | — |
+
+The resolved graph selects exactly `native-http1`, `transport-http1`,
+`standard-route`, `advanced-routing`, and `tls-rustls`; high-level `http1`,
+`high-level-url`, logical retry, redirects, Basic-auth, built-in proxy,
+HTTP/2/3, compression, native roots, JSON, cookies, and multipart remain
+absent. No Eggpool source change was required beyond the exact pin and
+version comments: the existing provider, coordinator, and cancellation
+qualification passes unchanged, and one coordinator attempt still produces at
+most one transport submission. Plans 215–220 remain the historical
+migration/adoption evidence; the 0.1.7 measurement above stays historical.

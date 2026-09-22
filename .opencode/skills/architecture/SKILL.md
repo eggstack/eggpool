@@ -49,7 +49,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 - Treat `rust/Cargo.toml` and its locked resolved graph as the native dependency
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
-- Provider transport uses exact-pinned `eggfetch-core =0.1.7` with
+- Provider transport uses exact-pinned `eggfetch-core =0.2.0` with
   `native-http1,tls-rustls`: retain `advanced-routing` for the custom Eggress
   dialer, and do not enable the `http1` compatibility alias, high-level URL,
   logical retry, redirects, Basic auth, built-in proxy, HTTP/2/3, or unrelated

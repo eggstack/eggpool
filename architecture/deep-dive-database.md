@@ -67,3 +67,37 @@ foreground records, failed requests, background task ticks, and ownership
 non-convergence. H0 uses the effective default, H1 uses `0`, and H2 uses `256`
 only when H0/H1 satisfy Plan 239's predicate. Neither override is a production
 recommendation, and no explicit checkpoint is run inside the measured batch.
+
+## Passive-checkpoint production follow-up (Plan 240, design only)
+
+Plan 239 classified the MMC tail as I1 (foreground SQLite automatic-checkpoint
+work). Plan 240 is the separate production design handoff and authorizes no
+runtime change: the single connection/gate, WAL mode, `synchronous = "NORMAL"`,
+and the existing maintenance-task `PRAGMA wal_checkpoint(PASSIVE)` boundary
+remain the production policy. Any future passive-checkpoint scheduling must
+stay on the existing DB worker (no second writer), bound WAL growth across
+restart/reload/backup/restore/recovery, and keep qualification diagnostics out
+of ordinary release builds.
+
+## Passive-checkpoint production follow-up (Plan 240, design only)
+
+Plan 239 classified the Pi MMC tail as I1 (foreground SQLite automatic
+checkpoint work). Plan 240 is the separate production design handoff and
+authorizes no runtime change: the single connection/gate, WAL with
+`synchronous = "NORMAL"`, existing publication/finalization ownership, and
+the pre-existing passive-checkpoint maintenance task remain the production
+policy. Any bounded passive-checkpoint scheduling proposal must preserve
+durability, bound WAL growth across restart/reload/backup/restore/recovery,
+keep diagnostics out of ordinary builds, and arrive with loopback evidence
+before a default change is considered.
+
+## Passive-checkpoint production follow-up (Plan 240, design only)
+
+Plan 239 classified the MMC tail as I1 (foreground SQLite automatic-checkpoint
+work). Plan 240 is the separate production design handoff and authorizes no
+runtime change: the single connection/gate, WAL mode, `synchronous = "NORMAL"`,
+and the existing maintenance-task `PRAGMA wal_checkpoint(PASSIVE)` boundary
+remain the production policy. Any future passive-checkpoint scheduling must
+stay on the existing DB worker (no second writer), bound WAL growth across
+restart/reload/backup/restore/recovery, and keep qualification diagnostics out
+of ordinary release builds.

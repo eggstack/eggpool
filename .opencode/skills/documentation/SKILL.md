@@ -33,7 +33,7 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   the root `ssh` capability through the stable facade, while no-default builds
   reject SSH configuration before dialing and retain non-SSH proxy support.
 - Keep provider transport documentation aligned with the exact Cargo profile:
-  Eggfetch 0.1.7 uses `native-http1,tls-rustls`, while the high-level `http1`
+  Eggfetch 0.2.0 uses `native-http1,tls-rustls`, while the high-level `http1`
   alias and `standard-http1` are intentionally not selected. Preserve the
   historical 0.1.5 measurement as history and record newer footprint evidence
   in a dated architecture subsection.
