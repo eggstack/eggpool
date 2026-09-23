@@ -111,6 +111,18 @@ support (both required for pproxy-style SSH); `test-support` aligns
 workaround, still no SSH session cache). Requalify as in Plan 241; leave
 plans 215–220 and 241 historical.
 
+ Plan 244 (EggServe 0.2.0 downstream transport adoption) stopped at its Phase 0
+ gate per Plan 245 and landed no runtime change: `eggserve-core =0.2.0` with the
+ plan-required `tower` feature does not compile (orphan-rule `http_body::Body`
+ impl for the relocated `eggserve_primitives::RequestBody`, unforwarded
+ `eggserve-primitives/http-interop` trailer accessors, stale non-exhaustive
+ `HttpVersion` match), and 0.2.0 exposes no public passive terminal-observation
+ contract (`ServerHandle::wait()` initiates shutdown; `Lifecycle` /
+ `subscribe_terminal` are `pub(crate)`; the handle is uncloneable with
+ shutdown-on-drop). `axum::serve` remains the downstream driver; no EggServe
+ dependency, config ceiling, doc-boundary, or footprint change applies until an
+ upstream release fixes both items and a new plan re-runs the Phase 0 gate.
+
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
