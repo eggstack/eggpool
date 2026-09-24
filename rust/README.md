@@ -71,6 +71,18 @@ translation boundary. Bodies are consumed incrementally through
 `ProviderBody::next`; transport does not buffer complete responses or inject
 provider credentials.
 
+## Downstream HTTP server
+
+`eggpool::server::ServerRuntime` passes its pre-bound listener to the exact
+`eggserve-server =0.2.1` H1 runtime and adapts the existing Axum router with
+`eggserve-core =0.2.2` `TowerToEggserve`. EggServe owns downstream HTTP/1
+parsing, connection and response transport, and connection drain. EggPool
+continues to own auth, live generation request-body limits, routes, inference
+coordination, providers, persistence, signals, and process shutdown. The
+transport profile has a fixed 1 GiB hard body ceiling above EggPool's live
+limit, disabled total connection lifetime, explicit parser/time limits, and a
+five-second child drain budget inside EggPool's ten-second foreground budget.
+
 The direct client disables ambient proxy behavior by construction. Additional
 DER roots are available only as an explicit constructor setting for
 deterministic test CAs.

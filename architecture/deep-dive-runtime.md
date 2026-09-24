@@ -14,7 +14,7 @@ LAN deployments.
 
 ```text
 CLI/runtime adapter -> operations services
-Axum server         -> request coordinator -> routing/provider transport
+EggServe H1 -> TowerToEggserve -> Axum router -> request coordinator -> routing/provider transport
                                       -> canonical wire codecs/stream
 runtime manager     -> generation factory -> supervised background tasks
 config parser       -> reload policy -> transactional reload/publication
@@ -25,9 +25,12 @@ SQLite repositories <- accounting/catalog/health/maintenance
 `rust/src/operations/lifecycle.rs` composes safe detached start, stop, restart,
 identity-proof, and watchdog workflows over `process.rs`, `paths.rs`, and
 `control.rs`; the CLI keeps prompts, presentation, and exit-code mapping.
-`rust/src/server/mod.rs` owns Axum startup, route assembly, shared state, and
-process lifespan. Its `middleware.rs`, `health.rs`, `dashboard.rs`, and
-`inference.rs` siblings own the corresponding HTTP adapters. Request routing,
+`rust/src/server/mod.rs` gives its pre-bound listener to the exact-pinned
+EggServe H1 runtime (`eggserve-server =0.2.1`) and adapts the existing Axum
+router through `eggserve-core =0.2.2` `TowerToEggserve`. EggServe owns HTTP/1
+parsing, connection admission and transport, and bounded connection drain.
+EggPool's server module retains route assembly, shared state, auth, body
+admission, signals, process lifespan, and shutdown reporting. Request routing,
 provider transport, wire adaptation, persistence, and finalization remain in
 their respective modules.
 
@@ -134,8 +137,11 @@ specification. Process-scoped containers such as the metrics coalescer and
 wire resolver are flushed or stopped through their existing shutdown
 contracts.
 
-Shutdown first closes control-plane admission, then retires the active
-generation and joins its supervised work. Readiness, routing-trace writers,
+Shutdown first quiesces EggPool, then requests EggServe shutdown and joins its
+typed passive completion before closing the control listener or shared
+application resources. EggServe's explicit five-second connection drain fits
+inside EggPool's single ten-second foreground deadline. EggPool then retires
+the active generation and joins its supervised work. Readiness, routing-trace writers,
 and retained finalization work stop before the process-owned database
 connections disconnect. PID cleanup and child-process joins remain bounded;
 systemd or the watchdog may restart a worker that exits after an indeterminate

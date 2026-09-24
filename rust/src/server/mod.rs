@@ -33,6 +33,7 @@ use axum::{
     routing::{get, post},
 };
 use http_body_util::{BodyExt, Limited};
+use hyper::body::Body as HttpBody;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -79,6 +80,8 @@ pub enum ServerError {
     Signal(#[from] SignalError),
     #[error("server forced shutdown exceeded its graceful deadline")]
     ForcedShutdown(ShutdownReport),
+    #[error("EggServe downstream HTTP runtime failed: {0}")]
+    EggServe(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("database close failed during server shutdown: {detail}")]
     ShutdownDatabase { detail: String },
     #[error("inference state construction failed: {0}")]
@@ -90,6 +93,7 @@ pub enum ServerError {
 }
 
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const EGG_SERVE_REQUEST_BODY_LIMIT: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -331,13 +335,25 @@ impl ServerRuntime {
             process: Some(self.inner.process.clone()),
             body_tasks: self.inner.body_tasks.clone(),
         });
-        let handle = self.handle();
-        let shutdown = handle.clone();
-        let server = tokio::spawn(
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move { shutdown.wait_for_quiesce().await })
-                .into_future(),
+        let runtime_config =
+            eggserve_runtime_config().map_err(|error| ServerError::EggServe(Box::new(error)))?;
+        let server = eggserve_server::Server::builder()
+            .runtime(runtime_config)
+            .from_listener(listener)
+            .build()
+            .map_err(|error| ServerError::EggServe(Box::new(error)))?;
+        let service = eggserve_core::server::TowerToEggserve::with_policy(
+            app,
+            eggserve_core::primitives::RequestBodyPolicy::Stream {
+                max_bytes: EGG_SERVE_REQUEST_BODY_LIMIT,
+            },
         );
+        let eggserve_handle = server
+            .start_with_service(service)
+            .await
+            .map_err(|error| ServerError::EggServe(Box::new(error)))?;
+        let (control, mut completion) = eggserve_handle.into_parts();
+        let handle = self.handle();
         let signal_handle = handle.clone();
         let signal_task = tokio::spawn(async move {
             if let Err(error) = shutdown_signal(signal_handle.clone()).await {
@@ -345,21 +361,18 @@ impl ServerRuntime {
             }
         });
 
-        let mut server = server;
-        let mut forced = false;
-        let server_result = tokio::select! {
-            result = &mut server => result.map_err(|_| ServerError::Bind(std::io::Error::other("server task failed")))?.map_err(ServerError::Bind),
+        let (server_result, shutdown_deadline) = tokio::select! {
+            result = completion.wait() => {
+                handle.request_shutdown(ShutdownReason::ServerCompleted);
+                let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+                let terminal = result.map_err(|error| ServerError::EggServe(Box::new(error)))
+                    .and_then(|_| Err(ServerError::EggServe(Box::new(std::io::Error::other("HTTP runtime completed unexpectedly")))));
+                (terminal, deadline)
+            }
             _ = handle.wait_for_quiesce() => {
-                match tokio::time::timeout(self.shutdown_timeout, &mut server).await {
-                    Ok(result) => result.map_err(|_| ServerError::Bind(std::io::Error::other("server task failed")))?.map_err(ServerError::Bind),
-                    Err(_) => {
-                        forced = true;
-                        handle.begin_forced_close();
-                        server.abort();
-                        let _ = server.await;
-                        Ok(())
-                    }
-                }
+                let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+                control.shutdown();
+                (completion.wait().await.map_err(|error| ServerError::EggServe(Box::new(error))), deadline)
             }
         };
         signal_task.abort();
@@ -373,7 +386,8 @@ impl ServerRuntime {
         } else {
             None
         };
-        let report = self.close_resources(forced).await;
+        let report =
+            close_runtime_resources_until(Arc::clone(&self.inner), false, shutdown_deadline).await;
         if let Some(error) = control_error {
             return Err(ServerError::Control(error));
         }
@@ -395,15 +409,31 @@ impl ServerRuntime {
         }
         Ok(report)
     }
+}
 
-    async fn close_resources(&self, initially_forced: bool) -> ShutdownReport {
-        close_runtime_resources(
-            Arc::clone(&self.inner),
-            initially_forced,
-            self.shutdown_timeout,
-        )
-        .await
-    }
+fn eggserve_runtime_config()
+-> Result<eggserve_server::RuntimeConfig, eggserve_server::errors::ServerError> {
+    // The long handler/body budgets intentionally avoid becoming EggPool's
+    // provider timeout policy. Header, keep-alive, write-progress, and parser
+    // ceilings remain explicit transport defenses. EggPool application body
+    // admission continues to enforce its generation-owned live limit.
+    eggserve_server::RuntimeConfig::builder()
+        .bind("127.0.0.1:0".parse().expect("static socket address"))
+        .max_connections(1024)
+        .max_in_flight_requests(1024)
+        .max_request_body_bytes(EGG_SERVE_REQUEST_BODY_LIMIT)
+        .max_buf_size(256 * 1024)
+        .max_headers(256)
+        .max_header_bytes(128 * 1024)
+        .max_request_target_bytes(16 * 1024)
+        .disable_connection_total_timeout()
+        .handler_timeout(Duration::from_secs(24 * 60 * 60))
+        .body_read_timeout(Duration::from_secs(24 * 60 * 60))
+        .header_read_timeout(Duration::from_secs(15))
+        .keep_alive_idle_timeout(Duration::from_secs(120))
+        .response_write_timeout(Duration::from_secs(120))
+        .graceful_shutdown_timeout(Duration::from_secs(5))
+        .build()
 }
 
 impl Drop for ServerRuntime {
@@ -427,10 +457,22 @@ async fn close_runtime_resources(
     initially_forced: bool,
     shutdown_timeout: Duration,
 ) -> ShutdownReport {
+    close_runtime_resources_until(
+        inner,
+        initially_forced,
+        tokio::time::Instant::now() + shutdown_timeout,
+    )
+    .await
+}
+
+async fn close_runtime_resources_until(
+    inner: Arc<ServerRuntimeInner>,
+    initially_forced: bool,
+    deadline: tokio::time::Instant,
+) -> ShutdownReport {
     let handle = ServerRuntimeHandle {
         inner: Arc::clone(&inner),
     };
-    let deadline = tokio::time::Instant::now() + shutdown_timeout;
     handle.request_shutdown(ShutdownReason::Requested);
     handle.set_phase(if initially_forced {
         ShutdownPhase::ForcedClosing
@@ -544,14 +586,6 @@ impl ServerRuntimeHandle {
         self.inner.notify.notify_waiters();
     }
 
-    fn begin_forced_close(&self) {
-        self.set_phase(ShutdownPhase::ForcedClosing);
-        self.inner
-            .process
-            .set_shutdown_diagnostics("forced_closing", true);
-        self.inner.body_tasks.abort_all();
-    }
-
     fn record_signal_failure(&self, error: SignalError) {
         *self
             .inner
@@ -652,6 +686,36 @@ impl AppState {
             body_tasks: BodyTaskTracker::new(),
         }
     }
+}
+
+/// A bodyless Axum route does not poll its request body. EggServe tracks the
+/// canonical body lifecycle and closes a connection when an unread body is
+/// abandoned, so explicitly finish only requests with transport framing that
+/// proves no body exists. Non-empty/unknown bodies remain incremental and
+/// untouched.
+async fn finish_empty_transport_body(
+    mut request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let body = std::mem::replace(request.body_mut(), Body::empty());
+    let no_transfer_encoding = !request.headers().contains_key(header::TRANSFER_ENCODING);
+    let no_declared_body = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .is_none_or(|length| length.as_bytes() == b"0");
+    let exact_size = HttpBody::size_hint(&body).exact();
+    let transport_has_no_body = no_transfer_encoding && no_declared_body && exact_size.is_none();
+    if transport_has_no_body || exact_size == Some(0) {
+        let mut body = body;
+        while let Some(frame) = body.frame().await {
+            if frame.is_err() {
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+        }
+    } else {
+        *request.body_mut() = body;
+    }
+    next.run(request).await
 }
 
 pub async fn run(config: Config) -> Result<(), ServerError> {
@@ -976,6 +1040,7 @@ pub fn build_router(state: AppState) -> Router {
     router
         .layer(from_fn_with_state(state.clone(), admit_inference_body))
         .layer(from_fn_with_state(state.clone(), authenticate))
+        .layer(axum::middleware::from_fn(finish_empty_transport_body))
         .with_state(state)
 }
 

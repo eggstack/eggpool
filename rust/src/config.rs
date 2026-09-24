@@ -19,6 +19,7 @@ const DEFAULT_PORT: u16 = 11_300;
 const DEFAULT_PROVIDER_ID: &str = "opencode-go";
 const DEFAULT_UPSTREAM_URL: &str = "https://opencode.ai/zen/go/v1";
 const MAX_REQUEST_BODY_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_SERVER_REQUEST_BODY_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn default_database_path() -> String {
     let root = env::var_os("XDG_DATA_HOME")
@@ -1490,9 +1491,11 @@ impl Config {
                 "server.threads must be between 1 and 64",
             ));
         }
-        if self.server.max_request_body_bytes == 0 {
+        if self.server.max_request_body_bytes == 0
+            || self.server.max_request_body_bytes > MAX_SERVER_REQUEST_BODY_BYTES
+        {
             return Err(ConfigError::validation(
-                "server.max_request_body_bytes must be greater than zero",
+                "server.max_request_body_bytes must be greater than zero and no greater than 1 GiB",
             ));
         }
         let wire = &self.routing.wire_negotiation;
@@ -2190,6 +2193,16 @@ mod tests {
         assert_eq!(config.limits.monthly_microdollars, 60_000_000);
         assert!(config.transcoder.enabled);
         assert!(config.model_info.enabled);
+        assert_eq!(config.server.max_request_body_bytes, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn request_body_limit_matches_eggserve_hard_ceiling() {
+        let mut config = Config::default();
+        config.server.max_request_body_bytes = MAX_SERVER_REQUEST_BODY_BYTES;
+        assert!(config.validate().is_ok());
+        config.server.max_request_body_bytes += 1;
+        assert!(config.validate().is_err());
     }
 
     #[test]

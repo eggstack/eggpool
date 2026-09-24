@@ -34,6 +34,11 @@ delegate inference lifecycle work to the coordinator (health/status handlers
 only project authoritative state), and lifecycle workflows must compose the
 existing process safety primitives.
 
+For downstream server transport changes, qualify `server_transport` over real
+loopback sockets plus `runtime_lifecycle_r009`; the production listener uses
+EggServe 0.2.1 with `TowerToEggserve` from EggServe core 0.2.2. Verify the
+EggServe child is joined before EggPool closes shared resources.
+
 Native test targets live in `rust/tests/` (serial `--test-threads=1`). The
 coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
 `c012`) plus `coordinator_boundaries`/`finalization`/`publication`; routing is

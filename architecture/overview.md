@@ -121,7 +121,10 @@ Deep dives: [Core](deep-dive-core.md), [Control plane and rehash](deep-dive-cont
 
 ### 3. HTTP server adapters
 
-`rust/src/server/mod.rs` builds the Axum router, owns `AppState` (API key,
+`rust/src/server/mod.rs` builds the Axum router, passes its pre-bound listener
+to EggServe 0.2.1 for downstream HTTP/1 transport, and adapts the router with
+EggServe core 0.2.2 `TowerToEggserve`. EggServe owns HTTP parsing, connection
+transport, and connection drain; EggPool continues to own `AppState` (API key,
 `Database`, `RuntimeManager`, body-task tracker), and owns foreground
 lifespan, signal handling, and quiesce/drain/close shutdown. Siblings stay
 thin: `middleware.rs` (constant-time Bearer/`x-api-key` auth, generation-lease

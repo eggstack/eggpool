@@ -18,6 +18,12 @@ generations, provider clients, routing, request coordination, wire adaptation,
 operations, and graceful shutdown. The repository-root `pyproject.toml` and
 the scripts under `scripts/` are development/release tooling only.
 
+Downstream TCP/HTTP/1 transport and connection drain are owned by the exact
+EggServe runtime (`eggserve-server =0.2.1`). Its `TowerToEggserve` bridge in
+`eggserve-core =0.2.2` enters EggPool's existing Axum router. EggPool retains
+authentication, generation-owned body limits, application routing, inference,
+provider transport, persistence, and process lifecycle.
+
 `rust/src/runtime_lifecycle/` is the lifecycle package. `process.rs` owns
 process-lifetime resources, `generation.rs` builds immutable candidates and
 owns generation close, `lease.rs` owns slots and request/finalization leases,
