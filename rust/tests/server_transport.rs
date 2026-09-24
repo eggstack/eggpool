@@ -106,60 +106,72 @@ async fn streaming_fixture_provider(
     listener: TcpListener,
     stopped: oneshot::Sender<()>,
 ) -> std::io::Result<()> {
-    let (mut stream, _) = listener.accept().await?;
-    let mut request = Vec::new();
-    let mut header_end = None;
-    while header_end.is_none() {
-        let mut buffer = [0_u8; 4096];
-        let read = stream.read(&mut buffer).await?;
-        if read == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "provider request ended before headers",
-            ));
-        }
-        request.extend_from_slice(&buffer[..read]);
-        header_end = request.windows(4).position(|window| window == b"\r\n\r\n");
-    }
-    let header_end = header_end.expect("header terminator was observed") + 4;
-    let headers = String::from_utf8_lossy(&request[..header_end]);
-    let content_length = headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
-        })
-        .unwrap_or(0);
-    while request.len() < header_end + content_length {
-        let mut buffer = [0_u8; 4096];
-        let read = stream.read(&mut buffer).await?;
-        if read == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "provider request body ended early",
-            ));
-        }
-        request.extend_from_slice(&buffer[..read]);
-    }
-    stream
-        .write_all(
-            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
-        )
-        .await?;
-    let payload = format!(
-        "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"delta\":\"{}\"}}\n\n",
-        "x".repeat(16 * 1024)
-    );
-    let chunk_header = format!("{:X}\r\n", payload.len());
     loop {
-        if stream.write_all(chunk_header.as_bytes()).await.is_err()
-            || stream.write_all(payload.as_bytes()).await.is_err()
-            || stream.write_all(b"\r\n").await.is_err()
-        {
-            let _ = stopped.send(());
-            return Ok(());
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        let mut header_end = None;
+        while header_end.is_none() {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "provider request ended before headers",
+                ));
+            }
+            request.extend_from_slice(&buffer[..read]);
+            header_end = request.windows(4).position(|window| window == b"\r\n\r\n");
+        }
+        let header_end = header_end.expect("header terminator was observed") + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "provider request body ended early",
+                ));
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        if String::from_utf8_lossy(&request).contains("\"stream\":false") {
+            let payload = br#"{"id":"response-transport","model":"stream-fixture","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"finite transport answer"}]}],"usage":{"input_tokens":1,"output_tokens":3,"total_tokens":4}}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                payload.len()
+            );
+            stream.write_all(head.as_bytes()).await?;
+            stream.write_all(payload).await?;
+            continue;
+        }
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            )
+            .await?;
+        let payload = format!(
+            "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"delta\":\"{}\"}}\n\n",
+            "x".repeat(16 * 1024)
+        );
+        let chunk_header = format!("{:X}\r\n", payload.len());
+        loop {
+            if stream.write_all(chunk_header.as_bytes()).await.is_err()
+                || stream.write_all(payload.as_bytes()).await.is_err()
+                || stream.write_all(b"\r\n").await.is_err()
+            {
+                let _ = stopped.send(());
+                return Ok(());
+            }
         }
     }
 }
@@ -181,12 +193,41 @@ async fn production_listener_serves_health_and_preserves_auth_boundary() {
     .await;
     assert!(health.starts_with("HTTP/1.1 200"), "{health}");
 
+    let http10 = request(address, b"GET /v1/healthz HTTP/1.0\r\n\r\n").await;
+    assert!(http10.starts_with("HTTP/1.0 200"), "{http10}");
+
     let inference = request(
         address,
         b"GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
     )
     .await;
     assert!(inference.starts_with("HTTP/1.1 401"), "{inference}");
+
+    let authenticated = request(
+        address,
+        b"GET /api/status HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(authenticated.starts_with("HTTP/1.1 200"), "{authenticated}");
+    assert!(
+        authenticated
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"),
+        "{authenticated}"
+    );
+
+    let static_asset = request(
+        address,
+        b"GET /static/dashboard.css HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(static_asset.starts_with("HTTP/1.1 200"), "{static_asset}");
+    assert!(
+        static_asset
+            .to_ascii_lowercase()
+            .contains("content-type: text/css"),
+        "{static_asset}"
+    );
 
     assert!(handle.request_shutdown(ShutdownReason::Requested));
     let report = tokio::time::timeout(Duration::from_secs(6), task)
@@ -402,12 +443,30 @@ async fn eggpool_live_body_limit_applies_to_content_length_and_chunked_bodies() 
     .await;
     assert!(health.starts_with("HTTP/1.1 200"), "{health}");
 
+    let mut upload = TcpStream::connect(address)
+        .await
+        .expect("connect incomplete upload");
+    upload
+        .write_all(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: 512\r\n\r\n{\"model\":",
+        )
+        .await
+        .expect("write incomplete upload prefix");
+    drop(upload);
+    let health = request(
+        address,
+        b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+
     assert!(handle.request_shutdown(ShutdownReason::Requested));
-    tokio::time::timeout(Duration::from_secs(6), task)
+    let report = tokio::time::timeout(Duration::from_secs(6), task)
         .await
         .expect("transport shutdown is bounded")
         .expect("server task joins")
         .expect("server shuts down cleanly");
+    assert_eq!(report.body_tasks_at_deadline, 0);
     database
         .close()
         .await
@@ -524,6 +583,23 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
     let address = listener.local_addr().expect("listener address");
     let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
 
+    let finite_body = br#"{"model":"stream-fixture","input":"ping","store":false,"stream":false}"#;
+    let mut finite_request = format!(
+        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        finite_body.len()
+    )
+    .into_bytes();
+    finite_request.extend_from_slice(finite_body);
+    let finite_response = request(address, &finite_request).await;
+    assert!(
+        finite_response.starts_with("HTTP/1.1 200"),
+        "{finite_response}"
+    );
+    assert!(
+        finite_response.contains("finite transport answer"),
+        "{finite_response}"
+    );
+
     let socket = TcpSocket::new_v4().expect("create client socket");
     socket
         .set_recv_buffer_size(1024)
@@ -561,6 +637,21 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
             String::from_utf8_lossy(&error_body)
         );
     }
+    let mut first_stream_event = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !first_stream_event
+            .windows(b"event: response.output_text.delta".len())
+            .any(|window| window == b"event: response.output_text.delta")
+        {
+            let mut byte = [0_u8; 1];
+            client.read_exact(&mut byte).await?;
+            first_stream_event.push(byte[0]);
+        }
+        std::io::Result::Ok(())
+    })
+    .await
+    .expect("first downstream event arrives before provider completion")
+    .expect("read first downstream stream event");
 
     let started = tokio::time::Instant::now();
     assert!(handle.request_shutdown(ShutdownReason::Requested));
