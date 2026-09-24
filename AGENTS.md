@@ -119,23 +119,26 @@ plans 215–220 and 241 historical.
  `HttpVersion` match), and 0.2.0 exposes no public passive terminal-observation
  contract (`ServerHandle::wait()` initiates shutdown; `Lifecycle` /
  `subscribe_terminal` are `pub(crate)`; the handle is uncloneable with
- shutdown-on-drop). `axum::serve` remains the downstream driver; no EggServe
- dependency, config ceiling, doc-boundary, or footprint change applies until an
- upstream release fixes both items and a new plan re-runs the Phase 0 gate.
+ shutdown-on-drop). At that historical stop point, `axum::serve` remained the
+ downstream driver; no EggServe dependency, config ceiling, doc-boundary, or
+ footprint change applied until an upstream release fixed both items and a new
+ plan re-ran the Phase 0 gate.
 
- Plans 246–247 reopen the EggServe downstream transport line after the upstream
- fixes were published and registry-qualified. Plan 246 exact-pins
- `eggserve-core =0.2.2` with `tower` plus direct
- `eggserve-server =0.2.1`, re-runs the exact EggPool Router gate, then replaces
- only `axum::serve` with the direct EggServe H1 runtime while retaining the
- existing Axum router/middleware/coordinator. It uses the core-owned
- `HttpRequestBody` bridge, `ServerHandle::into_parts()` passive typed
- completion, disabled total connection lifetime, a fixed 1 GiB defense-in-depth
- body ceiling above the live generation-owned EggPool limit, and a child
- graceful-drain budget that fits inside EggPool's foreground shutdown deadline.
- Plan 247 is the required real-socket/inference/auth/shutdown/dependency/
- footprint/documentation closure. Until Plan 246 implementation lands,
- `axum::serve` remains production behavior; Plans 244–245 stay historical.
+ Plans 246 and 247 are formally complete under append-only closure pass
+ `plans/248-eggserve-downstream-transport-closure-pass.md`. EggPool pins
+ `eggserve-core =0.2.2` with `tower` plus direct `eggserve-server =0.2.1`;
+ EggServe drives the pre-bound downstream H1 listener and adapts into the
+ existing Axum router. EggPool retains app policy and process lifecycle. The
+ integration uses passive typed completion, a fixed 1 GiB transport ceiling
+ above the live generation-owned request limit, and a child drain bounded
+ within the foreground shutdown deadline. Real-socket finite/streaming,
+ HTTP/1.0 and HTTP/1.1, auth, parser, body-admission, and stalled-reader
+ shutdown evidence is recorded by Plan 248. The exact core feature closure
+ pulls `eggserve-static`/PHF-related packages transitively; EggPool does not use
+ EggServe static serving. Dev-host release/resource comparisons are relative
+ evidence only; no physical SBC qualification is claimed. Plan 247 was
+ unblocked after the Plan 246 cutover and then closed; no later plan remains
+ blocked on this transport line. Plans 244–245 remain historical.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
