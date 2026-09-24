@@ -123,6 +123,20 @@ plans 215–220 and 241 historical.
  dependency, config ceiling, doc-boundary, or footprint change applies until an
  upstream release fixes both items and a new plan re-runs the Phase 0 gate.
 
+ Plans 246–247 reopen the EggServe downstream transport line after the upstream
+ fixes were published and registry-qualified. Plan 246 exact-pins
+ `eggserve-core =0.2.2` with `tower` plus direct
+ `eggserve-server =0.2.1`, re-runs the exact EggPool Router gate, then replaces
+ only `axum::serve` with the direct EggServe H1 runtime while retaining the
+ existing Axum router/middleware/coordinator. It uses the core-owned
+ `HttpRequestBody` bridge, `ServerHandle::into_parts()` passive typed
+ completion, disabled total connection lifetime, a fixed 1 GiB defense-in-depth
+ body ceiling above the live generation-owned EggPool limit, and a child
+ graceful-drain budget that fits inside EggPool's foreground shutdown deadline.
+ Plan 247 is the required real-socket/inference/auth/shutdown/dependency/
+ footprint/documentation closure. Until Plan 246 implementation lands,
+ `axum::serve` remains production behavior; Plans 244–245 stay historical.
+
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
