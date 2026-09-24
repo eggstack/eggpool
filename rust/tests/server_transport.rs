@@ -677,3 +677,316 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
         .await
         .expect("database close is idempotent");
 }
+
+/// Compact fixture provider: accepts one finite upstream request and returns
+/// deterministic remote-compaction replacement material.
+async fn compact_fixture_provider(listener: TcpListener) -> std::io::Result<()> {
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        let mut header_end = None;
+        while header_end.is_none() {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "provider request ended before headers",
+                ));
+            }
+            request.extend_from_slice(&buffer[..read]);
+            header_end = request.windows(4).position(|window| window == b"\r\n\r\n");
+            if request.len() > 64 * 1024 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "provider request headers too large",
+                ));
+            }
+        }
+        let header_end = header_end.expect("header terminator was observed") + 4;
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "provider request body ended early",
+                ));
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let payload = br#"{"id":"resp-compact-1","object":"response","model":"compact-fixture","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"compact checkpoint summary"}]}],"usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16}}"#;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            payload.len()
+        );
+        stream.write_all(head.as_bytes()).await?;
+        stream.write_all(payload).await?;
+    }
+}
+
+async fn compact_capable_runtime(
+    provider_address: std::net::SocketAddr,
+) -> (tempfile::TempDir, Database, ServerRuntime) {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("eggpool.db")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let mut config = Config::default();
+    config.server.api_key = Some("test-key-transport".to_owned());
+    config.models.startup_refresh = false;
+    let mut provider_config = ProviderConfig {
+        id: "fixture".to_owned(),
+        base_url: format!("http://{provider_address}"),
+        protocols: vec!["openai".to_owned()],
+        accounts: vec![AccountConfig {
+            name: "fixture-account".to_owned(),
+            api_key: Some("fixture-provider-key".to_owned()),
+            ..AccountConfig::default()
+        }],
+        ..ProviderConfig::default()
+    };
+    provider_config.wire_surfaces.insert(
+        "openai_responses".to_owned(),
+        ProviderWireSurfaceConfig {
+            path_template: "/responses".to_owned(),
+            auth: Some(ProviderAuthConfig::default()),
+            supports_remote_compaction_v1: true,
+            compact_path_template: Some("/responses/compact".to_owned()),
+            ..ProviderWireSurfaceConfig::default()
+        },
+    );
+    provider_config.model_wire.insert(
+        "compact-fixture".to_owned(),
+        ModelWirePreference {
+            preferred_surface: "openai_responses".to_owned(),
+            fixed: true,
+        },
+    );
+    provider_config
+        .static_models
+        .push(ProviderStaticModelConfig {
+            id: "compact-fixture".to_owned(),
+            protocol: Some("openai".to_owned()),
+            ..ProviderStaticModelConfig::default()
+        });
+    config
+        .providers
+        .insert("fixture".to_owned(), provider_config);
+    AccountRepository::new(&database)
+        .sync_from_config(vec![DbAccountConfig {
+            name: "fixture-account".to_owned(),
+            api_key_env: String::new(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "fixture".to_owned(),
+        }])
+        .await
+        .expect("fixture account synchronizes");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id, resolution_status) VALUES ('compact-fixture', 'openai', 'fixture', 'resolved')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("fixture model is catalogued");
+    let process = ProcessRuntime::new(database.clone());
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "transport-compact".to_owned(),
+        1,
+    )
+    .await
+    .expect("compact generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("initial tasks install");
+    (
+        directory,
+        database,
+        ServerRuntime::new(process, manager, config),
+    )
+}
+
+#[tokio::test]
+async fn compact_route_shares_generation_admission_and_returns_compact_result() {
+    let provider_listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind loopback compact provider");
+    let provider_address = provider_listener.local_addr().expect("provider address");
+    let provider = tokio::spawn(compact_fixture_provider(provider_listener));
+
+    let (_directory, database, runtime) = compact_capable_runtime(provider_address).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind HTTP listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let compact_body = br#"{"model":"compact-fixture","input":"history to compact"}"#;
+    let mut compact_request = format!(
+        "POST /v1/responses/compact HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        compact_body.len()
+    )
+    .into_bytes();
+    compact_request.extend_from_slice(compact_body);
+    let response = request(address, &compact_request).await;
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "compact request did not reach compact application logic: {response}"
+    );
+    assert!(
+        !response.contains("Missing extension") && !response.contains("Missing request extension"),
+        "compact request failed on the pre-fix missing GenerationLease path: {response}"
+    );
+    assert!(
+        response.contains("compact checkpoint summary"),
+        "compact response did not carry provider replacement material: {response}"
+    );
+
+    let health = request(
+        address,
+        b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert!(report.database_closed);
+    provider.abort();
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn compact_route_enforces_live_generation_body_ceiling() {
+    let (_directory, database, runtime) = runtime_fixture_with_body_limit(64).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    // Below the live generation ceiling the request reaches compact
+    // application logic: no provider is configured, so the coordinator
+    // returns its deterministic application error rather than the Axum
+    // missing-extension rejection or a 413.
+    let small_body = br#"{"model":"m","input":"h"}"#;
+    assert!(small_body.len() < 64, "fixture must stay below the ceiling");
+    let mut small_request = format!(
+        "POST /v1/responses/compact HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        small_body.len()
+    )
+    .into_bytes();
+    small_request.extend_from_slice(small_body);
+    let response = request(address, &small_request).await;
+    assert!(
+        !response.starts_with("HTTP/1.1 413"),
+        "below-limit compact request was body-limited: {response}"
+    );
+    assert!(
+        !response.contains("Missing extension") && !response.contains("Missing request extension"),
+        "below-limit compact request missed generation admission: {response}"
+    );
+    assert!(
+        response.contains("No eligible account was available")
+            || response.contains("upstream_error"),
+        "below-limit compact request did not reach compact logic: {response}"
+    );
+
+    // An over-limit Content-Length compact request returns the existing
+    // EggPool 413 JSON contract.
+    let large_body = vec![b'x'; 65];
+    let mut content_length = format!(
+        "POST /v1/responses/compact HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        large_body.len()
+    )
+    .into_bytes();
+    content_length.extend_from_slice(&large_body);
+    let response = request(address, &content_length).await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert!(
+        response.contains("Request body too large"),
+        "over-limit compact request missed the 413 contract: {response}"
+    );
+
+    // A chunked compact request crossing the same live ceiling is also 413.
+    let mut chunked = b"POST /v1/responses/compact HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n41\r\n"
+        .to_vec();
+    chunked.extend_from_slice(&large_body);
+    chunked.extend_from_slice(b"\r\n0\r\n\r\n");
+    let response = request(address, &chunked).await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+    assert!(
+        response.contains("Request body too large"),
+        "chunked over-limit compact request missed the 413 contract: {response}"
+    );
+
+    // A healthy request still reaches compact logic afterward: the rejection
+    // does not poison the connection or runtime.
+    let response = request(address, &small_request).await;
+    assert!(
+        !response.starts_with("HTTP/1.1 413"),
+        "rejection poisoned later compact requests: {response}"
+    );
+    assert!(
+        !response.contains("Missing extension") && !response.contains("Missing request extension"),
+        "later compact request missed generation admission: {response}"
+    );
+    let health = request(
+        address,
+        b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert_eq!(report.body_tasks_at_deadline, 0);
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}

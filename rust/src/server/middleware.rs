@@ -115,7 +115,7 @@ pub(super) async fn admit_inference_body(
 pub(super) fn is_inference_path(path: &str) -> bool {
     matches!(
         path,
-        "/v1/chat/completions" | "/v1/messages" | "/v1/responses"
+        "/v1/chat/completions" | "/v1/messages" | "/v1/responses" | "/v1/responses/compact"
     )
 }
 

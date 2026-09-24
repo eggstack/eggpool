@@ -1073,7 +1073,7 @@ async fn shutdown_signal(handle: ServerRuntimeHandle) -> Result<(), SignalError>
 
 #[cfg(test)]
 mod tests {
-    use super::{middleware::requires_auth, *};
+    use super::{middleware::is_inference_path, middleware::requires_auth, *};
 
     fn state_with_dashboard(public: bool) -> ServerState {
         ServerState {
@@ -1143,6 +1143,34 @@ mod tests {
             "/api/status",
         ] {
             assert!(requires_auth(path, &private), "{path} stays authenticated");
+        }
+    }
+
+    #[test]
+    fn inference_path_classification_covers_all_public_inference_routes() {
+        for path in [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+            "/v1/responses/compact",
+        ] {
+            assert!(
+                is_inference_path(path),
+                "{path} requires generation admission"
+            );
+        }
+        for path in [
+            "/v1/models",
+            "/v1/healthz",
+            "/v1/readyz",
+            "/api/status",
+            "/api/stats/runtime",
+            "/api/integrations/v1/profile",
+        ] {
+            assert!(
+                !is_inference_path(path),
+                "{path} must not take body admission"
+            );
         }
     }
 }

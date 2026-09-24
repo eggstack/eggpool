@@ -141,13 +141,12 @@ plans 215–220 and 241 historical.
  blocked on this transport line. Plans 244–245 remain historical.
 
 
- Plan 249 is a narrow corrective for the pre-existing
- `/v1/responses/compact` admission gap discovered during post-EggServe review.
- The handler requires a `GenerationLease`, but `is_inference_path()` currently
- omits the compact route, so it can bypass the common generation-owned body
- admission path. The fix is intentionally limited to route classification plus
- middleware/real-socket regression coverage; it does not reopen EggServe Plans
- 246–248 or change compact protocol/coordinator semantics.
+ Plan 249 closed the pre-existing `/v1/responses/compact` admission gap:
+ `is_inference_path()` covers all four public inference routes, so the
+ compact handler receives its `GenerationLease` through the common
+ generation-owned body-admission path. Coverage is route classification plus
+ middleware/real-socket regression; EggServe Plans 246–248 and compact
+ protocol/coordinator semantics were not reopened.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +

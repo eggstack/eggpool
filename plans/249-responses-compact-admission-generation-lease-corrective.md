@@ -1,7 +1,7 @@
 # Plan 249 — Responses Compact Admission and Generation-Lease Corrective
 
 Date: 2026-09-24
-Status: implementation handoff
+Status: complete
 Planning baseline: `cc17d2ccfa2233453fe9f39d2621122d0180b3e2` (main, EggPool 0.8.0)
 Priority: P1 public inference route correctness
 Related:
@@ -264,3 +264,41 @@ normal append-only closure pass if additional corrective work was needed.
 
 This plan closes when the production compact route demonstrably shares the same
 generation/body-admission invariant as every other public inference route.
+
+## Closure evidence (2026-09-24)
+
+- Track A: `is_inference_path()` in `rust/src/server/middleware.rs` now covers
+  all four public inference routes including `/v1/responses/compact`. No
+  route-specific lease acquisition, second body check, `build_router`
+  special-case, EggServe change, or second generation lookup was added.
+- Track B: `server::tests::inference_path_classification_covers_all_public_inference_routes`
+  (in `rust/src/server/mod.rs`) table-drives all four inference routes true
+  plus six non-inference routes false.
+- Track C: `server_transport::compact_route_shares_generation_admission_and_returns_compact_result`
+  exercises `TcpStream -> EggServe -> TowerToEggserve -> Axum middleware ->
+  responses_compact -> compact coordinator` over a real socket against a
+  deterministic compact-capable fixture provider and asserts HTTP 200 with
+  provider replacement material and no missing-extension rejection.
+- Track D: `server_transport::compact_route_enforces_live_generation_body_ceiling`
+  uses `max_request_body_bytes = 64`: below-limit reaches compact logic
+  (deterministic `No eligible account` application error, not 413 or
+  missing-extension), over-limit Content-Length and chunked requests each
+  return the existing 413 `Request body too large` contract, and a later
+  healthy request proves no connection/runtime poisoning.
+- Track E: middleware still acquires the active generation before body
+  collection and attaches that exact lease; no new reload harness was needed
+  (the mandatory condition is the shared middleware path). No reload-policy
+  change: `server.max_request_body_bytes` remains live-reloadable per
+  `config_reload_policy.rs`.
+- Track F: focused targets passed (`server_transport` 7/7, lib `server::` 7/7,
+  `codex_compaction_compat` 13/13, `coordinator_c009` 13/13, plus
+  `coordinator_boundaries`/`finalization`/`publication`); full serial
+  workspace suite, `cargo fmt --check`, strict Clippy, and the
+  `--no-default-features` check were run before push. No `Cargo.toml` /
+  `Cargo.lock` change, so no `cargo deny` requalification was required.
+- Track G: `AGENTS.md` Plan 249 note pruned to the closed state;
+  `architecture/deep-dive-request-lifecycle.md` now states explicitly that all
+  four inference routes share the generation-owned body-admission path.
+  `architecture/overview.md`, `README.md`, `docs/`, and
+  `.opencode/skills/architecture/SKILL.md` were inspected and needed no change
+  (already correct at the conceptual level).

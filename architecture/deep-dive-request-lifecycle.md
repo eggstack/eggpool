@@ -12,7 +12,9 @@ and finalizes durable state.
 The pre-bound listener is driven by EggServe's HTTP/1 runtime and its published
 Tower bridge into EggPool's Axum router. EggServe does not own admission policy:
 the Axum middleware acquires a generation lease before collecting inference
-bodies and applies that generation's configured request limit.
+bodies and applies that generation's configured request limit. All four public
+inference routes (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`,
+`/v1/responses/compact`) share this generation-owned body-admission path.
 
 `rust/src/wire/ir.rs` is captured before provider adaptation. A selected wire
 codec under `rust/src/wire/` encodes the provider request and decodes finite or
