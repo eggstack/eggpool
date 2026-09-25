@@ -19,7 +19,7 @@ operations, and graceful shutdown. The repository-root `pyproject.toml` and
 the scripts under `scripts/` are development/release tooling only.
 
 Downstream TCP/HTTP/1 transport and connection drain are owned by the exact
-EggServe runtime (`eggserve-server =0.3.0`, `tower` feature). Its
+EggServe runtime (`eggserve-server =0.4.0`, `tower` feature). Its
 server-owned `TowerToEggserve` adapter enters EggPool's existing Axum router.
 EggPool retains authentication, generation-owned body limits, application
 routing, inference, provider transport, persistence, and process lifecycle.

@@ -242,6 +242,40 @@ async fn production_listener_serves_health_and_preserves_auth_boundary() {
         .expect("database close is idempotent");
 }
 
+/// Read exactly one HTTP/1 response from a keep-alive stream, following the
+/// response's own framing (Content-Length or chunked). EggServe 0.4 retains
+/// known-length framing for exact-size bodies, so callers must not assume
+/// chunked encoding.
+async fn read_framed_response(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).await?;
+        head.push(byte[0]);
+    }
+    let head_text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+    let content_length = head_text.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    });
+    let mut response = head;
+    if let Some(length) = content_length {
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).await?;
+        response.extend_from_slice(&body);
+    } else {
+        while !response.ends_with(b"\r\n0\r\n\r\n") {
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).await?;
+            response.push(byte[0]);
+        }
+    }
+    Ok(response)
+}
+
 #[tokio::test]
 async fn production_listener_reuses_keep_alive_connection() {
     let (_directory, database, runtime) = runtime_fixture().await;
@@ -259,18 +293,10 @@ async fn production_listener_reuses_keep_alive_connection() {
         .write_all(b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .await
         .expect("write first keep-alive request");
-    let mut first = Vec::new();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !first.ends_with(b"\r\n0\r\n\r\n") {
-            let mut byte = [0_u8; 1];
-            stream.read_exact(&mut byte).await?;
-            first.push(byte[0]);
-        }
-        std::io::Result::Ok(())
-    })
-    .await
-    .expect("first response completes")
-    .expect("read first response");
+    let first = tokio::time::timeout(Duration::from_secs(2), read_framed_response(&mut stream))
+        .await
+        .expect("first response completes")
+        .expect("read first response");
     assert!(
         String::from_utf8_lossy(&first).starts_with("HTTP/1.1 200"),
         "{}",
@@ -280,18 +306,11 @@ async fn production_listener_reuses_keep_alive_connection() {
         .write_all(b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
         .await
         .expect("write second keep-alive request");
-    let mut second = Vec::new();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !second.ends_with(b"\r\n0\r\n\r\n") {
-            let mut byte = [0_u8; 1];
-            stream.read_exact(&mut byte).await?;
-            second.push(byte[0]);
-        }
-        std::io::Result::Ok(())
-    })
-    .await
-    .expect("second response completes")
-    .expect("read second response");
+    let mut second =
+        tokio::time::timeout(Duration::from_secs(2), read_framed_response(&mut stream))
+            .await
+            .expect("second response completes")
+            .expect("read second response");
     assert!(
         String::from_utf8_lossy(&second).starts_with("HTTP/1.1 200"),
         "{}",
@@ -889,6 +908,239 @@ async fn compact_route_shares_generation_admission_and_returns_compact_result() 
         .expect("server shuts down cleanly");
     assert!(report.database_closed);
     provider.abort();
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn eggserve_040_finite_response_framing_is_valid_without_trailers() {
+    let (_directory, database, runtime) = runtime_fixture().await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let health = request(
+        address,
+        b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(health.starts_with("HTTP/1.1 200"), "{health}");
+    let head_end = health.find("\r\n\r\n").expect("health head terminates");
+    let head = health[..head_end].to_ascii_lowercase();
+    assert!(
+        head.contains("content-type: application/json"),
+        "health keeps JSON content type: {health}"
+    );
+    let has_length = head.contains("content-length:");
+    let has_chunked = head.contains("transfer-encoding:") && head.contains("chunked");
+    assert!(
+        has_length ^ has_chunked,
+        "finite response carries exactly one framing declaration: {health}"
+    );
+    assert!(
+        !head.contains("trailer"),
+        "finite response declares no H1 trailers: {health}"
+    );
+    let body = &health[head_end + 4..];
+    assert!(
+        body.contains("\"status\""),
+        "finite JSON body is intact: {health}"
+    );
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert!(report.database_closed);
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn eggserve_040_streaming_stays_incremental_without_trailers() {
+    let provider_listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind loopback provider");
+    let provider_address = provider_listener.local_addr().expect("provider address");
+    let (provider_stopped_tx, provider_stopped_rx) = oneshot::channel();
+    let provider = tokio::spawn(streaming_fixture_provider(
+        provider_listener,
+        provider_stopped_tx,
+    ));
+
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("eggpool.db")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let mut config = Config::default();
+    config.server.api_key = Some("test-key-transport".to_owned());
+    config.models.startup_refresh = false;
+    let mut provider_config = ProviderConfig {
+        id: "fixture".to_owned(),
+        base_url: format!("http://{provider_address}"),
+        protocols: vec!["openai".to_owned()],
+        accounts: vec![AccountConfig {
+            name: "fixture-account".to_owned(),
+            api_key: Some("fixture-provider-key".to_owned()),
+            ..AccountConfig::default()
+        }],
+        ..ProviderConfig::default()
+    };
+    provider_config.wire_surfaces.insert(
+        "openai_responses".to_owned(),
+        ProviderWireSurfaceConfig {
+            path_template: "/responses".to_owned(),
+            auth: Some(ProviderAuthConfig::default()),
+            ..ProviderWireSurfaceConfig::default()
+        },
+    );
+    provider_config.model_wire.insert(
+        "stream-fixture".to_owned(),
+        ModelWirePreference {
+            preferred_surface: "openai_responses".to_owned(),
+            fixed: true,
+        },
+    );
+    provider_config
+        .static_models
+        .push(ProviderStaticModelConfig {
+            id: "stream-fixture".to_owned(),
+            protocol: Some("openai".to_owned()),
+            ..ProviderStaticModelConfig::default()
+        });
+    config
+        .providers
+        .insert("fixture".to_owned(), provider_config.clone());
+    AccountRepository::new(&database)
+        .sync_from_config(vec![DbAccountConfig {
+            name: "fixture-account".to_owned(),
+            api_key_env: String::new(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "fixture".to_owned(),
+        }])
+        .await
+        .expect("fixture account synchronizes");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id, resolution_status) VALUES ('stream-fixture', 'openai', 'fixture', 'resolved')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("fixture model is catalogued");
+    let process = ProcessRuntime::new(database.clone());
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "transport-stream-trailer-guard".to_owned(),
+        1,
+    )
+    .await
+    .expect("streaming generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("initial tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind HTTP listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let mut client = TcpStream::connect(address).await.expect("connect client");
+    let body = br#"{"model":"stream-fixture","input":"ping","store":false,"stream":true}"#;
+    let request_head = format!(
+        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    client
+        .write_all(request_head.as_bytes())
+        .await
+        .expect("write request headers");
+    client.write_all(body).await.expect("write request body");
+    let mut response_head = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !response_head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0_u8; 1];
+            client.read_exact(&mut byte).await?;
+            response_head.push(byte[0]);
+        }
+        std::io::Result::Ok(())
+    })
+    .await
+    .expect("stream response starts before provider completion")
+    .expect("read response headers");
+    let head_text = String::from_utf8_lossy(&response_head);
+    assert!(head_text.starts_with("HTTP/1.1 200"), "{head_text}");
+    let head_lower = head_text.to_ascii_lowercase();
+    assert!(
+        head_lower.contains("text/event-stream"),
+        "SSE keeps event-stream content type: {head_text}"
+    );
+    assert!(
+        head_lower.contains("transfer-encoding:") && head_lower.contains("chunked"),
+        "SSE stays incremental/chunked: {head_text}"
+    );
+    assert!(
+        !head_lower.contains("trailer"),
+        "SSE declares no H1 trailers without an EggPool declaration: {head_text}"
+    );
+    let mut first_stream_event = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !first_stream_event
+            .windows(b"event: response.output_text.delta".len())
+            .any(|window| window == b"event: response.output_text.delta")
+        {
+            let mut byte = [0_u8; 1];
+            client.read_exact(&mut byte).await?;
+            first_stream_event.push(byte[0]);
+        }
+        std::io::Result::Ok(())
+    })
+    .await
+    .expect("first downstream event arrives incrementally")
+    .expect("read first downstream stream event");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(11), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert!(report.database_closed);
+    tokio::time::timeout(Duration::from_secs(2), provider_stopped_rx)
+        .await
+        .expect("stream producer observes downstream cancellation")
+        .expect("provider connection closes");
+    let _ = tokio::time::timeout(Duration::from_secs(2), provider).await;
     database
         .close()
         .await

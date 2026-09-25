@@ -16,7 +16,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   runtime data.
 - Keep endpoint handling, coordinator, routing, persistence, provider
   transport, wire adaptation, and operations as explicit boundaries.
-- Downstream HTTP/1 transport belongs to exact-pinned `eggserve-server =0.3.0`
+- Downstream HTTP/1 transport belongs to exact-pinned `eggserve-server =0.4.0`
   with `tower`, using its server-owned `TowerToEggserve`; the Axum router,
   auth, live body policy, and process lifecycle remain EggPool-owned.
 - Build complete immutable runtime-generation candidates before publication.

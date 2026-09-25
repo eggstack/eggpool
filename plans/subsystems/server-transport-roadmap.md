@@ -1,6 +1,6 @@
 # Server Transport Roadmap
 
-Status: active
+Status: closing
 
 Long-term references:
 
@@ -208,4 +208,4 @@ Milestone 001 closes when EggPool consumes the published 0.4.0 direct server pac
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 | ready | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | — | — |
+| 001 | closing | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | — | — |

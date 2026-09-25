@@ -124,7 +124,7 @@ Deep dives: [Core](deep-dive-core.md), [Control plane and rehash](deep-dive-cont
 ### 3. HTTP server adapters
 
 `rust/src/server/mod.rs` builds the Axum router and passes its pre-bound listener
-to EggServe 0.3.0 (`eggserve-server` with `tower`) for downstream HTTP/1
+to EggServe 0.4.0 (`eggserve-server` with `tower`) for downstream HTTP/1
 transport via the server-owned `TowerToEggserve` (`with_policy` +
 `RequestBodyPolicy::Stream`, 1 GiB ceiling above the live generation-owned
 request limit, parser ceilings, 5 s drain inside the 10 s foreground

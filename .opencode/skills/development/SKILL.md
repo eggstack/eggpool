@@ -36,7 +36,7 @@ existing process safety primitives.
 
 For downstream server transport changes, qualify `server_transport` over real
 loopback sockets plus `runtime_lifecycle_r009`; the production listener uses
-EggServe `eggserve-server =0.3.0` with its `tower` feature and server-owned
+EggServe `eggserve-server =0.4.0` with its `tower` feature and server-owned
 `TowerToEggserve`. Verify the EggServe child is joined before EggPool closes
 shared resources.
 

@@ -27,7 +27,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
   reject configured SSH proxies while retaining non-SSH proxy support
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
 
-Downstream HTTP/1 connections are accepted and served by EggServe 0.3.0 through
+Downstream HTTP/1 connections are accepted and served by EggServe 0.4.0 through
 its direct Tower adapter into EggPool's existing Axum router. EggPool keeps
 ownership of authentication, generation-bound request limits, inference
 coordination, provider transport, persistence, and process shutdown.

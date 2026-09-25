@@ -26,7 +26,7 @@ SQLite repositories <- accounting/catalog/health/maintenance
 identity-proof, and watchdog workflows over `process.rs`, `paths.rs`, and
 `control.rs`; the CLI keeps prompts, presentation, and exit-code mapping.
 `rust/src/server/mod.rs` gives its pre-bound listener to the exact-pinned
-EggServe H1 runtime (`eggserve-server =0.3.0`, `tower` feature) and adapts the
+EggServe H1 runtime (`eggserve-server =0.4.0`, `tower` feature) and adapts the
 existing Axum router through the server-owned `TowerToEggserve`. Concretely,
 `serve_listener` builds the Axum router, derives
 `eggserve_runtime_config`, chains
@@ -40,7 +40,7 @@ HTTP/1 parsing, connection admission and transport, and bounded connection
 drain: at most 1024 connections and 1024 in-flight requests, explicit
 header/parser ceilings, and a five-second graceful connection drain.
 EggPool's server module retains route assembly, shared state, auth, body
-admission, signals, process lifespan, and shutdown reporting. EggServe 0.3
+admission, signals, process lifespan, and shutdown reporting. EggServe 0.4
 policy/admission defaults remain EggServe-owned. Request routing,
 provider transport, wire adaptation, persistence, and finalization remain in
 their respective modules.

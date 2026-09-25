@@ -1076,7 +1076,7 @@ mod tests {
     use super::{middleware::is_inference_path, middleware::requires_auth, *};
 
     #[test]
-    fn eggserve_03_policy_defaults_remain_eggserve_owned() {
+    fn eggserve_policy_defaults_remain_eggserve_owned() {
         let config = eggserve_runtime_config().expect("valid runtime config");
         assert_eq!(
             config.http1_request_target_mode,

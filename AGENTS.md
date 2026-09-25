@@ -149,14 +149,16 @@ plans 215–220 and 241 historical.
  protocol/coordinator semantics were not reopened.
 
 
-Plan 250 is complete. EggPool uses exact-pinned `eggserve-server =0.3.0` with
+Plan 250 is complete. EggPool uses exact-pinned `eggserve-server =0.4.0` with
 `tower`; the server-owned `TowerToEggserve` and `RequestBodyPolicy` adapt into
 the existing Axum router. EggServe's core/static/PHF ancestry is removed.
 Listener completion/shutdown ownership, all existing RuntimeConfig values,
 the 1 GiB transport ceiling, and generation-owned live body admission remain
-unchanged. EggServe 0.3 policy/admission defaults remain EggServe-owned. Hosted
-CI and dependency audit passed; Plan 250 records the evidence in
-`plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`.
+unchanged. EggServe 0.4 policy/admission defaults remain EggServe-owned. Hosted
+CI and dependency audit passed; Plan 250 records the 0.3.0 migration evidence in
+`plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`, and
+server-transport M001 records the 0.4.0 requalification in
+`plans/closure/server-transport/001-status.md`.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +

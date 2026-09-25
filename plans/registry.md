@@ -37,14 +37,14 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Planning governance | closed | `plans/subsystems/planning-governance-roadmap.md` | M001 closed | — |
-| Server transport | active | `plans/subsystems/server-transport-roadmap.md` | M001 ready — EggServe 0.4.0 adoption and requalification | Published `eggserve-server 0.4.0` + `eggserve-primitives 0.2.2` are live and non-yanked; existing direct-Tower boundary is the hard contract. |
+| Server transport | closing | `plans/subsystems/server-transport-roadmap.md` | M001 closing — EggServe 0.4.0 adoption and requalification | Published `eggserve-server 0.4.0` + `eggserve-primitives 0.2.2` are live and non-yanked; existing direct-Tower boundary is the hard contract. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Planning governance | M001 planning-convention bootstrap | closed | `plans/implementation/planning-governance/001-planning-convention-bootstrap.md` | none; closure at `plans/closure/planning-governance/001-status.md` |
-| Server transport | M001 EggServe 0.4.0 adoption and requalification | ready | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | No hard blocker: 0.4.0 is published; preserve Plan 250 ownership/config/lifecycle semantics and requalify the exact pin. |
+| Server transport | M001 EggServe 0.4.0 adoption and requalification | closing | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | No hard blocker: 0.4.0 is published; preserve Plan 250 ownership/config/lifecycle semantics and requalify the exact pin. |
 
 ## Blocked work
 

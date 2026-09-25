@@ -43,9 +43,10 @@ tooling-only.
    `from_admitted` construction. `is_inference_path()` covers all public
    inference routes (Plan 249).
 3. **Thin server adapters.** `rust/src/server/` holds no coordinator
-   retry/finalization logic. EggServe 0.3 drives the pre-bound downstream H1
-   listener and adapts into the existing Axum router; EggPool retains app
-   policy and process lifecycle (Plans 246–248, 250).
+   retry/finalization logic. The exact-pinned EggServe direct H1 runtime
+   drives the pre-bound downstream H1 listener and adapts into the existing
+   Axum router; EggPool retains app policy and process lifecycle
+   (Plans 246–248, 250).
 4. **Single SQLite gate.** One connection/gate, WAL/NORMAL, existing
    publication/finalization ownership, and the pre-existing passive
    maintenance checkpoint stay as-is until a reviewed design with
