@@ -148,6 +148,23 @@ plans 215–220 and 241 historical.
  middleware/real-socket regression; EggServe Plans 246–248 and compact
  protocol/coordinator semantics were not reopened.
 
+
+ Plan 250 is the active EggServe downstream migration/qualification handoff:
+ replace the current `eggserve-core =0.2.2 + tower` /
+ `eggserve-server =0.2.1` composition with exact-pinned
+ `eggserve-server =0.3.0` + `tower`, using server-owned
+ `TowerToEggserve` and `RequestBodyPolicy` directly. The cutover must preserve
+ the existing listener/control/completion lifecycle, all current RuntimeConfig
+ values, the fixed 1 GiB EggServe/Tower ceiling, and the generation-owned live
+ body limit. Do not adopt 0.3 external policy/admission ownership during the
+ migration; classify those APIs only after the direct cutover is green and use
+ a separate append-only plan for any semantic change. Closure requires real
+ EggPool dependency evidence showing no production `eggserve-core` /
+ `eggserve-static` or EggServe-owned PHF ancestry, Plan-248-style
+ footprint/runtime comparison, focused real-socket/lifecycle qualification,
+ full default/no-default/security/tooling gates, and hosted CI on the closure
+ candidate.
+
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
