@@ -38,15 +38,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Planning governance | closed | `plans/subsystems/planning-governance-roadmap.md` | M001 closed | — |
-| Server transport | closed | `plans/subsystems/server-transport-roadmap.md` | M001 closed — EggServe 0.4.0 adoption and requalification | Published `eggserve-server 0.4.0` + `eggserve-primitives 0.2.2` are live and non-yanked; existing direct-Tower boundary is the hard contract. |
+| — | — | — | — | none registered |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Planning governance | M001 planning-convention bootstrap | closed | `plans/implementation/planning-governance/001-planning-convention-bootstrap.md` | none; closure at `plans/closure/planning-governance/001-status.md` |
-| Server transport | M001 EggServe 0.4.0 adoption and requalification | closed | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | No hard blocker: 0.4.0 is published; preserve Plan 250 ownership/config/lifecycle semantics and requalify the exact pin. |
+| — | — | — | — | none registered |
 
 ## Blocked work
 
@@ -64,7 +62,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 ## Unblock audit
 
-M001 closed with no promotions: at close time no registered plan listed it
-as a hard or interface dependency. Future subsystem roadmaps (see Plan 251
+Server transport M001 closed with no promotions: at close time no registered
+plan listed it as a hard or interface dependency. Future subsystem roadmaps (see Plan 251
 candidate decomposition) register here only when ready to be reasoned
 about — do not bulk-generate rows to populate the table.
