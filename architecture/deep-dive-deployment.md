@@ -18,7 +18,11 @@ Production deployment, systemd integration, operational scripts, and the tools n
 
 ### `rust/src/operations/deploy.rs`
 
-Rust-owned systemd/logrotate/cron snippets for CLI output. Deployment
+Rust-owned systemd/logrotate/cron snippets for CLI output
+(`render_personal_systemd`, `render_production_systemd`, `render_logrotate`,
+`render_watchdog_cron`, `render_backup_cron`, `render_backup_script`,
+`write_atomic`, `install_systemd`/`install_logrotate`/cron-block helpers,
+`uninstall`, `remove_artifact`). Deployment
 rendering and process commands are implemented in `rust/src/operations/`.
 
 ### `rust/src/operations/lifecycle.rs`
@@ -33,9 +37,11 @@ not depend on the CLI runtime adapter. The CLI adapter in
 
 ### `scripts/install.sh`
 
-One-shot installer for the current Rust wheel. It recognizes existing package
+One-shot installer for the native Rust wheel. It recognizes existing package
 manager and standalone installations, refuses ambiguous ownership, checks the
 supported OS/architecture before mutation, and preserves configuration.
+Native releases start at `NATIVE_RELEASE_VERSION = "0.8.0"`; historical
+Python versions are catalogued exact-only targets and never the default.
 
 ## Operational tooling
 
@@ -43,10 +49,12 @@ The `scripts/` directory contains release, package-boundary, installer,
 portability, and qualification tooling. The most relevant commands are
 `qualify_quick_installer.py`, `validate_runtime_package_boundary.py`,
 `validate_release_workflow.py`, `build_release_artifacts.py`,
-`build_connect_artifacts.py`, `create_release_manifest.py`,
+`build_connect_artifacts.py`, `inspect_connect_artifact.py`,
+`create_release_manifest.py`,
 `validate_release_artifacts.py`, and `verify_published_release.py`.
 
 Release footprint qualification keeps the reviewed Maturin 1.14.1 setting
+in `packaging/pypi/pyproject.toml`
 `strip = false` / `--strip false` unless an otherwise equivalent stripped
 artifact passes executable, wheel, runtime, manifest, and target qualification.
 ThinLTO is an ephemeral comparison only; it is not enabled in the Cargo release
@@ -57,23 +65,28 @@ release threshold.
 ## Desktop helper release pipeline
 
 The release workflow builds the proxy wheel/raw pairs (Linux x86_64/aarch64,
-macOS arm64) plus four `eggpool-connect` helper binaries (same three targets
+macOS arm64; exactly three raw artifacts) plus four `eggpool-connect` helper binaries (same three targets
 plus Windows x86_64) from the same clean tag commit. Helpers build with plain
-Cargo (`scripts/build_connect_artifacts.py`, never Maturin) and upload as
+Cargo (`scripts/build_connect_artifacts.py`, never Maturin; target classes in
+`scripts/inspect_connect_artifact.py::CONNECT_TARGETS`) and upload as
 `connect-*` CI artifacts so they cannot mix with the wheel pipeline; the
 aggregate job stages the reviewed `packaging/connect/` bootstraps next to
 them, binds everything into the manifest `connect_artifacts` section
 (`scripts/create_release_manifest.py --connect-artifact-dir`), validates
 digests (`scripts/validate_release_artifacts.py --connect-artifact-dir`),
 and publishes the exact bytes under `dist/publish/connect/` with
-`SHA256SUMS`. Nothing is rebuilt in a publish job. The Windows helper is a
-desktop-only asset; the proxy matrix and its validators are unchanged, and
+`SHA256SUMS`. An absent or empty `connect_artifacts` list is valid for a
+proxy-only bundle: the checked-in `packaging/release/release-manifest.json`
+example carries exactly three proxy artifacts and no `connect_artifacts` key.
+Nothing is rebuilt in a publish job. The Windows helper is a
+desktop-only asset and never implies Windows proxy support; the proxy matrix and its validators are unchanged, and
 `validate_release_workflow.py` scopes the word “windows” to the single
 helper build job so a helper binary can never read as proxy support.
 macOS x86_64 was evaluated and deferred: no Intel runner exists to
 execute-qualify that binary, and publishing an unexecuted binary would
 violate the per-target qualification rule (Intel Mac operators build the
 helper from source with `cargo build --bin eggpool-connect --release`).
+See `docs/releasing.md` for the release/rollback operator boundary.
 
 ## Systemd Integration
 

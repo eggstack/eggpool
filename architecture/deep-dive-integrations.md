@@ -85,8 +85,12 @@ union of possible features.
 
 ## Codex provider contract
 
-`build_codex_toml_snippet()` emits the generic HTTP/SSE Responses provider
-shape used by the qualified Codex path:
+The portable crate owns `codex.rs::render_codex_toml()` /
+`render_codex_toml_with_catalog()`; the EggPool adapter wraps them as
+`operations/integrations.rs::build_codex_toml_snippet()` /
+`build_codex_toml_snippet_with_catalog()` /
+`build_codex_catalog_json()`. The emitted generic HTTP/SSE Responses provider
+shape used by the qualified Codex path is:
 
 ```toml
 model_provider = "eggpool"
@@ -185,7 +189,8 @@ the presentation adapter; reusable construction lives in
 ## Desktop bootstrap rendering
 
 `render_connect_posix()` / `render_connect_powershell()` (selected via
-`render_connect_bootstrap()` for `--shell auto|posix|powershell|all`) emit
+`render_connect_bootstrap()` for `--shell auto|posix|powershell|all`,
+quoting via `posix_shell_quote()` / `powershell_quote()`) emit
 copy/paste blocks pinned to the running EggPool version
 (`RELEASE_REPOSITORY = "eggstack/eggpool"`, immutable
 `/releases/download/vX.Y.Z/` URLs, no `latest`). Each block downloads the
@@ -198,6 +203,13 @@ within `MAX_BOOTSTRAP_COMMAND_LEN`. The bootstraps themselves
 select/download/verify/execute the matching helper binary and own no client
 mutation logic; helper binaries are the `eggpool-connect-*` release assets
 with `SHA256SUMS` as the integrity contract (see the deployment deep dive).
+Helper release identity is defined by `scripts/build_connect_artifacts.py`
+(plain Cargo, `CONNECT_TARGETS` in `scripts/inspect_connect_artifact.py`:
+`connect-linux-x86_64`, `connect-linux-aarch64`, `connect-macos-arm64`,
+`connect-windows-x86_64`) and inspected by
+`scripts/inspect_connect_artifact.py` (native kind/machine checks, version
+and bootstrap-filename contracts). A Windows helper never implies Windows
+proxy support.
 
 ## Integration-profile API
 
@@ -278,7 +290,10 @@ structural operations the narrow editors cannot express.
 ## Transactional desktop helper (`eggpool-connect`)
 
 `rust/crates/eggpool-connect/` is the small desktop counterpart over the
-same portable crate. It owns only receiving-machine concerns and never
+same portable crate (`src/`: `cli.rs`, `transaction.rs`, `install.rs`,
+`backup.rs`, `verify.rs`, `detect.rs`, `fetch.rs`, `credential.rs`,
+`paths.rs`, `process.rs`, `atomic.rs`, `outcome.rs`, `lib.rs`, `main.rs`).
+It owns only receiving-machine concerns and never
 duplicates renderers:
 
 - CLI: `plan` (read-only, no filesystem mutation), `install` (plan +
@@ -318,8 +333,11 @@ duplicates renderers:
   idempotent no-ops after validation; remote revision updates converge only
   owned artifacts without noisy rewrites. Credential persistence is deferred:
   default setup never touches shell profiles or persistent environment state.
-- Dependency surface (verified via `cargo tree -p eggpool-connect`): Clap,
-  Serde/JSON, SHA-2, TOML, narrow Hyper/Rustls/`webpki-roots`, Tokio, and the
+- Dependency surface (verified via `cargo tree -p eggpool-connect` and
+  `rust/crates/eggpool-connect/Cargo.toml`, `unsafe_code = "forbid"`): Clap,
+  Serde/JSON, SHA-2, TOML, narrow Hyper/Rustls/`webpki-roots`
+  (`http`, `http-body-util`, `hyper`, `hyper-util`, `hyper-rustls`),
+  Tokio, and the
   portable crate. No Axum, SQLite, Eggress, routing, provider codecs, or
   dashboard assets, so publishing a Windows helper never implies Windows
   proxy support.

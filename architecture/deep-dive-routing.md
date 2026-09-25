@@ -14,23 +14,29 @@ affinity cache and adapts TOML config into the neutral policy types. A selector
 chooses a concrete model before ordinary provider routing; it cannot pin an
 account, bypass health/quota, or reselect after submission.
 
-Claims and reservations are released on every terminal path. Quarantine,
-backoff, and capability gates are evaluated before selection and remain scoped
-to the provider/model facts that produced them.
+Claims and reservations are released on every terminal path (`rollback_claim`,
+`convert_claim_after_durable_publication`, `release_active_claim`,
+`release_quota_reservation`). Quarantine, backoff, and capability gates are
+evaluated before selection and remain scoped to the provider/model facts that
+produced them.
 
 Eligibility selects the effective capability policy once by reference before
 the account iteration. Request-provided policy overrides configured policy,
 empty request policy falls back to configuration, and deterministic scoring
-collections remain ordered `BTreeMap`-based. The selection lock still covers
-the synchronous claim/quota/fairness transaction; no provider or SQLite await
-enters it.
+collections remain ordered `BTreeMap`-based. The selection lock is an async
+mutex held across one synchronous claim/quota/fairness critical section
+(`select_and_claim_with_preference`); no provider, SQLite, or network await
+enters it after acquisition.
 
 ## Shared crate contract
 
-EggPool owns `eggpool-model-routing`; Codegg is a pinned downstream consumer.
-The crate's `model-router/v1` static-policy format is a semantic protocol
-contract separate from the crate's Rust semver. Public Rust API breaks require
-review and updates in Codegg before the pin moves. Changes to policy bytes or
-fingerprint semantics require explicit compatibility review and may require a
-selector protocol-version decision. Provider/account routing, quota, health,
-retry, and transport remain outside the shared crate.
+`eggpool-model-routing` is a neutral policy boundary: structural validation,
+deterministic compilation, route IDs, bounded static selector policy bytes
+(`model-router/v1`, 64 KiB cap), fingerprints, and hashed session identities.
+Downstream consumers adapt their local config into the neutral policy types
+and retain selector execution plus concrete-provider selection. Public Rust
+API breaks and policy-byte/fingerprint semantic changes require explicit
+compatibility review and may require a selector protocol-version decision.
+Provider/account routing, quota, health, retry, and transport remain outside
+the shared crate. See [Data models](deep-dive-models.md) for the
+crate-vs-affinity ownership split.

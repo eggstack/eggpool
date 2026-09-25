@@ -17,7 +17,7 @@ request limit. All four public inference routes (`/v1/chat/completions`,
 `/v1/messages`, `/v1/responses`, `/v1/responses/compact`) share this
 generation-owned body-admission path.
 
-`rust/src/wire/ir.rs` is captured before provider adaptation. A selected wire
+The canonical IR (`rust/src/wire/ir.rs`) is captured via admission before provider adaptation. A selected wire
 codec under `rust/src/wire/` encodes the provider request and decodes finite or
 streaming responses. Native terminal evidence is required; transport EOF is
 never treated as successful completion.

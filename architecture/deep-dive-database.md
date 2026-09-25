@@ -3,7 +3,10 @@
 Back to [Architecture](README.md)
 
 `rust/src/db/` owns the SQLite connection, migration runner, repositories,
-backup state, and recovery boundaries. Migrations and their checksums are
+and the consistent-snapshot `backup_to` primitive. Backup orchestration lives
+in `rust/src/operations/backup.rs` and crash-repair hooks live in
+`runtime_lifecycle/recovery.rs` plus coordinator reconciliation; the database
+contributes the shared transaction/recovery contract. Migrations and their checksums are
 embedded from `rust/assets/db/migrations/`; the runtime preserves the
 historical schema ledger and schema 54 contract.
 
@@ -18,7 +21,9 @@ not open independent writer pools or accept raw unbounded diagnostic content.
 Compatibility fixtures under `tests/fixtures/` are test-only and are never
 loaded by the production executable.
 
-See `rust/src/db/connection.rs`, `migrations.rs`, and `repositories.rs`.
+See `rust/src/db/connection.rs`, `migrations.rs`, `repositories.rs`, `mod.rs`,
+and feature-gated `qualification.rs` (only compiled with
+`qualification-db-diagnostics`).
 
 ## Publication/storage qualification diagnostic
 

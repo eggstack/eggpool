@@ -14,8 +14,8 @@ LAN deployments.
 
 ```text
 CLI/runtime adapter -> operations services
-EggServe H1 -> TowerToEggserve -> Axum router -> request coordinator -> routing/provider transport
-                                      -> canonical wire codecs/stream
+pre-bound listener + Axum router -> TowerToEggserve -> EggServe H1 -> request coordinator -> routing/provider transport
+                                       -> canonical wire codecs/stream
 runtime manager     -> generation factory -> supervised background tasks
 config parser       -> reload policy -> transactional reload/publication
 SQLite repositories <- accounting/catalog/health/maintenance
@@ -27,10 +27,21 @@ identity-proof, and watchdog workflows over `process.rs`, `paths.rs`, and
 `control.rs`; the CLI keeps prompts, presentation, and exit-code mapping.
 `rust/src/server/mod.rs` gives its pre-bound listener to the exact-pinned
 EggServe H1 runtime (`eggserve-server =0.3.0`, `tower` feature) and adapts the
-existing Axum router through the server-owned `TowerToEggserve`. EggServe owns
-HTTP/1 parsing, connection admission and transport, and bounded connection drain.
+existing Axum router through the server-owned `TowerToEggserve`. Concretely,
+`serve_listener` builds the Axum router, derives
+`eggserve_runtime_config`, chains
+`Server::builder().runtime(config).from_listener(listener).build()`, wraps
+the router with `TowerToEggserve::with_policy` using
+`RequestBodyPolicy::Stream { max_bytes: 1 GiB }`
+(`EGG_SERVE_REQUEST_BODY_LIMIT`), and drives it with
+`start_with_service`, splitting the handle into a shutdown control plus a
+passive typed completion (`into_parts` / `completion.wait()`). EggServe owns
+HTTP/1 parsing, connection admission and transport, and bounded connection
+drain: at most 1024 connections and 1024 in-flight requests, explicit
+header/parser ceilings, and a five-second graceful connection drain.
 EggPool's server module retains route assembly, shared state, auth, body
-admission, signals, process lifespan, and shutdown reporting. Request routing,
+admission, signals, process lifespan, and shutdown reporting. EggServe 0.3
+policy/admission defaults remain EggServe-owned. Request routing,
 provider transport, wire adaptation, persistence, and finalization remain in
 their respective modules.
 
@@ -82,7 +93,9 @@ old active -> retiring -> lease/finalization drain -> close -> retired
 
 The public lifecycle types remain re-exported from `runtime_lifecycle` so
 server, reload, operations, and integration-test callers do not depend on
-the internal file layout.
+the internal file layout. Bounded constants live in `mod.rs`:
+`MAX_RETIRING_GENERATIONS` (4), `DEFAULT_GENERATION_CLOSE_TIMEOUT` (1s),
+and `MAX_STARTUP_RECONCILIATION_PASSES` (1024).
 
 The core ownership types are:
 
@@ -131,19 +144,30 @@ before atomic replacement. Restart-after-mutation is composed by
 `rust/src/task_supervisor.rs` remains the sole owner of supervised task
 handles, callback registration, task-spec diffs, and bounded task shutdown.
 It registers bounded tasks for startup and generation construction.
-Generation-scoped supervisors own catalog refresh, health, maintenance,
-statistics, and retained finalization work according to the active task
-specification. Process-scoped containers such as the metrics coalescer and
-wire resolver are flushed or stopped through their existing shutdown
-contracts.
+The canonical task names (`RUNTIME_TASK_NAMES`) are `catalog_refresh`,
+`retention_cleanup`, `checkpoint`, `metrics_flush`, `update_checker`, and
+`automatic_backup`, split by `TaskOwnership`: process-owned tasks
+(checkpoint, metrics flush, update check, auto backup) versus
+generation-leased tasks (catalog refresh, retention/cleanup) whose
+callbacks receive a fresh lease per tick. `operations/metrics.rs`
+coalescing and `operations/update.rs` freshness probes plug in here.
+Process-scoped containers such as the metrics coalescer and wire resolver
+are flushed or stopped through their existing shutdown contracts.
 
-Shutdown first quiesces EggPool, then requests EggServe shutdown and joins its
-typed passive completion before closing the control listener or shared
-application resources. EggServe's explicit five-second connection drain fits
-inside EggPool's single ten-second foreground deadline. EggPool then retires
-the active generation and joins its supervised work. Readiness, routing-trace writers,
-and retained finalization work stop before the process-owned database
-connections disconnect. PID cleanup and child-process joins remain bounded;
+Shutdown first quiesces EggPool (`request_shutdown`, phase
+`Running -> Quiescing`), then requests EggServe shutdown via its control
+and joins the passive typed completion (`completion.wait()`) within the
+single ten-second foreground deadline (`GRACEFUL_SHUTDOWN_TIMEOUT`);
+EggServe's explicit five-second connection drain fits inside it. The
+control listener is closed next, then `close_runtime_resources_until`
+runs in ownership order: supervised-task shutdown with the remaining
+deadline, metrics flush, body-task drain (aborted only when already
+forced or timed out), generation-manager `close_for_shutdown`, and
+finally the process-owned database close. Phase transitions
+(`Quiescing -> Draining -> Closing`/`ForcedClosing -> Stopped`) and the
+`ShutdownReport` (forced flag, leases/terminal references/body tasks at
+deadline, task counts, database outcome) are the bounded shutdown
+evidence. PID cleanup and child-process joins remain bounded;
 systemd or the watchdog may restart a worker that exits after an indeterminate
 database state.
 

@@ -72,9 +72,10 @@ fail closed on validation, commit, or ownership ambiguity.
 ### 1. Entry, CLI adapter, errors
 
 `rust/src/main.rs` is a minimal Tokio `current_thread` entry point mapping
-`AppError` to `ExitCode`. `rust/src/lib.rs` declares the module tree and
+`AppError` to `ExitCode` (`Command` code, `Interrupted` → 130, else 1).
+`rust/src/lib.rs` declares the module tree (with `forbid(unsafe_code)`) and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
-command tree (`serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
+command tree (33 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
 `modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
@@ -86,9 +87,9 @@ receiving-machine `plan`/`install`/`verify`/`backups`/`restore`/`remove`
 contract over the same portable crate and never touches coordinator/server
 internals either. `rust/src/error.rs`
 (`AppError`/`BootstrapError`) owns the typed error hierarchy and stable
-exit-code mapping; HTTP/status mappings for server surfaces live with their
-adapters and retain context without secrets or raw bodies. `rust/src/version.rs`
-exposes `CARGO_PKG_VERSION` (currently `0.8.0`).
+exit-code mapping only; HTTP/status mappings for server surfaces live with
+their adapters and retain context without secrets or raw bodies. `rust/src/version.rs`
+exposes `PACKAGE_VERSION` from `CARGO_PKG_VERSION` (currently `0.8.0`).
 
 Deep dive: [Core](deep-dive-core.md).
 
@@ -100,13 +101,14 @@ Deep dive: [Core](deep-dive-core.md).
 `BackupConfig`, `ModelRouterConfig`, `IntegrationsConfig` (`[integrations].advertise_base_url`),
 transcoder/model-info policies) with
 `from_toml`/`validate` and proxy/model-router compilation. Resolution order is
-explicit `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` >
+explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware
+`~/.config/eggpool/config.toml` >
 `./config.toml`; API keys come from the environment or the adjacent `.env`
 (`$EGGPOOL_ENV` override supported), never committed. Canonical examples are
 the repository-root `config.example.toml` and `config.sbc.example.toml`;
-`rust/build.rs` embeds the default example for `eggpool init-config` and embeds
-the `rust/assets/db/migrations/` chain with checksums (via
-`rust/build_support.rs`).
+`rust/build.rs` (via `rust/build_support.rs`) embeds the default example for
+`eggpool init-config` and embeds the `rust/assets/db/migrations/` chain with
+checksums.
 
 `rust/src/config_reload_policy.rs::classify_transition` is the only
 reload-vs-restart authority. It returns one redacted typed result for
@@ -121,9 +123,12 @@ Deep dives: [Core](deep-dive-core.md), [Control plane and rehash](deep-dive-cont
 
 ### 3. HTTP server adapters
 
-`rust/src/server/mod.rs` builds the Axum router, passes its pre-bound listener
+`rust/src/server/mod.rs` builds the Axum router and passes its pre-bound listener
 to EggServe 0.3.0 (`eggserve-server` with `tower`) for downstream HTTP/1
-transport, and adapts the router with the server-owned `TowerToEggserve`.
+transport via the server-owned `TowerToEggserve` (`with_policy` +
+`RequestBodyPolicy::Stream`, 1 GiB ceiling above the live generation-owned
+request limit, parser ceilings, 5 s drain inside the 10 s foreground
+deadline).
 EggServe owns HTTP parsing, connection transport, and connection drain;
 EggPool continues to own `AppState` (API key,
 `Database`, `RuntimeManager`, body-task tracker), and owns foreground
@@ -172,10 +177,16 @@ outcomes without reparsing wire events; `streaming/timeout.rs`, `types.rs`,
 `diagnostics.rs` hold timeout policy, contracts, and secret-free counters.
 Supporting services: `publication.rs` (durable request/attempt/reservation
 publication), `finalization.rs` (`FinalizationSupervisor`, durable terminal
-convergence), `attempt.rs` (single prepared/submitted attempt), `failure.rs`
-(`FailureDecisionEngine`, retry legality), `wire_resolver.rs` (bounded
+convergence), `attempt.rs` (single prepared/submitted attempt; borrowed
+`AttemptPreparation` ends before provider I/O, `PreparedUpstreamAttempt` fully
+owned), `failure.rs`
+(`FailureDecisionEngine` over `FailureSource`/`FailureCategory`/`RetryScope`/
+`NextAction` with a single-application `EffectLedger`; `RetryPolicy`
+`max_attempts` default 3 gates both account retry and wire retry), `wire_resolver.rs` (bounded
 process-owned wire candidate ordering), `endpoints.rs`/`semantic.rs`/
 `reconciliation.rs` (surface detection, semantic helpers, crash repair hooks).
+Retry is structurally unavailable after the streaming handoff
+(`!response_started && !downstream_started`).
 The production compact endpoint uses a private single-owner execution input so
 the preserved JSON tree is not duplicated, while public finite constructors
 remain unchanged.
@@ -209,7 +220,8 @@ Deep dive: [Transcoding](deep-dive-transcoder.md).
 
 `rust/src/providers/` stops at neutral HTTP transport: `transport.rs`
 (`ProviderHttpClient`, `ProviderBody`, `ProviderResponse`, `TransportError`),
-`client_pool.rs` (generation-owned per-account pool). No auth/wire/retry here;
+`client_pool.rs` (generation-owned per-account pool over an immutable nested
+topology with atomic close). No auth/wire/retry here;
 credentials render only at dispatch-header construction. Proxy construction
 crosses the listener-free `eggress-outbound` boundary
 (`OutboundConnector::from_pproxy_uri` for single-hop and `__`-separated
@@ -223,7 +235,8 @@ is Eggfetch (`eggfetch-core` 0.2.0 with
 `native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
 WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
 add only a thin Eggress `Dialer` supplying the raw route stream, with origin
-TLS still owned by Eggfetch. Route failures arrive as typed
+TLS still owned by Eggfetch. There is no `eggress-embed` facade in the graph.
+Route failures arrive as typed
 `OutboundConnectError` kind/stage facts mapped into the stable proxy
 `TransportError` categories without message-string inspection. The native
 profile deliberately excludes
@@ -265,8 +278,12 @@ Deep dives: [Routing and quota](deep-dive-routing.md),
 `rust/src/db/` (`connection.rs` serialized `tokio-rusqlite` gate with
 `bundled`/`backup` features, explicit caller-owned transactions;
 `migrations.rs` checksum-validated runner; `repositories.rs` typed
-account/catalog/model/request/ping/dashboard/usage plus health persistence)
-is the only persistence boundary. Migrations (`rust/assets/db/migrations/`,
+account/catalog/model/request/ping/dashboard/usage plus health persistence;
+`mod.rs` facade; feature-gated `qualification.rs` tooling-only collector)
+is the only persistence boundary. `db/` owns only the `backup_to` snapshot
+primitive; backup orchestration lives in `operations/backup.rs` and crash
+repair in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation.
+Migrations (`rust/assets/db/migrations/`,
 currently v1–v54 with `checksums.json`) are embedded and immutable; commit or
 ownership ambiguity fails closed; startup reconciliation repairs only covered
 states. Repositories accept no unbounded diagnostic content and never store
@@ -285,11 +302,16 @@ path), `lease.rs` (slots, `GenerationLease`, finalization guards), `manager.rs`
 max 4 retiring generations), `recovery.rs` (bounded one-shot crash
 reconciliation, max 1024 passes), `diagnostics.rs` (secret-free projections),
 `mod.rs` (facade/re-exports only). `rust/src/task_supervisor.rs` supervises
-fixed-delay tasks: process-owned (WAL checkpoint, metrics flush, update check,
+fixed-delay `RuntimeTaskSpec` tasks with `TaskOwnership::{Process,
+ActiveGenerationLeased}`: process-owned (WAL checkpoint, metrics flush, update check,
 auto backup) vs. generation-leased (catalog refresh, retention/cleanup);
 `operations/metrics.rs` coalescing and `operations/update.rs` freshness probes
 plug in here. Shutdown closes admission, retires the active generation, joins
-supervised/finalization work, then disconnects the DB.
+supervised/finalization work, then disconnects the DB (quiesce → EggServe
+control + completion wait → control close → tasks → metrics flush → body
+drain → generation manager → DB close, with `ShutdownPhase`/`ShutdownReport`
+evidence; max 4 retiring generations; bounded one-shot crash reconciliation,
+max 1024 passes).
 
 Deep dives: [Runtime](deep-dive-runtime.md), [Background tasks](deep-dive-background.md).
 
@@ -307,10 +329,9 @@ atomic TOML edits + `classify_transition`-carrying apply), `terminal.rs`
 (TTY-only `j/k`/arrow interactive selector with a deterministic line-oriented
 fallback for non-TTY use; `Ctrl-C` stays `MutationError::Interrupted` to
 `BootstrapError::Interrupted` exit 130 behind one termios guard, qualified by
-safe `openpty` PTY tests), `deploy.rs`
-(systemd/logrotate/cron rendering, install/uninstall), `backup.rs` (staged
-atomic ZIP with `META` + config + optional `.env` + consistent SQLite
-snapshot; restore requires stopped service), `update.rs` (GitHub release
+safe `openpty` PTY tests), `deploy.rs`(systemd/logrotate/cron rendering, install/uninstall), `backup.rs` (staged
+atomic ZIP `BACKUP_FORMAT_VERSION=1` with `META` + config + optional `.env` + consistent SQLite
+snapshot via `backup_to`; restore requires stopped service), `update.rs` (GitHub release
 discovery, SHA-256 verification, atomic transition; background probes are
 conservative, exact-version resolution is explicit), `catalog.rs` (embedded
 installable-releases catalog), `provenance.rs` (install-provenance detection),
@@ -349,13 +370,16 @@ Deep dives: [Control plane](deep-dive-control.md),
 ### 12. Observability and security
 
 Observability is bounded, deterministic, and metadata-only: request/usage/
-latency/failure/reasoning/routing facts via `operations/metrics.rs` and
+latency/failure/reasoning/routing facts via `operations/metrics.rs` (scalar-only
+coalescer, `low_wear` default) and
 coordinator instrumentation; routing traces record decisions, not prompts;
 `eggpool status` / `GET /api/status` project the compact proxy/provider health
-snapshot while `runtime-status --json` and `/api/stats/runtime` keep the deep
-process/runtime diagnostics, all without secrets. Security is request limits, API-key auth,
+snapshot from `operations/status.rs` (shared readiness evaluation with
+`readyz`, no outbound probes) while `runtime-status --json` and `/api/stats/runtime` keep the deep
+process/runtime diagnostics, all without secrets. Security is request limits, API-key auth
+(constant-time `Bearer`/`x-api-key`, loopback exemption),
 header filtering, credential redaction, owner-only socket/state permissions
-(`0o700` runtime dir, `0o600` socket), and safe filesystem handling. Raw
+(`0o700` runtime dir, `0o600` socket and secret files), and safe filesystem handling. Raw
 bodies, prompts, cache keys, token values, and provider bodies stay out of
 persistence/logs/diagnostics.
 
@@ -456,8 +480,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
-| Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
-| Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
+| Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) || Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
 | Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
 | Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |

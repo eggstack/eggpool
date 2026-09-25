@@ -153,7 +153,7 @@ packaging, which passes `--strip false` to maturin):
 | final artifact bytes | 27,908,656 | 30,139,568 | +2,230,912 (+8.0%) |
 | direct dependencies | includes `tower-service` | `tower-service` removed | -1 |
 | resolved packages (`cargo metadata`) | 383 | 414 | +31 |
-| Eggfetch enabled features | N/A | `http1` + `tls-rustls` only | minimal |
+| Eggfetch enabled features (superseded 0.1.5 `http1` profile) | N/A | `http1` + `tls-rustls` only | minimal |
 
 The result classifies as **larger by a measured amount**. The delta is
 explained, not accidental: the entire added package closure arrives through
