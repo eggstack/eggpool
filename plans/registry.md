@@ -14,7 +14,9 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Plan 250 (EggServe 0.3.0 direct-Tower migration,
+Most recently closed: Server transport M001 (EggServe 0.4.0 adoption and
+requalification, `plans/closure/server-transport/001-status.md`). Legacy
+archive latest: Plan 250 (EggServe 0.3.0 direct-Tower migration,
 `7879cbf9`). Plans 244–245, 215–220, 241 remain historical per their own
 closure passes; the `146-*` duplicate pair is a known numbering accident.
 
@@ -37,14 +39,14 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Planning governance | closed | `plans/subsystems/planning-governance-roadmap.md` | M001 closed | — |
-| Server transport | closing | `plans/subsystems/server-transport-roadmap.md` | M001 closing — EggServe 0.4.0 adoption and requalification | Published `eggserve-server 0.4.0` + `eggserve-primitives 0.2.2` are live and non-yanked; existing direct-Tower boundary is the hard contract. |
+| Server transport | closed | `plans/subsystems/server-transport-roadmap.md` | M001 closed — EggServe 0.4.0 adoption and requalification | Published `eggserve-server 0.4.0` + `eggserve-primitives 0.2.2` are live and non-yanked; existing direct-Tower boundary is the hard contract. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Planning governance | M001 planning-convention bootstrap | closed | `plans/implementation/planning-governance/001-planning-convention-bootstrap.md` | none; closure at `plans/closure/planning-governance/001-status.md` |
-| Server transport | M001 EggServe 0.4.0 adoption and requalification | closing | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | No hard blocker: 0.4.0 is published; preserve Plan 250 ownership/config/lifecycle semantics and requalify the exact pin. |
+| Server transport | M001 EggServe 0.4.0 adoption and requalification | closed | `plans/implementation/server-transport/001-eggserve-0.4.0-adoption-and-requalification.md` | No hard blocker: 0.4.0 is published; preserve Plan 250 ownership/config/lifecycle semantics and requalify the exact pin. |
 
 ## Blocked work
 
@@ -58,10 +60,11 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|
 | Plan 250 — EggServe 0.3.0 direct-Tower migration (legacy flat) | closed | `plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`, `7879cbf9` |
 | Planning governance M001 | closing → closed on acceptance of `plans/closure/planning-governance/001-status.md` | Plan 251 authorizes; bootstrap files + verification in closure record |
+| Server transport M001 — EggServe 0.4.0 adoption and requalification | closed | `plans/closure/server-transport/001-status.md`, implementation `409491ea` |
 
 ## Unblock audit
 
-Closing M001 unblocks nothing: no registered plan lists it as a hard or
-interface dependency. Future subsystem roadmaps (see Plan 251 candidate
-decomposition) register here only when ready to be reasoned about — do not
-bulk-generate rows to populate the table.
+M001 closed with no promotions: at close time no registered plan listed it
+as a hard or interface dependency. Future subsystem roadmaps (see Plan 251
+candidate decomposition) register here only when ready to be reasoned
+about — do not bulk-generate rows to populate the table.

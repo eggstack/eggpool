@@ -1,6 +1,6 @@
 # Server Transport Milestone 001 — EggServe 0.4.0 adoption and requalification
 
-Status: closing
+Status: closed
 
 Repository baseline: `777dcdd597b5606997df99ffe9191691ba6785fb`
 
