@@ -149,21 +149,14 @@ plans 215–220 and 241 historical.
  protocol/coordinator semantics were not reopened.
 
 
- Plan 250 is the active EggServe downstream migration/qualification handoff:
- replace the current `eggserve-core =0.2.2 + tower` /
- `eggserve-server =0.2.1` composition with exact-pinned
- `eggserve-server =0.3.0` + `tower`, using server-owned
- `TowerToEggserve` and `RequestBodyPolicy` directly. The cutover must preserve
- the existing listener/control/completion lifecycle, all current RuntimeConfig
- values, the fixed 1 GiB EggServe/Tower ceiling, and the generation-owned live
- body limit. Do not adopt 0.3 external policy/admission ownership during the
- migration; classify those APIs only after the direct cutover is green and use
- a separate append-only plan for any semantic change. Closure requires real
- EggPool dependency evidence showing no production `eggserve-core` /
- `eggserve-static` or EggServe-owned PHF ancestry, Plan-248-style
- footprint/runtime comparison, focused real-socket/lifecycle qualification,
- full default/no-default/security/tooling gates, and hosted CI on the closure
- candidate.
+Plan 250 is complete. EggPool uses exact-pinned `eggserve-server =0.3.0` with
+`tower`; the server-owned `TowerToEggserve` and `RequestBodyPolicy` adapt into
+the existing Axum router. EggServe's core/static/PHF ancestry is removed.
+Listener completion/shutdown ownership, all existing RuntimeConfig values,
+the 1 GiB transport ceiling, and generation-owned live body admission remain
+unchanged. EggServe 0.3 policy/admission defaults remain EggServe-owned. Hosted
+CI and dependency audit passed; Plan 250 records the evidence in
+`plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`.
 
 Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +

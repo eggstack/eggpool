@@ -1,7 +1,7 @@
 # Plan 250 — EggServe 0.3.0 direct-Tower migration, static-graph removal, and runtime requalification
 
 Date: 2026-09-25  
-Status: implementation handoff  
+Status: complete
 Planning baseline: `880d48a39ea18a7119fb27c11daf95d153be3210` (main, EggPool 0.8.0)  
 Priority: P1 dependency/runtime qualification
 
@@ -554,36 +554,98 @@ Record in Plan 250 closure evidence:
 
 ## Acceptance criteria
 
-- [ ] `eggserve-core` is removed from `rust/Cargo.toml`.
-- [ ] `eggserve-server =0.3.0` is exact-pinned with
+- [x] `eggserve-core` is removed from `rust/Cargo.toml`.
+- [x] `eggserve-server =0.3.0` is exact-pinned with
       `default-features = false, features = ["tower"]`.
-- [ ] EggPool imports `TowerToEggserve` and `RequestBodyPolicy` directly
+- [x] EggPool imports `TowerToEggserve` and `RequestBodyPolicy` directly
       from `eggserve-server`.
-- [ ] No direct `eggserve-primitives` dependency is added unless justified
+- [x] No direct `eggserve-primitives` dependency is added unless justified
       by a public type not exposed from the server crate.
-- [ ] `ServerRuntime::serve_listener` retains the same control/completion
+- [x] `ServerRuntime::serve_listener` retains the same control/completion
       lifecycle and teardown ordering.
-- [ ] Unexpected EggServe completion retains the existing EggPool error path.
-- [ ] All existing runtime configuration values remain unchanged.
-- [ ] New EggServe 0.3 policy/admission ownership defaults remain EggServe-owned
+- [x] Unexpected EggServe completion retains the existing EggPool error path.
+- [x] All existing runtime configuration values remain unchanged.
+- [x] New EggServe 0.3 policy/admission ownership defaults remain EggServe-owned
       during the cutover.
-- [ ] The 1 GiB transport/Tower hard ceiling remains in place.
-- [ ] Generation-owned live body admission remains authoritative for all four
+- [x] The 1 GiB transport/Tower hard ceiling remains in place.
+- [x] Generation-owned live body admission remains authoritative for all four
       inference routes.
-- [ ] Real-socket transport/lifecycle/streaming/compact suites pass.
-- [ ] The production no-dev graph contains no `eggserve-core`.
-- [ ] The production no-dev graph contains no `eggserve-static`.
-- [ ] EggServe contributes no PHF-family dependency to EggPool.
-- [ ] The before/after package and dependency-node delta is recorded.
-- [ ] The before/after release executable and RSS delta is recorded.
-- [ ] The Plan-248-style finite/streaming comparison is rerun or its current
+- [x] Real-socket transport/lifecycle/streaming/compact suites pass.
+- [x] The production no-dev graph contains no `eggserve-core`.
+- [x] The production no-dev graph contains no `eggserve-static`.
+- [x] EggServe contributes no PHF-family dependency to EggPool.
+- [x] The before/after package and dependency-node delta is recorded.
+- [x] The before/after release executable and RSS delta is recorded.
+- [x] The Plan-248-style finite/streaming comparison is rerun or its current
       equivalent is recorded.
-- [ ] Any remaining PHF package has documented non-EggServe ancestry.
-- [ ] The new 0.3 ownership APIs are classified without opportunistic semantic
+- [x] Any remaining PHF package has documented non-EggServe ancestry; no PHF
+      package remains in the production graph.
+- [x] The new 0.3 ownership APIs are classified without opportunistic semantic
       changes.
-- [ ] Full default/no-default/security/package/tooling gates pass.
-- [ ] Hosted CI passes on the exact closure candidate.
-- [ ] Current-authority docs describe the direct server-only EggServe boundary.
+- [x] Full default/no-default/security/package/tooling gates pass.
+- [x] Hosted CI passes on the exact closure candidate.
+- [x] Current-authority docs describe the direct server-only EggServe boundary.
+
+## Closure evidence
+
+Implementation commit: `a0999a8e568d978faaf25c4c4675c4e1efc4dc98`.
+Hosted [CI run 36085657985](https://github.com/eggstack/eggpool/actions/runs/36085657985)
+passed for that exact commit. The matching
+[dependency audit run 36085657980](https://github.com/eggstack/eggpool/actions/runs/36085657980)
+passed. Local qualification used Rust 1.98.1 and Cargo 1.98.1 on the
+`aarch64-apple-darwin` development host; this is comparative development-host
+evidence, not physical SBC target-class evidence.
+
+The direct dependency resolves to `eggserve-server 0.3.0` and
+`eggserve-primitives 0.2.1`. The EggPool production graph no longer contains
+`eggserve-core`, `eggserve-static`, or `phf` (including its generator, macro,
+shared, and `siphasher` packages). Immediately before the migration at baseline
+`f80d1f9c`, the lockfile had 387 packages and the production no-dev tree had
+429 production no-dev tree nodes. The implementation has 380 lockfile
+packages and 416 production no-dev tree nodes (deltas -7 and -13).
+
+| Development-host measurement | Baseline | EggServe 0.3.0 | Change |
+|---|---:|---:|---:|
+| Release executable bytes | 27,956,080 | 27,914,576 | -41,504 (-0.15%) |
+| RSS just after readiness | 15,237,120 B | 15,351,808 B | +114,688 B (+0.75%) |
+| Idle RSS after 2 seconds | 11,468,800 B | 10,371,072 B | -1,097,728 B (-9.57%) |
+| Finite sequential elapsed p50 / p95 | 2 / 2 ms | 1 / 2 ms | p95 unchanged |
+| Finite sequential first-byte p50 / p95 | 2 / 2 ms | 1 / 2 ms | p95 unchanged |
+| Native streaming elapsed p50 / p95 | 1 / 2 ms | 1 / 3 ms | +1 ms p95 |
+| Native streaming first-byte p50 / p95 | 1 / 2 ms | 1 / 2 ms | unchanged |
+| Translated streaming elapsed p50 / p95 | 1 / 2 ms | 2 / 3 ms | +1 ms p95 |
+| Translated streaming first-byte p50 / p95 | 1 / 2 ms | 1 / 3 ms | +1 ms p95 |
+
+Sequential finite, native-streaming, and translated-streaming cases each ran
+30 requests through the loopback synthetic provider. Translated streaming
+proved the fixture Messages path. Ten additional four-client contention
+batches of 32 finite requests gave median throughput of 1,947.821 req/s at
+baseline and 2,010.874 req/s after migration; median p95 latency was 3 ms for
+both. The observed throughput ranges overlapped substantially (1,471.983–
+2,118.270 and 1,457.886–2,262.623 req/s). The current sequential benchmark
+helper does not emit throughput or streaming bytes/s for those cases. Timing
+values are millisecond-rounded; CPU counters are unavailable on this host.
+No repeatable runtime regression was observed. The measurements do not claim
+physical SBC qualification.
+
+EggServe 0.3 API ownership review:
+
+| API / authority | Disposition |
+|---|---|
+| Request-target mode | KEEP `OriginOnly` |
+| Parser, header and request-target ceilings | KEEP EGGSERVE-OWNED |
+| 1 GiB global transport body ceiling | KEEP EGGSERVE-OWNED |
+| Body-read, handler, keep-alive and response-write deadlines | KEEP EGGSERVE-OWNED |
+| Service-call admission at the existing 1024 ceiling | KEEP EGGSERVE-OWNED |
+| Tunnel admission | NOT APPLICABLE to normal EggPool traffic |
+| Runtime rejection presenter | NOT APPLICABLE; no mismatch found |
+
+Local verification passed: default Clippy and workspace tests (718 tests,
+61 suites); no-default check, Clippy, and tests (605 tests, 57 suites);
+`server_transport` in both profiles (7 tests each); focused health, lifecycle,
+status, coordinator, wire, Responses compatibility, and compact compatibility
+targets; locked debug/release builds; `cargo deny`; feature and duplicate
+trees; formatting; Ruff; Pyright; and tooling pytest (108 passed, 1 skipped).
 
 ## Non-goals
 
