@@ -342,9 +342,9 @@ impl ServerRuntime {
             .from_listener(listener)
             .build()
             .map_err(|error| ServerError::EggServe(Box::new(error)))?;
-        let service = eggserve_core::server::TowerToEggserve::with_policy(
+        let service = eggserve_server::TowerToEggserve::with_policy(
             app,
-            eggserve_core::primitives::RequestBodyPolicy::Stream {
+            eggserve_server::RequestBodyPolicy::Stream {
                 max_bytes: EGG_SERVE_REQUEST_BODY_LIMIT,
             },
         );
@@ -1074,6 +1074,23 @@ async fn shutdown_signal(handle: ServerRuntimeHandle) -> Result<(), SignalError>
 #[cfg(test)]
 mod tests {
     use super::{middleware::is_inference_path, middleware::requires_auth, *};
+
+    #[test]
+    fn eggserve_03_policy_defaults_remain_eggserve_owned() {
+        let config = eggserve_runtime_config().expect("valid runtime config");
+        assert_eq!(
+            config.http1_request_target_mode,
+            eggserve_server::Http1RequestTargetMode::OriginOnly
+        );
+        assert_eq!(
+            config.policy_ownership,
+            eggserve_server::H1PolicyOwnership::eggserve_owned()
+        );
+        assert_eq!(
+            config.admission_ownership,
+            eggserve_server::AdmissionOwnership::eggserve_owned()
+        );
+    }
 
     fn state_with_dashboard(public: bool) -> ServerState {
         ServerState {

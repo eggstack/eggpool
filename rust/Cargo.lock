@@ -983,7 +983,6 @@ dependencies = [
  "eggress-protocol-trojan",
  "eggress-server",
  "eggress-uri",
- "eggserve-core",
  "eggserve-server",
  "getrandom 0.3.4",
  "http",
@@ -1361,34 +1360,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "eggserve-core"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7ad027bf61c2f505c5a591348d03ab7d92cf1849af45e8d804e5593eb13bb54"
-dependencies = [
- "bytes",
- "eggserve-primitives",
- "eggserve-server",
- "eggserve-static",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "httpdate",
- "hyper",
- "hyper-util",
- "rustix",
- "thiserror",
- "tokio",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
 name = "eggserve-primitives"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8732e77fae06b395f992cb1dd163ca30750e2f44d1fed3824eb8fc4650dafc03"
+checksum = "ba5372af39cb279fab9cc672608fe83c3ac5ca16d8f8ce058c2400626ef3a101"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1396,32 +1371,22 @@ dependencies = [
 
 [[package]]
 name = "eggserve-server"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "255c1e95d0e6c6f7db8c26ea128267b3a1851dafe0f13a8229cdbec38a630feb"
+checksum = "b26bcaeb357dfafeb780649c789765c7b6545d85388ecdbb446a47ff78aac082"
 dependencies = [
  "bytes",
  "eggserve-primitives",
  "futures-util",
+ "http",
  "http-body",
  "http-body-util",
  "httpdate",
  "hyper",
  "hyper-util",
  "tokio",
-]
-
-[[package]]
-name = "eggserve-static"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3079735e246a37f49830aef10ed01de9aa70c0fb59a19f2aac5a99b513046a61"
-dependencies = [
- "eggserve-primitives",
- "eggserve-server",
- "httpdate",
- "phf",
- "rustix",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -2405,48 +2370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phf"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
-dependencies = [
- "phf_macros",
- "phf_shared",
-]
-
-[[package]]
-name = "phf_generator"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
-dependencies = [
- "phf_shared",
- "rand 0.8.8",
-]
-
-[[package]]
-name = "phf_macros"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
-dependencies = [
- "phf_generator",
- "phf_shared",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
-dependencies = [
- "siphasher",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3200,12 +3123,6 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
-
-[[package]]
-name = "siphasher"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "slab"

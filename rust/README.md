@@ -74,9 +74,9 @@ provider credentials.
 ## Downstream HTTP server
 
 `eggpool::server::ServerRuntime` passes its pre-bound listener to the exact
-`eggserve-server =0.2.1` H1 runtime and adapts the existing Axum router with
-`eggserve-core =0.2.2` `TowerToEggserve`. EggServe owns downstream HTTP/1
-parsing, connection and response transport, and connection drain. EggPool
+`eggserve-server =0.3.0` H1 runtime (`tower` feature) and adapts the existing
+Axum router with the server-owned `TowerToEggserve`. EggServe owns downstream
+HTTP/1 parsing, connection and response transport, and connection drain. EggPool
 continues to own auth, live generation request-body limits, routes, inference
 coordination, providers, persistence, signals, and process shutdown. The
 transport profile has a fixed 1 GiB hard body ceiling above EggPool's live
