@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Provider transport M003 (Eggress 1.0.10 adoption and
-requalification, `plans/closure/provider-transport/003-status.md`). Legacy
+Most recently closed: Provider transport M004 (typed transport diagnostic
+evidence, `plans/closure/provider-transport/004-status.md`). Legacy
 archive latest: Plan 250 (EggServe 0.3.0 direct-Tower migration,
 `7879cbf9`). Plans 244–245, 215–220, 241 remain historical per their own
 closure passes; the `146-*` duplicate pair is a known numbering accident.
@@ -38,14 +38,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M004 ready — typed transport diagnostic evidence | M001 and M003 closed; M002 remains upstream-blocked |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M001 ready — inference body resource admission hardening | Server transport M001 closed; generation-owned body limit + coordinator Bytes boundary stable. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider transport | M004 typed transport diagnostic evidence | ready | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | M001 and M003 closed; M002 is not a dependency. |
 | Request admission and wire | M001 inference body resource admission hardening | ready | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | No hard blocker; preserve live generation limit, EggServe 1 GiB outer ceiling, and public request/wire contracts. |
 
 ## Blocked work
@@ -60,14 +59,15 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|
 | Provider transport M001 — Eggfetch adapter contract hardening | closed | `plans/closure/provider-transport/001-status.md`, implementation `a87790ad` |
 | Provider transport M003 — Eggress 1.0.10 adoption and requalification | closed | `plans/closure/provider-transport/003-status.md`, implementation `a87790ad` |
+| Provider transport M004 — typed transport diagnostic evidence | closed | `plans/closure/provider-transport/004-status.md`, implementation `a87790ad` |
 | Plan 250 — EggServe 0.3.0 direct-Tower migration (legacy flat) | closed | `plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`, `7879cbf9` |
 | Planning governance M001 | closing → closed on acceptance of `plans/closure/planning-governance/001-status.md` | Plan 251 authorizes; bootstrap files + verification in closure record |
 | Server transport M001 — EggServe 0.4.0 adoption and requalification | closed | `plans/closure/server-transport/001-status.md`, implementation `409491ea` |
 
 ## Unblock audit
 
-Provider-transport M001 and M003 are closed. M004 is promoted to ready because
-both hard dependencies are satisfied; it remains independent of blocked M002.
+Provider-transport M001, M003, and M004 are closed. M004 did not depend on
+M002 and did not change its upstream API blocker.
 Provider-transport M002 remains blocked on an upstream Eggfetch typed
 classification interface and is not promoted to an implementation plan.
 Request-admission-wire M001 is independently ready after the EggServe review

@@ -1,6 +1,6 @@
 # Provider Transport Milestone 004 — Typed transport diagnostic evidence
 
-Status: ready
+Status: closed
 
 Repository planning baseline: `8bf99e7cb7d3a4c8e0cad383be8efb4ffa9cb91f`
 
