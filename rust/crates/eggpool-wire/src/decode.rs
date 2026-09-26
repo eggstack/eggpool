@@ -1167,7 +1167,21 @@ fn decode_response_custom_tool_output(
     })
 }
 
-fn is_client_tool_search_declaration(object: &Map<String, Value>) -> bool {
+/// Decide whether a tool declaration is the portable client-executed
+/// `tool_search` form.
+///
+/// This is the single semantic owner for the predicate shared by canonical
+/// structural tool decoding and EggPool native preservation/feature
+/// summarization. A declaration is portable only when `type == "tool_search"`
+/// with `execution == "client"`; server-owned, missing, null, wrong-type, or
+/// non-`tool_search` declarations stay native-only and must not become
+/// portable client declarations.
+///
+/// Pure over the already parsed JSON object: no I/O, no allocation beyond
+/// the caller's value, no admission ownership. Preservation lifetime and
+/// stateless product policy remain EggPool-owned; this helper only answers
+/// the classification question.
+pub fn is_client_tool_search_declaration(object: &Map<String, Value>) -> bool {
     object.get("type").and_then(Value::as_str) == Some("tool_search")
         && object.get("execution").and_then(Value::as_str) == Some("client")
 }
@@ -1958,4 +1972,78 @@ fn decode_tool_result_media(
         return Ok(block.media);
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_client_tool_search_declaration;
+    use serde_json::{Map, Value, json};
+
+    fn object(value: Value) -> Map<String, Value> {
+        value.as_object().cloned().expect("test value is an object")
+    }
+
+    #[test]
+    fn client_tool_search_classifier_matrix() {
+        let cases: &[(&str, Value, bool)] = &[
+            (
+                "client execution is portable",
+                json!({"type": "tool_search", "execution": "client"}),
+                true,
+            ),
+            (
+                "server execution stays native-only",
+                json!({"type": "tool_search", "execution": "server"}),
+                false,
+            ),
+            (
+                "missing execution stays native-only",
+                json!({"type": "tool_search"}),
+                false,
+            ),
+            (
+                "null execution stays native-only",
+                json!({"type": "tool_search", "execution": null}),
+                false,
+            ),
+            (
+                "wrong-type execution stays native-only",
+                json!({"type": "tool_search", "execution": 1}),
+                false,
+            ),
+            (
+                "empty execution stays native-only",
+                json!({"type": "tool_search", "execution": ""}),
+                false,
+            ),
+            (
+                "non-tool_search declaration is not classified",
+                json!({"type": "function", "execution": "client", "name": "lookup"}),
+                false,
+            ),
+            (
+                "missing type is not classified",
+                json!({"execution": "client"}),
+                false,
+            ),
+            (
+                "null type is not classified",
+                json!({"type": null, "execution": "client"}),
+                false,
+            ),
+            (
+                "client declaration with extra fields stays portable",
+                json!({"type": "tool_search", "execution": "client", "description": "search"}),
+                true,
+            ),
+        ];
+        for (name, value, expected) in cases {
+            let object = object(value.clone());
+            assert_eq!(
+                is_client_tool_search_declaration(&object),
+                *expected,
+                "case: {name}"
+            );
+        }
+    }
 }

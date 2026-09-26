@@ -11,6 +11,7 @@ use crate::{
         session_identity_from_header,
     },
     routing::RoutingRequestFacts,
+    wire::decode::is_client_tool_search_declaration,
     wire::ir::{CanonicalRequest, ClientSurface},
 };
 
@@ -482,11 +483,6 @@ pub(crate) fn canonical_request_from_object(
         DecodeLimits::current(),
     )
     .map_err(map_decode_error)
-}
-
-fn is_client_tool_search_declaration(object: &Map<String, Value>) -> bool {
-    object.get("type").and_then(Value::as_str) == Some("tool_search")
-        && object.get("execution").and_then(Value::as_str) == Some("client")
 }
 
 /// Enforce EggPool's product-level stateless Responses contract at the

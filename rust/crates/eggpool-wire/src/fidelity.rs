@@ -131,10 +131,14 @@ pub enum AdaptationEffectClass {
     Rewritten,
     /// Semantic content dropped on the target (metadata, reasoning controls).
     Omitted,
-    /// Remapped while preserving the intent level. Currently reserved: the
-    /// request codecs drop unsupported reasoning controls rather than
-    /// remapping them, so this class documents the taxonomy slot without
-    /// claiming a remap happened.
+    /// Remapped while preserving the intent level. Currently reserved: no
+    /// current request codec emits this class. Unsupported reasoning controls
+    /// are dropped with explicit loss ([`AdaptationEffectClass::Omitted`])
+    /// rather than remapped, so this variant documents the taxonomy slot
+    /// without claiming a remap happened. A future codec may emit it only for
+    /// a conversion that provably preserves the intent level; do not
+    /// reclassify an existing `Omitted` or `Rewritten` effect as
+    /// `Approximated` merely to eliminate an unused variant.
     Approximated,
     /// A deterministic compatibility identity (never provider-owned data).
     /// Never emitted on the request path; reserved for response/stream paths.
@@ -1109,6 +1113,58 @@ mod tests {
         ] {
             let (_, class) = classify_notice(code);
             assert_ne!(class, AdaptationEffectClass::Synthesized, "code {code}");
+        }
+    }
+
+    #[test]
+    fn approximated_stays_reserved_on_the_request_path() {
+        // M005 pins the M004 contract: current request codecs drop
+        // unsupported reasoning controls with explicit loss instead of
+        // remapping them, so no corpus plan and no classified known code may
+        // emit Approximated. A future codec may emit it only for a conversion
+        // that provably preserves the intent level; existing Omitted/Rewritten
+        // outcomes must not be reclassified to use it.
+        for (_, request) in corpus() {
+            for (target, _, _) in all_targets() {
+                let plan = plan_request_translation(
+                    &request,
+                    WireSurface::OpenaiChatCompletions,
+                    target,
+                    None,
+                )
+                .expect("planner is infallible");
+                assert!(
+                    plan.effects
+                        .iter()
+                        .all(|effect| effect.class != AdaptationEffectClass::Approximated),
+                    "no Approximated effects on the request path"
+                );
+            }
+        }
+        for code in [
+            "freeform_tool_wrapped_as_function",
+            "deferred_tool_search_wrapped_as_function",
+            "tool_order_collapsed",
+            "reasoning_capability_uncertain",
+            "image_detail_not_representable",
+            "refusal_not_representable",
+            "metadata_not_representable",
+            "reasoning_effort_not_representable",
+            "reasoning_budget_not_representable",
+            "reasoning_control_not_representable",
+            "reasoning_control_dropped_by_capability",
+            "structured_output_not_representable",
+            "structured_schema_not_representable",
+            "tool_call_id_not_representable",
+            "audio_not_representable",
+            "document_not_representable",
+            "cache_boundary_not_representable",
+            "parallel_tool_calls_not_representable",
+            "native_extension_not_representable",
+            "native_extensions_truncated",
+        ] {
+            let (_, class) = classify_notice(code);
+            assert_ne!(class, AdaptationEffectClass::Approximated, "code {code}");
         }
     }
 

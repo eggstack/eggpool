@@ -231,3 +231,32 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
         );
     }
 }
+
+/// M005 narrow regression guard: the client-executed `tool_search`
+/// declaration predicate has exactly one semantic owner in `eggpool-wire`,
+/// consumed by both structural decode and EggPool preservation. This keeps
+/// the M002–M004 duplication from silently reappearing across the seam.
+#[test]
+fn shared_tool_search_classifier_has_one_owner() {
+    let kernel_decode = include_str!("../crates/eggpool-wire/src/decode.rs");
+    let admission = include_str!("../src/request/admission.rs");
+    assert_eq!(
+        kernel_decode
+            .matches("fn is_client_tool_search_declaration")
+            .count(),
+        1,
+        "eggpool-wire decode must own the classifier exactly once"
+    );
+    assert!(
+        kernel_decode.contains("pub fn is_client_tool_search_declaration"),
+        "the shared classifier must be crate-visible"
+    );
+    assert!(
+        !admission.contains("fn is_client_tool_search_declaration"),
+        "request/admission.rs must not carry a duplicate predicate"
+    );
+    assert!(
+        admission.contains("is_client_tool_search_declaration"),
+        "request/admission.rs must consume the shared classifier"
+    );
+}

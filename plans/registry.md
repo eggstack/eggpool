@@ -39,13 +39,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M005 ready — planning reconciliation and minor wire cleanup | M001–M004 closed; no external hard dependency. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M005 active — planning reconciliation and minor wire cleanup | M001–M004 closed; no external hard dependency. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Request admission and wire | M005 planning reconciliation and minor wire cleanup | ready | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | Correct stale planning state and the two low-severity M004 cleanup findings without changing wire behavior. |
+| Request admission and wire | M005 planning reconciliation and minor wire cleanup | active | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | Correct stale planning state and the two low-severity M004 cleanup findings without changing wire behavior. |
 
 ## Blocked work
 

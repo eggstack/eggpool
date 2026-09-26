@@ -560,3 +560,79 @@ fn contract_terminal_evidence_distinguishes_outcomes() {
     // finish() on a partial frame reports the incomplete boundary distinctly.
     let _ = decoder.finish();
 }
+
+#[test]
+fn contract_client_tool_search_classifier_is_shared() {
+    // M005: one neutral `eggpool-wire` classifier backs both structural
+    // decode and EggPool native preservation. Client-executed `tool_search`
+    // decodes to a portable tool with no native blocker; server-owned,
+    // missing, null, wrong-type, and non-`tool_search` declarations agree on
+    // the negative outcome in both paths.
+    let cases: &[(&str, Value, usize, usize)] = &[
+        (
+            "client execution is portable",
+            json!({"type": "tool_search", "execution": "client"}),
+            1,
+            0,
+        ),
+        (
+            "server execution stays native-only",
+            json!({"type": "tool_search", "execution": "server"}),
+            0,
+            1,
+        ),
+        (
+            "missing execution stays native-only",
+            json!({"type": "tool_search"}),
+            0,
+            1,
+        ),
+        (
+            "null execution stays native-only",
+            json!({"type": "tool_search", "execution": null}),
+            0,
+            1,
+        ),
+        (
+            "wrong-type execution stays native-only",
+            json!({"type": "tool_search", "execution": 1}),
+            0,
+            1,
+        ),
+        (
+            "non-tool_search declaration is unaffected",
+            json!({"type": "function", "name": "lookup", "parameters": {"type": "object"}}),
+            1,
+            0,
+        ),
+    ];
+    for (name, tool, expected_tools, expected_native) in cases {
+        let body = json!({
+            "model": "model-a",
+            "input": "hello",
+            "tools": [tool],
+        });
+        let decoded = OpenAiResponsesCodec
+            .decode_client_request(&body, ClientSurface::Responses)
+            .expect("tools decode")
+            .value;
+        assert_eq!(decoded.tools.len(), *expected_tools, "decode case: {name}");
+        if *expected_tools == 1 && tool.get("type").and_then(Value::as_str) == Some("tool_search") {
+            assert_eq!(decoded.tools[0].name, "tool_search", "case: {name}");
+        }
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let admitted = admit_request(
+            &bytes,
+            AdmissionOptions {
+                client_surface: ClientSurface::Responses,
+                ..Default::default()
+            },
+        )
+        .expect("admits");
+        let preservation = admitted.native_preservation.expect("responses preserves");
+        assert_eq!(
+            preservation.summary.native_tool_definitions, *expected_native,
+            "preservation case: {name}"
+        );
+    }
+}

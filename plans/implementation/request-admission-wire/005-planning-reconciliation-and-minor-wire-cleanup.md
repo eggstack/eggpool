@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 005 — Planning Reconciliation and Minor Wire Cleanup
 
-Status: ready
+Status: active
 
 Repository baseline: `109a50f35032a22e26e8eb5be687ac7e01637298`
 
