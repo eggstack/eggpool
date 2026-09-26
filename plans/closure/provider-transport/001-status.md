@@ -76,6 +76,10 @@ profiles after its final streaming-reservation regression was added. The full
 workspace runs above preceded that test-only addition; no production code
 changed afterward.
 
+Hosted CI run `36216728012` on `12b846de87564961d97b56e5bdf3f39d91e5307e`
+passed all default workspace and tooling steps; hosted Dependency audit run
+`36216728024` also passed.
+
 ## 5. Compatibility, security, and residual findings
 
 No public wire/header behavior, transport error string, persisted schema, or

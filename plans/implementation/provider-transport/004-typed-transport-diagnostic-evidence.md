@@ -1,10 +1,12 @@
 # Provider Transport Milestone 004 — Typed transport diagnostic evidence
 
-Status: blocked
+Status: ready
 
 Repository planning baseline: `8bf99e7cb7d3a4c8e0cad383be8efb4ffa9cb91f`
 
-Execution baseline: MUST be refreshed after Provider Transport M001 and M003 close.
+Execution baseline: `a87790ad8815f3f39b09c39003ff6a73f23904f1` (implementation
+candidate after provider M001 and M003 source changes; both prerequisite
+closures are accepted in this registry transition).
 
 Source roadmap:
 
@@ -36,20 +38,34 @@ Preserve the existing stable `TransportError` category as bounded, credential-fr
 
 This milestone must not change `FailureSource`, `FailureCategory`, `RetryScope`, retry budgets, account penalties, persistent backoff, quarantine, circuit effects, provider attribution, client status mapping, or upstream-submission count. The value is observability only.
 
-## 2. Why this milestone is blocked
+## 2. Why this milestone is ready
 
-The code already exposes the necessary typed `TransportError`, but M001 and M003 intentionally settle the provider-body/error adapter and Eggress baseline first. After both close, refresh current evidence and promote M004 to ready only if the assumptions below still hold.
+Provider M001 and M003 are closed. Their final source candidate retains the
+stable `TransportError` enum and existing observation/effects boundary. A
+fresh consumer inventory found no persisted or externally projected use of
+`FailureObservation.error_class`; durable attempt/request `error_class`
+continues to come from `FailureEffects.evidence_class`. The static labels and
+policy-invariance guard are implemented on this qualified candidate, so M004
+is ready for closure verification.
 
 ## 3. Current implementation evidence
 
-At the planning baseline:
+At the refreshed execution baseline:
 
 - `rust/src/providers/transport.rs` exposes a stable `TransportError` enum covering configuration/proxy configuration/invalid target/body bounds/pool timeout/direct connect timeout/failure/proxy connect timeout/failure/proxy authentication/proxy target connect/origin TLS/write/read timeout/failure/protocol/cancellation.
 - Eggress detailed route errors already map into these categories without message parsing; M004 must not reach through `TransportError` to inspect Eggress internals.
 - `rust/src/coordinator/finite.rs` maps `ResponseBodyTooLarge` specially, while ordinary `AttemptError::Transport(_)` becomes `FailureSource::Transport` with no category hint. Its observation helper currently sets `error_class` from generic dispatch-phase labels such as `transport`/`body_read`.
 - `rust/src/coordinator/streaming/` has an equivalent observation boundary.
-- `rust/src/coordinator/failure.rs` classifies `FailureSource::Transport` as `FailureCategory::TransientTransport` and applies established account/circuit/backoff/retry behavior. Current policy does not branch on `FailureObservation.error_class` or `transport_phase`.
+- `rust/src/coordinator/failure.rs` classifies `FailureSource::Transport` as `FailureCategory::TransientTransport` and applies established account/circuit/backoff/retry behavior. `classify()` does not branch on `FailureObservation.error_class` or `transport_phase`.
 - `FailureObservation` already contains `transport_phase` and `error_class`, providing a diagnostic channel separate from policy-driving source/category fields.
+
+Refreshed consumer inventory: `FailureObservation` is constructed in finite
+and streaming coordinator/terminal code and consumed by `classify()` /
+`FailureDecisionEngine`; those observation-only labels do not serialize or
+persist. Finalization writes `FailureEffects.evidence_class` to the existing
+attempt/request columns. No API projection, metric, event sink, or migration
+consumes the observation label. Existing transport phase values remain
+unchanged.
 
 Before implementation, inventory every serializer, database/finalization consumer, API projection, metric/event sink, and test assertion touching `FailureObservation.error_class` or `transport_phase`. Repository evidence decides whether a compatibility migration/additive field is required.
 
@@ -297,4 +313,7 @@ Stop rather than improvise if:
 
 ## 16. Handoff notes
 
-Do not execute until M001 and M003 close and this plan is re-baselined/promoted to ready. Prefer changing only `error_class`; preserve `transport_phase`/`dispatch_phase` unless inventory proves otherwise. If richer proxy classes suggest a different retry strategy, capture that as a new evidence-driven plan instead of changing policy here.
+M001 and M003 are closed and the refreshed execution baseline is recorded
+above. Prefer changing only `error_class`; preserve `transport_phase` /
+`dispatch_phase`. If richer proxy classes suggest a different retry strategy,
+capture that as a new evidence-driven plan instead of changing policy here.

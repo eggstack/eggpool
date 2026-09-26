@@ -310,3 +310,11 @@ physical-admission expiry uses its typed predicate; residual pool errors fail
 closed without parsing upstream display text. The live Eggress package family
 is now exact-pinned to 1.0.10; the preceding Plan 243 measurements remain
 historical.
+
+For coordinator diagnostic observations, each `TransportError` also owns one
+static `diagnostic_class()` label. Finite submit/body-read failures and
+streaming pre-handoff/post-handoff failures carry that label as bounded
+evidence. It does not change `FailureSource`, category, retry scope, effects,
+health, or backoff. Persisted attempt/request `error_class` remains the existing
+policy evidence class produced by `FailureEffects`; the observation-only
+transport detail is not substituted into that durable contract.

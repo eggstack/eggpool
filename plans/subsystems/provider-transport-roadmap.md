@@ -119,7 +119,7 @@ and proxied request shape, TLS, keepalive, pool pressure, cancellation recovery,
 timeouts, premature closes, body bounds, account isolation, supported Eggress
 route families, route authentication/refusal, and fail-closed behavior.
 
-Eggress is currently exact-pinned at 1.0.8 across the live outbound/test-support family.
+Eggress is exact-pinned at 1.0.10 across the live outbound/test-support family.
 Production uses the listener-free `eggress-outbound` `OutboundConnector` and
 `connect_tcp_detailed` typed failure surface; the full `eggress-embed`/runtime
 service facade is absent from the normal release path. The root `ssh` capability
@@ -127,8 +127,9 @@ enables `eggress-outbound/ssh` plus `eggress-pproxy-compat/ssh`, while
 `--no-default-features` rejects SSH configuration before dialing and retains
 direct/non-SSH proxy support.
 
-Upstream Eggress v1.0.10 was published 2026-09-24. The v1.0.8..v1.0.10
-range contains 44 commits and changes relevant to embedding consumers:
+Eggress 1.0.10 adoption and requalification completed under M003. The
+v1.0.8..v1.0.10 range contains 44 commits and included changes relevant to
+embedding consumers:
 physical TCP metadata recovery, hop-zero SSH/H2 pooling/reuse isolation,
 TLS-policy identity scoping for pooled H2, nested-hop pooling behavior, and
 preservation of caller rustls trust/mTLS/verifier state during ALPN
@@ -187,8 +188,8 @@ coordinator to Eggress/Eggfetch internal error types.
 - Interface/blocker for future M002: a published, general-purpose Eggfetch
   typed classification surface that replaces the remaining Hyper/Rustls
   source-chain inspection without weakening error fidelity.
-- M003 hard dependencies: the closed Plan-243 Eggress outbound boundary and a published Eggress 1.0.10 family; both are satisfied.
-- M003 soft/coordination dependency: M001 touches the same provider adapter/test target. M003 is technically independent but MUST be rebased after M001 if M001 lands first and SHOULD NOT be implemented concurrently in the same worktree.
+- M003 hard dependencies: the closed Plan-243 Eggress outbound boundary and a published Eggress 1.0.10 family; both are satisfied and M003 is closed.
+- M003 coordination is resolved: M001 closed before the 1.0.10 requalification was accepted; no Eggress source adaptation was needed.
 - M003 interface dependencies: `eggfetch-core 0.2.0` custom `Dialer` contract and Eggress `OutboundConnector` typed detailed-connect surface.
 - M003 operational dependency: hosted CI/dependency-audit evidence is required for closure.
 - M004 hard dependencies: M001 and M003 closure, so diagnostics target the final qualified provider-body/error adapter and current Eggress baseline.
@@ -465,5 +466,5 @@ registered.
 |---|---|---|---|---|
 | 001 — Eggfetch adapter contract hardening | closed | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | `plans/closure/provider-transport/001-status.md` | none |
 | 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
-| 003 — Eggress 1.0.10 adoption and requalification | ready | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | — | none; soft coordination with M001 |
-| 004 — Typed transport diagnostic evidence | blocked | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | — | hard dependencies: M001 and M003 closure |
+| 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
+| 004 — Typed transport diagnostic evidence | ready | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | — | M001 and M003 closed; closure audit remains |

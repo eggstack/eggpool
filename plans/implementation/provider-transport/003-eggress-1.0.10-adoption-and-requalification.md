@@ -1,6 +1,6 @@
 # Provider Transport Milestone 003 — Eggress 1.0.10 adoption and requalification
 
-Status: ready
+Status: closed
 
 Repository baseline: `8bf99e7cb7d3a4c8e0cad383be8efb4ffa9cb91f`
 
