@@ -242,7 +242,8 @@ M001 is closed on its recorded body-admission evidence. The roadmap was reopened
 |---|---|---|---|---|
 | 001 — inference body resource admission hardening | closed | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | `plans/closure/request-admission-wire/001-status.md` | none |
 | 002 — wire-kernel extraction seam and contract freeze | closed | `plans/implementation/request-admission-wire/002-wire-kernel-extraction-seam-and-contract-freeze.md` | `plans/closure/request-admission-wire/002-status.md` | none |
-| 003 — sans-I/O wire-kernel extraction and EggPool cutover | ready | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | — | hard dependency satisfied: M002 closed |
+| 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
+| 004 — fidelity, provenance, and conformance hardening | ready | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | — | hard dependency satisfied: M003 closed |
 | 004 — fidelity, provenance, and conformance hardening | blocked | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | — | hard dependency: M003 closure |
 
 

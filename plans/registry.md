@@ -39,20 +39,19 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M003 ready — sans-I/O wire-kernel extraction and EggPool cutover | M002 closed; no external hard dependency. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M004 ready — fidelity, provenance, and conformance hardening | M003 closed; no external hard dependency. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Request admission and wire | M003 sans-I/O wire-kernel extraction and EggPool cutover | ready | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | Move the M002-qualified kernel into one internal crate and cut over. |
+| Request admission and wire | M004 fidelity, provenance, and conformance hardening | ready | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | Harden the extracted kernel with fidelity/provenance/conformance without changing EggPool decisions. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
-| Request admission and wire | M004 fidelity, provenance, and conformance hardening | Hard dependency: M003 closure. |
 
 ## Recently closed
 
@@ -66,6 +65,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Planning governance M001 | closing → closed on acceptance of `plans/closure/planning-governance/001-status.md` | Plan 251 authorizes; bootstrap files + verification in closure record |
 | Server transport M001 — EggServe 0.4.0 adoption and requalification | closed | `plans/closure/server-transport/001-status.md`, implementation `409491ea` |
 | Request admission and wire M002 — wire-kernel extraction seam and contract freeze | closed | `plans/closure/request-admission-wire/002-status.md`, implementation `ca3d16b3` |
+| Request admission and wire M003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/closure/request-admission-wire/003-status.md`, implementation `5f373c98` |
 
 ## Unblock audit
 
@@ -76,7 +76,7 @@ classification interface and is not promoted to an implementation plan.
 Request-admission-wire M001 is closed after consuming the stable
 server-transport interface. Explicit user direction reopened that subsystem for
 the wire-kernel extraction sequence: M002 is closed (`ca3d16b3` seam +
-`wire_extraction_contract`/`wire_kernel_boundary` corpus); M003 is promoted
-to dependency-ready; M004 remains blocked on M003 closure. No provider-
+`wire_extraction_contract`/`wire_kernel_boundary` corpus); M003 is closed
+(`5f373c98` crate + cutover); M004 is promoted to dependency-ready. No provider-
 transport blocked work is promoted; Provider M002 remains blocked on upstream
 Eggfetch API work.
