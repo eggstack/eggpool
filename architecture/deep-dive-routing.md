@@ -28,6 +28,21 @@ mutex held across one synchronous claim/quota/fairness critical section
 (`select_and_claim_with_preference`); no provider, SQLite, or network await
 enters it after acquisition.
 
+Router scoring uses a private ordered path (routing-selection M001):
+`QuotaEstimator::snapshot_ordered` borrows caller-ordered account names and
+snapshots state once under one estimator lock, returning one entry per
+account (preserving the missing-account case) without a String-keyed result
+map. `QuotaFairScorer::score_ordered` feeds those snapshots through the same
+`score_one` core as public `score_accounts`, reading active counts directly
+from the existing snapshot and keeping `projected_tokens` as one request
+scalar with zero health penalty. Scores align by index with the eligible
+`Vec<RoutingCandidate>`, whose ownership moves into the final scored Vec —
+no `BTreeMap<String, RoutingCandidate>` reindex or candidate clone-back.
+Public `score_accounts`/`rank_accounts`/`near_ties` remain available and
+numerically equivalent; the final deterministic comparator, fairness,
+selection lock, claim, health, quota, exclusion, and trace behavior are
+unchanged.
+
 ## Shared crate contract
 
 `eggpool-model-routing` is a neutral policy boundary: structural validation,

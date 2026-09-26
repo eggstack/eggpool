@@ -240,37 +240,27 @@ pub fn build_eligible_candidates(
         };
         eligible.push(candidate);
     }
-    let names: Vec<String> = eligible
-        .iter()
-        .map(|item| item.account_name.clone())
-        .collect();
-    let active: BTreeMap<String, i64> = names
-        .iter()
-        .map(|name| (name.clone(), *active_requests.get(name).unwrap_or(&0)))
-        .collect();
-    let projected: BTreeMap<String, i64> = names
-        .iter()
-        .map(|name| (name.clone(), facts.projected_tokens.max(0)))
-        .collect();
-    let penalties = BTreeMap::new();
+    // Ordered private scoring path (routing-selection M001): borrowed
+    // account names in candidate order, one estimator snapshot under one
+    // lock, one request-wide projected-tokens scalar, and scores aligned by
+    // index so candidate ownership moves instead of reindexing through a
+    // String-keyed map. The public scorer contract is untouched.
     let scorer = QuotaFairScorer::new(policy.scorer);
-    let scores = scorer.score_accounts(estimator, &names, &active, &projected, &penalties);
-    let by_name: BTreeMap<String, RoutingCandidate> = eligible
-        .into_iter()
-        .map(|candidate| (candidate.account_name.clone(), candidate))
+    let names: Vec<&str> = eligible
+        .iter()
+        .map(|item| item.account_name.as_str())
         .collect();
-    let scored = scores
-        .into_iter()
-        .filter_map(|score| {
-            by_name
-                .get(&score.account_name)
-                .cloned()
-                .map(|mut candidate| {
-                    candidate.score = score;
-                    candidate
-                })
-        })
-        .collect::<Vec<_>>();
+    let scores = scorer.score_ordered(
+        estimator,
+        &names,
+        active_requests,
+        facts.projected_tokens.max(0),
+    );
+    let mut scored = Vec::with_capacity(eligible.len());
+    for (mut candidate, score) in eligible.into_iter().zip(scores) {
+        candidate.score = score;
+        scored.push(candidate);
+    }
     let mut valid = Vec::with_capacity(scored.len());
     for candidate in scored {
         if candidate.score.is_eligible && candidate.score.final_score().is_finite() {

@@ -530,6 +530,38 @@ impl QuotaEstimator {
         snapshots
     }
 
+    /// Ordered snapshot for the router hot path (routing-selection M001).
+    /// Borrows caller-ordered account names, acquires the estimator state
+    /// once, runs the same mirror sync as [`Self::snapshot`], and returns one
+    /// entry per requested account — `None` for the missing-account case —
+    /// without allocating String keys for the returned collection.
+    pub(crate) fn snapshot_ordered<'a>(
+        &self,
+        account_names: impl Iterator<Item = &'a str>,
+    ) -> Vec<Option<QuotaAccountSnapshot>> {
+        let mut state = self.lock();
+        let mut snapshots = Vec::new();
+        for name in account_names {
+            sync_mirrors(&mut state, name);
+            snapshots.push(
+                state
+                    .accounts
+                    .get(name)
+                    .cloned()
+                    .map(|quota| QuotaAccountSnapshot {
+                        quota,
+                        reserved_cost: *state.reserved_cost.get(name).unwrap_or(&0),
+                        reserved_requests: *state.reserved_requests.get(name).unwrap_or(&0),
+                        reserved_tokens: *state.reserved_tokens.get(name).unwrap_or(&0),
+                        pending_cost: *state.pending_cost.get(name).unwrap_or(&0),
+                        pending_requests: *state.pending_requests.get(name).unwrap_or(&0),
+                        pending_tokens: *state.pending_tokens.get(name).unwrap_or(&0),
+                    }),
+            );
+        }
+        snapshots
+    }
+
     fn ensure_account(&self, account_name: &str) {
         let mut state = self.lock();
         state
@@ -727,4 +759,46 @@ fn finalize_estimate(tokens: i64, rate: f64, safety_factor: f64) -> i64 {
     }
     raw.min(RESERVATION_COST_CEILING_MICRODOLLARS as f64)
         .min(SQLITE_INTEGER_MAX as f64) as i64
+}
+
+#[cfg(test)]
+mod ordered_snapshot_tests {
+    use super::super::state::AccountQuota;
+    use super::*;
+
+    #[test]
+    fn ordered_snapshot_preserves_order_and_missing_entries() {
+        let estimator = QuotaEstimator::new(
+            (0..8).map(|index| AccountQuota::new(format!("account-{index:03}"))),
+        );
+        estimator
+            .add_pending_claim("account-003", 100, 500)
+            .expect("pending claim");
+        estimator
+            .add_reservation("account-000", 1, 50, 250)
+            .expect("reservation");
+        let names = ["account-003", "ghost-999", "account-000", "account-007"];
+        let ordered = estimator.snapshot_ordered(names.iter().copied());
+        assert_eq!(ordered.len(), names.len());
+        assert!(ordered[0].is_some());
+        assert!(ordered[1].is_none());
+        assert!(ordered[2].is_some());
+        assert!(ordered[3].is_some());
+        // Values equal the map snapshot entry-for-entry, including the
+        // synced reservation/pending mirrors.
+        let legacy = estimator.snapshot(
+            &names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        for (name, snapshot) in names.iter().zip(ordered.iter()) {
+            match snapshot {
+                Some(snapshot) => assert_eq!(Some(snapshot), legacy.get(*name)),
+                None => assert!(!legacy.contains_key(*name)),
+            }
+        }
+        assert_eq!(ordered[0].as_ref().expect("present").pending_requests, 1);
+        assert_eq!(ordered[2].as_ref().expect("present").reserved_requests, 1);
+    }
 }

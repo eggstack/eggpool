@@ -111,6 +111,39 @@ impl QuotaFairScorer {
         scores
     }
 
+    /// Router-private ordered scoring (routing-selection M001). Accepts
+    /// borrowed account names in caller order, snapshots estimator state
+    /// once, and scores through the same [`Self::score_one`] core as the
+    /// public path. Active counts are read directly from the existing
+    /// snapshot, `projected_tokens` stays one request scalar, and the
+    /// current router path carries zero health penalty — without building
+    /// per-selection String-keyed maps. Missing accounts score exactly like
+    /// the public path's empty case.
+    pub(crate) fn score_ordered(
+        &self,
+        estimator: &QuotaEstimator,
+        account_names: &[&str],
+        active_requests: &BTreeMap<String, i64>,
+        projected_tokens: i64,
+    ) -> Vec<RoutingScore> {
+        let snapshots = estimator.snapshot_ordered(account_names.iter().copied());
+        let mut scores = Vec::with_capacity(account_names.len());
+        for (name, snapshot) in account_names.iter().zip(snapshots) {
+            let Some(mut snapshot) = snapshot else {
+                scores.push(empty_score(name));
+                continue;
+            };
+            scores.push(self.score_one(
+                name,
+                &mut snapshot,
+                active_requests.get(*name).copied().unwrap_or(0),
+                projected_tokens,
+                0.0,
+            ));
+        }
+        scores
+    }
+
     pub fn rank_accounts(&self, mut scores: Vec<RoutingScore>) -> Vec<RoutingScore> {
         if self.policy.prefer_native {
             scores.sort_by(|left, right| {
@@ -279,5 +312,144 @@ fn empty_score(name: &str) -> RoutingScore {
         active_request_count: 0,
         tier: 0,
         requires_transcode: false,
+    }
+}
+
+#[cfg(test)]
+mod ordered_scoring_tests {
+    use super::*;
+    use crate::quota::state::AccountQuota;
+
+    fn account_name(index: usize) -> String {
+        format!("account-{index:03}")
+    }
+
+    fn estimator_with_pressure(account_count: usize) -> QuotaEstimator {
+        let estimator = QuotaEstimator::new(
+            (0..account_count).map(|index| AccountQuota::new(account_name(index))),
+        );
+        for index in 0..account_count {
+            if index % 4 == 0 {
+                estimator
+                    .add_pending_claim(&account_name(index), 100, 500)
+                    .expect("pending claim");
+            }
+            if index % 6 == 0 {
+                estimator
+                    .add_reservation(&account_name(index), 1, 50, 250)
+                    .expect("reservation");
+            }
+        }
+        estimator
+    }
+
+    fn assert_field_equal(left: f64, right: f64, field: &str, account: &str) {
+        assert!(
+            left == right || (left.is_nan() && right.is_nan()),
+            "{field} diverged for {account}: {left} vs {right}"
+        );
+    }
+
+    fn assert_scores_equal(left: &[RoutingScore], right: &[RoutingScore]) {
+        assert_eq!(left.len(), right.len(), "score counts must match");
+        for (left, right) in left.iter().zip(right) {
+            assert_eq!(left.account_name, right.account_name);
+            let name = left.account_name.as_str();
+            assert_field_equal(left.quota_score, right.quota_score, "quota_score", name);
+            assert_field_equal(left.weight, right.weight, "weight", name);
+            assert_eq!(left.is_eligible, right.is_eligible);
+            assert_field_equal(
+                left.inflight_penalty,
+                right.inflight_penalty,
+                "inflight_penalty",
+                name,
+            );
+            assert_field_equal(
+                left.health_penalty,
+                right.health_penalty,
+                "health_penalty",
+                name,
+            );
+            assert_field_equal(left.final_score(), right.final_score(), "final_score", name);
+            assert_eq!(left.reserved_microdollars, right.reserved_microdollars);
+            assert_eq!(left.reserved_requests, right.reserved_requests);
+            assert_eq!(left.reserved_tokens, right.reserved_tokens);
+            assert_eq!(left.cost_5h_microdollars, right.cost_5h_microdollars);
+            assert_eq!(left.cost_7d_microdollars, right.cost_7d_microdollars);
+            assert_eq!(left.cost_30d_microdollars, right.cost_30d_microdollars);
+            assert_eq!(left.request_count_5h, right.request_count_5h);
+            assert_eq!(left.request_count_7d, right.request_count_7d);
+            assert_eq!(left.request_count_30d, right.request_count_30d);
+            assert_eq!(left.token_count_5h, right.token_count_5h);
+            assert_eq!(left.token_count_7d, right.token_count_7d);
+            assert_eq!(left.token_count_30d, right.token_count_30d);
+            assert_eq!(
+                left.capacity_5h_microdollars,
+                right.capacity_5h_microdollars
+            );
+            assert_eq!(
+                left.capacity_7d_microdollars,
+                right.capacity_7d_microdollars
+            );
+            assert_eq!(
+                left.capacity_30d_microdollars,
+                right.capacity_30d_microdollars
+            );
+            assert_eq!(left.capacity_5h_requests, right.capacity_5h_requests);
+            assert_eq!(left.capacity_7d_requests, right.capacity_7d_requests);
+            assert_eq!(left.capacity_30d_requests, right.capacity_30d_requests);
+            assert_eq!(left.capacity_5h_tokens, right.capacity_5h_tokens);
+            assert_eq!(left.capacity_7d_tokens, right.capacity_7d_tokens);
+            assert_eq!(left.capacity_30d_tokens, right.capacity_30d_tokens);
+            assert_eq!(left.active_request_count, right.active_request_count);
+        }
+    }
+
+    #[test]
+    fn ordered_path_matches_public_scorer_across_account_counts() {
+        for account_count in [1_usize, 4, 16, 128] {
+            for projected_tokens in [0_i64, 500] {
+                for prefer_native in [true, false] {
+                    let estimator = estimator_with_pressure(account_count);
+                    let mut active = BTreeMap::new();
+                    for index in 0..account_count {
+                        if index % 3 == 0 {
+                            active.insert(account_name(index), 2);
+                        }
+                    }
+                    let mut names: Vec<String> = (0..account_count).map(account_name).collect();
+                    names.push("ghost-999".to_owned());
+                    let scorer = QuotaFairScorer::new(ScoringPolicy {
+                        prefer_native,
+                        ..ScoringPolicy::default()
+                    });
+                    // Legacy transient inputs: full String-keyed maps plus
+                    // the empty penalty map the router used to build.
+                    let legacy_active = names
+                        .iter()
+                        .map(|name| (name.clone(), *active.get(name).unwrap_or(&0)))
+                        .collect();
+                    let legacy_projected = names
+                        .iter()
+                        .map(|name| (name.clone(), projected_tokens.max(0)))
+                        .collect();
+                    let public = scorer.score_accounts(
+                        &estimator,
+                        &names,
+                        &legacy_active,
+                        &legacy_projected,
+                        &BTreeMap::new(),
+                    );
+                    let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
+                    let ordered =
+                        scorer.score_ordered(&estimator, &borrowed, &active, projected_tokens);
+                    assert_scores_equal(&public, &ordered);
+                    let ghost = ordered.last().expect("ghost score");
+                    assert_eq!(ghost.account_name, "ghost-999");
+                    assert!(!ghost.is_eligible);
+                    assert!(!ghost.final_score().is_finite());
+                }
+            }
+        }
     }
 }
