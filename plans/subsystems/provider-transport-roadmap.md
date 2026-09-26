@@ -463,7 +463,7 @@ registered.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — Eggfetch adapter contract hardening | ready | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | — | none |
+| 001 — Eggfetch adapter contract hardening | closed | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | `plans/closure/provider-transport/001-status.md` | none |
 | 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
 | 003 — Eggress 1.0.10 adoption and requalification | ready | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | — | none; soft coordination with M001 |
 | 004 — Typed transport diagnostic evidence | blocked | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | — | hard dependencies: M001 and M003 closure |

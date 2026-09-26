@@ -38,14 +38,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M001 ready — Eggfetch adapter contract hardening | no hard blocker; preserves closed Plans 215–220/241 transport ownership |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M003 ready — Eggress 1.0.10 adoption and requalification | M001 closed; M002 remains upstream-blocked; M004 awaits M003 closure |
 | Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M001 ready — inference body resource admission hardening | Server transport M001 closed; generation-owned body limit + coordinator Bytes boundary stable. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider transport | M001 Eggfetch adapter contract hardening | ready | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | Preserve DATA-only callers/wire behavior; retain trailers as transport metadata; remove residual Eggfetch pool message parsing only if exact 0.2.0 typed-source audit supports the fail-closed mapping. |
 | Provider transport | M003 Eggress 1.0.10 adoption and requalification | ready | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | No hard blocker; soft coordination with M001 because both touch the provider adapter/test target. Rebase after M001 if it lands first. |
 | Request admission and wire | M001 inference body resource admission hardening | ready | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | No hard blocker; preserve live generation limit, EggServe 1 GiB outer ceiling, and public request/wire contracts. |
 
@@ -60,19 +59,19 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider transport M001 — Eggfetch adapter contract hardening | closed | `plans/closure/provider-transport/001-status.md`, implementation `a87790ad` |
 | Plan 250 — EggServe 0.3.0 direct-Tower migration (legacy flat) | closed | `plans/250-eggserve-0.3.0-direct-tower-migration-and-requalification.md`, `7879cbf9` |
 | Planning governance M001 | closing → closed on acceptance of `plans/closure/planning-governance/001-status.md` | Plan 251 authorizes; bootstrap files + verification in closure record |
 | Server transport M001 — EggServe 0.4.0 adoption and requalification | closed | `plans/closure/server-transport/001-status.md`, implementation `409491ea` |
 
 ## Unblock audit
 
-Provider-transport M001 and M003 have no hard correctness blockers and are
-ready for handoff, but they share provider adapter/test files and should be
-sequenced/rebased rather than implemented concurrently in one worktree.
+Provider-transport M001 is closed. M003 is ready and was implemented on the
+same candidate after compiling unchanged 1.0.10 source in an isolated worktree.
 Provider-transport M002 remains blocked on an upstream Eggfetch typed
 classification interface and is not promoted to an implementation plan.
-Provider-transport M004 remains blocked on M001 + M003 closure and is already
-planned so it can be promoted by the closure unblock audit without rediscovery.
+Provider-transport M004 remains blocked on M003 closure and is already planned
+so it can be promoted by the closure unblock audit without rediscovery.
 Request-admission-wire M001 is independently ready after the EggServe review
 identified an application-side raw-body resource-admission gap; it consumes the
 closed server-transport interface and does not reopen that milestone. No blocked

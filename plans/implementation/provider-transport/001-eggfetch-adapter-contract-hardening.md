@@ -1,6 +1,6 @@
 # Provider Transport Milestone 001 — Eggfetch adapter contract hardening
 
-Status: ready
+Status: closed
 
 Repository baseline: `b1896813caa1ebb5382939d9a29788d987c01843`
 
