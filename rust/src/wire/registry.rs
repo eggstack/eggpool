@@ -139,14 +139,6 @@ pub struct CompactionCapabilities {
 }
 
 impl CompactionCapabilities {
-    pub fn from_surface_config(config: &crate::config::ProviderWireSurfaceConfig) -> Self {
-        Self {
-            supports_remote_compaction_v1: config.supports_remote_compaction_v1,
-            compact_path_template: config.compact_path_template.clone(),
-            supports_remote_compaction_v2: config.supports_remote_compaction_v2,
-        }
-    }
-
     /// Native v1 forwarding is legal only with both the flag and a path.
     pub fn native_v1_supported(&self) -> bool {
         self.supports_remote_compaction_v1 && self.compact_path_template.is_some()
@@ -309,59 +301,5 @@ impl WireProfileRegistry {
 
     pub fn supports(&self, surface: WireSurface) -> bool {
         self.profiles.contains_key(&surface)
-    }
-
-    /// Join static registry definitions to provider-owned path metadata.
-    pub fn configured_profiles(
-        &self,
-        surfaces: &BTreeMap<String, crate::config::ProviderWireSurfaceConfig>,
-    ) -> Result<Vec<ConfiguredWireProfile>, WireRegistryError> {
-        let mut result = Vec::with_capacity(surfaces.len());
-        for (surface_id, config) in surfaces {
-            let surface = WireSurface::try_from(surface_id.as_str())
-                .map_err(|_| WireRegistryError::ProviderUnknownProfile(surface_id.clone()))?;
-            let definition = self
-                .get(surface)
-                .ok_or_else(|| WireRegistryError::ProviderUnknownProfile(surface_id.clone()))?;
-            result.push(ConfiguredWireProfile {
-                definition: definition.clone(),
-                path_template: config.path_template.clone(),
-                stream_path_template: config.stream_path_template.clone(),
-                priority: config.priority,
-            });
-        }
-        result.sort_by_key(|profile| (profile.priority, profile.definition.surface));
-        Ok(result)
-    }
-
-    pub fn validate_provider_references(
-        &self,
-        surfaces: &BTreeMap<String, crate::config::ProviderWireSurfaceConfig>,
-        model_preferences: &BTreeMap<String, crate::config::ModelWirePreference>,
-    ) -> Result<(), WireRegistryError> {
-        for surface_id in surfaces.keys() {
-            if !self.supports(
-                WireSurface::try_from(surface_id.as_str())
-                    .map_err(|_| WireRegistryError::ProviderUnknownProfile(surface_id.clone()))?,
-            ) {
-                return Err(WireRegistryError::ProviderUnknownProfile(
-                    surface_id.clone(),
-                ));
-            }
-        }
-        for preference in model_preferences.values() {
-            let surface =
-                WireSurface::try_from(preference.preferred_surface.as_str()).map_err(|_| {
-                    WireRegistryError::ModelPreferenceUnavailable(
-                        preference.preferred_surface.clone(),
-                    )
-                })?;
-            if !surfaces.contains_key(surface.as_str()) {
-                return Err(WireRegistryError::ModelPreferenceUnavailable(
-                    preference.preferred_surface.clone(),
-                ));
-            }
-        }
-        Ok(())
     }
 }

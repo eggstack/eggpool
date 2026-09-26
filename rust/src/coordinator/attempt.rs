@@ -205,7 +205,7 @@ impl AttemptBuilder {
             .get(input.profile.definition.surface.as_str())
         {
             context = context.with_compaction(
-                crate::wire::CompactionCapabilities::from_surface_config(surface),
+                crate::wire::compaction_capabilities_from_surface_config(surface),
             );
         }
         let body = match admission {
@@ -407,7 +407,7 @@ impl AttemptBuilder {
             .provider
             .wire_surfaces
             .get(surface_key)
-            .map(crate::wire::CompactionCapabilities::from_surface_config)
+            .map(crate::wire::compaction_capabilities_from_surface_config)
             .unwrap_or_default();
         if !capabilities.native_v1_supported() {
             return Err(AttemptError::Wire(

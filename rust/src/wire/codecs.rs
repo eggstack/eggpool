@@ -12,6 +12,10 @@ use super::codec::{
     CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload, StreamAdapterKind, WireCodec,
     WireCodecId,
 };
+use super::decode::{
+    DecodeError, DecodeLimits, MAX_IMAGE_BYTES, MAX_MEDIA_URI_BYTES, MAX_PDF_BYTES,
+    canonical_request_from_value_with_limits, validate_base64, validate_media_type,
+};
 use super::ir::{
     CacheCounterStatus, CanonicalBlockKind, CanonicalContentBlock, CanonicalMessage,
     CanonicalOutputBlock, CanonicalRequest, CanonicalResponse, CanonicalRole, CanonicalToolChoice,
@@ -19,10 +23,6 @@ use super::ir::{
     ReasoningMode, ToolChoiceMode,
 };
 use super::registry::{ConfiguredWireProfile, WireSurface};
-use crate::request::{
-    AdmissionError, MAX_IMAGE_BYTES, MAX_MEDIA_URI_BYTES, MAX_PDF_BYTES,
-    canonical_request_from_value, validate_base64, validate_media_type,
-};
 
 const MAX_PROVIDER_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 
@@ -176,29 +176,28 @@ fn decode_request(
     value: &Value,
     client_surface: ClientSurface,
 ) -> Result<CodecOutput<CanonicalRequest>, CodecError> {
-    canonical_request_from_value(value, client_surface)
+    canonical_request_from_value_with_limits(value, client_surface, DecodeLimits::current())
         .map(CodecOutput::new)
-        .map_err(|error| map_admission_error(error, client_surface))
+        .map_err(|error| map_decode_error(error, client_surface))
 }
 
-fn map_admission_error(error: AdmissionError, source: ClientSurface) -> CodecError {
+fn map_decode_error(error: DecodeError, source: ClientSurface) -> CodecError {
     let (reason, field) = match error {
-        AdmissionError::BodyTooLarge { .. }
-        | AdmissionError::CollectionLimit { .. }
-        | AdmissionError::DepthLimit
-        | AdmissionError::MediaLimit { .. }
-        | AdmissionError::InvalidLimit { .. }
-        | AdmissionError::LengthOverflow => (CodecReasonCode::ResourceLimitViolation, None),
-        AdmissionError::UnsupportedContent { .. } => {
+        DecodeError::CollectionLimit { .. }
+        | DecodeError::DepthLimit
+        | DecodeError::MediaLimit { .. }
+        | DecodeError::InvalidLimit { .. }
+        | DecodeError::LengthOverflow => (CodecReasonCode::ResourceLimitViolation, None),
+        DecodeError::UnsupportedContent { .. } => {
             (CodecReasonCode::UnsupportedSemanticFeature, Some("content"))
         }
-        AdmissionError::InvalidField { field } => {
+        DecodeError::InvalidField { field } => {
             (CodecReasonCode::MalformedSourceRequest, Some(field))
         }
-        AdmissionError::InvalidJson
-        | AdmissionError::TopLevelNotObject
-        | AdmissionError::InvalidModel => (CodecReasonCode::MalformedSourceRequest, None),
-        AdmissionError::StatefulResponsesFeature { field } => {
+        DecodeError::TopLevelNotObject | DecodeError::InvalidModel => {
+            (CodecReasonCode::MalformedSourceRequest, None)
+        }
+        DecodeError::StatefulResponsesFeature { field } => {
             (CodecReasonCode::UnsupportedSemanticFeature, Some(field))
         }
     };

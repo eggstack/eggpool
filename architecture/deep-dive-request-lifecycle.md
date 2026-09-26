@@ -27,7 +27,10 @@ the handler deadline remains 24 hours for long provider/model work.
 The canonical IR (`rust/src/wire/ir.rs`) is captured via admission before provider adaptation. A selected wire
 codec under `rust/src/wire/` encodes the provider request and decodes finite or
 streaming responses. Native terminal evidence is required; transport EOF is
-never treated as successful completion.
+never treated as successful completion. Since M002, the pure structural
+decoder lives in `wire::decode` with explicit `DecodeLimits::current()`;
+`request::admission` retains one bounded parse, stateless Responses policy,
+and token/context accounting and delegates structure to the kernel.
 
 ## Bounded admission and ownership
 

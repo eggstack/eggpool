@@ -5,7 +5,7 @@ use eggpool::{
     config::{ModelWirePreference, ProviderWireSurfaceConfig},
     wire::{
         CodecFamily, CodecReasonCode, CompatibilityPath, WireCodecId, WireProfileRegistry,
-        WireSurface, builtin_codec, compatibility_path,
+        WireSurface, builtin_codec, compatibility_path, configured_profiles,
     },
 };
 use serde_json::json;
@@ -184,7 +184,7 @@ fn configured_provider_profiles_are_exact_and_priority_ordered() {
             },
         ),
     ]);
-    let profiles = registry.configured_profiles(&surfaces).unwrap();
+    let profiles = configured_profiles(&registry, &surfaces).unwrap();
     assert_eq!(profiles[0].definition.surface, WireSurface::OpenaiResponses);
     assert_eq!(profiles[0].path_template, "/responses");
     assert_eq!(
@@ -197,7 +197,7 @@ fn configured_provider_profiles_are_exact_and_priority_ordered() {
         "unknown_surface".into(),
         ProviderWireSurfaceConfig::default(),
     );
-    assert!(registry.configured_profiles(&invalid).is_err());
+    assert!(configured_profiles(&registry, &invalid).is_err());
 }
 
 #[test]

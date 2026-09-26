@@ -667,7 +667,7 @@ impl FiniteCoordinator {
                             .wire_surfaces
                             .get(profile.definition.surface.as_str())
                             .is_some_and(|surface| {
-                                crate::wire::CompactionCapabilities::from_surface_config(surface)
+                                crate::wire::compaction_capabilities_from_surface_config(surface)
                                     .native_v1_supported()
                             })
                 });
@@ -1516,7 +1516,7 @@ impl FiniteCoordinator {
             .get(profile.definition.surface.as_str())
         {
             context = context.with_compaction(
-                crate::wire::CompactionCapabilities::from_surface_config(surface),
+                crate::wire::compaction_capabilities_from_surface_config(surface),
             );
         }
         context

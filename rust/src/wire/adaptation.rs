@@ -9,14 +9,53 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::{CapabilityStatus, ThinkingCapability};
-
 use super::codec::{AdaptationNotice, CodecError, CodecOutput, CodecReasonCode};
 use super::ir::{
     CanonicalBlockKind, CanonicalRequest, CanonicalToolKind, ClientSurface, ReasoningMode,
 };
 use super::registry::WireSurface;
-use crate::request::NativeRequestPreservation;
+
+/// Neutral capability status owned by the extractable wire kernel.
+///
+/// EggPool catalog adapters map `crate::catalog::CapabilityStatus` into this
+/// type at the boundary (`wire::adapters`); the kernel never imports catalog
+/// state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeutralCapabilityStatus {
+    Supported,
+    Unsupported,
+    Unknown,
+    Mixed,
+    Conflicting,
+}
+
+/// Neutral thinking-capability facts consumed by pure adaptation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NeutralThinkingCapability {
+    pub status: NeutralCapabilityStatus,
+    pub toggle: NeutralCapabilityStatus,
+    pub effort: NeutralCapabilityStatus,
+    pub budget: NeutralCapabilityStatus,
+}
+
+/// Redaction-safe native summary facts owned by the wire boundary.
+///
+/// This mirrors the shape EggPool computes in
+/// `crate::request::NativeFeatureSummary` without retaining the parsed
+/// request value lifetime. Adapters map the EggPool summary into this type.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NativeSummaryFacts {
+    pub native_input_items: usize,
+    pub native_tool_definitions: usize,
+    pub extension_fields: Vec<String>,
+    pub extensions_truncated: bool,
+}
+
+impl NativeSummaryFacts {
+    pub fn has_cross_surface_blocker(&self) -> bool {
+        self.native_input_items > 0 || self.native_tool_definitions > 0
+    }
+}
 
 pub const MAX_ADAPTATION_NOTICES: usize = 32;
 
@@ -227,17 +266,19 @@ pub fn request_notices(
 /// representation. Native same-surface forwarding never calls this helper.
 /// Unknown extension fields are safe to omit only with an explicit notice;
 /// native input items and tool definitions are semantic blockers.
-pub fn native_preservation_notices(
-    preservation: &NativeRequestPreservation,
+///
+/// This is the pure kernel entry point over [`NativeSummaryFacts`].
+/// EggPool callers use `crate::wire::adapters::native_preservation_notices`
+/// which maps `NativeRequestPreservation` into these facts.
+pub fn native_summary_notices(
+    summary: &NativeSummaryFacts,
     target: WireSurface,
 ) -> Result<Vec<AdaptationNotice>, CodecError> {
     if target == WireSurface::OpenaiResponses {
         return Ok(Vec::new());
     }
     let source = Some(WireSurface::OpenaiResponses);
-    if preservation.summary.has_cross_surface_blocker()
-        && preservation.summary.native_input_items > 0
-    {
+    if summary.has_cross_surface_blocker() && summary.native_input_items > 0 {
         return Err(CodecError {
             reason: CodecReasonCode::UnsupportedSemanticFeature,
             field: Some("input.native_item".into()),
@@ -245,7 +286,7 @@ pub fn native_preservation_notices(
             target_surface: Some(target),
         });
     }
-    if preservation.summary.native_tool_definitions > 0 {
+    if summary.native_tool_definitions > 0 {
         return Err(CodecError {
             reason: CodecReasonCode::UnsupportedSemanticFeature,
             field: Some("tools.native_definition".into()),
@@ -253,8 +294,7 @@ pub fn native_preservation_notices(
             target_surface: Some(target),
         });
     }
-    let mut notices: Vec<_> = preservation
-        .summary
+    let mut notices: Vec<_> = summary
         .extension_fields
         .iter()
         .map(|field| {
@@ -266,7 +306,7 @@ pub fn native_preservation_notices(
             )
         })
         .collect();
-    if preservation.summary.extensions_truncated {
+    if summary.extensions_truncated {
         notices.push(notice(
             "native_extensions_truncated",
             "extensions",
@@ -420,9 +460,12 @@ fn valid_prompt_breakpoint(value: Option<&serde_json::Value>) -> bool {
 /// This is deliberately separate from [`request_notices`]: codecs can encode
 /// a request without a catalog, while M7 can supply verified capability facts
 /// when it wants capability-aware rejection or downgrade behavior.
-pub fn reasoning_capability_notices(
+///
+/// Pure kernel entry point over [`NeutralThinkingCapability`]. EggPool
+/// callers use `crate::wire::adapters::reasoning_capability_notices`.
+pub fn reasoning_capability_notices_neutral(
     request: &CanonicalRequest,
-    capability: &ThinkingCapability,
+    capability: &NeutralThinkingCapability,
     policy: &ReasoningCapabilityPolicy,
     target: WireSurface,
 ) -> Result<Vec<AdaptationNotice>, CodecError> {
@@ -438,14 +481,14 @@ pub fn reasoning_capability_notices(
         }
     };
     let status = match capability.status {
-        CapabilityStatus::Supported => dimension_status,
+        NeutralCapabilityStatus::Supported => dimension_status,
         other => other,
     };
     let disposition = match status {
-        CapabilityStatus::Supported => return Ok(Vec::new()),
-        CapabilityStatus::Unsupported => policy.unsupported,
-        CapabilityStatus::Unknown | CapabilityStatus::Conflicting => policy.unknown,
-        CapabilityStatus::Mixed => policy.mixed,
+        NeutralCapabilityStatus::Supported => return Ok(Vec::new()),
+        NeutralCapabilityStatus::Unsupported => policy.unsupported,
+        NeutralCapabilityStatus::Unknown | NeutralCapabilityStatus::Conflicting => policy.unknown,
+        NeutralCapabilityStatus::Mixed => policy.mixed,
     };
     let source = Some(client_wire_surface(request.client_surface));
     let field = match intent.mode {

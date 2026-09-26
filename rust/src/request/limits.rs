@@ -7,14 +7,13 @@ pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 10 * 1024 * 1024;
 pub const MAX_SSE_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_ESTIMATED_INPUT_TOKENS: u64 = 128_000;
 pub const CONTEXT_ESTIMATE_MIN_TOKENS: u64 = 1_000;
-pub const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
-pub const MAX_PDF_BYTES: u64 = 32 * 1024 * 1024;
-pub const MAX_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
-pub const MAX_MEDIA_ITEMS: usize = 64;
-pub const MAX_MEDIA_AGGREGATE_BYTES: u64 = 40 * 1024 * 1024;
-pub const MAX_MEDIA_URI_BYTES: usize = 8 * 1024;
-pub const MAX_MEDIA_TYPE_BYTES: usize = 128;
-pub const MAX_CACHE_MARKER_BYTES: usize = 1024;
+// Media/protocol acceptance constants are single-sourced in the wire kernel.
+// Re-exported here so EggPool admission keeps its existing paths while the
+// kernel remains the authority.
+pub use crate::wire::decode::{
+    MAX_AUDIO_BYTES, MAX_CACHE_MARKER_BYTES, MAX_IMAGE_BYTES, MAX_MEDIA_AGGREGATE_BYTES,
+    MAX_MEDIA_ITEMS, MAX_MEDIA_TYPE_BYTES, MAX_MEDIA_URI_BYTES, MAX_PDF_BYTES,
+};
 pub const ESTIMATED_BYTES_PER_TOKEN: u64 = 3;
 pub const ESTIMATED_TEXT_CHARS_PER_TOKEN: u64 = 4;
 pub const ESTIMATED_NON_ASCII_BYTES_PER_TOKEN: u64 = 2;
@@ -125,40 +124,11 @@ pub fn requested_output_tokens(
 }
 
 pub fn decoded_base64_len(encoded: &str) -> Option<u64> {
-    if encoded.is_empty() || !encoded.len().is_multiple_of(4) {
-        return None;
-    }
-    let padding = encoded
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|byte| **byte == b'=')
-        .count();
-    if padding > 2 || encoded.as_bytes()[..encoded.len() - padding].contains(&b'=') {
-        return None;
-    }
-    if !encoded
-        .as_bytes()
-        .iter()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'+' | b'/' | b'='))
-    {
-        return None;
-    }
-    let quartets = (encoded.len() / 4) as u64;
-    quartets
-        .checked_mul(3)
-        .and_then(|length| length.checked_sub(padding as u64))
+    crate::wire::decode::decoded_base64_len(encoded)
 }
 
 pub fn base64_definitely_exceeds(encoded: &str, limit_bytes: u64) -> bool {
-    if !encoded.len().is_multiple_of(4) {
-        return false;
-    }
-    let minimum_decoded = (encoded.len() as u64 / 4)
-        .checked_mul(3)
-        .and_then(|value| value.checked_sub(2))
-        .unwrap_or(u64::MAX);
-    minimum_decoded > limit_bytes
+    crate::wire::decode::base64_definitely_exceeds(encoded, limit_bytes)
 }
 
 pub fn validate_base64(
@@ -166,39 +136,20 @@ pub fn validate_base64(
     limit_bytes: u64,
     kind: &'static str,
 ) -> Result<u64, LimitError> {
-    if base64_definitely_exceeds(encoded, limit_bytes) {
-        return Err(LimitError::EncodedPayloadTooLarge { kind });
-    }
-    let Some(decoded_len) = decoded_base64_len(encoded) else {
-        return Err(LimitError::InvalidBase64);
-    };
-    if decoded_len > limit_bytes {
-        return Err(LimitError::EncodedPayloadTooLarge { kind });
-    }
-    Ok(decoded_len)
+    crate::wire::decode::validate_base64(encoded, limit_bytes, kind).map_err(|error| match error {
+        crate::wire::decode::MediaLimitError::InvalidBase64 => LimitError::InvalidBase64,
+        crate::wire::decode::MediaLimitError::EncodedPayloadTooLarge { kind } => {
+            LimitError::EncodedPayloadTooLarge { kind }
+        }
+    })
 }
 
 pub fn validate_media_type(media_type: &str) -> bool {
-    !media_type.is_empty()
-        && media_type.len() <= MAX_MEDIA_TYPE_BYTES
-        && media_type.is_ascii()
-        && !media_type.chars().any(char::is_whitespace)
-        && media_type.split_once('/').is_some_and(|(kind, subtype)| {
-            !kind.is_empty()
-                && !subtype.is_empty()
-                && kind.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                && subtype
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
-        })
+    crate::wire::decode::validate_media_type(media_type)
 }
 
 pub fn valid_reference(value: &str) -> bool {
-    value.len() <= MAX_MEDIA_URI_BYTES
-        && ((value.starts_with("http://") || value.starts_with("https://"))
-            || value.starts_with("file_")
-            || value.starts_with("file-")
-            || value.starts_with("urn:"))
+    crate::wire::decode::valid_reference(value)
 }
 
 fn ceil_div(value: u64, divisor: u64) -> u64 {

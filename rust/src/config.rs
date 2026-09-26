@@ -1789,9 +1789,12 @@ fn validate_provider(
     }
     validate_auth(&provider.auth)?;
     validate_headers(&provider.headers, Some(&provider.auth), "provider")?;
-    wire_registry
-        .validate_provider_references(&provider.wire_surfaces, &provider.model_wire)
-        .map_err(|error| ConfigError::validation(error.to_string()))?;
+    crate::wire::validate_provider_references(
+        wire_registry,
+        &provider.wire_surfaces,
+        &provider.model_wire,
+    )
+    .map_err(|error| ConfigError::validation(error.to_string()))?;
     for (surface, candidate) in &provider.wire_surfaces {
         validate_path(&candidate.path_template)?;
         if let Some(path) = &candidate.stream_path_template {

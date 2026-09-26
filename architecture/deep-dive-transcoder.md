@@ -6,7 +6,22 @@ Back to [Architecture](README.md)
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
 surfaces. `rust/src/wire/ir.rs` captures canonical request, reasoning, usage,
 function/freeform/deferred-search tool, response-block, provider-error, and
-stream-event semantics before adaptation.
+stream-event semantics before adaptation. `rust/src/wire/ir.rs` remains the
+EggPool canonical boundary facade.
+
+M002 extraction seam (no source move yet): the pure sans-I/O kernel is
+`wire::{ir, adaptation (neutral), codec, codecs, additional_codecs, decode,
+registry (neutral), stream}`. It never imports EggPool routing, catalog,
+config, request-runtime/resource, model-router, provider, database, server,
+coordinator, Tokio, Axum, Hyper, TLS, or transport types (guarded by
+`rust/tests/wire_kernel_boundary.rs`). EggPool-owned joins live in
+`wire::adapters` (catalog/request/config→neutral facts, thinking-requirement,
+profile joins, compaction constructors), `wire::runtime`, and
+`request::admission` (one bounded parse, stateless Responses policy,
+token/context estimates, routing/affinity projection). `wire::decode` owns
+protocol-structure decoding with explicit `DecodeLimits::current()`; EggPool
+passes the current constants unchanged. The `wire_extraction_contract`
+corpus freezes exact/adapted/rejected behavior before the M003 move.
 
 Each concrete codec builds a fresh target payload from canonical intent. Loss
 policy and provider capability contracts independently govern reasoning, tools,

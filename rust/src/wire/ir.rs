@@ -448,6 +448,21 @@ impl Default for ReasoningIntent {
     }
 }
 
+/// Neutral thinking facts owned by the extractable wire kernel.
+///
+/// This is the sans-I/O projection of [`ReasoningIntent`] used at the
+/// extraction seam. EggPool routing adapters convert these facts into
+/// `crate::routing::ThinkingRequirement` outside the kernel; the kernel
+/// itself never imports routing state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThinkingFacts {
+    pub requested: bool,
+    pub requested_toggle: Option<bool>,
+    pub effort: Option<String>,
+    pub budget_tokens: Option<u64>,
+    pub explicit_disable: bool,
+}
+
 impl ReasoningIntent {
     pub fn disabled() -> Self {
         Self {
@@ -469,15 +484,15 @@ impl ReasoningIntent {
         }
     }
 
-    pub fn to_thinking_requirement(&self) -> Option<crate::routing::ThinkingRequirement> {
-        self.requested
-            .map(|requested| crate::routing::ThinkingRequirement {
-                requested,
-                requested_toggle: (self.mode == ReasoningMode::Toggle).then_some(requested),
-                effort: self.effort.clone(),
-                budget_tokens: self.budget_tokens,
-                explicit_disable: self.explicit_disable,
-            })
+    /// Pure kernel projection of the reasoning intent.
+    pub fn to_thinking_facts(&self) -> Option<ThinkingFacts> {
+        self.requested.map(|requested| ThinkingFacts {
+            requested,
+            requested_toggle: (self.mode == ReasoningMode::Toggle).then_some(requested),
+            effort: self.effort.clone(),
+            budget_tokens: self.budget_tokens,
+            explicit_disable: self.explicit_disable,
+        })
     }
 }
 

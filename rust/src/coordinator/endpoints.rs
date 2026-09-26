@@ -49,7 +49,7 @@ use crate::{
     routing::{EligibilityPolicy, RoutingRouter},
     wire::{
         ConfiguredWireProfile, WireCodecId, WireProfileDefinition, WireProfileRegistry,
-        WireRuntime, WireSurface, ir::ClientSurface,
+        WireRuntime, WireSurface, configured_profiles, ir::ClientSurface,
     },
 };
 
@@ -1150,8 +1150,7 @@ pub(crate) fn compile_provider_profiles(
         .map_err(|error| format!("wire registry failed: {error}"))?;
     let mut provider_profiles: BTreeMap<String, Vec<ConfiguredWireProfile>> = BTreeMap::new();
     for (provider_id, provider) in &config.providers {
-        let profiles = wire_registry
-            .configured_profiles(&provider.wire_surfaces)
+        let profiles = configured_profiles(&wire_registry, &provider.wire_surfaces)
             .map_err(|error| format!("wire profiles for {provider_id:?} failed: {error}"))?;
         if profiles.is_empty() {
             let fallback = fallback_profiles(provider_id, provider);
