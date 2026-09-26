@@ -240,5 +240,5 @@ This roadmap closes when the accepted checkpoint policy has physical target evid
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | ready | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | — | operational physical SBC evidence required for closure |
-| 002 — single-gate tenure and metrics-flush allocation cleanup | not started | — | — | none; may be promoted independently |
+| 002 — single-gate tenure and metrics-flush allocation cleanup | ready | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | — | none; independent of M001 |
 | 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if M001 proves periodic scheduling insufficient |

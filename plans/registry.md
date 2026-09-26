@@ -39,13 +39,14 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 ready — bounded passive checkpoint scheduling and target qualification | Hard evidence from Plans 239/240; physical SBC evidence is an operational closure gate. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 and M002 ready — checkpoint scheduling plus single-gate tenure cleanup | M001 has a physical SBC closure gate; M002 is independently dependency-ready. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M001 bounded passive checkpoint scheduling and target qualification | ready | `plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md` | Preserve the one DB gate/worker and automatic checkpoint safety ceiling; physical Pi/MMC evidence required for closure. |
+| Persistence | M002 single-gate tenure and metrics-flush allocation cleanup | ready | `plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md` | Independent low-risk ownership/statement-preparation cleanup; no schema/API/dependency change. |
 
 ## Blocked work
 
@@ -91,3 +92,5 @@ M002 remains blocked on upstream Eggfetch API work.
 
 
 Explicit user direction opens the persistence performance workstream at the current Rust baseline. Persistence M001 is dependency-ready against the completed Plan 239 diagnostic and Plan 240 design constraints; its physical SBC requirement is operational closure evidence, not a reason to invent a different storage architecture. Provider-transport M002 remains blocked and is unaffected.
+
+Persistence M002 is independently dependency-ready: it shortens avoidable work around the existing gate without changing the Plan-240 checkpoint policy, so it does not wait on M001 or the physical SBC operational gate.
