@@ -1,6 +1,6 @@
 # Routing Selection Milestone 001 — Ordered Quota-Scoring and Candidate-Allocation Cleanup
 
-Status: active
+Status: closed
 
 Repository baseline: e64df3391a85a19267c69c95897f2515ba0463d0
 

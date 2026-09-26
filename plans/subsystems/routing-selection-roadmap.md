@@ -224,5 +224,5 @@ This roadmap closes when M001 has removed the known deferred transient scoring c
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — ordered quota-scoring and candidate-allocation cleanup | ready | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | — | none |
-| 002 — semantic-affinity exact-LRU cost qualification | not started | — | — | M001 closure + measured affinity cost |
+| 001 — ordered quota-scoring and candidate-allocation cleanup | closed | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | plans/closure/routing-selection/001-status.md | none |
+| 002 — semantic-affinity exact-LRU cost qualification | not started | — | — | M001 closed; still needs a representative 64/512/4096-entry workload showing the exact VecDeque touch is material (see `plans/closure/routing-selection/001-status.md` §11) |
