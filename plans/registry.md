@@ -40,14 +40,14 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 ready — ordered quota-scoring and candidate-allocation cleanup | No external hard dependency; preserves the selection lock and public scorer contract. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 conditionally closed — checkpoint scheduling plus single-gate tenure cleanup | M001 production landed; physical Pi/MMC evidence outstanding per `plans/closure/persistence/001-status.md` §11. M002 remains independently dependency-ready. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 conditionally closed, M002 closed; M003 conditional | M001 production landed; physical Pi/MMC evidence outstanding per `plans/closure/persistence/001-status.md` §11. M003 stays not started behind that condition. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M001 bounded passive checkpoint scheduling and target qualification | conditionally closed | `plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md` | Production mechanism landed (`6eae94db`); physical Pi/MMC evidence required for full closure. |
-| Persistence | M002 single-gate tenure and metrics-flush allocation cleanup | ready | `plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md` | Independent low-risk ownership/statement-preparation cleanup; no schema/API/dependency change. |
+| Persistence | M002 single-gate tenure and metrics-flush allocation cleanup | closed | `plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md` | Structural gate-tenure cleanup with row/rebuffer equivalence (`52494140`). |
 | Routing selection | M001 ordered quota-scoring and candidate-allocation cleanup | ready | `plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md` | Completes the transient scoring cleanup explicitly deferred by legacy Plan 231 without changing routing semantics. |
 
 ## Blocked work
@@ -61,6 +61,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
 | Persistence M001 — bounded passive checkpoint scheduling and target qualification | conditionally closed | `plans/closure/persistence/001-status.md`, implementation `6eae94db` |
+| Persistence M002 — single-gate tenure and metrics-flush allocation cleanup | closed | `plans/closure/persistence/002-status.md`, implementation `52494140` |
 | Request admission and wire M001 — inference body resource admission hardening | closed | `plans/closure/request-admission-wire/001-status.md`, implementation `a87790ad` |
 | Provider transport M004 — typed transport diagnostic evidence | closed | `plans/closure/provider-transport/004-status.md`, implementation `a87790ad` |
 | Provider transport M003 — Eggress 1.0.10 adoption and requalification | closed | `plans/closure/provider-transport/003-status.md`, implementation `a87790ad` |
@@ -96,7 +97,7 @@ M002 remains blocked on upstream Eggfetch API work.
 
 Explicit user direction opens the persistence performance workstream at the current Rust baseline. Persistence M001 is dependency-ready against the completed Plan 239 diagnostic and Plan 240 design constraints; its physical SBC requirement is operational closure evidence, not a reason to invent a different storage architecture. Provider-transport M002 remains blocked and is unaffected.
 
-Persistence M002 is independently dependency-ready: it shortens avoidable work around the existing gate without changing the Plan-240 checkpoint policy, so it does not wait on M001 or the physical SBC operational gate.
+Persistence M002 is closed (`52494140` implementation, `plans/closure/persistence/002-status.md`): gate-tenure and metrics-flush ownership cleanup with row/rebuffer equivalence. No blocked work is promoted: persistence M003 stays not started behind M001's physical-evidence condition, routing-selection M001 stays ready (independent), and provider-transport M002 remains blocked on upstream Eggfetch API work.
 
 Routing-selection M001 is dependency-ready from current source evidence and the explicit deferred-work record in Plan 231. The semantic-affinity exact-LRU finding remains unpromoted until M001 closes and a representative 64/512/4096-entry workload shows that the current exact VecDeque touch is material.
 

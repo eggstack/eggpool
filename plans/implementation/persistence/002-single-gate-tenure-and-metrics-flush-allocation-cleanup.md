@@ -1,6 +1,6 @@
 # Persistence Milestone 002 — Single-Gate Tenure and Metrics-Flush Allocation Cleanup
 
-Status: active
+Status: closed
 
 Repository baseline: ef4749f2eb48c46a877c1d83d5bb313c194df1f0
 

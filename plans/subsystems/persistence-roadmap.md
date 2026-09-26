@@ -240,5 +240,5 @@ This roadmap closes when the accepted checkpoint policy has physical target evid
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | production mechanism landed; physical Pi/MMC target evidence outstanding per closure §11 |
-| 002 — single-gate tenure and metrics-flush allocation cleanup | ready | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | — | none; independent of M001 |
+| 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
 | 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if M001 proves periodic scheduling insufficient |
