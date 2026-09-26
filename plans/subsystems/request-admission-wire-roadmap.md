@@ -234,7 +234,7 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 ## 11. Completion definition
 
-M001 is closed on its recorded body-admission evidence. The roadmap was reopened by explicit user direction for the wire-kernel extraction sequence below. It closes again only after M002–M004 have closure records proving that EggPool still owns the same admission/runtime boundaries, consumes one canonical codec implementation, preserves every existing public wire capability, and carries no unresolved medium-or-higher compatibility finding.
+M001 is closed on its recorded body-admission evidence. M002–M004 are also closed on the extraction and fidelity/provenance evidence recorded in their closure files. Explicit user direction keeps this roadmap active for the bounded M005 corrective/cleanup pass. It closes again only after M005 reconciles the planning control surfaces, resolves the two low-severity M004 cleanup findings without changing wire behavior, and records closure evidence.
 
 ## 12. Milestone status
 
@@ -244,7 +244,7 @@ M001 is closed on its recorded body-admission evidence. The roadmap was reopened
 | 002 — wire-kernel extraction seam and contract freeze | closed | `plans/implementation/request-admission-wire/002-wire-kernel-extraction-seam-and-contract-freeze.md` | `plans/closure/request-admission-wire/002-status.md` | none |
 | 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
-| 004 — fidelity, provenance, and conformance hardening | blocked | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | — | hard dependency: M003 closure |
+| 005 — planning reconciliation and minor wire cleanup | ready | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | — | none |
 
 
 ## 13. Wire-kernel extraction extension
@@ -402,3 +402,53 @@ Key exit conditions:
 - no crates.io publication or repository split is required to close M004.
   External publication is a later release decision after the internal
   consumer has remained qualified.
+
+
+### Milestone 005 — Planning reconciliation and minor wire cleanup
+
+Class: polish
+
+Objective: close the post-M004 cleanup debt without reopening the completed
+wire-kernel architecture. Reconcile the request-admission-wire roadmap and
+registry with the accepted M004 closure, eliminate the duplicated
+client-executed `tool_search` declaration predicate behind one neutral
+kernel helper, and make the currently unemitted `Approximated` effect class
+an explicit documented reservation rather than an accidental-looking dead
+variant.
+
+Dependencies:
+
+- M002, M003, and M004: hard, closed.
+- No external dependency.
+
+Deliverable boundary:
+
+- planning/status reconciliation only; no rewrite of historical closure
+  records or legacy plans;
+- one neutral `eggpool-wire` classifier for client-executed
+  `tool_search` declarations, reused by structural decode and EggPool native
+  preservation;
+- rustdoc/tests that make `AdaptationEffectClass::Approximated` intentionally
+  reserved while current codecs continue to drop unsupported reasoning
+  controls rather than claim approximation;
+- no protocol, routing, admission, provider, config, storage, dependency, or
+  publication change.
+
+Exit conditions:
+
+- the roadmap contains one row per M001–M005 milestone and no stale blocked
+  M004 row;
+- the registry identifies M004 as the latest completed extraction milestone,
+  M005 as the ready/current corrective milestone while work is open, and
+  transitions the subsystem to closed when M005 closure is accepted;
+- the duplicated `is_client_tool_search_declaration` logic has one semantic
+  owner in `eggpool-wire` and both decode/preservation paths prove identical
+  acceptance for client/server/missing execution forms;
+- `Approximated` is either explicitly documented/tested as reserved or,
+  only if repository evidence proves it has no intended API role, removed
+  with all exhaustive matches and docs updated; no existing fidelity outcome
+  changes;
+- `wire_extraction_contract`, `wire_kernel_boundary`, canonical request,
+  Codex Responses, default, and no-default workspace suites remain green;
+- closure record accepted with no medium-or-higher finding and no remaining
+  contradictory request-admission-wire status metadata.
