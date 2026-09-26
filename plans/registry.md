@@ -39,12 +39,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 ready — bounded passive checkpoint scheduling and target qualification | Hard evidence from Plans 239/240; physical SBC evidence is an operational closure gate. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| (none — request-admission-wire sequence complete) | — | — | — | M001–M005 closed; no ready successor in this subsystem. |
+| Persistence | M001 bounded passive checkpoint scheduling and target qualification | ready | `plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md` | Preserve the one DB gate/worker and automatic checkpoint safety ceiling; physical Pi/MMC evidence required for closure. |
 
 ## Blocked work
 
@@ -87,3 +88,6 @@ no-default tests green, no medium-or-higher finding); the
 request-admission-wire subsystem is closed with no ready successor. No
 provider-transport blocked work is promoted; Provider
 M002 remains blocked on upstream Eggfetch API work.
+
+
+Explicit user direction opens the persistence performance workstream at the current Rust baseline. Persistence M001 is dependency-ready against the completed Plan 239 diagnostic and Plan 240 design constraints; its physical SBC requirement is operational closure evidence, not a reason to invent a different storage architecture. Provider-transport M002 remains blocked and is unaffected.
