@@ -65,6 +65,13 @@ DIAGNOSTIC_MAX_SAMPLES = 200
 PUBLICATION_STORAGE_MIN_SAMPLES = 20
 PUBLICATION_STORAGE_MAX_SAMPLES = 200
 PUBLICATION_PHASE_SAMPLES = 60
+# Persistence M001 qualification-only tuning bounds. The soft threshold must
+# stay at or below the SQLite automatic checkpoint safety ceiling so routine
+# maintenance always fires before the foreground fallback.
+QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S = 1.0
+QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S = 3600.0
+QUALIFICATION_CHECKPOINT_SOFT_MIN_FRAMES = 1
+QUALIFICATION_CHECKPOINT_SOFT_MAX_FRAMES = 1000
 DIAGNOSTIC_WARMUPS = 5
 DIRECT_CONTROL_WARMUPS = 5
 DIRECT_CONTROL_SAMPLES = 30
@@ -1203,6 +1210,42 @@ def _qualification_wal_autocheckpoint_pages(value: str) -> int:
     return pages
 
 
+def _qualification_checkpoint_interval_s(value: str) -> float:
+    try:
+        interval = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "qualification checkpoint interval must be seconds in 1..3600"
+        ) from error
+    if not (
+        QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S
+        <= interval
+        <= QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S
+    ):
+        raise argparse.ArgumentTypeError(
+            "qualification checkpoint interval must be seconds in 1..3600"
+        )
+    return interval
+
+
+def _qualification_checkpoint_soft_frames(value: str) -> int:
+    try:
+        frames = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "qualification checkpoint soft threshold must be an integer in 1..1000"
+        ) from error
+    if not (
+        QUALIFICATION_CHECKPOINT_SOFT_MIN_FRAMES
+        <= frames
+        <= QUALIFICATION_CHECKPOINT_SOFT_MAX_FRAMES
+    ):
+        raise argparse.ArgumentTypeError(
+            "qualification checkpoint soft threshold must be an integer in 1..1000"
+        )
+    return frames
+
+
 def _ns_to_ms(earlier_ns: int | None, later_ns: int | None) -> int | None:
     if earlier_ns is None or later_ns is None:
         return None
@@ -1371,6 +1414,80 @@ def _qualification_database_snapshot(value: Mapping[str, Any]) -> dict[str, Any]
         "effective": required_effective,
         "latest_record_seq": latest,
     }
+
+
+def _qualification_checkpoint_maintenance(
+    value: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Validate the additive M001 maintenance projection, if present.
+
+    Older qualification builds omit the object; that absence is tolerated so
+    historical artifacts still parse. A present object must carry the full
+    bounded scalar shape.
+    """
+    snapshot_value = value.get("database_qualification")
+    snapshot = (
+        cast("dict[str, Any]", snapshot_value)
+        if isinstance(snapshot_value, dict)
+        else None
+    )
+    if not isinstance(snapshot, dict):
+        raise QualificationError(
+            "Plan 239 requires a qualification-db-diagnostics candidate build"
+        )
+    maintenance_value = snapshot.get("checkpoint_maintenance")
+    if maintenance_value is None:
+        return None
+    if not isinstance(maintenance_value, dict):
+        raise QualificationError("qualification checkpoint maintenance is invalid")
+    maintenance = cast("dict[str, Any]", maintenance_value)
+    required: dict[str, Any] = {
+        name: maintenance.get(name)
+        for name in (
+            "soft_threshold_frames",
+            "not_due",
+            "gate_busy",
+            "below_threshold",
+            "checkpointed",
+            "failures",
+            "last_log_frames",
+            "last_checkpointed_frames",
+        )
+    }
+    if not all(isinstance(item, int) and item >= 0 for item in required.values()):
+        raise QualificationError("qualification checkpoint maintenance is not scalar")
+    if not (
+        QUALIFICATION_CHECKPOINT_SOFT_MIN_FRAMES
+        <= required["soft_threshold_frames"]
+        <= QUALIFICATION_CHECKPOINT_SOFT_MAX_FRAMES
+    ):
+        raise QualificationError("qualification checkpoint soft threshold is invalid")
+    return required
+
+
+def _checkpoint_maintenance_deltas(
+    baseline: Mapping[str, Any] | None, final: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """Bounded tick deltas between two maintenance projections."""
+    if baseline is None or final is None:
+        return None
+    deltas: dict[str, Any] = {
+        "soft_threshold_frames": final["soft_threshold_frames"],
+    }
+    for name in (
+        "not_due",
+        "gate_busy",
+        "below_threshold",
+        "checkpointed",
+        "failures",
+    ):
+        delta = final[name] - baseline[name]
+        if not isinstance(delta, int) or delta < 0:
+            raise QualificationError("qualification checkpoint ticks are not ordered")
+        deltas[f"{name}_delta"] = delta
+    deltas["last_log_frames"] = final["last_log_frames"]
+    deltas["last_checkpointed_frames"] = final["last_checkpointed_frames"]
+    return deltas
 
 
 def _qualification_records_after(
@@ -2114,6 +2231,9 @@ def run_qualification(
     diagnose_publication_storage: int | None = None,
     diagnose_publication_phases: bool = False,
     qualification_wal_autocheckpoint_pages: int | None = None,
+    qualification_checkpoint_interval_s: float | None = None,
+    qualification_checkpoint_soft_frames: int | None = None,
+    diagnose_checkpoint_maintenance: bool = False,
     diagnostic_database_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
@@ -2162,6 +2282,17 @@ def run_qualification(
     ):
         raise ValueError(
             "qualification wal_autocheckpoint requires Plan 239 phase diagnostics"
+        )
+    if (
+        qualification_checkpoint_interval_s is not None
+        or qualification_checkpoint_soft_frames is not None
+    ) and not diagnose_publication_phases:
+        raise ValueError(
+            "qualification checkpoint tuning requires Plan 239 phase diagnostics"
+        )
+    if diagnose_checkpoint_maintenance and not diagnose_publication_phases:
+        raise ValueError(
+            "checkpoint maintenance diagnostics require Plan 239 phase diagnostics"
         )
     if diagnose_publication_storage is not None and benchmark_samples > 0:
         raise ValueError(
@@ -2256,6 +2387,14 @@ def run_qualification(
         if qualification_wal_autocheckpoint_pages is not None:
             env["EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES"] = str(
                 qualification_wal_autocheckpoint_pages
+            )
+        if qualification_checkpoint_interval_s is not None:
+            env["EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S"] = str(
+                qualification_checkpoint_interval_s
+            )
+        if qualification_checkpoint_soft_frames is not None:
+            env["EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES"] = str(
+                qualification_checkpoint_soft_frames
             )
         commands: list[CommandResult] = []
         samples: list[dict[str, Any]] = []
@@ -2501,6 +2640,14 @@ def run_qualification(
                         baseline_runtime
                     )
                     baseline_sequence = baseline_database["latest_record_seq"]
+                    baseline_maintenance = _qualification_checkpoint_maintenance(
+                        baseline_runtime
+                    )
+                    if diagnose_checkpoint_maintenance and baseline_maintenance is None:
+                        raise QualificationError(
+                            "M001 maintenance evidence requires a candidate build "
+                            "with the checkpoint_maintenance projection"
+                        )
                     phase_run = _diagnostic_finite_batch(
                         port,
                         provider,
@@ -2529,6 +2676,17 @@ def run_qualification(
                             "runtime snapshot was unavailable after Plan 239 batch"
                         )
                     final_database = _qualification_database_snapshot(final_runtime)
+                    final_maintenance = _qualification_checkpoint_maintenance(
+                        final_runtime
+                    )
+                    if diagnose_checkpoint_maintenance and final_maintenance is None:
+                        raise QualificationError(
+                            "M001 maintenance evidence requires a candidate build "
+                            "with the checkpoint_maintenance projection"
+                        )
+                    maintenance_deltas = _checkpoint_maintenance_deltas(
+                        baseline_maintenance, final_maintenance
+                    )
                     records = _qualification_records_after(
                         final_runtime, baseline_sequence
                     )
@@ -2547,8 +2705,26 @@ def run_qualification(
                         **phase_run,
                         **correlation,
                     }
+                    if diagnose_checkpoint_maintenance:
+                        benchmark["checkpoint_tuning"] = {
+                            "poll_interval_s": qualification_checkpoint_interval_s,
+                            "soft_threshold_frames": (
+                                qualification_checkpoint_soft_frames
+                            ),
+                        }
+                        benchmark["checkpoint_maintenance"] = {
+                            "baseline": baseline_maintenance,
+                            "final": final_maintenance,
+                            "deltas": maintenance_deltas,
+                        }
                     final_tasks = _runtime_task_snapshot(final_runtime)
                     task_deltas = _task_tick_deltas(baseline_tasks, final_tasks)
+                    # M001 maintenance ticks are the measured subject, not
+                    # contamination: the per-record gate-wait phases already
+                    # capture any foreground wait behind PASSIVE work.
+                    exempt_tasks: set[str] = (
+                        {"checkpoint"} if diagnose_checkpoint_maintenance else set()
+                    )
                     benchmark["task_quiescence"] = {
                         "wait_timeout_s": DIAGNOSTIC_QUIESCENCE_TIMEOUT,
                         "fixed_task_names": list(DIAGNOSTIC_TASK_NAMES),
@@ -2557,8 +2733,9 @@ def run_qualification(
                         "deltas": task_deltas,
                         "background_db_activity": any(
                             value.get("tick_count_delta", 0) > 0
-                            for value in task_deltas.values()
-                            if isinstance(value.get("tick_count_delta"), int)
+                            for name, value in task_deltas.items()
+                            if name not in exempt_tasks
+                            and isinstance(value.get("tick_count_delta"), int)
                         ),
                     }
                     if benchmark["task_quiescence"]["background_db_activity"]:
@@ -3101,6 +3278,36 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--qualification-checkpoint-interval-s",
+        type=_qualification_checkpoint_interval_s,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "Set the feature-only maintenance checkpoint poll interval for "
+            "persistence M001 tuning (1..3600 seconds); requires "
+            "--diagnose-publication-phases."
+        ),
+    )
+    parser.add_argument(
+        "--qualification-checkpoint-soft-frames",
+        type=_qualification_checkpoint_soft_frames,
+        default=None,
+        metavar="N",
+        help=(
+            "Set the feature-only WAL-frame soft threshold for persistence "
+            "M001 tuning (1..1000); requires --diagnose-publication-phases."
+        ),
+    )
+    parser.add_argument(
+        "--diagnose-checkpoint-maintenance",
+        action="store_true",
+        help=(
+            "Record M001 maintenance tick/frame evidence in the Plan 239 "
+            "phase report and exempt checkpoint ticks from the contamination "
+            "rule; requires --diagnose-publication-phases."
+        ),
+    )
+    parser.add_argument(
         "--diagnostic-database-dir",
         type=Path,
         default=None,
@@ -3132,6 +3339,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             qualification_wal_autocheckpoint_pages=(
                 args.qualification_wal_autocheckpoint_pages
             ),
+            qualification_checkpoint_interval_s=(
+                args.qualification_checkpoint_interval_s
+            ),
+            qualification_checkpoint_soft_frames=(
+                args.qualification_checkpoint_soft_frames
+            ),
+            diagnose_checkpoint_maintenance=args.diagnose_checkpoint_maintenance,
             diagnostic_database_dir=args.diagnostic_database_dir,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:

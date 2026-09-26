@@ -72,6 +72,59 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn maintenance_checkpoint_preserves_wal_normal_autocheckpoint_and_close() {
+    let path = temporary_database_path("checkpoint-maintenance");
+    let database = open_database(&path).await;
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations apply");
+    let pragmas = database
+        .call(|connection| {
+            Ok((
+                connection.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0))?,
+                connection.query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))?,
+                connection
+                    .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get::<_, i64>(0))?,
+            ))
+        })
+        .await
+        .expect("pragmas readable");
+    assert_eq!(pragmas.0.to_ascii_lowercase(), "wal");
+    assert_eq!(pragmas.1, 1, "synchronous must remain NORMAL");
+    assert_eq!(
+        pragmas.2, 1000,
+        "production automatic checkpoint safety ceiling must remain unchanged"
+    );
+    database
+        .with_transaction(|connection| {
+            connection.execute(
+                "INSERT INTO providers (provider_id, base_url, protocols) VALUES ('fixture', 'https://fixture.invalid', '[\"openai\"]')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("write commits");
+    database
+        .checkpoint()
+        .await
+        .expect("compatibility checkpoint still runs on the existing worker");
+    let destination = path.with_extension("backup.sqlite3");
+    database
+        .backup_to(destination.clone())
+        .await
+        .expect("backup works with recent checkpoint activity");
+    assert!(destination.exists(), "backup snapshot exists");
+    database
+        .close()
+        .await
+        .expect("database closes after checkpoint");
+    fs::remove_file(&path).expect("temporary database removed");
+    fs::remove_file(&destination).expect("temporary backup removed");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
     let path = temporary_database_path("historical");
     let database = open_database(&path).await;

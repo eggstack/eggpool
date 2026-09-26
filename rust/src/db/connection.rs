@@ -138,6 +138,94 @@ pub struct DatabaseStats {
     pub transactions: u64,
 }
 
+/// Internal policy for opportunistic maintenance checkpoints (persistence
+/// M001). The production SQLite automatic checkpoint threshold is unchanged
+/// and remains the hard fallback that bounds worst-case WAL growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CheckpointMaintenancePolicy {
+    pub soft_wal_frames: u32,
+}
+
+impl CheckpointMaintenancePolicy {
+    pub(crate) const DEFAULT_SOFT_WAL_FRAMES: u32 = 256;
+    #[cfg(feature = "qualification-db-diagnostics")]
+    pub(crate) const MAX_SOFT_WAL_FRAMES: u32 = 1000;
+
+    pub(crate) fn effective() -> Self {
+        #[cfg(feature = "qualification-db-diagnostics")]
+        if let Some(soft) = qualification_checkpoint_soft_frames_override() {
+            return Self {
+                soft_wal_frames: soft,
+            };
+        }
+        Self {
+            soft_wal_frames: Self::DEFAULT_SOFT_WAL_FRAMES,
+        }
+    }
+}
+
+/// Bounded outcome of one opportunistic maintenance tick. Only scalar frame
+/// counts cross this boundary; no SQL text, path, or request detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckpointMaintenanceOutcome {
+    /// No durable transaction completed since the previous inspection, so no
+    /// SQLite work was performed.
+    NotDue,
+    /// The database gate was already owned by foreground work; the optional
+    /// tick deferred instead of queueing behind it.
+    GateBusy,
+    /// WAL state was inspected through SQLite and remains below the soft
+    /// maintenance threshold.
+    BelowThreshold { log_frames: u32 },
+    /// A PASSIVE checkpoint ran on the existing worker and reported its
+    /// post-checkpoint frame counts.
+    Checkpointed {
+        log_frames: u32,
+        checkpointed_frames: u32,
+    },
+}
+
+impl CheckpointMaintenanceOutcome {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotDue => "not_due",
+            Self::GateBusy => "gate_busy",
+            Self::BelowThreshold { .. } => "below_threshold",
+            Self::Checkpointed { .. } => "checkpointed",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CheckpointMaintenanceStats {
+    not_due: AtomicU64,
+    gate_busy: AtomicU64,
+    below_threshold: AtomicU64,
+    checkpointed: AtomicU64,
+    failures: AtomicU64,
+    last_log_frames: AtomicU64,
+    last_checkpointed_frames: AtomicU64,
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+impl CheckpointMaintenanceStats {
+    fn snapshot(
+        &self,
+        soft_threshold_frames: u32,
+    ) -> super::qualification::QualificationCheckpointMaintenance {
+        super::qualification::QualificationCheckpointMaintenance {
+            soft_threshold_frames,
+            not_due: self.not_due.load(Ordering::Relaxed),
+            gate_busy: self.gate_busy.load(Ordering::Relaxed),
+            below_threshold: self.below_threshold.load(Ordering::Relaxed),
+            checkpointed: self.checkpointed.load(Ordering::Relaxed),
+            failures: self.failures.load(Ordering::Relaxed),
+            last_log_frames: self.last_log_frames.load(Ordering::Relaxed),
+            last_checkpointed_frames: self.last_checkpointed_frames.load(Ordering::Relaxed),
+        }
+    }
+}
+
 struct DatabaseInner {
     connection: AsyncConnection,
     gate: Arc<Semaphore>,
@@ -146,6 +234,7 @@ struct DatabaseInner {
     calls: AtomicU64,
     transactions: AtomicU64,
     config: DatabaseConfig,
+    checkpoint_stats: CheckpointMaintenanceStats,
     #[cfg(feature = "qualification-db-diagnostics")]
     qualification: super::qualification::QualificationCollector,
 }
@@ -233,6 +322,7 @@ impl Database {
                 calls: AtomicU64::new(0),
                 transactions: AtomicU64::new(0),
                 config,
+                checkpoint_stats: CheckpointMaintenanceStats::default(),
                 #[cfg(feature = "qualification-db-diagnostics")]
                 qualification: super::qualification::QualificationCollector::new(),
             }),
@@ -255,9 +345,18 @@ impl Database {
         }
     }
 
+    pub(crate) fn transaction_count(&self) -> u64 {
+        self.inner.transactions.load(Ordering::Relaxed)
+    }
+
     #[cfg(feature = "qualification-db-diagnostics")]
     pub fn qualification_snapshot(&self) -> crate::db::QualificationDbSnapshot {
-        self.inner.qualification.snapshot()
+        let mut snapshot = self.inner.qualification.snapshot();
+        snapshot.checkpoint_maintenance = self
+            .inner
+            .checkpoint_stats
+            .snapshot(CheckpointMaintenancePolicy::effective().soft_wal_frames);
+        snapshot
     }
 
     pub async fn close(&self) -> Result<(), DatabaseError> {
@@ -645,13 +744,129 @@ impl Database {
     /// only the success/failure category and does not retain database detail.
     pub async fn checkpoint(&self) -> Result<(), DatabaseError> {
         self.call(|connection| {
-            let _: (i64, i64, i64) =
-                connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-                })?;
+            run_passive_checkpoint(connection)?;
             Ok(())
         })
         .await
+    }
+
+    /// Opportunistic maintenance checkpoint for the process-owned task
+    /// (persistence M001). The tick never queues behind foreground work: when
+    /// no durable transaction completed since `observed_transactions` was last
+    /// updated, no SQLite work runs; when the gate is already owned, the tick
+    /// defers. WAL state is observed through SQLite itself
+    /// (`PRAGMA wal_checkpoint(NOOP)`), and PASSIVE work runs only once the
+    /// soft threshold is due. The unchanged SQLite automatic checkpoint
+    /// threshold remains the hard fallback.
+    pub(crate) async fn checkpoint_maintenance(
+        &self,
+        policy: CheckpointMaintenancePolicy,
+        observed_transactions: &AtomicU64,
+    ) -> Result<CheckpointMaintenanceOutcome, DatabaseError> {
+        let current = self.inner.transactions.load(Ordering::Relaxed);
+        if current == observed_transactions.load(Ordering::Relaxed) {
+            self.inner
+                .checkpoint_stats
+                .not_due
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(CheckpointMaintenanceOutcome::NotDue);
+        }
+        if self.inner.closed.load(Ordering::Acquire) {
+            self.record_maintenance_failure();
+            return Err(DatabaseError::Closed);
+        }
+        let permit = match self.inner.gate.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(tokio::sync::TryAcquireError::NoPermits) => {
+                self.inner
+                    .checkpoint_stats
+                    .gate_busy
+                    .fetch_add(1, Ordering::Relaxed);
+                return Ok(CheckpointMaintenanceOutcome::GateBusy);
+            }
+            Err(tokio::sync::TryAcquireError::Closed) => {
+                self.record_maintenance_failure();
+                return Err(DatabaseError::WorkerClosed);
+            }
+        };
+        self.inner.calls.fetch_add(1, Ordering::Relaxed);
+        let soft = policy.soft_wal_frames;
+        let inspected = self
+            .inner
+            .connection
+            .call(move |connection| {
+                let progress = query_wal_progress(connection)?;
+                if progress.busy {
+                    Ok(MaintenanceInspection::Deferred)
+                } else if u64::from(progress.log_frames) >= u64::from(soft) {
+                    let after = run_passive_checkpoint(connection)?;
+                    Ok(MaintenanceInspection::Checkpointed(after))
+                } else {
+                    Ok(MaintenanceInspection::BelowThreshold(progress))
+                }
+            })
+            .await;
+        drop(permit);
+        let inspection = inspected.map_err(|error| {
+            self.record_maintenance_failure();
+            match error {
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite(
+                        "checkpoint maintenance",
+                        self.inner.config.busy_timeout_ms,
+                        source,
+                    )
+                }
+                _ => DatabaseError::WorkerClosed,
+            }
+        })?;
+        if matches!(inspection, MaintenanceInspection::Deferred) {
+            self.inner
+                .checkpoint_stats
+                .gate_busy
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(CheckpointMaintenanceOutcome::GateBusy);
+        }
+        let progress = match inspection {
+            MaintenanceInspection::BelowThreshold(progress)
+            | MaintenanceInspection::Checkpointed(progress) => progress,
+            MaintenanceInspection::Deferred => unreachable!("deferred inspection returned above"),
+        };
+        observed_transactions.store(current, Ordering::Relaxed);
+        self.inner
+            .checkpoint_stats
+            .last_log_frames
+            .store(u64::from(progress.log_frames), Ordering::Relaxed);
+        self.inner
+            .checkpoint_stats
+            .last_checkpointed_frames
+            .store(u64::from(progress.checkpointed_frames), Ordering::Relaxed);
+        if matches!(inspection, MaintenanceInspection::BelowThreshold(_)) {
+            self.inner
+                .checkpoint_stats
+                .below_threshold
+                .fetch_add(1, Ordering::Relaxed);
+            Ok(CheckpointMaintenanceOutcome::BelowThreshold {
+                log_frames: progress.log_frames,
+            })
+        } else {
+            self.inner
+                .checkpoint_stats
+                .checkpointed
+                .fetch_add(1, Ordering::Relaxed);
+            Ok(CheckpointMaintenanceOutcome::Checkpointed {
+                log_frames: progress.log_frames,
+                checkpointed_frames: progress.checkpointed_frames,
+            })
+        }
+    }
+
+    fn record_maintenance_failure(&self) {
+        self.inner
+            .checkpoint_stats
+            .failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Rebuild the database through SQLite's dedicated maintenance command.
@@ -784,6 +999,8 @@ impl Database {
     }
 
     async fn configure(&self) -> Result<(), DatabaseError> {
+        #[cfg(feature = "qualification-db-diagnostics")]
+        validate_qualification_checkpoint_overrides()?;
         let config = self.inner.config.clone();
         #[cfg(feature = "qualification-db-diagnostics")]
         let wal_autocheckpoint_override = qualification_wal_autocheckpoint_override()?;
@@ -874,6 +1091,44 @@ fn parse_qualification_wal_autocheckpoint(value: &str) -> Result<u32, DatabaseEr
                     .to_owned(),
         })
     }
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn qualification_checkpoint_soft_frames_override() -> Option<u32> {
+    let value = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES")?;
+    let value = value.to_str().unwrap_or("");
+    parse_qualification_checkpoint_soft_frames(value).ok()
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn parse_qualification_checkpoint_soft_frames(value: &str) -> Result<u32, DatabaseError> {
+    let frames = value.parse::<u32>().map_err(|_| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES must be an integer in 1..=1000"
+            .to_owned(),
+    })?;
+    if (1..=CheckpointMaintenancePolicy::MAX_SOFT_WAL_FRAMES).contains(&frames) {
+        Ok(frames)
+    } else {
+        Err(DatabaseError::Integrity {
+            detail: "EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES must be an integer in 1..=1000"
+                .to_owned(),
+        })
+    }
+}
+
+/// Fail fast at startup when a qualification-only checkpoint override is
+/// present but outside its bounded range. Ordinary builds never consult these
+/// variables.
+#[cfg(feature = "qualification-db-diagnostics")]
+fn validate_qualification_checkpoint_overrides() -> Result<(), DatabaseError> {
+    if let Some(raw) = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES") {
+        let raw = raw.to_str().ok_or_else(|| DatabaseError::Integrity {
+            detail: "EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES must be ASCII digits".to_owned(),
+        })?;
+        parse_qualification_checkpoint_soft_frames(raw)?;
+    }
+    crate::task_supervisor::validate_qualification_checkpoint_interval()?;
+    Ok(())
 }
 
 #[cfg(feature = "qualification-db-diagnostics")]
@@ -1060,6 +1315,53 @@ fn validate_config(config: &DatabaseConfig) -> Result<(), DatabaseError> {
     Ok(())
 }
 
+/// Bounded WAL frame observation shared by the maintenance tick and the
+/// compatibility checkpoint path. Only scalar counters cross this boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WalCheckpointProgress {
+    busy: bool,
+    log_frames: u32,
+    checkpointed_frames: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaintenanceInspection {
+    Deferred,
+    BelowThreshold(WalCheckpointProgress),
+    Checkpointed(WalCheckpointProgress),
+}
+
+/// Observe WAL frame counts through SQLite without performing checkpoint
+/// work. A busy report means another checkpoint owner is active; the caller
+/// treats that as a deferral signal rather than an error.
+fn query_wal_progress(
+    connection: &mut SqliteConnection,
+) -> Result<WalCheckpointProgress, SqliteError> {
+    let (busy, log, checkpointed): (i64, i64, i64) =
+        connection.query_row("PRAGMA wal_checkpoint(NOOP)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+    Ok(WalCheckpointProgress {
+        busy: busy != 0,
+        log_frames: u32::try_from(log.max(0)).unwrap_or(u32::MAX),
+        checkpointed_frames: u32::try_from(checkpointed.max(0)).unwrap_or(u32::MAX),
+    })
+}
+
+fn run_passive_checkpoint(
+    connection: &mut SqliteConnection,
+) -> Result<WalCheckpointProgress, SqliteError> {
+    let (_, log, checkpointed): (i64, i64, i64) =
+        connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+    Ok(WalCheckpointProgress {
+        busy: false,
+        log_frames: u32::try_from(log.max(0)).unwrap_or(u32::MAX),
+        checkpointed_frames: u32::try_from(checkpointed.max(0)).unwrap_or(u32::MAX),
+    })
+}
+
 fn map_sqlite(operation: &str, busy_timeout_ms: u32, source: SqliteError) -> DatabaseError {
     let is_busy = matches!(
         source,
@@ -1109,6 +1411,21 @@ mod qualification_tests {
         }
     }
 
+    #[test]
+    fn checkpoint_soft_frames_override_accepts_only_bounded_values() {
+        assert_eq!(parse_qualification_checkpoint_soft_frames("1").unwrap(), 1);
+        assert_eq!(
+            parse_qualification_checkpoint_soft_frames("1000").unwrap(),
+            1000
+        );
+        for value in ["", "0", "1001", "1.5", "secret", "-4"] {
+            assert!(
+                parse_qualification_checkpoint_soft_frames(value).is_err(),
+                "{value}"
+            );
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn transaction_records_capture_success_and_rollback_phases() {
         let database = Database::open(DatabaseConfig::default())
@@ -1132,5 +1449,196 @@ mod qualification_tests {
         assert!(!snapshot.records[1].success);
         assert_eq!(snapshot.records[1].commit_us, None);
         database.close().await.expect("database closes");
+    }
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn idle_tick_reports_not_due_without_sqlite_work() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        let observed = AtomicU64::new(database.transaction_count());
+        let calls_before = database.stats().calls;
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)
+            .await
+            .expect("idle maintenance succeeds");
+        assert_eq!(outcome, CheckpointMaintenanceOutcome::NotDue);
+        assert_eq!(outcome.as_str(), "not_due");
+        assert_eq!(
+            database.stats().calls,
+            calls_before,
+            "idle tick must not touch SQLite"
+        );
+        database.close().await.expect("database closes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_then_inspect_reports_below_threshold_and_advances_observed() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE maintenance_probe (id INTEGER)")
+            })
+            .await
+            .expect("transaction commits");
+        let observed = AtomicU64::new(0);
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)
+            .await
+            .expect("maintenance succeeds");
+        assert!(
+            matches!(outcome, CheckpointMaintenanceOutcome::BelowThreshold { .. }),
+            "unexpected outcome: {outcome:?}"
+        );
+        assert_eq!(outcome.as_str(), "below_threshold");
+        assert_eq!(observed.load(Ordering::Relaxed), 1);
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)
+            .await
+            .expect("second maintenance succeeds");
+        assert_eq!(outcome, CheckpointMaintenanceOutcome::NotDue);
+        database.close().await.expect("database closes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn busy_gate_defers_without_queueing_or_advancing_observed() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE maintenance_busy (id INTEGER)")
+            })
+            .await
+            .expect("transaction commits");
+        // Hold the single gate through an explicit transaction. The optional
+        // tick must defer instead of queueing behind this holder.
+        let holder = database
+            .begin_transaction()
+            .await
+            .expect("gate holder begins");
+        let observed = AtomicU64::new(0);
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)
+            .await
+            .expect("busy maintenance defers");
+        assert_eq!(outcome, CheckpointMaintenanceOutcome::GateBusy);
+        assert_eq!(outcome.as_str(), "gate_busy");
+        assert_eq!(
+            observed.load(Ordering::Relaxed),
+            0,
+            "deferred tick must not advance the observed watermark"
+        );
+        holder.rollback().await.expect("holder rolls back");
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)
+            .await
+            .expect("maintenance succeeds after release");
+        assert!(
+            matches!(outcome, CheckpointMaintenanceOutcome::BelowThreshold { .. }),
+            "unexpected outcome: {outcome:?}"
+        );
+        database.close().await.expect("database closes");
+    }
+
+    fn unique_temp_path(tag: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "eggpool-checkpoint-maintenance-{tag}-{}-{id}.db",
+            std::process::id()
+        ))
+    }
+
+    fn remove_temp_database(path: &std::path::Path) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut candidate = path.as_os_str().to_owned();
+            candidate.push(suffix);
+            let _ = std::fs::remove_file(std::path::Path::new(&candidate));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn file_database_reports_wal_and_unchanged_autocheckpoint_ceiling() {
+        let path = unique_temp_path("ceiling");
+        let database = Database::open(DatabaseConfig {
+            path: path.to_string_lossy().into_owned(),
+            ..DatabaseConfig::default()
+        })
+        .await
+        .expect("database opens");
+        let journal_mode: String = database
+            .call(|connection| connection.query_row("PRAGMA journal_mode", [], |row| row.get(0)))
+            .await
+            .expect("journal mode reads");
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        let autocheckpoint: i64 = database
+            .call(|connection| {
+                connection.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+            })
+            .await
+            .expect("autocheckpoint reads");
+        assert_eq!(
+            autocheckpoint, 1000,
+            "production automatic checkpoint safety ceiling must remain unchanged"
+        );
+        database
+            .checkpoint()
+            .await
+            .expect("compatibility checkpoint still runs");
+        database.close().await.expect("database closes");
+        remove_temp_database(&path);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn low_soft_threshold_triggers_bounded_passive_checkpoint() {
+        let path = unique_temp_path("trigger");
+        let database = Database::open(DatabaseConfig {
+            path: path.to_string_lossy().into_owned(),
+            ..DatabaseConfig::default()
+        })
+        .await
+        .expect("database opens");
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch(
+                    "CREATE TABLE maintenance_wal (id INTEGER PRIMARY KEY, body TEXT); \
+                     INSERT INTO maintenance_wal (body) VALUES ('alpha'), ('beta'), ('gamma')",
+                )
+            })
+            .await
+            .expect("transaction commits");
+        let observed = AtomicU64::new(0);
+        let policy = CheckpointMaintenancePolicy { soft_wal_frames: 1 };
+        let outcome = database
+            .checkpoint_maintenance(policy, &observed)
+            .await
+            .expect("maintenance succeeds");
+        let (log_frames, checkpointed_frames) = match outcome {
+            CheckpointMaintenanceOutcome::Checkpointed {
+                log_frames,
+                checkpointed_frames,
+            } => (log_frames, checkpointed_frames),
+            CheckpointMaintenanceOutcome::BelowThreshold { log_frames } => {
+                panic!("expected a due threshold with written WAL frames, saw {log_frames}")
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        };
+        assert_eq!(outcome.as_str(), "checkpointed");
+        assert!(
+            checkpointed_frames <= log_frames.max(checkpointed_frames),
+            "frame scalars must stay bounded: {log_frames}/{checkpointed_frames}"
+        );
+        assert_eq!(observed.load(Ordering::Relaxed), 1);
+        database.close().await.expect("database closes");
+        remove_temp_database(&path);
     }
 }

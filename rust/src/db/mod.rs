@@ -15,9 +15,11 @@ pub use connection::{
 };
 #[cfg(feature = "qualification-db-diagnostics")]
 pub use qualification::{
-    QualificationDbSnapshot, QualificationEffectivePragmas, QualificationTransactionRecord,
+    QualificationCheckpointMaintenance, QualificationDbSnapshot, QualificationEffectivePragmas,
+    QualificationTransactionRecord,
 };
 
+pub(crate) use connection::CheckpointMaintenancePolicy;
 pub(crate) use connection::TransactionKind;
 pub use migrations::{Migration, MigrationRunner, MigrationState};
 pub use repositories::{

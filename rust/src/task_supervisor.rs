@@ -31,6 +31,72 @@ const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_TASK_NAME_BYTES: usize = 128;
 const MAX_CALLBACK_KIND_BYTES: usize = 128;
 
+/// Process-owned maintenance checkpoint cadence (persistence M001). The tick
+/// is cheap when idle: it inspects one in-memory transaction counter and only
+/// touches SQLite after durable writes occurred. The unchanged SQLite
+/// automatic checkpoint threshold remains the hard WAL-growth fallback.
+pub(crate) const CHECKPOINT_POLL_INTERVAL_S: f64 = 60.0;
+
+#[cfg(feature = "qualification-db-diagnostics")]
+const QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S: f64 = 1.0;
+#[cfg(feature = "qualification-db-diagnostics")]
+const QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S: f64 = 3600.0;
+
+/// Qualification-only checkpoint cadence override (persistence M001 tuning
+/// matrix). Ordinary builds always use [`CHECKPOINT_POLL_INTERVAL_S`].
+pub(crate) fn effective_checkpoint_interval_s() -> f64 {
+    #[cfg(feature = "qualification-db-diagnostics")]
+    if let Some(interval) = qualification_checkpoint_interval_override() {
+        return interval;
+    }
+    CHECKPOINT_POLL_INTERVAL_S
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn qualification_checkpoint_interval_override() -> Option<f64> {
+    let value = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S")?;
+    parse_qualification_checkpoint_interval(value.to_str().unwrap_or("")).ok()
+}
+
+#[cfg(feature = "qualification-db-diagnostics")]
+fn parse_qualification_checkpoint_interval(value: &str) -> Result<f64, TaskSpecError> {
+    let interval: f64 = value.parse().map_err(|_| TaskSpecError::InvalidInterval {
+        name: "checkpoint".to_owned(),
+    })?;
+    if interval.is_finite()
+        && interval >= QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S
+        && interval <= QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S
+    {
+        Ok(interval)
+    } else {
+        Err(TaskSpecError::InvalidInterval {
+            name: "checkpoint".to_owned(),
+        })
+    }
+}
+
+/// Fail fast at startup when the qualification-only checkpoint cadence is
+/// present but outside its bounded range. Called from database startup so an
+/// invalid qualification environment cannot silently run with defaults.
+#[cfg(feature = "qualification-db-diagnostics")]
+pub(crate) fn validate_qualification_checkpoint_interval() -> Result<(), crate::db::DatabaseError> {
+    if let Some(raw) = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S") {
+        let raw = raw
+            .to_str()
+            .ok_or_else(|| crate::db::DatabaseError::Integrity {
+                detail: "EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S must be ASCII digits"
+                    .to_owned(),
+            })?;
+        parse_qualification_checkpoint_interval(raw).map_err(|_| {
+            crate::db::DatabaseError::Integrity {
+                detail: "EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S must be a number of seconds in 1..=3600"
+                    .to_owned(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
 /// The canonical task names frozen by R001.
 pub const RUNTIME_TASK_NAMES: [&str; 6] = [
     "catalog_refresh",
@@ -179,7 +245,7 @@ pub fn runtime_task_inventory() -> Vec<RuntimeTaskSpec> {
         ),
         spec(
             "checkpoint",
-            14_400.0,
+            effective_checkpoint_interval_s(),
             None,
             true,
             TaskOwnership::Process,
@@ -367,16 +433,38 @@ impl TaskCallbackRegistry {
 
     /// The only business callback available in R006.  R008 supplies the
     /// generation-leased maintenance callbacks and M9 supplies update/backup.
+    ///
+    /// Persistence M001: the checkpoint tick is opportunistic maintenance on
+    /// the existing worker. It skips cheaply when no durable transaction
+    /// completed since the previous tick and defers (rather than queueing)
+    /// when the single database gate is already owned by foreground work.
+    /// Only scalar outcome categories are retained; database detail never
+    /// enters task diagnostics.
     pub fn with_checkpoint(database: Database) -> Self {
+        let observed = Arc::new(AtomicU64::new(database.transaction_count()));
+        let policy = crate::db::CheckpointMaintenancePolicy::effective();
         Self::new().with_callback(
             "checkpoint",
             task_callback(move |_| {
                 let database = database.clone();
+                let observed = Arc::clone(&observed);
                 async move {
-                    database
-                        .checkpoint()
-                        .await
-                        .map_err(|_| TaskCallbackError::Failed)
+                    match database.checkpoint_maintenance(policy, &observed).await {
+                        Ok(outcome) => {
+                            tracing::debug!(
+                                outcome = outcome.as_str(),
+                                "checkpoint maintenance tick completed"
+                            );
+                            Ok(())
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                error = %error,
+                                "checkpoint maintenance tick failed"
+                            );
+                            Err(TaskCallbackError::Failed)
+                        }
+                    }
                 }
             }),
         )
@@ -1387,4 +1475,40 @@ fn cancel_task(task: &TaskState) {
 
 fn valid_seconds(value: f64) -> bool {
     value.is_finite() && value <= Duration::MAX.as_secs_f64()
+}
+
+#[cfg(all(test, feature = "qualification-db-diagnostics"))]
+mod qualification_checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_interval_override_accepts_only_bounded_seconds() {
+        assert_eq!(parse_qualification_checkpoint_interval("1").unwrap(), 1.0);
+        assert_eq!(
+            parse_qualification_checkpoint_interval("3600").unwrap(),
+            3600.0
+        );
+        for value in ["", "0", "0.5", "3600.5", "-4", "infinite", "secret"] {
+            assert!(
+                parse_qualification_checkpoint_interval(value).is_err(),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_inventory_uses_process_maintenance_cadence() {
+        let specs: std::collections::BTreeMap<_, _> = runtime_task_inventory()
+            .into_iter()
+            .map(|spec| (spec.name.clone(), spec))
+            .collect();
+        let checkpoint = specs.get("checkpoint").expect("checkpoint task exists");
+        assert_eq!(checkpoint.ownership, TaskOwnership::Process);
+        assert!(checkpoint.run_immediately);
+        assert!(
+            checkpoint.interval_s > 0.0 && checkpoint.interval_s <= 3600.0,
+            "checkpoint cadence must stay bounded: {}",
+            checkpoint.interval_s
+        );
+    }
 }

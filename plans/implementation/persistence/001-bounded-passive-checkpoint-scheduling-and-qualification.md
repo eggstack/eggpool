@@ -1,6 +1,6 @@
 # Persistence Milestone 001 — Bounded Passive Checkpoint Scheduling and Target Qualification
 
-Status: ready
+Status: active
 
 Repository baseline: 4060c5a90f2c2c84d91273e489a922febf2af42c
 

@@ -15,10 +15,12 @@ defaults and `runtime_task_specs_for_config()` applies config gates.
 
 ## Task classes
 
-Process-owned tasks cover periodic SQLite WAL checkpointing (`checkpoint`),
+Process-owned tasks cover opportunistic SQLite WAL checkpointing
+(`checkpoint`, every 60 seconds; the tick skips cheaply when no durable
+transaction completed since the previous tick and defers rather than
+queueing when the single database gate is busy, per persistence M001),
 metrics flushing (`metrics_flush` via `operations/metrics.rs::
-MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),
-optional update checking (`update_checker` via
+MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
 `operations/update.rs::UpdateCheckerState` + `register_update_checker`),
 and optional automatic backups (`automatic_backup`, gated by
 `[backup].enabled`/`interval_s`/`startup_delay_s`). Generation-leased tasks cover catalog

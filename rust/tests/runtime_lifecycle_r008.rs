@@ -115,6 +115,42 @@ async fn maintenance_capabilities_are_registered_or_explicitly_deferred() {
 }
 
 #[tokio::test]
+async fn checkpoint_task_is_single_process_owned_maintenance_loop() {
+    let inventory = eggpool::task_supervisor::runtime_task_inventory();
+    let checkpoints = inventory
+        .iter()
+        .filter(|spec| spec.name == "checkpoint")
+        .collect::<Vec<_>>();
+    assert_eq!(checkpoints.len(), 1, "exactly one checkpoint task exists");
+    let checkpoint = checkpoints[0];
+    assert_eq!(
+        checkpoint.ownership,
+        eggpool::task_supervisor::TaskOwnership::Process
+    );
+    assert!(checkpoint.run_immediately);
+    assert!(
+        checkpoint.interval_s > 0.0 && checkpoint.interval_s <= 3600.0,
+        "checkpoint cadence must stay bounded: {}",
+        checkpoint.interval_s
+    );
+    assert_eq!(checkpoint.callback_kind, "checkpoint");
+
+    let database = database().await;
+    let process = ProcessRuntime::new(database.clone());
+    let capabilities = process.task_capability_inventory();
+    let checkpoint_capability = capabilities
+        .iter()
+        .find(|capability| capability.name == "checkpoint")
+        .expect("checkpoint capability exists");
+    assert!(checkpoint_capability.registered);
+    assert_eq!(
+        checkpoint_capability.ownership,
+        eggpool::task_supervisor::TaskOwnership::Process
+    );
+    database.close().await.expect("database close");
+}
+
+#[tokio::test]
 async fn retention_cleanup_is_bounded_and_preserves_pending_requests() {
     let database = database().await;
     database

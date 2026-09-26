@@ -86,3 +86,42 @@ worker unless separately evidenced, bound WAL growth across
 restart/reload/backup/restore/recovery, keep qualification diagnostics out of
 ordinary release builds, and arrive with the focused loopback evidence required
 by Plan 240 before a default change is considered.
+
+## Bounded passive checkpoint scheduling (persistence M001)
+
+The accepted M001 candidate keeps every Plan 240 invariant and makes the
+existing process-owned `checkpoint` task opportunistic instead of periodic-
+unconditional. `Database::checkpoint_maintenance` (in
+`rust/src/db/connection.rs`) runs on the same gate/worker with a
+crate-private `CheckpointMaintenancePolicy` (soft WAL-frame threshold, default
+256) and returns a bounded `CheckpointMaintenanceOutcome`
+(`not_due`/`gate_busy`/`below_threshold`/`checkpointed` plus scalar frame
+counts):
+
+- the tick first compares the in-memory durable-transaction counter against
+  its last observed watermark, so an idle process performs no SQLite work;
+- optional work uses `try_acquire` on the existing gate and defers when the
+  gate is already owned instead of queueing behind foreground work;
+- once the gate is owned, WAL frames are observed through SQLite itself
+  (`PRAGMA wal_checkpoint(NOOP)`, no checkpoint work) and
+  `PRAGMA wal_checkpoint(PASSIVE)` runs only when the soft threshold is due;
+- the production `wal_autocheckpoint` safety ceiling (1000 pages) is
+  unchanged and remains the hard fallback under bursts or repeated deferrals;
+- no checkpoint work runs inside coordinator publication/finalization code,
+  and no public config/CLI/HTTP/Rust surface is added.
+
+The task polls every 60 seconds (`CHECKPOINT_POLL_INTERVAL_S` in
+`rust/src/task_supervisor.rs`; wakeups are atomic-counter checks when idle).
+Feature-only qualification overrides
+(`EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S` in 1..=3600 seconds,
+`EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES` in 1..=1000 frames) follow the
+Plan 239 rules: validated at database startup, absent from ordinary builds,
+and recorded in the sanitized artifact. Maintenance counters and the
+effective soft threshold ride the existing authenticated
+`database_qualification.checkpoint_maintenance` projection; ordinary runtime
+JSON is unchanged. `scripts/qualification_sbc.py
+--diagnose-checkpoint-maintenance` (requires `--diagnose-publication-phases`)
+records baseline/final projections with bounded tick deltas and exempts
+checkpoint ticks from the Plan 239 contamination rule, since the maintenance
+tick is the measured subject and per-record gate-wait phases already capture
+any foreground wait behind PASSIVE work.

@@ -31,6 +31,7 @@ from scripts.qualification_sbc import (
     LoopbackProvider,
     QualificationError,
     _benchmark_sample_count,
+    _checkpoint_maintenance_deltas,
     _combine_diagnostic_sample,
     _correlate_transaction_phases,
     _diagnose_sample_count,
@@ -39,6 +40,9 @@ from scripts.qualification_sbc import (
     _ns_to_ms,
     _percentile,
     _publication_storage_sample_count,
+    _qualification_checkpoint_interval_s,
+    _qualification_checkpoint_maintenance,
+    _qualification_checkpoint_soft_frames,
     _qualification_database_snapshot,
     _qualification_records_after,
     _qualification_wal_autocheckpoint_pages,
@@ -584,6 +588,109 @@ def test_239_phase_mode_is_bounded_and_feature_only(tmp_path: Path) -> None:
             binary=Path("/not/a/candidate"),
             diagnostic_database_dir=tmp_path,
         )
+
+
+def _maintenance_runtime(
+    maintenance: dict[str, object] | None,
+) -> dict[str, object]:
+    snapshot: dict[str, object] = {
+        "schema_version": "sqlite-db-phase.v1",
+        "collector_capacity": 256,
+        "effective": {
+            "journal_mode": "wal",
+            "synchronous": "NORMAL",
+            "page_size": 4096,
+            "wal_autocheckpoint_pages": 1000,
+        },
+        "latest_record_seq": 4,
+        "records": [],
+    }
+    if maintenance is not None:
+        snapshot["checkpoint_maintenance"] = maintenance
+    return {"database_qualification": snapshot}
+
+
+def _maintenance_projection(
+    soft: int = 256,
+    not_due: int = 0,
+    gate_busy: int = 0,
+    below: int = 0,
+    checkpointed: int = 0,
+    failures: int = 0,
+    log_frames: int = 0,
+    checkpointed_frames: int = 0,
+) -> dict[str, object]:
+    return {
+        "soft_threshold_frames": soft,
+        "not_due": not_due,
+        "gate_busy": gate_busy,
+        "below_threshold": below,
+        "checkpointed": checkpointed,
+        "failures": failures,
+        "last_log_frames": log_frames,
+        "last_checkpointed_frames": checkpointed_frames,
+    }
+
+
+def test_m001_checkpoint_tuning_bounds_and_maintenance_projection() -> None:
+    assert _qualification_checkpoint_interval_s("1") == 1.0
+    assert _qualification_checkpoint_interval_s("3600") == 3600.0
+    for invalid in ("0", "0.5", "3600.5", "-4", "secret"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _qualification_checkpoint_interval_s(invalid)
+    assert _qualification_checkpoint_soft_frames("1") == 1
+    assert _qualification_checkpoint_soft_frames("1000") == 1000
+    for invalid in ("0", "1001", "1.5", "secret"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _qualification_checkpoint_soft_frames(invalid)
+    with pytest.raises(ValueError, match="phase diagnostics"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            qualification_checkpoint_interval_s=5.0,
+        )
+    with pytest.raises(ValueError, match="phase diagnostics"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            qualification_checkpoint_soft_frames=128,
+        )
+    with pytest.raises(ValueError, match="phase diagnostics"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            diagnose_checkpoint_maintenance=True,
+        )
+    # Older builds omit the additive projection; historical artifacts parse.
+    assert _qualification_checkpoint_maintenance(_maintenance_runtime(None)) is None
+    parsed = _qualification_checkpoint_maintenance(
+        _maintenance_runtime(_maintenance_projection(soft=128, below=3))
+    )
+    assert parsed is not None
+    assert parsed["soft_threshold_frames"] == 128
+    assert parsed["below_threshold"] == 3
+    broken = _maintenance_projection()
+    broken["failures"] = -1
+    with pytest.raises(QualificationError, match="not scalar"):
+        _qualification_checkpoint_maintenance(_maintenance_runtime(broken))
+    unbounded = _maintenance_projection(soft=5000)
+    with pytest.raises(QualificationError, match="soft threshold"):
+        _qualification_checkpoint_maintenance(_maintenance_runtime(unbounded))
+    baseline = _maintenance_projection(soft=128, below=3, gate_busy=1)
+    final = _maintenance_projection(
+        soft=128,
+        below=5,
+        gate_busy=1,
+        checkpointed=2,
+        log_frames=300,
+        checkpointed_frames=290,
+    )
+    deltas = _checkpoint_maintenance_deltas(baseline, final)
+    assert deltas is not None
+    assert deltas["below_threshold_delta"] == 2
+    assert deltas["checkpointed_delta"] == 2
+    assert deltas["gate_busy_delta"] == 0
+    assert deltas["last_log_frames"] == 300
+    assert deltas["last_checkpointed_frames"] == 290
+    assert _checkpoint_maintenance_deltas(None, final) is None
+    assert "sql" not in json.dumps(deltas).lower()
 
 
 def test_239_phase_records_correlate_exactly_and_remain_scalar_only() -> None:

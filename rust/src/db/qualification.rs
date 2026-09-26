@@ -42,6 +42,21 @@ pub struct QualificationDbSnapshot {
     pub effective: QualificationEffectivePragmas,
     pub latest_record_seq: u64,
     pub records: Vec<QualificationTransactionRecord>,
+    pub checkpoint_maintenance: QualificationCheckpointMaintenance,
+}
+
+/// Bounded, scalar-only maintenance checkpoint evidence (persistence M001).
+/// No SQL text, path, or request detail ever crosses this boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QualificationCheckpointMaintenance {
+    pub soft_threshold_frames: u32,
+    pub not_due: u64,
+    pub gate_busy: u64,
+    pub below_threshold: u64,
+    pub checkpointed: u64,
+    pub failures: u64,
+    pub last_log_frames: u64,
+    pub last_checkpointed_frames: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -123,6 +138,16 @@ impl QualificationCollector {
                 .expect("qualification pragmas captured during database configure"),
             latest_record_seq: state.next_record_seq,
             records: state.records.iter().cloned().collect(),
+            checkpoint_maintenance: QualificationCheckpointMaintenance {
+                soft_threshold_frames: 0,
+                not_due: 0,
+                gate_busy: 0,
+                below_threshold: 0,
+                checkpointed: 0,
+                failures: 0,
+                last_log_frames: 0,
+                last_checkpointed_frames: 0,
+            },
         }
     }
 }
