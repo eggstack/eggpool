@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 002 — Wire-Kernel Extraction Seam and Contract Freeze
 
-Status: active
+Status: closed
 
 Repository baseline: `61470ef788e287c49b4a51062eaba439049d46dc`
 
