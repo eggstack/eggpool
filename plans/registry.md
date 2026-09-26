@@ -39,17 +39,21 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M002 ready — wire-kernel extraction seam and contract freeze | M001 closed; no external hard dependency. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Request admission and wire | M002 wire-kernel extraction seam and contract freeze | ready | `plans/implementation/request-admission-wire/002-wire-kernel-extraction-seam-and-contract-freeze.md` | Freeze compatibility and remove runtime/config/catalog/request couplings before any source move. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
+| Request admission and wire | M003 sans-I/O wire-kernel extraction and EggPool cutover | Hard dependency: M002 closure. |
+| Request admission and wire | M004 fidelity, provenance, and conformance hardening | Hard dependency: M003 closure. |
 
 ## Recently closed
 
@@ -70,5 +74,8 @@ M002 and did not change its upstream API blocker.
 Provider-transport M002 remains blocked on an upstream Eggfetch typed
 classification interface and is not promoted to an implementation plan.
 Request-admission-wire M001 is closed after consuming the stable
-server-transport interface; it did not reopen that milestone or promote any
-blocked work. Provider M002 remains blocked on upstream Eggfetch API work.
+server-transport interface. Explicit user direction reopened that subsystem for
+the wire-kernel extraction sequence: M002 is dependency-ready; M003 remains
+blocked on M002 closure; M004 remains blocked on M003 closure. No provider-
+transport blocked work is promoted; Provider M002 remains blocked on upstream
+Eggfetch API work.

@@ -1,6 +1,6 @@
 # Request Admission and Wire Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -234,10 +234,170 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 ## 11. Completion definition
 
-This roadmap is closed by M001's closure record proving bounded aggregate raw-body admission, early oversize rejection, cancellation/reload correctness, listener recovery, the five-minute downstream body deadline, and semantic/compatibility non-regression with no medium-or-higher unresolved finding.
+M001 is closed on its recorded body-admission evidence. The roadmap was reopened by explicit user direction for the wire-kernel extraction sequence below. It closes again only after M002–M004 have closure records proving that EggPool still owns the same admission/runtime boundaries, consumes one canonical codec implementation, preserves every existing public wire capability, and carries no unresolved medium-or-higher compatibility finding.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — inference body resource admission hardening | closed | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | `plans/closure/request-admission-wire/001-status.md` | none |
+| 002 — wire-kernel extraction seam and contract freeze | ready | `plans/implementation/request-admission-wire/002-wire-kernel-extraction-seam-and-contract-freeze.md` | — | none |
+| 003 — sans-I/O wire-kernel extraction and EggPool cutover | blocked | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | — | hard dependency: M002 closure |
+| 004 — fidelity, provenance, and conformance hardening | blocked | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | — | hard dependency: M003 closure |
+
+
+## 13. Wire-kernel extraction extension
+
+The M001 sections above remain the closed record for body admission. This
+extension governs M002–M004 and does not reopen M001 implementation.
+
+### Current extraction evidence
+
+At baseline `61470ef788e287c49b4a51062eaba439049d46dc`, the reusable protocol machinery is concentrated in
+`rust/src/wire/`, but the files are not yet a clean crate boundary:
+
+- `wire/ir.rs` is mostly provider-neutral, but
+  `ReasoningIntent::to_thinking_requirement` reaches into EggPool routing.
+- `wire/adaptation.rs` owns the useful bounded loss vocabulary
+  (`AdaptationNotice`, `LossPolicy`, exact/adapted/rejected behavior), but
+  currently imports EggPool catalog capability types and
+  `request::NativeRequestPreservation`.
+- `wire/codecs.rs` and `wire/additional_codecs.rs` own OpenAI Chat,
+  OpenAI Responses, Anthropic Messages, Gemini Interactions, and Gemini
+  generateContent finite codecs, but client decoding calls back into
+  `request::admission` and its EggPool-specific policy/limit helpers.
+- `wire/registry.rs` mixes neutral codec/profile vocabulary with EggPool
+  `Config` conversion.
+- `wire/stream.rs` already has the desired sans-I/O incremental SSE decoder,
+  terminal-evidence model, translated stream events, and native observation
+  machinery with no transport ownership.
+- `wire/runtime.rs` is intentionally *not* extraction material: it joins
+  request admission, routing facts, selected profiles, body encoding,
+  compaction, and EggPool coordinator/runtime policy.
+
+The existing regression surface is substantial and must be treated as the
+compatibility contract: `rust/tests/wire_adaptation.rs`,
+`wire_codecs.rs`, `wire_multimodal.rs`, `wire_profiles.rs`,
+`wire_qualification.rs`, `wire_runtime.rs`, `wire_stream.rs`,
+`canonical_request.rs`, `codex_responses_compat.rs`,
+`codex_compaction_compat.rs`, and the wire fixtures under
+`tests/fixtures/wire/`.
+
+### Target ownership after extraction
+
+```text
+EggPool request/server/coordinator/runtime policy
+  - body/resource admission
+  - stateless Responses product policy
+  - token/context estimates
+  - routing/catalog/config adapters
+  - profile selection and compaction execution
+  - provider transport and finalization
+                |
+                v
+sans-I/O wire kernel
+  - canonical request/response/event IR
+  - presence and reasoning/tool/media semantics
+  - bounded native provenance vocabulary
+  - loss/adaptation policy and preflight fidelity
+  - finite codecs
+  - SSE framing/decoding/encoding and terminal evidence
+  - neutral codec/profile identifiers
+                |
+                v
+OpenAI Chat / OpenAI Responses / Anthropic Messages /
+Gemini Interactions / Gemini generateContent
+```
+
+EggPool MUST remain the first and continuously qualified consumer. Extraction
+must not introduce a second implementation, translated-payload chaining, an
+HTTP/runtime dependency in the kernel, or an externally published artifact as
+a prerequisite for EggPool builds.
+
+### Milestone 002 — Wire-kernel extraction seam and contract freeze
+
+Class: invariant
+
+Objective: remove EggPool-only dependencies from the extractable protocol
+modules and freeze current finite/streaming behavior before moving source
+files. The milestone makes the boundary movable; it does not create a second
+codec implementation or change public wire behavior.
+
+Key exit conditions:
+
+- protocol parsing is separated from EggPool's body/resource admission,
+  stateless Responses policy, token estimates, routing conversion, and config
+  conversion;
+- neutral capability/provenance inputs replace imports from EggPool catalog
+  and request types, with exact adapters at the EggPool boundary;
+- all current numeric/media/depth semantics used by EggPool remain identical;
+- a deterministic extraction contract corpus covers exact/adapted/rejected
+  outcomes, same-surface preservation, usage, tools, multimodal blocks,
+  reasoning, null-vs-missing presence, and stream terminal evidence;
+- an enforceable dependency guard proves extractable modules do not import
+  routing, catalog, config, request-runtime, provider, database, server, Tokio,
+  Axum, Hyper, or transport state;
+- all existing wire/Codex/request integration tests remain green.
+
+### Milestone 003 — Sans-I/O wire-kernel extraction and EggPool cutover
+
+Class: infrastructure
+
+Objective: create one internal workspace crate containing the neutral wire
+kernel and cut EggPool over to it without changing any client/provider behavior.
+
+Hard dependency: M002 closed.
+
+Key exit conditions:
+
+- the workspace crate is `publish = false` during cutover and has no HTTP
+  client/server, async runtime, credentials, retry, routing, SQLite, or config
+  ownership;
+- EggPool root modules become adapters/re-exports around the crate rather than
+  carrying forked codec copies;
+- `wire/runtime.rs`, request admission/resource budgeting, routing/catalog
+  capability ownership, config projection, compaction execution, and provider
+  transport remain in EggPool;
+- OpenAI Chat, Responses, Messages, Gemini Interactions, and Gemini
+  generateContent finite and streaming compatibility remain unchanged;
+- native Responses request preservation and native stream
+  observe-and-forward behavior remain native paths and are never forced
+  through a lossy canonical re-encode;
+- default and `--no-default-features` workspace qualification, dependency
+  audit, and feature/dependency graph evidence close with no capability loss.
+
+### Milestone 004 — Fidelity, provenance, and conformance hardening
+
+Class: infrastructure
+
+Objective: after the internal cutover is proven, turn the extracted kernel's
+existing loss-aware behavior into a reusable, auditable API without changing
+EggPool's externally observable decisions.
+
+Hard dependency: M003 closed.
+
+The public-kernel direction is deliberately narrower than another generic LLM
+SDK. Current Rust alternatives already provide canonical provider models and
+translation; the useful differentiation is explicit translation fidelity,
+bounded source-native provenance, strict terminal evidence, and reusable
+conformance vectors.
+
+Key exit conditions:
+
+- a pure preflight translation-plan API reports whether a conversion is exact,
+  wire-normalized/semantically equivalent, lossy, or unsupported before
+  encoding and uses the same decision engine as actual conversion;
+- adaptation effects are typed and redaction-safe; existing EggPool notice
+  codes and `LossPolicy::Warn/Reject` behavior either remain stable or have a
+  proven compatibility mapping;
+- source-native provenance is a separate bounded object from semantic IR, so
+  same-surface restoration does not pollute the canonical model with arbitrary
+  provider fields;
+- provenance never fabricates provider-owned signatures, encrypted reasoning,
+  IDs, or terminal events and has explicit completeness/truncation state;
+- deterministic cross-surface and arbitrary-chunk-boundary stream conformance
+  vectors live with the kernel and are also exercised by EggPool integration
+  tests;
+- no crates.io publication or repository split is required to close M004.
+  External publication is a later release decision after the internal
+  consumer has remained qualified.
