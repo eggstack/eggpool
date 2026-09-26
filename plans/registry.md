@@ -39,12 +39,14 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M001 ready — Eggfetch adapter contract hardening | no hard blocker; preserves closed Plans 215–220/241 transport ownership |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M001 ready — inference body resource admission hardening | Server transport M001 closed; generation-owned body limit + coordinator Bytes boundary stable. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider transport | M001 Eggfetch adapter contract hardening | ready | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | Preserve DATA-only callers/wire behavior; retain trailers as transport metadata; remove residual Eggfetch pool message parsing only if exact 0.2.0 typed-source audit supports the fail-closed mapping. |
+| Request admission and wire | M001 inference body resource admission hardening | ready | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | No hard blocker; preserve live generation limit, EggServe 1 GiB outer ceiling, and public request/wire contracts. |
 
 ## Blocked work
 
@@ -65,4 +67,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 Provider-transport M001 has no hard blocker and is ready for handoff.
 Provider-transport M002 remains blocked on an upstream Eggfetch typed
 classification interface and is not promoted to an implementation plan.
-No other registered blocked work is affected by this registration.
+Request-admission-wire M001 is independently ready after the EggServe review
+identified an application-side raw-body resource-admission gap; it consumes the
+closed server-transport interface and does not reopen that milestone. No blocked
+work is promoted by this registration.

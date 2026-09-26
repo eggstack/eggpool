@@ -1,0 +1,241 @@
+# Request Admission and Wire Roadmap
+
+Status: active
+
+Long-term references:
+
+- `plans/000-long-term-specification.md` — bounded generation-owned request admission, thin HTTP adapters, and secret-free resource handling.
+- `plans/001-terminology-and-domain-model.md` — generation, lease, admission, and request-lifecycle ownership.
+- `plans/002-long-term-roadmap.md#phase-1--transport-and-admission-hardening-sustaining` — sustaining transport/admission hardening without changing public wire capability.
+- `plans/003-planning-process.md` — dependency, handoff, and closure rules.
+
+Related ADRs:
+
+- None required for Milestone 001. The milestone preserves the existing durable ownership decision: EggServe owns downstream H1 transport, while EggPool owns generation-specific application admission. It adds no public configuration key, protocol, storage schema, or reload/restart boundary.
+
+## 1. Purpose and ownership boundary
+
+This subsystem owns the bounded client-request admission path between EggPool's HTTP adapter and its canonical request/wire machinery. The current authority spans `rust/src/server/middleware.rs`, `rust/src/request/`, and the single production endpoint boundary in `rust/src/coordinator/endpoints.rs`.
+
+It consumes:
+
+- EggServe for downstream HTTP/1 parsing, request-body streaming, transport deadlines, framing, and connection lifecycle;
+- `RuntimeManager` / `GenerationLease` for the live generation and that generation's `server.max_request_body_bytes`;
+- Axum only as the HTTP adapter that carries the bounded body into the coordinator;
+- request admission and wire code for one bounded parse, semantic validation, native preservation, and provider adaptation.
+
+It must not own provider retries/finalization, account/model routing, provider transport, EggServe connection implementation, SQLite lifecycle, or public model/wire semantics.
+
+The body-size limit remains generation-owned. Process-local raw-body memory admission is a defense-in-depth resource invariant above that semantic limit, not a replacement configuration authority.
+
+## 2. Work classification
+
+### Invariants
+
+- Every inference route acquires one generation lease before application body admission and uses that generation's live `server.max_request_body_bytes`.
+- A request whose declared or observed body exceeds the live generation limit is rejected before coordinator execution.
+- Concurrent buffered inference request bodies have an explicit process-local aggregate raw-byte bound; the 1024 EggServe request concurrency ceiling is not allowed to multiply the per-request body ceiling without a second bound.
+- Resource reservations are RAII-owned and released on success, rejection, cancellation, disconnect, panic unwinding, and endpoint completion; no permit/resource leak survives a dropped request future.
+- Native request preservation, one-parse admission, compact admission, and finite/streaming routing semantics remain unchanged.
+- Credentials, prompts, raw bodies, and request content never enter diagnostics, persistence, or resource-admission evidence.
+- The 1 GiB EggServe transport/Tower hard ceiling remains unchanged and above the generation-owned live application limit.
+
+### Capabilities
+
+- Existing Chat Completions, Messages, Responses, and Responses Compact request handling.
+- Existing live reload of `server.max_request_body_bytes`.
+- Existing finite and streaming inference behavior and OpenAI/Codex compatibility.
+
+Milestone 001 adds no new user-visible inference capability.
+
+### Infrastructure
+
+- A process-local weighted raw-body reservation primitive used by the inference admission middleware.
+- Early `Content-Length` preflight against the generation-owned live limit.
+- Bounded reservation for bodies without a trustworthy known length.
+- A downstream request-body read deadline appropriate to LAN/local proxy operation rather than model-inference duration.
+- Focused real-socket contention, cancellation, and recovery guards.
+
+### Polish
+
+- Clear architecture documentation separating transport ceiling, live per-request limit, aggregate raw-body memory admission, and downstream upload deadline.
+- Stable, secret-free test evidence for the resource bound.
+
+## 3. Non-goals
+
+- No change to EggServe ownership, crate selection, feature flags, static serving, parser implementation, or the completed server-transport M001 integration.
+- No new public `server.*` configuration key in Milestone 001.
+- No reduction of the existing maximum accepted `server.max_request_body_bytes` value (1 GiB).
+- No streaming JSON parser, tempfile/spool-to-disk request path, mmap body store, or provider-body streaming redesign.
+- No change to canonical IR, request semantics, model selection, retry policy, provider timeout policy, or response streaming.
+- No global worker pool, new Tokio runtime, broad queue, or general-purpose memory allocator/accounting framework.
+- No exact RSS claim: the aggregate guard bounds retained raw request bytes, not allocator/serde tree overhead.
+- No physical-SBC performance campaign unless correctness evidence exposes a target-class regression that cannot be characterized on loopback.
+
+## 4. Current state
+
+At repository baseline `04f447a4fa459385fddd58ac2cd58f29320725b5`:
+
+- `rust/src/server/middleware.rs::admit_inference_body` acquires the active generation lease, reads that generation's `server.max_request_body_bytes`, then uses `Limited::new(body, limit).collect().await`. The body is therefore bounded per request but fully materialized as `Bytes` before the handler.
+- The default live limit is 10 MiB and validation permits values up to 1 GiB. The field remains live-reloadable through `rust/src/config_reload_policy.rs`.
+- `rust/src/server/mod.rs::eggserve_runtime_config` independently retains a 1 GiB transport/Tower ceiling and allows up to 1024 connections / 1024 in-flight service calls.
+- There is no aggregate application body-buffer budget. The theoretical raw-body exposure can therefore scale with concurrent request count rather than with one explicit process resource bound.
+- Known oversized `Content-Length` requests currently cross into body collection before the application limit rejects them; the middleware does not preflight the declared length.
+- EggServe's production `body_read_timeout` is currently 24 hours, intentionally paired historically with the long handler budget. Upstream defines this timeout as a downstream request-body read deadline, so it is not provider/model execution policy and does not need the 24-hour value.
+- `rust/src/coordinator/endpoints.rs` parses the already bounded `Bytes` once and preserves that backing allocation for native dispatch when possible. Public `FiniteRequest` and `StreamRequest` compatibility shapes must not be changed merely to carry a server resource token.
+- Server transport M001 is closed on EggServe 0.4.0 with real-socket framing/body-limit/shutdown coverage. This roadmap consumes that stable interface; it does not reopen it.
+
+## 5. Target architecture
+
+```text
+EggServe H1 transport
+  hard body ceiling = 1 GiB
+  downstream body-read deadline = bounded upload window
+        |
+        v
+Axum auth
+        |
+        v
+acquire GenerationLease
+        |
+        +--> live_limit = generation.config.server.max_request_body_bytes
+        |
+        +--> Content-Length known and > live_limit
+        |       -> 413 before body collection
+        |
+        +--> raw-body budget reservation
+        |       known length -> reserve declared bytes
+        |       unknown/chunked -> reserve live_limit
+        |       process effective ceiling -> max(64 MiB, live_limit)
+        |       unavailable -> bounded overload rejection; never spin
+        |
+        v
+Limited(body, live_limit).collect()
+        |
+        v
+handler retains reservation through endpoint execution / stream handoff
+        |
+        v
+coordinator one-parse admission -> routing/provider execution
+        |
+        v
+reservation Drop -> process raw-body budget released
+```
+
+The aggregate budget is intentionally process-local and internal. A live increase of the generation limit may raise the effective raw-body ceiling enough to admit one request at that configured size; a live decrease does not revoke already-admitted requests, and new requests fail closed until existing reservations fall beneath the new effective ceiling.
+
+The initial internal floor is 64 MiB. Thus the default 10 MiB live limit permits a bounded small number of full-size/unknown-length bodies while ordinary known small requests reserve only their declared size. When an operator deliberately raises the per-request limit above 64 MiB, the effective aggregate ceiling becomes that live limit rather than silently making the configured maximum impossible.
+
+## 6. Dependency graph
+
+```text
+Server transport M001 — EggServe 0.4.0 direct Tower runtime (closed)
+        |
+        | interface: stable streaming body + timeout + abandoned-body behavior
+        v
+Request-admission-wire M001 — body resource admission hardening
+        |
+        +-- hard: existing generation-owned live body limit (satisfied)
+        +-- interface: coordinator one-parse Bytes boundary (stable)
+        `-- soft: future broader request/wire milestones
+```
+
+Milestone 001 has no unresolved hard dependency and is ready for handoff.
+
+## 7. Milestones
+
+### Milestone 001 — Inference body resource admission hardening
+
+Class: invariant
+
+Objective: bound concurrent retained raw inference request bytes independently of EggServe request concurrency, reject declared oversize bodies before collection, and replace the 24-hour downstream upload deadline with a bounded LAN-appropriate value while preserving existing application/wire semantics.
+
+Dependencies:
+
+- Server transport M001: interface, closed/stable.
+- Existing generation lease and live body-limit contract: hard, satisfied.
+- Coordinator one-parse request boundary: interface, stable.
+
+Deliverable boundary:
+
+- one narrow process-local body-budget primitive with RAII reservations and no new dependency;
+- middleware preflight/reservation integration for all four inference routes;
+- explicit overload/cancellation/recovery semantics;
+- production downstream body-read timeout reduced to five minutes while the 24-hour handler budget remains untouched;
+- focused unit/real-socket tests for known-length, chunked/unknown, contention, cancellation, live-limit changes, and recovery;
+- architecture/current-authority documentation.
+
+User or operator value: large or slow client uploads cannot multiply into unbounded raw-body memory pressure simply because the transport admits many concurrent requests; oversized declared requests are rejected without needlessly receiving their body; slow uploads release transport/application resources on a bounded timescale.
+
+Exit conditions:
+
+- all four inference routes share the hardened middleware path;
+- default effective aggregate raw-body ceiling is 64 MiB and is never below the active generation's live per-request body limit;
+- known declared lengths reserve only their declared bytes and receive 413 before collection when above the generation limit;
+- unknown/chunked bodies reserve the full live per-request limit before collection, preventing incremental weighted-budget deadlock;
+- aggregate budget exhaustion has deterministic bounded behavior, does not read/retain the rejected body, and does not poison the listener;
+- every reservation is released on all terminal/cancellation paths;
+- live limit increase/decrease semantics are explicitly tested without changing reload classification;
+- downstream request-body timeout is five minutes; model/provider handler timeout remains 24 hours;
+- no public config/schema/dependency change and no public request/wire compatibility regression;
+- closure record accepted.
+
+Deferred work:
+
+- configurable aggregate-memory budgets, adaptive budgets from machine RAM/cgroups, disk spooling, or streaming JSON parsing require separate capability/design work if real workloads justify them.
+- exact serde/allocator amplification accounting is not part of this milestone.
+
+## 8. Cross-cutting requirements
+
+Storage/migration: none. No database or migration change.
+
+Protocol/compatibility: preserve existing success shapes and per-request 413 behavior. Resource exhaustion may use the existing generic 503 application-unavailable envelope; do not introduce a new public schema, bespoke status code, or leak resource counters. Unread rejected request bodies may cause the current EggServe connection-abandon/close behavior; the listener and subsequent connections must remain healthy.
+
+Security/auth: authentication remains outside/above body admission, so unauthenticated inference traffic cannot consume the application raw-body budget. Early size rejection and budget exhaustion must not echo lengths, configured limits, body fragments, credentials, or memory counters in logs/diagnostics.
+
+Concurrency/cancellation/recovery: reservations must be drop-safe and cancellation-safe. Do not implement incremental acquire-as-chunks-arrive because two or more bodies could each retain partial budget and deadlock while waiting for the remainder. Reserve known lengths exactly; reserve the full live limit for unknown/chunked bodies before collection. Avoid spin loops and unbounded waiter queues.
+
+Live reload: `server.max_request_body_bytes` remains live. Admission uses the already-acquired generation lease as the semantic authority. A limit decrease never retroactively cancels admitted work; new requests use the new generation's smaller limit/effective budget. Existing reservations from older generations remain accounted process-wide until dropped.
+
+Observability: tests may expose counters through test-only inspection, but production diagnostics should not gain body-content or per-request memory details. A bounded aggregate in-use gauge is not required for M001.
+
+Performance/resources: ordinary known-length requests should reserve only their actual declared size, avoiding the conservative full-limit reservation used for chunked/unknown bodies. No additional body copy should be introduced. The existing `Bytes` one-parse/native-forwarding path remains intact.
+
+Docs/ops: distinguish four separate concepts: EggServe 1 GiB transport hard ceiling, generation-owned live per-request limit, process-local aggregate raw-body budget, and five-minute downstream upload deadline.
+
+## 9. Verification strategy
+
+Use `rust/tests/server_transport.rs` for real-socket behavior and listener recovery, request/admission/coordinator targets for semantic non-regression, and config/reload tests for generation authority.
+
+Required contention cases include:
+
+- known `Content-Length` above live limit returns 413 without entering body collection;
+- multiple known-size bodies cannot exceed the aggregate raw-byte ceiling;
+- unknown/chunked requests reserve the full live limit and cannot deadlock through partial reservations;
+- budget exhaustion returns the chosen existing 503 envelope without consuming an attacker-controlled body; after a reservation drops, a healthy request succeeds;
+- dropping/cancelling a waiting or admitted request releases all reservation state;
+- a live body-limit increase and decrease affects only requests acquiring the corresponding active generation and does not leak capacity across retiring generations;
+- finite, streaming, and compact requests still cross the same generation-owned admission path;
+- the five-minute production body-read timeout is asserted directly; any behavioral timeout test uses a test-specific short duration rather than sleeping for production time.
+
+Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-features` parity remain closure gates.
+
+## 10. Risks and decision points
+
+- Holding a raw-body reservation only for collection would under-account because the ingress `Bytes` backing can remain alive through request preparation/execution. The reservation lifetime must cover the server/coordinator ownership window, at minimum through finite endpoint completion or streaming handoff.
+- Holding reservations through the entire downstream streaming response would be unnecessarily conservative; release once the request body/request execution no longer retains the ingress buffer.
+- The aggregate bound tracks raw request bytes, not the serde JSON tree. Do not claim a strict RSS ceiling.
+- A new public memory-budget knob would create config/reload/operations surface and is out of scope. If implementation cannot provide a safe internal bound without such a knob, stop and write an ADR/capability plan rather than silently adding one.
+- Do not lower the 1 GiB accepted configuration maximum to make memory accounting easier.
+- Do not move body-limit authority into EggServe or make EggServe's static 1 GiB ceiling the live application limit.
+- If early rejection conflicts with EggServe's abandoned-body/keep-alive semantics, preserve safety by closing that connection; do not drain arbitrarily large rejected bodies merely to keep it reusable.
+
+## 11. Completion definition
+
+This roadmap closes when M001 has a closure record proving bounded aggregate raw-body admission, early oversize rejection, cancellation/reload correctness, listener recovery, the five-minute downstream body deadline, and semantic/compatibility non-regression with no medium-or-higher unresolved finding.
+
+## 12. Milestone status
+
+| Milestone | Status | Implementation plan | Closure record | Blockers |
+|---|---|---|---|---|
+| 001 — inference body resource admission hardening | ready | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | — | none |
