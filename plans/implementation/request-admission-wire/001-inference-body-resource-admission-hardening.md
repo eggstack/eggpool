@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 001 — Inference Body Resource Admission Hardening
 
-Status: ready
+Status: closed
 
 Repository baseline: `04f447a4fa459385fddd58ac2cd58f29320725b5`
 

@@ -1,6 +1,6 @@
 # Request Admission and Wire Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -140,7 +140,9 @@ Request-admission-wire M001 — body resource admission hardening
         `-- soft: future broader request/wire milestones
 ```
 
-Milestone 001 has no unresolved hard dependency and is ready for handoff.
+Milestone 001 is closed with its required implementation, real-socket, default,
+no-default, tooling, and hosted verification evidence recorded in the closure
+status file.
 
 ## 7. Milestones
 
@@ -232,10 +234,10 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 ## 11. Completion definition
 
-This roadmap closes when M001 has a closure record proving bounded aggregate raw-body admission, early oversize rejection, cancellation/reload correctness, listener recovery, the five-minute downstream body deadline, and semantic/compatibility non-regression with no medium-or-higher unresolved finding.
+This roadmap is closed by M001's closure record proving bounded aggregate raw-body admission, early oversize rejection, cancellation/reload correctness, listener recovery, the five-minute downstream body deadline, and semantic/compatibility non-regression with no medium-or-higher unresolved finding.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — inference body resource admission hardening | ready | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | — | none |
+| 001 — inference body resource admission hardening | closed | `plans/implementation/request-admission-wire/001-inference-body-resource-admission-hardening.md` | `plans/closure/request-admission-wire/001-status.md` | none |
