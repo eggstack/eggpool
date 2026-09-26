@@ -38,19 +38,19 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| — | — | — | — | none registered |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M001 ready — Eggfetch adapter contract hardening | no hard blocker; preserves closed Plans 215–220/241 transport ownership |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| — | — | — | — | none registered |
+| Provider transport | M001 Eggfetch adapter contract hardening | ready | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | Preserve DATA-only callers/wire behavior; retain trailers as transport metadata; remove residual Eggfetch pool message parsing only if exact 0.2.0 typed-source audit supports the fail-closed mapping. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| — | — | none registered |
+| Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
 
 ## Recently closed
 
@@ -62,7 +62,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 
 ## Unblock audit
 
-Server transport M001 closed with no promotions: at close time no registered
-plan listed it as a hard or interface dependency. Future subsystem roadmaps (see Plan 251
-candidate decomposition) register here only when ready to be reasoned
-about — do not bulk-generate rows to populate the table.
+Provider-transport M001 has no hard blocker and is ready for handoff.
+Provider-transport M002 remains blocked on an upstream Eggfetch typed
+classification interface and is not promoted to an implementation plan.
+No other registered blocked work is affected by this registration.
