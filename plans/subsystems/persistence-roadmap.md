@@ -73,7 +73,7 @@ Current EggPool production state after persistence M001/M002 is:
 - M001 (`6eae94db`, conditionally closed) made the existing process-owned `checkpoint` task opportunistic: a 60-second poll first checks the durable-transaction watermark, uses non-queueing `try_acquire`, observes WAL progress with `PRAGMA wal_checkpoint(NOOP)`, and runs PASSIVE only at the internal 256-frame soft threshold. Feature-only interval/threshold knobs and sanitized maintenance counters support target qualification.
 - M001 has host correctness/compatibility evidence but still lacks the physical Pi/MMC evidence required to claim that the periodic strategy removes the original foreground checkpoint tail.
 - M002 (`52494140`, closed) moved deterministic routing-decision preparation outside the database gate, removed the full `SelectionSnapshot` transaction clone, changed the metrics common path to move owned keys/batches, and prepares its repeated UPSERT once per flush transaction with row/rebuffer equivalence tests.
-- The remaining persistence work is therefore qualification and disposition, not another broad runtime refactor. M004 owns that physical target pass. M003 remains conditional and may be promoted only if M004 proves the periodic strategy insufficient.
+- M004 (`plans/closure/persistence/004-status.md`, blocked) attempted the physical target pass on a Darwin/x86_64 host: the qualification runner refused with `status: blocked` before any request, so 0 target runs exist for any threshold/cadence candidate. Production stays on the conservative 60s/256 default with the 1000-page automatic fallback. M001 remains conditionally closed; M003 remains not started and is not promoted.
 
 ## 5. Target architecture
 
@@ -271,5 +271,5 @@ This roadmap closes when M004 resolves the physical checkpoint condition with ta
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | production mechanism landed; physical Pi/MMC target evidence outstanding per closure §11 |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if M004 proves periodic scheduling insufficient |
-| 004 — physical checkpoint qualification and final disposition | ready | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | — | operational Pi/MMC target required for closure |
+| 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if a future M004 re-attempt proves periodic scheduling insufficient; M004 blocked without target evidence, so no promotion |
+| 004 — physical checkpoint qualification and final disposition | blocked | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | qualifying Pi-class Linux/aarch64 MMC target unavailable; 0 target runs; re-attempt on SHA-verified target required |

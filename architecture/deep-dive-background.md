@@ -18,7 +18,10 @@ defaults and `runtime_task_specs_for_config()` applies config gates.
 Process-owned tasks cover opportunistic SQLite WAL checkpointing
 (`checkpoint`, every 60 seconds; the tick skips cheaply when no durable
 transaction completed since the previous tick and defers rather than
-queueing when the single database gate is busy, per persistence M001),
+queueing when the single database gate is busy, per persistence M001 —
+target performance qualification remains outstanding per blocked M004, so the
+60s/256-frame default is conservative and unproven on Pi/MMC rather than
+target-accepted),
 metrics flushing (`metrics_flush` via `operations/metrics.rs::
 MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
 `operations/update.rs::UpdateCheckerState` + `register_update_checker`),

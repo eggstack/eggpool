@@ -1,6 +1,6 @@
 # Persistence Milestone 004 — Physical Checkpoint Qualification and Final Disposition
 
-Status: ready
+Status: blocked
 
 Repository baseline: `213e35e166a0b78030f4c53ff4003638b5e6c7d2`
 

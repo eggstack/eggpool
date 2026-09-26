@@ -40,18 +40,20 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 ready — physical checkpoint qualification and final disposition | M001 conditionally closed, M002 closed; M004 resolves the Pi/MMC evidence gate and decides whether M003 is promoted. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 blocked — physical checkpoint qualification and final disposition | M001 conditionally closed, M002 closed; M004 blocked without Pi/MMC target (see `plans/closure/persistence/004-status.md`); M003 stays not started. |
 
 ## Dependency-ready implementation plans
 
-| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
-|---|---|---|---|---|
-| Persistence | M004 physical checkpoint qualification and final disposition | ready | `plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md` | Execute on a qualifying Pi-class Linux/aarch64 MMC target; current production mechanism stays conservative while evidence is gathered. |
+No dependency-ready implementation plans. Persistence M004 is blocked on its
+operational Pi/MMC target; persistence M003 stays conditional on future M004
+target evidence; routing-selection M002 stays evidence-gated; provider-transport
+M002 stays blocked on upstream API work.
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| Persistence | M004 physical checkpoint qualification and final disposition | No qualifying Pi-class Linux/aarch64 MMC target available; runner refuses non-Linux/aarch64 hosts before any request (`plans/closure/persistence/004-status.md`) |
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
 
 ## Recently closed
@@ -113,3 +115,15 @@ that periodic scheduling is insufficient and promote M003 for separate
 architecture/design planning. Routing-selection M002 remains evidence-gated on
 a representative 64/512/4096-entry affinity workload; Provider-transport M002
 remains blocked on upstream Eggfetch API work.
+
+Persistence M004 is blocked (`plans/closure/persistence/004-status.md`, baseline
+`d669c02c`, no production change): the Darwin/x86_64 host fails the runner's
+Linux/aarch64 + device-tree gate before any request, so 0 target runs exist and
+no keep/retune/reject decision was authorized.
+
+Unblock audit (M004 blocked closure): persistence M003 stays not started — promotion
+requires M004 target evidence proving periodic insufficiency, which was not
+collected; routing-selection M002 stays not started — its 64/512/4096-entry affinity
+workload was outside M004 scope and was not produced; provider-transport M002
+remains blocked on the upstream Eggfetch typed classification interface. No blocked
+work is promoted by this commit.

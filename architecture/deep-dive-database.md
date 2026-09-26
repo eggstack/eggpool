@@ -101,9 +101,13 @@ by Plan 240 before a default change is considered.
 
 ## Bounded passive checkpoint scheduling (persistence M001)
 
-The accepted M001 candidate keeps every Plan 240 invariant and makes the
+The landed M001 candidate is conditionally closed: it keeps every Plan 240
+invariant and makes the
 existing process-owned `checkpoint` task opportunistic instead of periodic-
-unconditional. `Database::checkpoint_maintenance` (in
+unconditional. Physical Pi/MMC target qualification remains outstanding
+(persistence M004 is blocked without a qualifying target; see below), so the
+60s/256-frame periodic strategy is neither accepted as sufficient nor rejected
+on target. `Database::checkpoint_maintenance` (in
 `rust/src/db/connection.rs`) runs on the same gate/worker with a
 crate-private `CheckpointMaintenancePolicy` (soft WAL-frame threshold, default
 256) and returns a bounded `CheckpointMaintenanceOutcome`
@@ -137,3 +141,14 @@ records baseline/final projections with bounded tick deltas and exempts
 checkpoint ticks from the Plan 239 contamination rule, since the maintenance
 tick is the measured subject and per-record gate-wait phases already capture
 any foreground wait behind PASSIVE work.
+
+Physical qualification disposition (persistence M004, blocked): M004 collected
+0 Pi/MMC target runs — the qualification runner refuses non-Linux/aarch64
+hosts before any request, and no qualifying Pi-class MMC target was available.
+Production therefore stays on the conservative M001 default (60-second poll,
+256-frame soft threshold, unchanged 1000-page automatic fallback) with no
+retune. M001 remains conditionally closed per
+`plans/closure/persistence/001-status.md` §11; M004
+(`plans/closure/persistence/004-status.md`) is the blocked record; persistence
+M003 (conditional event-driven coordination) stays not started and is not
+promoted.
