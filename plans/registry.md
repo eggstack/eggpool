@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Request admission and wire M004 (fidelity, provenance,
-and conformance hardening, `plans/closure/request-admission-wire/004-status.md`). Legacy
+Most recently closed: Request admission and wire M005 (planning reconciliation
+and minor wire cleanup, `plans/closure/request-admission-wire/005-status.md`). Legacy
 archive latest: Plan 250 (EggServe 0.3.0 direct-Tower migration,
 `7879cbf9`). Plans 244–245, 215–220, 241 remain historical per their own
 closure passes; the `146-*` duplicate pair is a known numbering accident.
@@ -39,13 +39,12 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M005 active — planning reconciliation and minor wire cleanup | M001–M004 closed; no external hard dependency. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Request admission and wire | M005 planning reconciliation and minor wire cleanup | active | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | Correct stale planning state and the two low-severity M004 cleanup findings without changing wire behavior. |
+| (none — request-admission-wire sequence complete) | — | — | — | M001–M005 closed; no ready successor in this subsystem. |
 
 ## Blocked work
 
@@ -67,6 +66,7 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 | Request admission and wire M002 — wire-kernel extraction seam and contract freeze | closed | `plans/closure/request-admission-wire/002-status.md`, implementation `ca3d16b3` |
 | Request admission and wire M003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/closure/request-admission-wire/003-status.md`, implementation `5f373c98` |
 | Request admission and wire M004 — fidelity, provenance, and conformance hardening | closed | `plans/closure/request-admission-wire/004-status.md`, implementation `72d6d442` |
+| Request admission and wire M005 — planning reconciliation and minor wire cleanup | closed | `plans/closure/request-admission-wire/005-status.md`, implementation `4a1315a1` |
 
 ## Unblock audit
 
@@ -81,6 +81,9 @@ the wire-kernel extraction sequence: M002 is closed (`ca3d16b3` seam +
 (`5f373c98` crate + cutover); M004 is closed (`72d6d442` fidelity/provenance/
 conformance, additive only). Explicit user direction opens M005 as a bounded
 corrective/polish pass for planning reconciliation plus the two low-severity
-cleanup findings recorded by M004. M005 has no external hard dependency and is
-dependency-ready. No provider-transport blocked work is promoted; Provider
+cleanup findings recorded by M004. M005 is closed (`4a1315a1` shared classifier
++ `Approximated` reservation + planning reconciliation, 781 default / 782
+no-default tests green, no medium-or-higher finding); the
+request-admission-wire subsystem is closed with no ready successor. No
+provider-transport blocked work is promoted; Provider
 M002 remains blocked on upstream Eggfetch API work.
