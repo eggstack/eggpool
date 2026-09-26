@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Request admission and wire M005 (planning reconciliation
-and minor wire cleanup, `plans/closure/request-admission-wire/005-status.md`). Legacy
+Most recently closed: Routing selection M001 (ordered quota-scoring and
+candidate-allocation cleanup, `plans/closure/routing-selection/001-status.md`). Legacy
 archive latest: Plan 250 (EggServe 0.3.0 direct-Tower migration,
 `7879cbf9`). Plans 244–245, 215–220, 241 remain historical per their own
 closure passes; the `146-*` duplicate pair is a known numbering accident.
@@ -40,15 +40,13 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M001 conditionally closed, M002 closed; M003 conditional | M001 production landed; physical Pi/MMC evidence outstanding per `plans/closure/persistence/001-status.md` §11. M003 stays not started behind that condition. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 ready — physical checkpoint qualification and final disposition | M001 conditionally closed, M002 closed; M004 resolves the Pi/MMC evidence gate and decides whether M003 is promoted. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M001 bounded passive checkpoint scheduling and target qualification | conditionally closed | `plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md` | Production mechanism landed (`6eae94db`); physical Pi/MMC evidence required for full closure. |
-| Persistence | M002 single-gate tenure and metrics-flush allocation cleanup | closed | `plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md` | Structural gate-tenure cleanup with row/rebuffer equivalence (`52494140`). |
-| Routing selection | M001 ordered quota-scoring and candidate-allocation cleanup | closed | `plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md` | Deferred Plan 231 transient cleanup with seam parity (`4db8000d`); M002 stays evidence-gated. |
+| Persistence | M004 physical checkpoint qualification and final disposition | ready | `plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md` | Execute on a qualifying Pi-class Linux/aarch64 MMC target; current production mechanism stays conservative while evidence is gathered. |
 
 ## Blocked work
 
@@ -105,3 +103,13 @@ Persistence M002 is closed (`52494140` implementation, `plans/closure/persistenc
 Routing-selection M001 is closed (`4db8000d` implementation, `plans/closure/routing-selection/001-status.md`): ordered quota-scoring and candidate-allocation cleanup with seam parity and twin-router determinism.
 
 Unblock audit (all three closures): persistence M003 stays not started behind M001's physical-evidence condition (it requires full target evidence to decide periodic-sufficient vs event-driven); routing-selection M002 stays not started — M001's closure satisfies its hard dependency, but its evidence dependency (representative 64/512/4096-entry affinity workload) was not produced here, so no implementation plan is authorized yet; provider-transport M002 remains blocked on upstream Eggfetch API work. No other eligible plans exist.
+
+
+Persistence M004 is registered as the follow-up for M001's named physical
+evidence condition. It does not reopen closed M002 or routing-selection M001.
+The pass must either target-qualify the periodic checkpoint strategy (optionally
+retuning only its existing internal cadence/soft-threshold constants) or record
+that periodic scheduling is insufficient and promote M003 for separate
+architecture/design planning. Routing-selection M002 remains evidence-gated on
+a representative 64/512/4096-entry affinity workload; Provider-transport M002
+remains blocked on upstream Eggfetch API work.

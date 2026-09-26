@@ -67,18 +67,13 @@ Plan 239 and artifacts/qualification/239-sbc-db-phase-checkpoint-diagnostic.json
 
 SQLite documents the same mechanism: automatic WAL checkpoints are PASSIVE, default to 1000 pages, and run from the COMMIT that crosses the threshold. The application may instead initiate PASSIVE checkpoints; disabling automatic checkpointing without another bound can allow the WAL to grow excessively.
 
-Current EggPool production behavior therefore remains conservative:
+Current EggPool production state after persistence M001/M002 is:
 
-- Database::configure enables WAL/NORMAL and does not override wal_autocheckpoint.
-- Database::checkpoint runs PRAGMA wal_checkpoint(PASSIVE) on the existing connection.
-- The process-owned checkpoint task runs immediately at startup and then every 14,400 seconds.
-- The automatic SQLite threshold remains the effective safety mechanism during ordinary traffic.
-- Plans 239/240 did not authorize a production default change.
-
-A second independent inefficiency remains around the same serialized gate:
-
-- coordinator/publication.rs builds routing-decision JSON inside the publication transaction and clones a full SelectionSnapshot solely to move data into the worker closure.
-- operations/metrics.rs clones owned metric-key strings on enqueue, clones them again when building a flush batch, deep-clones the complete row batch for failure recovery, and calls connection.execute with the same large UPSERT once per row, causing repeated prepare/finalize work while the gate is held.
+- `Database::configure` keeps WAL/NORMAL and the ordinary SQLite automatic checkpoint threshold unchanged at the effective 1000-page fallback.
+- M001 (`6eae94db`, conditionally closed) made the existing process-owned `checkpoint` task opportunistic: a 60-second poll first checks the durable-transaction watermark, uses non-queueing `try_acquire`, observes WAL progress with `PRAGMA wal_checkpoint(NOOP)`, and runs PASSIVE only at the internal 256-frame soft threshold. Feature-only interval/threshold knobs and sanitized maintenance counters support target qualification.
+- M001 has host correctness/compatibility evidence but still lacks the physical Pi/MMC evidence required to claim that the periodic strategy removes the original foreground checkpoint tail.
+- M002 (`52494140`, closed) moved deterministic routing-decision preparation outside the database gate, removed the full `SelectionSnapshot` transaction clone, changed the metrics common path to move owned keys/batches, and prepares its repeated UPSERT once per flush transaction with row/rebuffer equivalence tests.
+- The remaining persistence work is therefore qualification and disposition, not another broad runtime refactor. M004 owns that physical target pass. M003 remains conditional and may be promoted only if M004 proves the periodic strategy insufficient.
 
 ## 5. Target architecture
 
@@ -95,7 +90,8 @@ Request publication/finalization continue to own their current transactions. Det
 - Physical Raspberry Pi-class MMC qualification → operational closure dependency for M001 production-default acceptance.
 - Current publication/finalization ownership contract → interface dependency for M002; already stable.
 - M001 and M002 are otherwise independent and may be implemented in either order.
-- A future event-driven checkpoint coordinator is conditional on M001 failing its narrow periodic design; it is not dependency-ready now.
+- A future event-driven checkpoint coordinator is conditional on the physical M004 qualification proving the periodic M001 design insufficient; it is not dependency-ready now.
+- M004 depends on the landed M001 mechanism and its conditional closure record; its Pi/MMC target is an operational evidence dependency, not authorization for architectural substitution.
 
 ## 7. Milestones
 
@@ -191,6 +187,40 @@ Exit conditions:
 
 A separate reviewed plan proves lifecycle, cancellation, shutdown, WAL bounds, and single-worker ownership before code changes.
 
+
+### Milestone 004 — Physical checkpoint qualification and final disposition
+
+Class: polish
+
+Objective:
+
+Resolve M001's outstanding Pi/MMC condition with the already-landed qualification tooling, select keep/retune/reject for the periodic checkpoint strategy, and reconcile current planning/documentation state.
+
+Dependencies:
+
+- Hard/interface: M001 mechanism landed and conditionally closed; M002 closed.
+- Operational: qualifying Linux/aarch64 Raspberry Pi-class MMC target.
+- No dependency on routing-selection or provider-transport work.
+
+Deliverable boundary:
+
+- Physical 60-request phase evidence for current 60s/256 plus a small feature-gated threshold/cadence matrix.
+- Ordinary physical benchmark/concurrency and backup/restart/recovery/shutdown evidence.
+- At most a constant-only production retune of checkpoint cadence/soft threshold when target evidence clearly supports it.
+- M004 closure deciding whether M003 remains unpromoted or becomes the next design milestone.
+- Registry/roadmap/current-architecture reconciliation; historical closure records stay historical.
+
+User or operator value:
+
+Turn the landed conservative checkpoint mechanism into a target-qualified keep decision or produce the evidence needed for a separate event-driven design, without weakening durability or adding speculative complexity.
+
+Exit conditions:
+
+- M004 closure records exact target/build hashes, matrix results, phase/gate/WAL evidence, lifecycle checks, and final decision.
+- If a periodic candidate is accepted, M001's outstanding condition is satisfied through the M004 closure and M003 remains not started.
+- If periodic scheduling is insufficient, M003 is promoted for separate design/implementation planning; M004 does not implement it.
+- Registry contains only actually-ready work in its dependency-ready table and current docs no longer overstate qualification.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -233,7 +263,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap closes when the accepted checkpoint policy has physical target evidence or a documented keep decision, single-gate CPU/allocation cleanup is closed, no high/medium correctness finding remains, current persistence architecture/docs describe the resulting policy, and any need for event-driven checkpoint coordination is either explicitly rejected or represented by a separate reviewed milestone.
+This roadmap closes when M004 resolves the physical checkpoint condition with target evidence or a truthful blocked disposition, M002 remains closed, no high/medium correctness finding remains, current persistence architecture/docs describe the resulting policy, and any need for event-driven checkpoint coordination is either explicitly rejected or represented by a separate reviewed milestone.
 
 ## 12. Milestone status
 
@@ -241,4 +271,5 @@ This roadmap closes when the accepted checkpoint policy has physical target evid
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | production mechanism landed; physical Pi/MMC target evidence outstanding per closure §11 |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if M001 proves periodic scheduling insufficient |
+| 003 — event-driven checkpoint coordination, conditional | not started | — | — | only if M004 proves periodic scheduling insufficient |
+| 004 — physical checkpoint qualification and final disposition | ready | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | — | operational Pi/MMC target required for closure |
