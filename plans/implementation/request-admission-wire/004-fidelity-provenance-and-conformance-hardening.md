@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 004 — Fidelity, Provenance, and Conformance Hardening
 
-Status: ready
+Status: active
 
 Repository baseline: `61470ef788e287c49b4a51062eaba439049d46dc`
 

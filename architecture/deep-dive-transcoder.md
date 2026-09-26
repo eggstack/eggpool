@@ -86,3 +86,19 @@ by `call_id` even when output-item order differs. EOF,
 cancellation, and malformed frames remain typed failures, and alternate wire
 negotiation is bounded and uses the same request submission budget as account
 retries.
+
+M004 three-layer model (kernel `eggpool-wire`, still `publish = false`):
+semantic IR (`CanonicalRequest/Response/Event`) carries provider-neutral
+meaning; `WireProvenance` carries bounded source-native restore facts
+(source surface/codec, fragment/shape budgets, explicit
+complete/truncated state) with redaction-safe `Debug` and no credentials;
+adaptation/fidelity (`TranslationPlan`, `Fidelity`,
+`AdaptationEffect`) preflights exact/wire-normalized/semantically-equivalent/
+lossy/unsupported using the same decision engine as encoding. Same-surface
+exact restore may use provenance plus EggPool-owned model rewrites;
+cross-surface encode uses semantic IR plus plan/effects and never injects
+source extras blindly; incomplete provenance can never claim `Exact`.
+EggPool warn/reject decisions are unchanged (compat layer over the same
+notice codes). Comparison boundary: this is a protocol kernel — not an
+SDK/provider client, router, agent framework, MCP/tool executor, storage, or
+gateway server API. Routing never selects providers from `Fidelity`.

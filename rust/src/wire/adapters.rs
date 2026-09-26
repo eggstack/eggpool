@@ -11,8 +11,9 @@ use super::adaptation::{
     NativeSummaryFacts, NeutralCapabilityStatus, NeutralThinkingCapability,
     ReasoningCapabilityPolicy, native_summary_notices, reasoning_capability_notices_neutral,
 };
-use super::codec::{AdaptationNotice, CodecError};
-use super::ir::{CanonicalRequest, ReasoningIntent};
+use super::codec::{AdaptationNotice, CodecError, WireCodecId};
+use super::ir::{CanonicalRequest, ClientSurface, ReasoningIntent};
+use super::provenance::WireProvenance;
 use super::registry::{
     CompactionCapabilities, ConfiguredWireProfile, WireProfileRegistry, WireRegistryError,
     WireSurface,
@@ -77,6 +78,33 @@ pub fn native_preservation_notices(
     target: WireSurface,
 ) -> Result<Vec<AdaptationNotice>, CodecError> {
     native_summary_notices(&neutral_native_summary(&preservation.summary), target)
+}
+
+/// Map EggPool native request preservation into bounded wire provenance.
+///
+/// Additive compat glue for the [`WireProvenance`] kernel type: the summary
+/// facts project onto provenance fragments/counts, and the preservation's
+/// client surface selects the source surface/codec identity. Responses is
+/// the provenance-complete source (native items/tools are first-class
+/// there); other client surfaces begin with empty/count-only provenance and
+/// never claim round-trip fidelity they do not have. Behavior of the
+/// existing preservation/notices path is unchanged — this only reads it.
+pub fn provenance_from_preservation(preservation: &NativeRequestPreservation) -> WireProvenance {
+    let (source_surface, source_codec) = match preservation.source_surface {
+        ClientSurface::Responses => (WireSurface::OpenaiResponses, WireCodecId::OpenaiResponses),
+        ClientSurface::ChatCompletions => {
+            (WireSurface::OpenaiChatCompletions, WireCodecId::OpenaiChat)
+        }
+        ClientSurface::Messages => (
+            WireSurface::AnthropicMessages,
+            WireCodecId::AnthropicMessages,
+        ),
+    };
+    WireProvenance::from_native_summary(
+        &neutral_native_summary(&preservation.summary),
+        source_surface,
+        source_codec,
+    )
 }
 
 /// EggPool-owned adapter from reasoning intent into routing state.
@@ -201,5 +229,69 @@ pub fn compaction_capabilities_from_surface_config(
         supports_remote_compaction_v1: config.supports_remote_compaction_v1,
         compact_path_template: config.compact_path_template.clone(),
         supports_remote_compaction_v2: config.supports_remote_compaction_v2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::{NativeFeatureSummary, NativeRequestPreservation};
+    use serde_json::json;
+
+    fn preservation(summary: NativeFeatureSummary) -> NativeRequestPreservation {
+        NativeRequestPreservation {
+            source_surface: ClientSurface::Responses,
+            parsed: json!({"model": "model-a", "input": []}),
+            summary,
+        }
+    }
+
+    #[test]
+    fn provenance_mapping_preserves_blocker_semantics() {
+        // A blocker preservation still blocks cross-surface encoding through
+        // the unchanged notices path, and its provenance records the native
+        // counts without claiming exactness anywhere.
+        let blocker = preservation(NativeFeatureSummary {
+            native_input_items: 2,
+            native_tool_definitions: 1,
+            extension_fields: Vec::new(),
+            extensions_truncated: false,
+        });
+        assert!(
+            native_preservation_notices(&blocker, WireSurface::OpenaiChatCompletions).is_err(),
+            "cross-surface blocker still rejects (behavior unchanged)"
+        );
+        assert!(
+            native_preservation_notices(&blocker, WireSurface::OpenaiResponses).is_ok(),
+            "same-surface native path stays notice-free (behavior unchanged)"
+        );
+        let provenance = provenance_from_preservation(&blocker);
+        assert_eq!(provenance.source_surface, WireSurface::OpenaiResponses);
+        assert_eq!(provenance.source_codec, WireCodecId::OpenaiResponses);
+        assert_eq!(provenance.shape.field_count, 2 + 1);
+        assert!(provenance.is_complete());
+        // Counts alone never license cross-surface exactness.
+        assert!(!super::super::provenance::may_restore_exact_for(
+            &provenance,
+            WireSurface::OpenaiChatCompletions
+        ));
+        assert!(super::super::provenance::may_restore_exact_for(
+            &provenance,
+            WireSurface::OpenaiResponses
+        ));
+    }
+
+    #[test]
+    fn provenance_mapping_marks_truncated_preservation_inexact() {
+        let truncated = preservation(NativeFeatureSummary {
+            native_input_items: 0,
+            native_tool_definitions: 0,
+            extension_fields: vec!["extra".into()],
+            extensions_truncated: true,
+        });
+        let provenance = provenance_from_preservation(&truncated);
+        assert!(!provenance.is_complete());
+        assert!(!provenance.is_exact_capable());
+        assert!(!super::super::provenance::may_restore_exact(&provenance));
     }
 }

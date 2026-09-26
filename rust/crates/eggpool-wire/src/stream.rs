@@ -397,6 +397,19 @@ impl CanonicalEventSink for NativeObservationSink {
 
 /// Bounded facts observed by the native Responses streaming path without
 /// materializing a discarded canonical-event batch.
+///
+/// # Bounded observation contract
+///
+/// Native forwarding keeps source bytes caller-owned: the runtime forwards
+/// the exact bytes it received while the kernel observes only bounded
+/// protocol facts through [`StreamEventDecoder::observe_native_push`] and
+/// [`StreamEventDecoder::finalize_observed`]. No complete stream is buffered,
+/// no payload content is retained, and usage folds through the same bounded
+/// accumulator as translated decoding. `saw_terminal_event` reports whether
+/// a terminal Responses event (`response.completed` / `response.incomplete` /
+/// `response.failed` / `error`) was observed so far; terminal evidence,
+/// usage completeness, and EOF/malformed distinctions remain available from
+/// the final [`StreamTerminalSummary`] exactly as on the translated path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeStreamObservation {
     pub saw_terminal_event: bool,
@@ -477,6 +490,12 @@ impl StreamEventDecoder {
         self.decode_frames(frames)
     }
 
+    /// Observe caller-owned native bytes without taking them.
+    ///
+    /// Feeds `bytes` through framing and folds bounded terminal/usage facts
+    /// without materializing (or returning) canonical events, so the caller
+    /// can forward the original bytes unchanged. See
+    /// [`NativeStreamObservation`] for the contract.
     pub fn observe_native_push(
         &mut self,
         bytes: &[u8],
@@ -501,6 +520,12 @@ impl StreamEventDecoder {
         Ok(summary)
     }
 
+    /// Finalize the native-observed path: flush framing, fold remaining
+    /// observed facts, and report the terminal summary. The observed summary
+    /// is directly comparable to the translated-decoding summary for the
+    /// same bytes (same outcome vocabulary, same EOF/malformed
+    /// distinctions); only the forwarded representation differs
+    /// (caller-owned source bytes vs. synthesized canonical events).
     pub fn finalize_observed(&mut self) -> Result<StreamTerminalSummary, StreamError> {
         if self.finalized {
             return Ok(self.summary(false));

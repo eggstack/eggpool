@@ -21,6 +21,9 @@ const KERNEL_SOURCES: &[(&str, &str)] = &[
     ("decode", include_str!("../src/wire/decode.rs")),
     ("registry", include_str!("../src/wire/registry.rs")),
     ("stream", include_str!("../src/wire/stream.rs")),
+    ("fidelity", include_str!("../src/wire/fidelity.rs")),
+    ("provenance", include_str!("../src/wire/provenance.rs")),
+    ("conformance", include_str!("../src/wire/conformance.rs")),
 ];
 
 /// M003 single-source-of-truth locations. `registry.rs` moved to
@@ -57,6 +60,18 @@ const EXTRACTED_CRATE_SOURCES: &[(&str, &str)] = &[
     (
         "eggpool-wire/stream",
         include_str!("../crates/eggpool-wire/src/stream.rs"),
+    ),
+    (
+        "eggpool-wire/fidelity",
+        include_str!("../crates/eggpool-wire/src/fidelity.rs"),
+    ),
+    (
+        "eggpool-wire/provenance",
+        include_str!("../crates/eggpool-wire/src/provenance.rs"),
+    ),
+    (
+        "eggpool-wire/conformance",
+        include_str!("../crates/eggpool-wire/src/conformance.rs"),
     ),
 ];
 
@@ -144,6 +159,9 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
         ("decode", "eggpool_wire::decode"),
         ("registry", "eggpool_wire::profile"),
         ("stream", "eggpool_wire::stream"),
+        ("fidelity", "eggpool_wire::fidelity"),
+        ("provenance", "eggpool_wire::provenance"),
+        ("conformance", "eggpool_wire::conformance"),
     ];
     // Implementation markers that must live only in `eggpool-wire`. If any
     // root facade grows one of these, the single-source-of-truth invariant
@@ -174,6 +192,14 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
         "fn decode_request",
         "fn encode_request",
         "fn decode_response",
+        "pub enum Fidelity",
+        "pub struct TranslationPlan",
+        "pub fn plan_request_translation",
+        "pub struct WireProvenance",
+        "pub fn may_restore_exact_for",
+        "pub struct StreamConformanceVector",
+        "pub fn stream_conformance_vectors",
+        "pub fn sse_split_points",
     ];
     for ((module, source), (_, facade_path)) in KERNEL_SOURCES.iter().zip(FACADE_CRATE.iter()) {
         assert!(

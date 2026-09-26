@@ -9,8 +9,11 @@ pub mod adapters;
 pub mod additional_codecs;
 pub mod codec;
 pub mod codecs;
+pub mod conformance;
 pub mod decode;
+pub mod fidelity;
 pub mod ir;
+pub mod provenance;
 pub mod registry;
 pub mod runtime;
 pub mod stream;
@@ -24,8 +27,8 @@ pub use adaptation::{
 };
 pub use adapters::{
     SurfaceConfigFacts, compaction_capabilities_from_surface_config, configured_profiles,
-    configured_profiles_from_facts, native_preservation_notices, reasoning_capability_notices,
-    thinking_requirement_from_intent, validate_provider_references,
+    configured_profiles_from_facts, native_preservation_notices, provenance_from_preservation,
+    reasoning_capability_notices, thinking_requirement_from_intent, validate_provider_references,
     validate_provider_references_neutral,
 };
 pub use additional_codecs::{
@@ -37,9 +40,19 @@ pub use codec::{
     builtin_codec, compatibility_path,
 };
 pub use codecs::{AnthropicMessagesCodec, OpenAiChatCodec, builtin_codec_instance};
+pub use conformance::{StreamConformanceVector, sse_split_points, stream_conformance_vectors};
 pub use decode::{
     DecodeError, DecodeLimits, MediaLimitError, canonical_request_from_object_with_limits,
     canonical_request_from_value_with_limits,
+};
+pub use fidelity::{
+    AdaptationEffect, AdaptationEffectClass, Fidelity, TranslationPlan, classify_notice,
+    effects_for_notices, fidelity_for_response_notices, plan_request_translation,
+};
+pub use provenance::{
+    MAX_PROVENANCE_DEPTH, MAX_PROVENANCE_FRAGMENTS, MAX_PROVENANCE_NAME_BYTES,
+    MAX_PROVENANCE_TOTAL_BYTES, ProvenanceCompleteness, ProvenanceFragment, ProvenanceShape,
+    TruncationReason, WireProvenance, may_restore_exact, may_restore_exact_for,
 };
 pub use registry::{
     CodecFamily, CompactionCapabilities, ConfiguredWireProfile, WireHint, WireProfileDefinition,
