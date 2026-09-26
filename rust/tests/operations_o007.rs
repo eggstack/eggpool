@@ -229,3 +229,281 @@ async fn every_o007_dispatch_path_reaches_rust_behavior() {
     }
     let _ = config;
 }
+
+type RollupRow = (
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    Option<i64>,
+    i64,
+    i64,
+    i64,
+);
+
+#[allow(clippy::too_many_arguments)]
+fn metric_event(
+    bucket: &str,
+    provider: &str,
+    model: &str,
+    status: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cost: i64,
+    latency_ms: i64,
+    first_byte_ms: Option<i64>,
+) -> UsageMetricEvent {
+    let mut event = UsageMetricEvent::now(provider, model, 7, "openai", status);
+    event.bucket_start = bucket.into();
+    event.input_tokens = input_tokens;
+    event.output_tokens = output_tokens;
+    event.cost_microdollars = cost;
+    event.latency_ms = latency_ms;
+    event.first_byte_ms = first_byte_ms;
+    event.bytes_received = 11;
+    event.bytes_emitted = 13;
+    event
+}
+
+#[tokio::test]
+async fn metrics_flush_writes_many_rows_additively_in_one_transaction() {
+    let directory = tempfile::tempdir().expect("temp root");
+    let (config, _) = config(&directory);
+    let database = database(&directory.path().join("usage.sqlite3")).await;
+    let coalescer = MetricsWriteCoalescer::new(&config.metrics, database.clone());
+    assert!(coalescer.record_usage(metric_event(
+        "2026-02-01T00:00:00Z",
+        "fixture",
+        "model-a",
+        "success",
+        10,
+        20,
+        100,
+        10,
+        Some(5)
+    )));
+    assert!(coalescer.record_usage(metric_event(
+        "2026-02-01T00:00:00Z",
+        "fixture",
+        "model-a",
+        "success",
+        30,
+        40,
+        200,
+        30,
+        None
+    )));
+    assert!(coalescer.record_usage(metric_event(
+        "2026-02-01T00:00:00Z",
+        "fixture",
+        "model-b",
+        "error",
+        1,
+        2,
+        7,
+        50,
+        Some(9)
+    )));
+    assert_eq!(coalescer.snapshot().buffered_rows, 2);
+    assert_eq!(coalescer.flush().await.expect("flush"), 2);
+    let snapshot = coalescer.snapshot();
+    assert_eq!(snapshot.last_flush_rows, 2);
+    assert_eq!(snapshot.total_flushed, 3);
+    assert_eq!(snapshot.flush_failures, 0);
+
+    let rows: Vec<RollupRow> = database
+        .call(|connection| {
+            let mut statement = connection.prepare(
+                "SELECT model_id, request_count, error_count, input_tokens,\
+                 output_tokens, cost_microdollars, latency_ms_sum,\
+                 latency_ms_min, latency_ms_max, first_byte_ms_sum,\
+                 first_byte_ms_count, bytes_received FROM usage_rollups ORDER BY model_id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .expect("rollup rows");
+    assert_eq!(rows.len(), 2);
+    let expected_a: RollupRow = (
+        "model-a".to_owned(),
+        2,
+        0,
+        40,
+        60,
+        300,
+        40,
+        Some(10),
+        Some(30),
+        5,
+        1,
+        22,
+    );
+    assert_eq!(rows[0], expected_a);
+    let expected_b: RollupRow = (
+        "model-b".to_owned(),
+        1,
+        1,
+        1,
+        2,
+        7,
+        50,
+        Some(50),
+        Some(50),
+        9,
+        1,
+        11,
+    );
+    assert_eq!(rows[1], expected_b);
+    database.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn metrics_failed_flush_rebuffers_exactly_and_keeps_concurrent_events() {
+    let directory = tempfile::tempdir().expect("temp root");
+    let (config, _) = config(&directory);
+    let database = database(&directory.path().join("usage.sqlite3")).await;
+    let coalescer = MetricsWriteCoalescer::new(&config.metrics, database.clone());
+    assert!(coalescer.record_usage(metric_event(
+        "2026-03-01T00:00:00Z",
+        "fixture",
+        "model-a",
+        "success",
+        5,
+        5,
+        5,
+        5,
+        None
+    )));
+    assert!(coalescer.record_usage(metric_event(
+        "2026-03-01T00:00:00Z",
+        "fixture",
+        "model-a",
+        "success",
+        7,
+        7,
+        7,
+        7,
+        None
+    )));
+    assert!(coalescer.record_usage(metric_event(
+        "2026-03-01T00:00:00Z",
+        "fixture",
+        "model-b",
+        "success",
+        1,
+        1,
+        1,
+        1,
+        None
+    )));
+    // A closed database fails the flush deterministically; the single owned
+    // batch must come back without duplication or loss.
+    database.close().await.expect("close");
+    let failed = coalescer.flush().await.expect_err("flush fails");
+    assert!(format!("{failed}").contains("database operation failed"));
+    let snapshot = coalescer.snapshot();
+    assert_eq!(snapshot.flush_failures, 1);
+    assert_eq!(snapshot.total_flushed, 0);
+    assert_eq!(snapshot.buffered_events, 3);
+    assert_eq!(snapshot.buffered_rows, 2);
+    // A retry against the same closed database is idempotent: still exactly
+    // the same three events, never doubled.
+    coalescer.flush().await.expect_err("retry fails");
+    let snapshot = coalescer.snapshot();
+    assert_eq!(snapshot.flush_failures, 2);
+    assert_eq!(snapshot.buffered_events, 3);
+
+    // An event recorded while a failing flush is in flight lands either in
+    // the failed batch or in the live buffer; both paths must converge to
+    // the exact total without loss or duplication.
+    let concurrent = coalescer.clone();
+    let flush = tokio::spawn(async move { concurrent.flush().await });
+    assert!(coalescer.record_usage(metric_event(
+        "2026-03-01T00:00:00Z",
+        "fixture",
+        "model-c",
+        "success",
+        2,
+        2,
+        2,
+        2,
+        None
+    )));
+    flush.await.expect("flush joins").expect_err("flush fails");
+    let snapshot = coalescer.snapshot();
+    assert_eq!(snapshot.buffered_events, 4);
+    assert_eq!(snapshot.total_dropped, 0);
+}
+
+#[tokio::test]
+async fn metrics_immediate_mode_flushes_through_the_same_boundary() {
+    let directory = tempfile::tempdir().expect("temp root");
+    let (mut config, _) = config(&directory);
+    config.metrics.write_mode = "immediate".into();
+    let database = database(&directory.path().join("usage.sqlite3")).await;
+    let coalescer = MetricsWriteCoalescer::new(&config.metrics, database.clone());
+    assert_eq!(coalescer.write_mode(), "immediate");
+    // Immediate mode never buffers through the synchronous entry point.
+    assert!(!coalescer.record_usage(metric_event(
+        "2026-04-01T00:00:00Z",
+        "fixture",
+        "model-a",
+        "success",
+        4,
+        4,
+        4,
+        4,
+        None
+    )));
+    assert!(
+        coalescer
+            .record_usage_async(metric_event(
+                "2026-04-01T00:00:00Z",
+                "fixture",
+                "model-a",
+                "success",
+                4,
+                6,
+                8,
+                12,
+                Some(3)
+            ))
+            .await
+            .expect("immediate record")
+    );
+    let row: (i64, i64, i64) = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT request_count, input_tokens, first_byte_ms_sum FROM usage_rollups WHERE provider_id='fixture'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+        })
+        .await
+        .expect("rollup row");
+    assert_eq!(row, (1, 4, 3));
+    assert_eq!(coalescer.snapshot().total_flushed, 1);
+    database.close().await.expect("close");
+}

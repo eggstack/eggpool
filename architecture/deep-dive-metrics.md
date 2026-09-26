@@ -14,6 +14,15 @@ defaults to `write_mode = "low_wear"` with `max_buffered_events = 250`;
 returning, while buffered modes only enqueue. `MetricsSnapshot` exposes
 `total_flushed`/`flush_failures`/`buffered_events` counters only.
 
+Ownership around the single database gate is move-based (persistence M002):
+enqueue folds the event into one additive delta and then moves the already-
+owned key Strings into the buffer map instead of cloning them; flush consumes
+the taken map into one ordered immutable row batch shared (`Arc`) between DB
+execution and failure recovery, so no second deep batch clone is retained;
+the repeated UPSERT is prepared once per flush transaction and executed once
+per row. Capacity, drop, additive-aggregation, rebuffer-merge, ordering, and
+immediate/low-wear semantics are unchanged.
+
 Metrics labels and snapshots are bounded, deterministic, and metadata-only.
 They never contain credentials, raw request bodies, cache keys, or provider
 response bodies. Pricing contributes to accounting and observability only; it

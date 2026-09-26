@@ -295,8 +295,18 @@ impl PublicationService {
         if let Err(error) = self.validate(&claim, &input) {
             return self.rollback_after_error(claim, error);
         }
-        let snapshot = claim.selection_snapshot().clone();
-        let transaction = self.publish_transaction(&claim, &input, &snapshot).await;
+        // Deterministic routing-decision preparation happens before the
+        // database gate is acquired (persistence M002). Serialization or
+        // formatting failure maps to the existing database-transaction error
+        // category without starting a transaction or converting the claim.
+        let prepared = match PreparedRoutingDecisionRow::prepare(
+            claim.selection_snapshot(),
+            input.reservation_ttl_seconds,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => return self.rollback_after_error(claim, error),
+        };
+        let transaction = self.publish_transaction(&claim, &input, prepared).await;
         let transaction = match transaction {
             Ok(value) => value,
             Err(error) => return self.rollback_after_error(claim, error),
@@ -403,7 +413,7 @@ impl PublicationService {
         &self,
         claim: &SelectionClaim,
         input: &PublicationInput,
-        snapshot: &SelectionSnapshot,
+        prepared: PreparedRoutingDecisionRow,
     ) -> Result<TransactionOutcome, PublicationError> {
         let database = self.database.clone();
         let input = input.clone();
@@ -414,7 +424,6 @@ impl PublicationService {
         let upstream_protocol = input.upstream_protocol.clone();
         let projected_tokens = claim.projected_tokens();
         let projected_cost = claim.projected_cost_microdollars();
-        let snapshot = snapshot.clone();
         let injector = self.fault_injector.clone();
         let transaction_injector = injector.clone();
         let result = database
@@ -559,14 +568,13 @@ impl PublicationService {
                         transaction_injector.as_ref(),
                         AttemptRows {
                             input: &input,
-                            snapshot: &snapshot,
+                            prepared: &prepared,
                             request_id,
                             account_id,
                             account_name: &account_name,
                             provider_id: &provider_id,
                             model_id: &model_id,
                             upstream_protocol: &upstream_protocol,
-                            reservation_ttl_seconds: input.reservation_ttl_seconds,
                             projected_tokens,
                             projected_cost,
                         },
@@ -600,14 +608,13 @@ impl PublicationService {
                     transaction_injector.as_ref(),
                     AttemptRows {
                         input: &input,
-                        snapshot: &snapshot,
+                        prepared: &prepared,
                         request_id,
                         account_id,
                         account_name: &account_name,
                         provider_id: &provider_id,
                         model_id: &model_id,
                         upstream_protocol: &upstream_protocol,
-                        reservation_ttl_seconds: input.reservation_ttl_seconds,
                         projected_tokens,
                         projected_cost,
                     },
@@ -812,16 +819,90 @@ fn fail_sql(
     Ok(())
 }
 
+/// Deterministic routing-decision persistence facts prepared from a borrowed
+/// selection snapshot before the database gate is acquired (persistence
+/// M002). Only the bounded scalar/JSON facts that `insert_attempt_rows`
+/// persists travel into the worker transaction; the full runtime snapshot
+/// never crosses that boundary.
+#[derive(Debug, Clone)]
+struct PreparedRoutingDecisionRow {
+    exclusions_json: String,
+    score_components_json: String,
+    selected_score: Option<f64>,
+    top_score: Option<f64>,
+    eligible_count: i64,
+    scored_count: i64,
+    excluded_count: i64,
+    selected_account_id: Option<i64>,
+    selected_priority: Option<u32>,
+    top_account_name: Option<String>,
+    reservation_expiry_modifier: String,
+}
+
+impl PreparedRoutingDecisionRow {
+    fn prepare(
+        snapshot: &SelectionSnapshot,
+        reservation_ttl_seconds: i64,
+    ) -> Result<Self, PublicationError> {
+        let exclusion_rows = snapshot
+            .exclusions
+            .iter()
+            .map(|exclusion| {
+                serde_json::json!({
+                    "account": exclusion.account_name,
+                    "reason": exclusion.reason_code,
+                })
+            })
+            .collect::<Vec<_>>();
+        let exclusions_json =
+            serde_json::to_string(&exclusion_rows).map_err(|_| map_precompute_failure())?;
+        let score_components_json = snapshot
+            .selected_score
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| map_precompute_failure())?
+            .unwrap_or_else(|| "{}".to_owned());
+        Ok(Self {
+            exclusions_json,
+            score_components_json,
+            selected_score: snapshot
+                .selected_score
+                .as_ref()
+                .map(|score| score.final_score()),
+            top_score: snapshot
+                .candidates
+                .first()
+                .map(|candidate| candidate.score.final_score()),
+            eligible_count: snapshot.eligible_candidate_count as i64,
+            scored_count: snapshot.candidates.len() as i64,
+            excluded_count: snapshot.exclusions.len() as i64,
+            selected_account_id: snapshot.selected_account_id,
+            selected_priority: snapshot.selected_priority,
+            top_account_name: snapshot.top_account_name.clone(),
+            reservation_expiry_modifier: format!("+{reservation_ttl_seconds} seconds"),
+        })
+    }
+}
+
+/// Serialization for the prepared routing row cannot fail against SQLite, so
+/// it maps to the existing database-transaction error category without
+/// starting a transaction or widening the public error enum.
+fn map_precompute_failure() -> PublicationError {
+    PublicationError::Database(DatabaseError::Transaction {
+        source: Box::new(tokio_rusqlite::rusqlite::Error::InvalidQuery),
+    })
+}
+
 struct AttemptRows<'a> {
     input: &'a PublicationInput,
-    snapshot: &'a SelectionSnapshot,
+    prepared: &'a PreparedRoutingDecisionRow,
     request_id: i64,
     account_id: i64,
     account_name: &'a str,
     provider_id: &'a str,
     model_id: &'a str,
     upstream_protocol: &'a str,
-    reservation_ttl_seconds: i64,
     projected_tokens: i64,
     projected_cost: i64,
 }
@@ -843,7 +924,7 @@ fn insert_attempt_rows(
             rows.model_id,
             rows.projected_cost,
             rows.projected_tokens,
-            format!("+{} seconds", rows.reservation_ttl_seconds),
+            rows.prepared.reservation_expiry_modifier,
         ],
     )?;
     let reservation_id = connection.last_insert_rowid();
@@ -866,37 +947,6 @@ fn insert_attempt_rows(
     let attempt_id = connection.last_insert_rowid();
 
     fail_sql(injector, PublicationStage::RoutingDecisionInsert)?;
-    let exclusion_rows = rows
-        .snapshot
-        .exclusions
-        .iter()
-        .map(|exclusion| {
-            serde_json::json!({
-                "account": exclusion.account_name,
-                "reason": exclusion.reason_code,
-            })
-        })
-        .collect::<Vec<_>>();
-    let exclusions_json = serde_json::to_string(&exclusion_rows)
-        .map_err(|_| tokio_rusqlite::rusqlite::Error::InvalidQuery)?;
-    let selected_score = rows
-        .snapshot
-        .selected_score
-        .as_ref()
-        .map(|score| score.final_score());
-    let top_score = rows
-        .snapshot
-        .candidates
-        .first()
-        .map(|candidate| candidate.score.final_score());
-    let score_components = rows
-        .snapshot
-        .selected_score
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(|_| tokio_rusqlite::rusqlite::Error::InvalidQuery)?
-        .unwrap_or_else(|| "{}".to_owned());
     connection.execute(
         "INSERT INTO routing_decisions\n\
          (request_id, attempt_number, model_id, provider_id, protocol,\n\
@@ -910,17 +960,17 @@ fn insert_attempt_rows(
             rows.model_id,
             rows.provider_id,
             rows.upstream_protocol,
-            rows.snapshot.selected_account_id,
+            rows.prepared.selected_account_id,
             rows.account_name,
-            rows.snapshot.selected_priority,
-            selected_score,
-            rows.snapshot.eligible_candidate_count as i64,
-            rows.snapshot.candidates.len() as i64,
-            rows.snapshot.exclusions.len() as i64,
-            top_score,
-            rows.snapshot.top_account_name,
-            exclusions_json,
-            score_components,
+            rows.prepared.selected_priority,
+            rows.prepared.selected_score,
+            rows.prepared.eligible_count,
+            rows.prepared.scored_count,
+            rows.prepared.excluded_count,
+            rows.prepared.top_score,
+            rows.prepared.top_account_name,
+            rows.prepared.exclusions_json,
+            rows.prepared.score_components_json,
         ],
     )?;
     let routing_decision_id = connection.last_insert_rowid();

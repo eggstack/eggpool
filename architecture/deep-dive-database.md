@@ -21,6 +21,18 @@ not open independent writer pools or accept raw unbounded diagnostic content.
 Compatibility fixtures under `tests/fixtures/` are test-only and are never
 loaded by the production executable.
 
+Durable publication prepares its deterministic routing-decision row before
+acquiring the database gate (persistence M002):
+`PreparedRoutingDecisionRow` in `rust/src/coordinator/publication.rs` is
+built from the borrowed selection snapshot — exclusion/selected-score JSON
+serialization, score scalars, counts, and the reservation-expiry modifier —
+and only those minimal owned facts travel into the worker transaction. The
+full `SelectionSnapshot` is never cloned for the transaction closure, and
+SQLite-dependent validation (request/duplicate/prior-attempt/account checks,
+inserts, fault-injection stages) stays inside the transaction in its existing
+order. Precomputation failure maps to the existing
+`PublicationError::Database` category without starting a transaction.
+
 See `rust/src/db/connection.rs`, `migrations.rs`, `repositories.rs`, `mod.rs`,
 and feature-gated `qualification.rs` (only compiled with
 `qualification-db-diagnostics`).

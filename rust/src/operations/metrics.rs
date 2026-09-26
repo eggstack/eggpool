@@ -16,6 +16,27 @@ use crate::db::{Database, DatabaseError};
 const SQLITE_MAX: i64 = i64::MAX;
 type MetricKey = (String, i64, String, String, i64, String, bool, String);
 
+/// One ordered flush row moved out of the coalescer buffer (persistence
+/// M002). The batch is shared immutably between DB execution and failure
+/// recovery so no second deep String clone is retained.
+#[derive(Debug, Clone)]
+struct MetricFlushRow {
+    bucket_start: String,
+    bucket_size_s: i64,
+    provider_id: String,
+    model_id: String,
+    account_id: i64,
+    protocol: String,
+    streamed: bool,
+    status: String,
+    aggregate: Aggregate,
+}
+
+/// The metrics UPSERT is prepared once per flush transaction and executed
+/// once per row (persistence M002). Values are bound per row; no SQL is
+/// generated dynamically.
+const METRICS_UPSERT_SQL: &str = "INSERT INTO usage_rollups (bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status,request_count,error_count,retry_count,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,thinking_characters,cost_microdollars,bytes_received,bytes_emitted,latency_ms_sum,latency_ms_min,latency_ms_max,first_byte_ms_sum,first_byte_ms_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25) ON CONFLICT(bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status) DO UPDATE SET request_count=request_count+excluded.request_count,error_count=error_count+excluded.error_count,retry_count=retry_count+excluded.retry_count,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens,reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens,thinking_characters=thinking_characters+excluded.thinking_characters,cost_microdollars=MIN(?,cost_microdollars+excluded.cost_microdollars),bytes_received=bytes_received+excluded.bytes_received,bytes_emitted=bytes_emitted+excluded.bytes_emitted,latency_ms_sum=latency_ms_sum+excluded.latency_ms_sum,latency_ms_min=CASE WHEN excluded.latency_ms_min IS NULL THEN latency_ms_min WHEN latency_ms_min IS NULL THEN excluded.latency_ms_min ELSE MIN(latency_ms_min,excluded.latency_ms_min) END,latency_ms_max=CASE WHEN excluded.latency_ms_max IS NULL THEN latency_ms_max WHEN latency_ms_max IS NULL THEN excluded.latency_ms_max ELSE MAX(latency_ms_max,excluded.latency_ms_max) END,first_byte_ms_sum=first_byte_ms_sum+excluded.first_byte_ms_sum,first_byte_ms_count=first_byte_ms_count+excluded.first_byte_ms_count,updated_at=CURRENT_TIMESTAMP";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageMetricEvent {
     pub bucket_start: String,
@@ -284,24 +305,55 @@ impl MetricsWriteCoalescer {
             event.bucket_start = canonical;
             event.bucket_size_s = self.bucket_size_s;
         }
+        // Fold the event into one additive delta before moving its owned key
+        // Strings, so the already-owned event is never deep-cloned.
+        let mut delta = Aggregate::default();
+        delta.add(&event);
         let mut state = self.inner.lock().expect("metrics state lock");
-        let key = (
-            event.bucket_start.clone(),
-            event.bucket_size_s,
-            event.provider_id.clone(),
-            event.model_id.clone(),
-            event.account_id,
-            event.protocol.clone(),
-            event.streamed,
-            event.status.clone(),
-        );
-        if state.pending_events >= self.max_pending_events
-            || (state.buffer.len() >= self.max_rows && !state.buffer.contains_key(&key))
-        {
+        if state.pending_events >= self.max_pending_events {
             state.total_dropped = state.total_dropped.saturating_add(1);
             return false;
         }
-        state.buffer.entry(key).or_default().add(&event);
+        if state.buffer.len() >= self.max_rows {
+            // At the row cap the lookup clones only to probe for an existing
+            // key; the common path below moves ownership without cloning.
+            let probe = (
+                event.bucket_start.clone(),
+                event.bucket_size_s,
+                event.provider_id.clone(),
+                event.model_id.clone(),
+                event.account_id,
+                event.protocol.clone(),
+                event.streamed,
+                event.status.clone(),
+            );
+            if !state.buffer.contains_key(&probe) {
+                state.total_dropped = state.total_dropped.saturating_add(1);
+                return false;
+            }
+        }
+        let UsageMetricEvent {
+            bucket_start,
+            bucket_size_s,
+            provider_id,
+            model_id,
+            account_id,
+            protocol,
+            streamed,
+            status,
+            ..
+        } = event;
+        let key = (
+            bucket_start,
+            bucket_size_s,
+            provider_id,
+            model_id,
+            account_id,
+            protocol,
+            streamed,
+            status,
+        );
+        state.buffer.entry(key).or_default().merge(delta);
         state.pending_events = state.pending_events.saturating_add(1);
         state.total_received = state.total_received.saturating_add(1);
         true
@@ -331,8 +383,11 @@ impl MetricsWriteCoalescer {
         if batch.is_empty() {
             return Ok(0);
         }
-        let rows = batch
-            .iter()
+        // Consume the taken map into one ordered, immutable row batch. The
+        // Arc is shared with the worker closure and retained for failure
+        // recovery, so row Strings are moved exactly once.
+        let rows: Arc<[MetricFlushRow]> = batch
+            .into_iter()
             .map(
                 |(
                     (
@@ -346,36 +401,62 @@ impl MetricsWriteCoalescer {
                         status,
                     ),
                     aggregate,
-                )| {
-                    (
-                        bucket_start.clone(),
-                        *bucket_size_s,
-                        provider_id.clone(),
-                        model_id.clone(),
-                        *account_id,
-                        protocol.clone(),
-                        i64::from(*streamed),
-                        status.clone(),
-                        *aggregate,
-                    )
+                )| MetricFlushRow {
+                    bucket_start,
+                    bucket_size_s,
+                    provider_id,
+                    model_id,
+                    account_id,
+                    protocol,
+                    streamed,
+                    status,
+                    aggregate,
                 },
             )
-            .collect::<Vec<_>>();
+            .collect();
         let row_count = rows.len();
         let flushed_events = rows
             .iter()
-            .map(|(_, _, _, _, _, _, _, _, row)| row.request_count as u64)
+            .map(|row| row.aggregate.request_count as u64)
             .sum::<u64>();
-        let transaction_rows = rows.clone();
-        let result = self.database.with_transaction(move |connection| {
-            for (bucket_start, bucket_size_s, provider_id, model_id, account_id, protocol, streamed, status, row) in &transaction_rows {
-                connection.execute(
-                    "INSERT INTO usage_rollups (bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status,request_count,error_count,retry_count,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,reasoning_tokens,thinking_characters,cost_microdollars,bytes_received,bytes_emitted,latency_ms_sum,latency_ms_min,latency_ms_max,first_byte_ms_sum,first_byte_ms_count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25) ON CONFLICT(bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status) DO UPDATE SET request_count=request_count+excluded.request_count,error_count=error_count+excluded.error_count,retry_count=retry_count+excluded.retry_count,input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens,cache_write_tokens=cache_write_tokens+excluded.cache_write_tokens,reasoning_tokens=reasoning_tokens+excluded.reasoning_tokens,thinking_characters=thinking_characters+excluded.thinking_characters,cost_microdollars=MIN(?,cost_microdollars+excluded.cost_microdollars),bytes_received=bytes_received+excluded.bytes_received,bytes_emitted=bytes_emitted+excluded.bytes_emitted,latency_ms_sum=latency_ms_sum+excluded.latency_ms_sum,latency_ms_min=CASE WHEN excluded.latency_ms_min IS NULL THEN latency_ms_min WHEN latency_ms_min IS NULL THEN excluded.latency_ms_min ELSE MIN(latency_ms_min,excluded.latency_ms_min) END,latency_ms_max=CASE WHEN excluded.latency_ms_max IS NULL THEN latency_ms_max WHEN latency_ms_max IS NULL THEN excluded.latency_ms_max ELSE MAX(latency_ms_max,excluded.latency_ms_max) END,first_byte_ms_sum=first_byte_ms_sum+excluded.first_byte_ms_sum,first_byte_ms_count=first_byte_ms_count+excluded.first_byte_ms_count,updated_at=CURRENT_TIMESTAMP",
-                    tokio_rusqlite::rusqlite::params![bucket_start,bucket_size_s,provider_id,model_id,account_id,protocol,streamed,status,row.request_count,row.error_count,row.retry_count,row.input_tokens,row.output_tokens,row.cache_read_tokens,row.cache_write_tokens,row.reasoning_tokens,row.thinking_characters,row.cost_microdollars,row.bytes_received,row.bytes_emitted,row.latency_ms_sum,row.latency_ms_min,row.latency_ms_max,row.first_byte_ms_sum,row.first_byte_ms_count,SQLITE_MAX],
-                )?;
-            }
-            Ok(())
-        }).await;
+        let transaction_rows = Arc::clone(&rows);
+        let result = self
+            .database
+            .with_transaction(move |connection| {
+                let mut statement = connection.prepare(METRICS_UPSERT_SQL)?;
+                for row in transaction_rows.iter() {
+                    statement.execute(tokio_rusqlite::rusqlite::params![
+                        row.bucket_start,
+                        row.bucket_size_s,
+                        row.provider_id,
+                        row.model_id,
+                        row.account_id,
+                        row.protocol,
+                        i64::from(row.streamed),
+                        row.status,
+                        row.aggregate.request_count,
+                        row.aggregate.error_count,
+                        row.aggregate.retry_count,
+                        row.aggregate.input_tokens,
+                        row.aggregate.output_tokens,
+                        row.aggregate.cache_read_tokens,
+                        row.aggregate.cache_write_tokens,
+                        row.aggregate.reasoning_tokens,
+                        row.aggregate.thinking_characters,
+                        row.aggregate.cost_microdollars,
+                        row.aggregate.bytes_received,
+                        row.aggregate.bytes_emitted,
+                        row.aggregate.latency_ms_sum,
+                        row.aggregate.latency_ms_min,
+                        row.aggregate.latency_ms_max,
+                        row.aggregate.first_byte_ms_sum,
+                        row.aggregate.first_byte_ms_count,
+                        SQLITE_MAX
+                    ])?;
+                }
+                Ok(())
+            })
+            .await;
         match result {
             Ok(()) => {
                 let mut state = self.inner.lock().expect("metrics state lock");
@@ -387,28 +468,17 @@ impl MetricsWriteCoalescer {
             Err(error) => {
                 let mut state = self.inner.lock().expect("metrics state lock");
                 state.flush_failures = state.flush_failures.saturating_add(1);
-                for (
-                    bucket_start,
-                    bucket_size_s,
-                    provider_id,
-                    model_id,
-                    account_id,
-                    protocol,
-                    streamed,
-                    status,
-                    aggregate,
-                ) in rows
-                {
-                    let event_count = aggregate.request_count.max(0) as usize;
+                for row in rows.iter() {
+                    let event_count = row.aggregate.request_count.max(0) as usize;
                     let key = (
-                        bucket_start.clone(),
-                        bucket_size_s,
-                        provider_id.clone(),
-                        model_id.clone(),
-                        account_id,
-                        protocol.clone(),
-                        streamed != 0,
-                        status.clone(),
+                        row.bucket_start.clone(),
+                        row.bucket_size_s,
+                        row.provider_id.clone(),
+                        row.model_id.clone(),
+                        row.account_id,
+                        row.protocol.clone(),
+                        row.streamed,
+                        row.status.clone(),
                     );
                     if state.pending_events.saturating_add(event_count) > self.max_pending_events
                         || (state.buffer.len() >= self.max_rows && !state.buffer.contains_key(&key))
@@ -417,7 +487,7 @@ impl MetricsWriteCoalescer {
                             state.total_dropped.saturating_add(event_count as u64);
                         continue;
                     }
-                    state.buffer.entry(key).or_default().merge(aggregate);
+                    state.buffer.entry(key).or_default().merge(row.aggregate);
                     state.pending_events = state.pending_events.saturating_add(event_count);
                 }
                 Err(MetricsFlushError::Database(error))

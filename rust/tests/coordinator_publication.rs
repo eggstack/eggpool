@@ -389,3 +389,234 @@ async fn cancelling_the_waiter_cannot_strand_a_claim_or_durable_rows() {
     }
     fixture.database.close().await.expect("database closes");
 }
+
+struct ExclusionFixture {
+    database: Database,
+    router: RoutingRouter,
+}
+
+async fn exclusion_fixture() -> ExclusionFixture {
+    let database = Database::open(DatabaseConfig::default())
+        .await
+        .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("canonical migrations apply");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id)\n\
+                 VALUES (1, 'account-a', 'UNUSED', 1, 'provider-a')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id)\n\
+                 VALUES (2, 'account-b', 'UNUSED', 0, 'provider-a')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id)\n\
+                 VALUES (3, 'account-c', 'UNUSED', 1, 'provider-a')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id, resolution_status)\n\
+                 VALUES ('model-a', 'openai', 'provider-a', 'resolved')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("fixture rows insert");
+
+    let mut config = Config::default();
+    let mut provider = eggpool::config::ProviderConfig {
+        id: "provider-a".into(),
+        base_url: "https://provider.invalid/v1".into(),
+        protocols: vec!["openai".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    for (name, enabled) in [
+        ("account-a", true),
+        ("account-b", false),
+        ("account-c", true),
+    ] {
+        provider.accounts.push(eggpool::config::AccountConfig {
+            name: name.into(),
+            enabled,
+            ..Default::default()
+        });
+    }
+    config.providers.insert("provider-a".into(), provider);
+    config.validate().expect("fixture config validates");
+    let registry = AccountRegistry::from_config(
+        &config,
+        &[
+            Account {
+                id: 1,
+                name: "account-a".into(),
+                api_key_env: "UNUSED".into(),
+                enabled: true,
+                weight: 1.0,
+                provider_id: "provider-a".into(),
+            },
+            Account {
+                id: 2,
+                name: "account-b".into(),
+                api_key_env: "UNUSED".into(),
+                enabled: false,
+                weight: 1.0,
+                provider_id: "provider-a".into(),
+            },
+            Account {
+                id: 3,
+                name: "account-c".into(),
+                api_key_env: "UNUSED".into(),
+                enabled: true,
+                weight: 1.0,
+                provider_id: "provider-a".into(),
+            },
+        ],
+        &CredentialStore::default(),
+    )
+    .expect("registry builds");
+    // Only account-a receives catalog model support, so account-c is
+    // excluded as no_model while account-b is excluded as disabled.
+    let mut catalog = ModelCatalogCache::default();
+    catalog.set_account_provider("account-a", "provider-a");
+    catalog.set_account_provider("account-b", "provider-a");
+    catalog.set_account_provider("account-c", "provider-a");
+    let mut model = ModelInput::new("model-a");
+    model.protocol = Some("openai".into());
+    model.protocol_source = Some("fixture".into());
+    model.resolution_status = ProtocolResolutionStatus::Resolved;
+    catalog
+        .update_from_account("account-a", "provider-a", &[model], true, true)
+        .expect("catalog model");
+    let estimator = QuotaEstimator::new([
+        AccountQuota::new("account-a"),
+        AccountQuota::new("account-b"),
+        AccountQuota::new("account-c"),
+    ]);
+    let router = RoutingRouter::new(
+        registry,
+        catalog,
+        estimator,
+        None,
+        EligibilityPolicy::default(),
+    );
+    ExclusionFixture { database, router }
+}
+
+#[tokio::test]
+async fn prepared_routing_row_persists_multi_exclusion_and_score_facts() {
+    let fixture = exclusion_fixture().await;
+    let claim = fixture
+        .router
+        .select_and_claim(&facts(), &BTreeSet::new())
+        .await
+        .expect("claim succeeds")
+        .expect("account-a is selectable");
+    assert_eq!(claim.account_name(), "account-a");
+    let snapshot = claim.selection_snapshot().clone();
+    assert_eq!(snapshot.exclusions.len(), 2);
+    let service = PublicationService::new(fixture.database.clone());
+    let outcome = service
+        .publish(claim, input(1))
+        .await
+        .expect("publication succeeds");
+    assert!(matches!(outcome, PublicationOutcome::Published(_)));
+
+    let row = fixture
+        .database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT selected_account_id, selected_account_name, selected_tier, \
+                 selected_score, eligible_count, scored_count, \
+                 attempted_excluded_count, top_score, top_score_account_name, \
+                 exclude_reasons_json, score_components_json \
+                 FROM routing_decisions",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, Option<f64>>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, Option<f64>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                    ))
+                },
+            )
+        })
+        .await
+        .expect("routing decision row reads");
+    assert_eq!(row.0, Some(1));
+    assert_eq!(row.1, "account-a");
+    assert_eq!(row.2, snapshot.selected_priority.map(i64::from));
+    assert_eq!(row.4, snapshot.eligible_candidate_count as i64);
+    assert_eq!(row.5, snapshot.candidates.len() as i64);
+    assert_eq!(row.6, snapshot.exclusions.len() as i64);
+    assert_eq!(row.6, 2);
+    let expected_selected = snapshot
+        .selected_score
+        .as_ref()
+        .map(|score| score.final_score());
+    assert_eq!(row.3, expected_selected);
+    assert_eq!(
+        row.7,
+        snapshot
+            .candidates
+            .first()
+            .map(|candidate| candidate.score.final_score())
+    );
+    assert_eq!(row.8, snapshot.top_account_name);
+
+    let exclusions: serde_json::Value =
+        serde_json::from_str(&row.9).expect("exclusions JSON parses");
+    let mut reasons = exclusions
+        .as_array()
+        .expect("exclusions array")
+        .iter()
+        .map(|entry| {
+            (
+                entry["account"].as_str().expect("account").to_owned(),
+                entry["reason"].as_str().expect("reason").to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    reasons.sort();
+    assert_eq!(
+        reasons,
+        vec![
+            ("account-b".to_owned(), "disabled".to_owned()),
+            ("account-c".to_owned(), "no_model".to_owned()),
+        ]
+    );
+    let components: serde_json::Value =
+        serde_json::from_str(&row.10).expect("score components JSON parses");
+    assert!(
+        components.is_object(),
+        "score components must be a JSON object"
+    );
+    // Byte comparison against the same deterministic serializer: the prepared
+    // row must carry exactly the snapshot's score facts. (Parsed-Value float
+    // comparison is avoided because decimal parsing need not reproduce the
+    // identical f64 bits for 17-digit doubles.)
+    assert_eq!(
+        row.10,
+        serde_json::to_string(snapshot.selected_score.as_ref().expect("selected score"))
+            .expect("score serializes")
+    );
+    fixture.database.close().await.expect("database closes");
+}
