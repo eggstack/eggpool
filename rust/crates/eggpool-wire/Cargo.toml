@@ -1,0 +1,17 @@
+[package]
+name = "eggpool-wire"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+description = "Neutral sans-I/O wire kernel: canonical request/response/event types, protocol decoders, finite codecs, and streaming state machines"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "2"
+toml = "0.8"
+
+[lints.rust]
+unsafe_code = "forbid"

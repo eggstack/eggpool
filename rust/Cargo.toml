@@ -11,6 +11,7 @@ members = [
     "crates/eggpool-model-routing",
     "crates/eggpool-client-config",
     "crates/eggpool-connect",
+    "crates/eggpool-wire",
 ]
 
 [features]
@@ -72,6 +73,7 @@ eggserve-server = { version = "=0.4.0", default-features = false, features = ["t
 getrandom = "0.3.4"
 eggpool-client-config = { path = "crates/eggpool-client-config" }
 eggpool-model-routing = { path = "crates/eggpool-model-routing" }
+eggpool-wire = { path = "crates/eggpool-wire" }
 http = "1"
 http-body-util = "0.1"
 hyper = "1"

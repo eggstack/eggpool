@@ -1,4 +1,8 @@
 //! Canonical, provider-independent wire semantics.
+//!
+//! The neutral implementation lives in the `eggpool-wire` workspace crate;
+//! the kernel modules below are facades re-exporting that single source of
+//! truth, while `adapters` and `runtime` remain EggPool-owned.
 
 pub mod adaptation;
 pub mod adapters;

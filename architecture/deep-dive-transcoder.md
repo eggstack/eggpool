@@ -23,6 +23,15 @@ protocol-structure decoding with explicit `DecodeLimits::current()`; EggPool
 passes the current constants unchanged. The `wire_extraction_contract`
 corpus freezes exact/adapted/rejected behavior before the M003 move.
 
+M003 workspace split: the kernel is the single source of truth in
+`rust/crates/eggpool-wire` (`publish = false`; deps only serde/serde_json/
+thiserror/sha2/toml; no runtime/network/persistence). `rust/src/wire/`
+modules are narrow facades (`pub use eggpool_wire::...`) preserving the
+canonical `wire::ir` boundary path; `wire::adapters`, `wire::runtime`, and
+`request::admission` remain EggPool-owned. Root integration tests stay
+authoritative; the crate runs its own package tests. No new binary or
+packaging artifact was introduced.
+
 Each concrete codec builds a fresh target payload from canonical intent. Loss
 policy and provider capability contracts independently govern reasoning, tools,
 structured output, multimodal content, and cache controls. Unsupported fields

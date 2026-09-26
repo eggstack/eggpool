@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 003 — Sans-I/O Wire-Kernel Extraction and EggPool Cutover
 
-Status: ready
+Status: active
 
 Repository baseline: `61470ef788e287c49b4a51062eaba439049d46dc`
 

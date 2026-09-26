@@ -975,6 +975,7 @@ dependencies = [
  "eggfetch-core",
  "eggpool-client-config",
  "eggpool-model-routing",
+ "eggpool-wire",
  "eggress-config",
  "eggress-core",
  "eggress-outbound",
@@ -1047,6 +1048,17 @@ name = "eggpool-model-routing"
 version = "0.1.0"
 dependencies = [
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "eggpool-wire"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

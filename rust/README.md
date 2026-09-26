@@ -11,10 +11,13 @@ tooling-only.
 document/token estimates, and compact JSON body preparation. It parses a
 request once, retains only bounded canonical data plus accounting estimates,
 and never selects accounts or submits provider traffic. `eggpool::wire::ir`
-contains the source-owned request, response, usage, provider-error, and stream
-event semantics used by later static wire codecs. M5 routing and model-router
-affinity are reached only through pure adapters supplied with caller-owned
-static facts.
+is the EggPool canonical boundary facade; the implementation lives in the
+internal workspace library `eggpool-wire` (sans-I/O kernel: canonical
+request/response/event types, structural decoder, adaptation policy, finite
+codecs, SSE/stream state machines). The library is part of the shipped
+EggPool build but remains `publish = false` and is not independently
+published. M5 routing and model-router affinity are reached only through pure
+adapters supplied with caller-owned static facts.
 
 ## Toolchain policy
 
