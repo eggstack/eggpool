@@ -29,7 +29,7 @@ fn w012_oracle() -> Value {
 
 // `as_chunks` is newer than the Rust 1.85 MSRV; retain the equivalent
 // `chunks_exact` fixture operation while the project supports that MSRV.
-#[allow(clippy::chunks_exact_to_as_chunks)]
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 fn hex_bytes(hex: &str) -> Vec<u8> {
     hex.as_bytes()
         .chunks_exact(2)

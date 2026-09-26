@@ -952,9 +952,9 @@ impl PackageTransitionService {
             | InstallProvenance::Pipx { .. }
             | InstallProvenance::PipEnvironment { .. } => {
                 if selection.era == ReleaseEra::Python
-                    && !context
+                    && context
                         .python_version
-                        .is_some_and(|(major, minor)| (major, minor) >= (3, 11))
+                        .is_none_or(|(major, minor)| (major, minor) < (3, 11))
                 {
                     return Err(UpdateError::IncompatiblePythonEnvironment);
                 }

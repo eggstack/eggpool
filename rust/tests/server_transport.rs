@@ -28,6 +28,21 @@ async fn runtime_fixture() -> (tempfile::TempDir, Database, ServerRuntime) {
 async fn runtime_fixture_with_body_limit(
     max_request_body_bytes: u64,
 ) -> (tempfile::TempDir, Database, ServerRuntime) {
+    let (directory, database, runtime, _, _, _) =
+        runtime_fixture_with_generation_components(max_request_body_bytes).await;
+    (directory, database, runtime)
+}
+
+async fn runtime_fixture_with_generation_components(
+    max_request_body_bytes: u64,
+) -> (
+    tempfile::TempDir,
+    Database,
+    ServerRuntime,
+    ProcessRuntime,
+    Arc<RuntimeManager>,
+    Config,
+) {
     let directory = tempfile::tempdir().expect("temporary state directory");
     let database = Database::open(DatabaseConfig {
         path: directory
@@ -62,11 +77,35 @@ async fn runtime_fixture_with_body_limit(
         .install_initial_tasks((*manager).clone(), &config)
         .await
         .expect("initial tasks install");
-    (
-        directory,
-        database,
-        ServerRuntime::new(process, manager, config),
+    let runtime = ServerRuntime::new(process.clone(), Arc::clone(&manager), config.clone());
+    (directory, database, runtime, process, manager, config)
+}
+
+async fn publish_body_limit(
+    process: &ProcessRuntime,
+    manager: &Arc<RuntimeManager>,
+    mut config: Config,
+    max_request_body_bytes: u64,
+    generation_id: u64,
+) -> Config {
+    config.server.max_request_body_bytes = max_request_body_bytes;
+    let expected_generation = manager.active_generation().generation_id();
+    let candidate = RuntimeGenerationFactory::prepare(
+        process,
+        config.clone(),
+        format!("body-limit-{generation_id}"),
+        generation_id,
     )
+    .await
+    .expect("body-limit generation prepares");
+    let mut staged = manager
+        .stage(expected_generation, &candidate)
+        .expect("body-limit generation stages");
+    staged
+        .commit_pointer()
+        .expect("body-limit generation pointer commits");
+    staged.accept().expect("body-limit generation is accepted");
+    config
 }
 
 async fn request(address: std::net::SocketAddr, raw: &[u8]) -> String {
@@ -174,6 +213,121 @@ async fn streaming_fixture_provider(
             }
         }
     }
+}
+
+async fn concurrent_streaming_fixture_provider(
+    listener: TcpListener,
+    stopped: oneshot::Sender<()>,
+) -> std::io::Result<()> {
+    let mut workers = Vec::new();
+    for _ in 0..2 {
+        let (mut stream, _) = listener.accept().await?;
+        workers.push(tokio::spawn(async move {
+            let mut request = Vec::new();
+            let mut header_end = None;
+            while header_end.is_none() {
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).await?;
+                if read == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "provider request ended before headers",
+                    ));
+                }
+                request.extend_from_slice(&buffer[..read]);
+                header_end = request.windows(4).position(|window| window == b"\r\n\r\n");
+            }
+            let header_end = header_end.expect("header terminator was observed") + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).await?;
+                if read == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "provider request body ended early",
+                    ));
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+                )
+                .await?;
+            let payload = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n";
+            stream
+                .write_all(format!("{:X}\r\n", payload.len()).as_bytes())
+                .await?;
+            stream.write_all(payload).await?;
+            stream.write_all(b"\r\n").await?;
+            stream.write_all(b"0\r\n\r\n").await?;
+            stream.flush().await?;
+            Ok::<(), std::io::Error>(())
+        }));
+    }
+    for worker in workers {
+        worker
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))??;
+    }
+    let _ = stopped.send(());
+    Ok(())
+}
+
+async fn start_unknown_length_stream_request(address: std::net::SocketAddr) -> TcpStream {
+    let mut client = TcpStream::connect(address)
+        .await
+        .expect("connect stream client");
+    let body = br#"{"model":"stream-fixture","input":"ping","store":false,"stream":true}"#;
+    client
+        .write_all(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+        )
+        .await
+        .expect("write request headers");
+    client
+        .write_all(format!("{:X}\r\n", body.len()).as_bytes())
+        .await
+        .expect("write chunk header");
+    client.write_all(body).await.expect("write request body");
+    client
+        .write_all(b"\r\n0\r\n\r\n")
+        .await
+        .expect("finish chunked request body");
+    client
+}
+
+async fn read_stream_start(client: &mut TcpStream) -> std::io::Result<(String, Vec<u8>)> {
+    let mut response_head = Vec::new();
+    while !response_head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0_u8; 1];
+        client.read_exact(&mut byte).await?;
+        response_head.push(byte[0]);
+    }
+    let mut first_event = Vec::new();
+    let marker = b"event: response.output_text.delta";
+    while !first_event
+        .windows(marker.len())
+        .any(|window| window == marker)
+    {
+        let mut byte = [0_u8; 1];
+        client.read_exact(&mut byte).await?;
+        first_event.push(byte[0]);
+    }
+    Ok((
+        String::from_utf8_lossy(&response_head).into_owned(),
+        first_event,
+    ))
 }
 
 #[tokio::test]
@@ -431,13 +585,11 @@ async fn eggpool_live_body_limit_applies_to_content_length_and_chunked_bodies() 
     let address = listener.local_addr().expect("listener address");
     let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
     let body = vec![b'x'; 65];
-    let mut content_length = format!(
+    let content_length = format!(
         "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    )
-    .into_bytes();
-    content_length.extend_from_slice(&body);
-    let response = request(address, &content_length).await;
+    );
+    let response = request(address, content_length.as_bytes()).await;
     assert!(response.starts_with("HTTP/1.1 413"), "{response}");
     let health = request(
         address,
@@ -486,6 +638,124 @@ async fn eggpool_live_body_limit_applies_to_content_length_and_chunked_bodies() 
         .expect("server task joins")
         .expect("server shuts down cleanly");
     assert_eq!(report.body_tasks_at_deadline, 0);
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn aggregate_unknown_body_admission_rejects_without_reading_and_recovers() {
+    let (_directory, database, runtime) = runtime_fixture_with_body_limit(64 * 1024 * 1024).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let mut admitted = TcpStream::connect(address)
+        .await
+        .expect("first upload connects");
+    admitted
+        .write_all(b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nTransfer-Encoding: chunked\r\n\r\n")
+        .await
+        .expect("send first upload headers");
+
+    let rejected = request(
+        address,
+        b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(rejected.starts_with("HTTP/1.1 503"), "{rejected}");
+    assert!(!rejected.contains("67108864"), "{rejected}");
+    drop(admitted);
+
+    let recovery = request(
+        address,
+        b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    )
+    .await;
+    assert!(!recovery.starts_with("HTTP/1.1 503"), "{recovery}");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn body_admission_uses_each_requests_leased_generation_limit() {
+    let (_directory, database, runtime, process, manager, config) =
+        runtime_fixture_with_generation_components(32).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let config = publish_body_limit(&process, &manager, config, 64, 2).await;
+    let increased = vec![b'x'; 40];
+    let mut increased_request = format!(
+        "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        increased.len()
+    )
+    .into_bytes();
+    increased_request.extend_from_slice(&increased);
+    let response = request(address, &increased_request).await;
+    assert!(!response.starts_with("HTTP/1.1 413"), "{response}");
+
+    let old_slot = manager.active_slot();
+    let mut admitted = TcpStream::connect(address)
+        .await
+        .expect("old-generation upload connects");
+    admitted
+        .write_all(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: 64\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .expect("old-generation headers are sent");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while old_slot.active_lease_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("old-generation request acquired its lease before upload");
+
+    let _config = publish_body_limit(&process, &manager, config, 32, 3).await;
+    admitted
+        .write_all(&[b'x'; 64])
+        .await
+        .expect("finish the old-generation upload");
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), admitted.read_to_end(&mut response))
+        .await
+        .expect("old-generation request completes")
+        .expect("old-generation response reads");
+    let response = String::from_utf8_lossy(&response);
+    assert!(!response.starts_with("HTTP/1.1 413"), "{response}");
+
+    let response = request(
+        address,
+        b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Length: 33\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
     database
         .close()
         .await
@@ -1141,6 +1411,166 @@ async fn eggserve_040_streaming_stays_incremental_without_trailers() {
         .expect("stream producer observes downstream cancellation")
         .expect("provider connection closes");
     let _ = tokio::time::timeout(Duration::from_secs(2), provider).await;
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
+async fn unknown_body_reservation_releases_at_stream_handoff() {
+    const BODY_LIMIT: u64 = 64 * 1024 * 1024;
+    let provider_listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind loopback provider");
+    let provider_address = provider_listener.local_addr().expect("provider address");
+    let (provider_stopped_tx, provider_stopped_rx) = oneshot::channel();
+    let provider = tokio::spawn(concurrent_streaming_fixture_provider(
+        provider_listener,
+        provider_stopped_tx,
+    ));
+
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("eggpool.db")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    let mut config = Config::default();
+    config.server.api_key = Some("test-key-transport".to_owned());
+    config.server.max_request_body_bytes = BODY_LIMIT;
+    config.models.startup_refresh = false;
+    let mut provider_config = ProviderConfig {
+        id: "fixture".to_owned(),
+        base_url: format!("http://{provider_address}"),
+        protocols: vec!["openai".to_owned()],
+        accounts: ["fixture-account-a", "fixture-account-b"]
+            .into_iter()
+            .map(|name| AccountConfig {
+                name: name.to_owned(),
+                api_key: Some("fixture-provider-key".to_owned()),
+                ..AccountConfig::default()
+            })
+            .collect(),
+        ..ProviderConfig::default()
+    };
+    provider_config.wire_surfaces.insert(
+        "openai_responses".to_owned(),
+        ProviderWireSurfaceConfig {
+            path_template: "/responses".to_owned(),
+            auth: Some(ProviderAuthConfig::default()),
+            ..ProviderWireSurfaceConfig::default()
+        },
+    );
+    provider_config.model_wire.insert(
+        "stream-fixture".to_owned(),
+        ModelWirePreference {
+            preferred_surface: "openai_responses".to_owned(),
+            fixed: true,
+        },
+    );
+    provider_config
+        .static_models
+        .push(ProviderStaticModelConfig {
+            id: "stream-fixture".to_owned(),
+            protocol: Some("openai".to_owned()),
+            ..ProviderStaticModelConfig::default()
+        });
+    config
+        .providers
+        .insert("fixture".to_owned(), provider_config);
+    AccountRepository::new(&database)
+        .sync_from_config(
+            ["fixture-account-a", "fixture-account-b"]
+                .into_iter()
+                .map(|name| DbAccountConfig {
+                    name: name.to_owned(),
+                    api_key_env: String::new(),
+                    enabled: true,
+                    weight: 1.0,
+                    provider_id: "fixture".to_owned(),
+                })
+                .collect(),
+        )
+        .await
+        .expect("fixture accounts synchronize");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id, resolution_status) VALUES ('stream-fixture', 'openai', 'fixture', 'resolved')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("fixture model is catalogued");
+    let process = ProcessRuntime::new(database.clone());
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "stream-body-reservation".to_owned(),
+        1,
+    )
+    .await
+    .expect("streaming generation prepares");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfers"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("initial tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind HTTP listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let mut first = start_unknown_length_stream_request(address).await;
+    let (first_head, _) =
+        tokio::time::timeout(Duration::from_secs(5), read_stream_start(&mut first))
+            .await
+            .expect("first stream starts")
+            .expect("read first stream");
+    assert!(first_head.starts_with("HTTP/1.1 200"), "{first_head}");
+
+    let mut second = start_unknown_length_stream_request(address).await;
+    let (second_head, _) =
+        tokio::time::timeout(Duration::from_secs(5), read_stream_start(&mut second))
+            .await
+            .expect("second stream starts after first handler handoff")
+            .expect("read second stream");
+    assert!(second_head.starts_with("HTTP/1.1 200"), "{second_head}");
+
+    drop(first);
+    drop(second);
+    tokio::time::timeout(Duration::from_secs(2), provider_stopped_rx)
+        .await
+        .expect("provider observes downstream cancellation")
+        .expect("provider task stop is signaled");
+    tokio::time::timeout(Duration::from_secs(2), provider)
+        .await
+        .expect("provider workers stop")
+        .expect("provider task joins")
+        .expect("provider workers finish cleanly");
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(11), task)
+        .await
+        .expect("transport shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert!(report.database_closed);
     database
         .close()
         .await

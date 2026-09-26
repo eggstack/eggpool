@@ -657,7 +657,7 @@ where
     transaction.advance(Phase::LocalParseValidated)?;
 
     // Layer 2: client-native validation (time-bound, redacted).
-    let native_result: Result<String, ConnectError> = (|| async {
+    let native_result: Result<String, ConnectError> = async {
         if injector.fail_native_validation {
             return Err(ConnectError::Validation {
                 detail: "injected native validation failure".to_owned(),
@@ -681,7 +681,7 @@ where
             &expected,
         )
         .await
-    })()
+    }
     .await;
     let native_detail = match native_result {
         Ok(detail) => detail,

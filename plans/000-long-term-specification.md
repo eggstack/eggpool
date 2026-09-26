@@ -103,5 +103,5 @@ narrowly scoped change.
 
 No second HTTP abstraction or retry owner; no new restart/reload key lists;
 no buffering of arbitrary native streams; no EggPool SSH executor fallback
-(Eggress 1.0.8 outbound owns proxy transport); no Windows proxy support
+(the exact-pinned Eggress outbound crate owns proxy transport); no Windows proxy support
 implied by the `eggpool-connect` helper.

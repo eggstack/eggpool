@@ -432,7 +432,7 @@ Deep dives: [Observability](deep-dive-observability.md),
 Eggfetch (`eggfetch-core` 0.2.0 `native-http1` + `tls-rustls`, provider
 transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
-`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.8
+`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.10
 (optional SSH capability), plus the path crates `eggpool-model-routing`,
 `eggpool-client-config`, and the `eggpool-connect` desktop binary (narrow
 Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `ssh`

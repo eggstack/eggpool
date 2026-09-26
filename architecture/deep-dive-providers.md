@@ -105,7 +105,7 @@ chain-executor path keeps its own fully typed `ChainError` classification.
 route timeout; Eggfetch's connect timeout owns the provider deadline.
 
 Eggpool delegates provider proxy-chain construction and execution to
-`eggress-outbound` 1.0.8. The root `ssh` capability enables the outbound
+`eggress-outbound` 1.0.10. The root `ssh` capability enables the outbound
 crate's native SSH session ownership plus the compatibility crate's SSH
 translation support by default (pproxy-style SSH expressions construct only
 when both cfg gates agree); `--no-default-features` omits that capability
@@ -301,3 +301,12 @@ default and 40/40 with `test-support`; coordinator C008/C009/C011,
 boundaries, finalization, publication, and wire-runtime pass; no-default
 check/clippy/tests pass with SSH rejected pre-dial; `cargo deny` passes.
 Plans 215–220 and 241 remain historical evidence.
+
+Current adapter contract: `ProviderBody::next()` yields only DATA frames.
+HTTP trailer frames observed while polling are retained separately and can be
+moved out with `take_trailers()`; they never become downstream wire terminal
+evidence. Its debug representation reports trailer presence only. Eggfetch
+physical-admission expiry uses its typed predicate; residual pool errors fail
+closed without parsing upstream display text. The live Eggress package family
+is now exact-pinned to 1.0.10; the preceding Plan 243 measurements remain
+historical.

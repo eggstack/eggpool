@@ -22,7 +22,7 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 - Thinking/reasoning capability metadata with compositional toggle/effort/budget
   controls and explicit translation-policy budget mapping
 - Per-account outbound proxy support in the native runtime
-- Default builds enable Eggress 1.0.8 SSH support through the listener-free
+- Default builds enable Eggress 1.0.10 SSH support through the listener-free
   `eggress-outbound` `OutboundConnector`; deliberately reduced `--no-default-features` builds
   reject configured SSH proxies while retaining non-SSH proxy support
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
@@ -566,7 +566,7 @@ Provider transport is pinned to `eggfetch-core =0.2.0` with
 `native-http1,tls-rustls`: this keeps direct standard routing and custom
 Eggress routing while excluding Eggfetch's high-level URL, retry, redirect,
 Basic-auth, built-in proxy, and HTTP/2/3 policies. Provider proxy routing
-uses exact-pinned `eggress-outbound =1.0.8` directly (no full-service facade):
+uses exact-pinned `eggress-outbound =1.0.10` directly (no full-service facade):
 the dialer calls `connect_tcp_detailed` and maps typed `OutboundConnectError`
 kind/stage facts into the stable `TransportError` proxy categories without
 inspecting error strings. See the [provider

@@ -3,6 +3,9 @@ use super::*;
 pub(super) async fn chat_completions(
     State(state): State<AppState>,
     Extension(lease): Extension<Arc<GenerationLease>>,
+    Extension(_raw_body_reservation): Extension<
+        Arc<crate::request::resource_budget::RawBodyReservation>,
+    >,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -12,6 +15,9 @@ pub(super) async fn chat_completions(
 pub(super) async fn messages(
     State(state): State<AppState>,
     Extension(lease): Extension<Arc<GenerationLease>>,
+    Extension(_raw_body_reservation): Extension<
+        Arc<crate::request::resource_budget::RawBodyReservation>,
+    >,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -21,6 +27,9 @@ pub(super) async fn messages(
 pub(super) async fn responses(
     State(state): State<AppState>,
     Extension(lease): Extension<Arc<GenerationLease>>,
+    Extension(_raw_body_reservation): Extension<
+        Arc<crate::request::resource_budget::RawBodyReservation>,
+    >,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -37,6 +46,9 @@ pub(super) async fn responses(
 pub(super) async fn responses_compact(
     State(state): State<AppState>,
     Extension(lease): Extension<Arc<GenerationLease>>,
+    Extension(_raw_body_reservation): Extension<
+        Arc<crate::request::resource_budget::RawBodyReservation>,
+    >,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {

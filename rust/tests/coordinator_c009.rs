@@ -699,13 +699,12 @@ async fn thin_stream_path_covers_three_surfaces_without_buffering() {
             Ok((mut execution, _)) => {
                 assert_eq!(server.count(), 1, "{client:?} dispatches once");
                 execution.mark_started();
-                let (chunks, clean) = drain_stream(&mut execution).await;
+                let (chunks, _clean) = drain_stream(&mut execution).await;
                 assert!(
                     !chunks.is_empty(),
                     "{client:?} forwards chunks incrementally"
                 );
                 let _ = execution.complete(DownstreamResult::Delivered).await;
-                assert!(clean || !clean, "{client:?} terminal stored");
                 assert_eq!(server.count(), 1, "{client:?} never replays");
             }
             Err(error) => {

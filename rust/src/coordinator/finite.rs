@@ -821,7 +821,7 @@ impl FiniteCoordinator {
                         AttemptError::Transport(_) => (FailureSource::Transport, None),
                         _ => (FailureSource::LocalPreparation, None),
                     };
-                    let observation = self.observation(
+                    let mut observation = self.observation(
                         &identity,
                         &candidate.profile,
                         attempt_number,
@@ -832,6 +832,9 @@ impl FiniteCoordinator {
                         alternate_wire_available,
                         "transport",
                     );
+                    if let AttemptError::Transport(error) = &error {
+                        observation.error_class = Some(error.diagnostic_class().into());
+                    }
                     let (effects, first) = self.decide(&observation)?;
                     if first {
                         self.apply_effects(&published.claim, &effects);
@@ -906,7 +909,7 @@ impl FiniteCoordinator {
                         FailureSource::Transport
                     };
                     let category_hint = is_body_too_large.then_some(FailureCategory::Fatal);
-                    let observation = self.observation(
+                    let mut observation = self.observation(
                         &identity,
                         &candidate.profile,
                         attempt_number,
@@ -917,6 +920,7 @@ impl FiniteCoordinator {
                         alternate_wire_available,
                         "body_read",
                     );
+                    observation.error_class = Some(error.diagnostic_class().into());
                     let (effects, first) = self.decide(&observation)?;
                     if first {
                         self.apply_effects(&published.claim, &effects);

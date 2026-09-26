@@ -1023,7 +1023,7 @@ impl StreamingCoordinator {
             AttemptError::Transport(_) => FailureSource::Transport,
             _ => FailureSource::LocalPreparation,
         };
-        let observation = self.observation(
+        let mut observation = self.observation(
             identity,
             profile,
             attempt_number,
@@ -1035,6 +1035,9 @@ impl StreamingCoordinator {
             dispatch_phase,
             false,
         );
+        if let AttemptError::Transport(transport_error) = &error {
+            observation.error_class = Some(transport_error.diagnostic_class().into());
+        }
         let (effects, first) = self.decide(&observation)?;
         *last_failure = Some((effects.clone(), None, identity.upstream_protocol.clone()));
         if first {

@@ -159,7 +159,7 @@ pub(crate) fn store_idle_timeout(
     router: &RoutingRouter,
     engine: &Mutex<FailureDecisionEngine>,
 ) -> Option<Result<Bytes, StreamChunkError>> {
-    let observation = transport_observation(parts, facts, "stream_idle");
+    let observation = transport_observation(parts, facts, "stream_idle", "stream_idle");
     let (effects, first) = match decide(engine, &observation) {
         Ok(value) => value,
         Err(_) => return store_local_midstream(parts, facts, "StreamIdleTimeout"),
@@ -189,8 +189,9 @@ pub(crate) fn store_midstream_transport(
     facts: &AttemptStreamFacts,
     router: &RoutingRouter,
     engine: &Mutex<FailureDecisionEngine>,
+    diagnostic_class: &'static str,
 ) -> Option<Result<Bytes, StreamChunkError>> {
-    let observation = transport_observation(parts, facts, "stream_body");
+    let observation = transport_observation(parts, facts, "stream_body", diagnostic_class);
     let (effects, first) = match decide(engine, &observation) {
         Ok(value) => value,
         Err(_) => return store_local_midstream(parts, facts, "UpstreamTransport"),
@@ -462,6 +463,7 @@ fn transport_observation(
     parts: &PendingStreamFinalizationParts,
     facts: &AttemptStreamFacts,
     dispatch_phase: &str,
+    diagnostic_class: &str,
 ) -> FailureObservation {
     let mut observation = FailureObservation::response(
         parts.identity.attempt_id,
@@ -480,7 +482,7 @@ fn transport_observation(
     observation.upstream_protocol = parts.identity.upstream_protocol.clone();
     observation.wire_surface = Some(facts.wire_surface.as_str().into());
     observation.transport_phase = Some(dispatch_phase.into());
-    observation.error_class = Some(dispatch_phase.into());
+    observation.error_class = Some(diagnostic_class.into());
     observation.credential_configured = true;
     observation.dispatch_phase = dispatch_phase.into();
     observation

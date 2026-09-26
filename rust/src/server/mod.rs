@@ -413,10 +413,10 @@ impl ServerRuntime {
 
 fn eggserve_runtime_config()
 -> Result<eggserve_server::RuntimeConfig, eggserve_server::errors::ServerError> {
-    // The long handler/body budgets intentionally avoid becoming EggPool's
-    // provider timeout policy. Header, keep-alive, write-progress, and parser
-    // ceilings remain explicit transport defenses. EggPool application body
-    // admission continues to enforce its generation-owned live limit.
+    // Body-read time is a client upload policy. Handler time protects long
+    // provider/model operations from an EggServe-owned transport deadline.
+    // Header, keep-alive, write-progress, and parser ceilings remain explicit
+    // transport defenses; application admission enforces the live body limit.
     eggserve_server::RuntimeConfig::builder()
         .bind("127.0.0.1:0".parse().expect("static socket address"))
         .max_connections(1024)
@@ -428,7 +428,7 @@ fn eggserve_runtime_config()
         .max_request_target_bytes(16 * 1024)
         .disable_connection_total_timeout()
         .handler_timeout(Duration::from_secs(24 * 60 * 60))
-        .body_read_timeout(Duration::from_secs(24 * 60 * 60))
+        .body_read_timeout(Duration::from_secs(5 * 60))
         .header_read_timeout(Duration::from_secs(15))
         .keep_alive_idle_timeout(Duration::from_secs(120))
         .response_write_timeout(Duration::from_secs(120))
@@ -1078,6 +1078,8 @@ mod tests {
     #[test]
     fn eggserve_policy_defaults_remain_eggserve_owned() {
         let config = eggserve_runtime_config().expect("valid runtime config");
+        assert_eq!(config.body_read_timeout, Duration::from_secs(5 * 60));
+        assert_eq!(config.handler_timeout, Duration::from_secs(24 * 60 * 60));
         assert_eq!(
             config.http1_request_target_mode,
             eggserve_server::Http1RequestTargetMode::OriginOnly

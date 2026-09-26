@@ -9,7 +9,7 @@
 //! `eggfetch-core` 0.2.0 native `Client::execute_http_body`. Proxied routes
 //! supply the physical byte stream through a thin `EggressDialer` adapter that
 //! implements Eggfetch's general custom `Dialer` interface over the
-//! listener-free `eggress-outbound` 1.0.8 `OutboundConnector` route API.
+//! listener-free `eggress-outbound` 1.0.10 `OutboundConnector` route API.
 //! Eggress owns route/proxy handshakes and route-level TLS; Eggfetch still
 //! performs destination/origin TLS across the returned stream, so proxy and
 //! origin trust planes remain separate. Route failures arrive as typed
@@ -108,6 +108,34 @@ pub enum TransportError {
     Cancelled,
 }
 
+impl TransportError {
+    /// Return the bounded diagnostic class for this transport failure.
+    /// Labels contain no route, provider, or source-error data.
+    pub const fn diagnostic_class(&self) -> &'static str {
+        match self {
+            Self::Configuration => "configuration",
+            Self::ProxyConfiguration => "proxy_configuration",
+            Self::InvalidTarget => "invalid_target",
+            Self::RequestBodyTooLarge => "request_body_too_large",
+            Self::PoolTimeout => "pool_timeout",
+            Self::ConnectTimeout => "connect_timeout",
+            Self::Connect => "connect",
+            Self::ProxyConnectTimeout => "proxy_connect_timeout",
+            Self::ProxyConnect => "proxy_connect",
+            Self::ProxyAuthentication => "proxy_authentication",
+            Self::ProxyTargetConnect => "proxy_target_connect",
+            Self::Tls => "tls",
+            Self::WriteTimeout => "write_timeout",
+            Self::Write => "write",
+            Self::ReadTimeout => "read_timeout",
+            Self::Read => "read",
+            Self::ResponseBodyTooLarge => "response_body_too_large",
+            Self::Protocol => "protocol",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 /// Provider transport settings independent of provider wire semantics.
 #[derive(Debug, Clone)]
 pub struct ProviderHttpConfig {
@@ -192,7 +220,6 @@ pub struct ProviderResponse {
 }
 
 /// A response body that never buffers the complete upstream response.
-#[derive(Debug)]
 pub struct ProviderBody {
     inner: Pin<Box<eggfetch_core::NativeResponseBody>>,
     /// Whether the owning client dials through an Eggress route. Dialer
@@ -200,6 +227,17 @@ pub struct ProviderBody {
     /// route to classify establishment timeouts without conflating them with
     /// direct connection failures.
     proxy_transport: bool,
+    trailers: Option<HeaderMap>,
+}
+
+impl std::fmt::Debug for ProviderBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderBody")
+            .field("proxy_transport", &self.proxy_transport)
+            .field("has_trailers", &self.trailers.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ProviderBody {
@@ -207,16 +245,30 @@ impl ProviderBody {
         Self {
             inner: Box::pin(inner),
             proxy_transport,
+            trailers: None,
         }
     }
 
-    /// Wait for the next data chunk. Trailers are consumed and skipped.
+    /// Wait for the next data chunk. HTTP trailers are retained separately.
     pub async fn next(&mut self) -> Option<Result<Bytes, TransportError>> {
         loop {
             match self.inner.frame().await {
                 Some(Ok(frame)) => match frame.into_data() {
                     Ok(data) => return Some(Ok(data)),
-                    Err(_) => continue,
+                    Err(frame) => {
+                        if let Ok(trailers) = frame.into_trailers() {
+                            if let Some(existing) = &mut self.trailers {
+                                for (name, value) in trailers {
+                                    if let Some(name) = name {
+                                        existing.append(name, value);
+                                    }
+                                }
+                            } else {
+                                self.trailers = Some(trailers);
+                            }
+                        }
+                        continue;
+                    }
                 },
                 Some(Err(error)) => {
                     return Some(Err(map_eggfetch_error(
@@ -228,6 +280,12 @@ impl ProviderBody {
                 None => return None,
             }
         }
+    }
+
+    /// Take trailers already observed while polling the response body.
+    /// This accessor never reads or drains the body.
+    pub fn take_trailers(&mut self) -> Option<HeaderMap> {
+        self.trailers.take()
     }
 
     /// Buffer a response only when the caller supplies an explicit finite
@@ -935,14 +993,10 @@ fn map_eggfetch_error(
     if error.is_physical_connection_admission_timeout() {
         return TransportError::PoolTimeout;
     }
-    if let EggfetchError::Pool(message) = error {
-        // Zero max_live or admission without max_live is a construction bug;
-        // validate_config already rejects max_connections == 0, so fail
-        // closed as configuration rather than a transient pool timeout.
-        if message.contains("max_live") {
-            return TransportError::Configuration;
-        }
-        return TransportError::PoolTimeout;
+    if matches!(error, EggfetchError::Pool(_)) {
+        // The typed physical-admission predicate above is the only runtime
+        // pool-timeout signal. Residual pool errors are setup/internal faults.
+        return TransportError::Configuration;
     }
     // 2-3. Established transport inactivity direction is typed.
     if let EggfetchError::TransportIoTimeout { direction, .. } = error {
@@ -1306,6 +1360,79 @@ mod tests {
             map_eggfetch_error(&error, TransportError::Write, false),
             TransportError::ConnectTimeout
         );
+    }
+
+    #[test]
+    fn residual_eggfetch_pool_errors_are_configuration_not_text_classified() {
+        use super::map_eggfetch_error;
+        use eggfetch_core::{Error as EggfetchError, TimeoutPhase};
+
+        let residual = EggfetchError::Pool("arbitrary diagnostic text".to_owned());
+        assert_eq!(
+            map_eggfetch_error(&residual, TransportError::Read, false),
+            TransportError::Configuration
+        );
+        let physical = EggfetchError::Pool("physical connection admission timeout".to_owned());
+        assert_eq!(
+            map_eggfetch_error(&physical, TransportError::Read, false),
+            TransportError::PoolTimeout
+        );
+        let typed_timeout = EggfetchError::Timeout {
+            phase: TimeoutPhase::Pool,
+            elapsed: std::time::Duration::from_secs(1),
+        };
+        assert_eq!(
+            map_eggfetch_error(&typed_timeout, TransportError::Read, false),
+            TransportError::PoolTimeout
+        );
+    }
+
+    #[test]
+    fn transport_diagnostic_labels_are_exhaustive_static_and_policy_neutral() {
+        use super::TransportError as T;
+        use crate::coordinator::{FailureObservation, FailureSource, RetryPolicy, classify};
+
+        let cases = [
+            (T::Configuration, "configuration"),
+            (T::ProxyConfiguration, "proxy_configuration"),
+            (T::InvalidTarget, "invalid_target"),
+            (T::RequestBodyTooLarge, "request_body_too_large"),
+            (T::PoolTimeout, "pool_timeout"),
+            (T::ConnectTimeout, "connect_timeout"),
+            (T::Connect, "connect"),
+            (T::ProxyConnectTimeout, "proxy_connect_timeout"),
+            (T::ProxyConnect, "proxy_connect"),
+            (T::ProxyAuthentication, "proxy_authentication"),
+            (T::ProxyTargetConnect, "proxy_target_connect"),
+            (T::Tls, "tls"),
+            (T::WriteTimeout, "write_timeout"),
+            (T::Write, "write"),
+            (T::ReadTimeout, "read_timeout"),
+            (T::Read, "read"),
+            (T::ResponseBodyTooLarge, "response_body_too_large"),
+            (T::Protocol, "protocol"),
+            (T::Cancelled, "cancelled"),
+        ];
+        for (error, label) in cases {
+            assert_eq!(error.diagnostic_class(), label);
+            assert!(label.len() <= 32);
+            assert!(
+                label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            );
+
+            let mut generic =
+                FailureObservation::response(1, 1, http::StatusCode::INTERNAL_SERVER_ERROR);
+            generic.source = FailureSource::Transport;
+            generic.error_class = Some("transport".into());
+            let mut specific = generic.clone();
+            specific.error_class = Some(label.into());
+            assert_eq!(
+                classify(&generic, RetryPolicy::default()),
+                classify(&specific, RetryPolicy::default())
+            );
+        }
     }
 
     #[cfg(feature = "test-support")]

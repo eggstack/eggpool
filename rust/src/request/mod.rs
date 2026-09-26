@@ -6,6 +6,7 @@
 pub mod admission;
 pub mod body;
 pub mod limits;
+pub(crate) mod resource_budget;
 
 pub use admission::{
     AdmissionError, AdmissionOptions, AdmittedRequest, CompactAdmittedRequest,

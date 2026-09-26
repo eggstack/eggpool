@@ -51,7 +51,7 @@ the native `Client::execute_http_body` API. Eggpool selects Eggfetch's
 `advanced-routing`) rather than the high-level `http1` alias; redirects,
 logical retries, and built-in proxy support remain disabled. Proxied accounts install a thin
 `EggressDialer` implementing Eggfetch's custom `Dialer` interface over the
-listener-free `eggress-outbound` 1.0.8 `OutboundConnector` route API;
+listener-free `eggress-outbound` 1.0.10 `OutboundConnector` route API;
 Eggfetch still performs origin TLS across the
 returned stream, so proxy and origin trust planes stay separate and a failed
 dial never falls back to direct networking. Route failures arrive as typed

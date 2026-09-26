@@ -16,6 +16,13 @@ before collecting inference bodies and applies that generation's configured
 request limit. All four public inference routes (`/v1/chat/completions`,
 `/v1/messages`, `/v1/responses`, `/v1/responses/compact`) share this
 generation-owned body-admission path.
+Admission rejects a declared `Content-Length` above the live generation limit
+before polling the body, and reserves known raw bytes (or the full live limit
+for unknown-length bodies) against a process-local budget of
+`max(64 MiB, live max_request_body_bytes)`. The reservation stays with the
+request through finite execution and is released when streaming has handed off
+the upstream request. EggServe limits client body reads to five minutes while
+the handler deadline remains 24 hours for long provider/model work.
 
 The canonical IR (`rust/src/wire/ir.rs`) is captured via admission before provider adaptation. A selected wire
 codec under `rust/src/wire/` encodes the provider request and decodes finite or

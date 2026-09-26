@@ -95,6 +95,28 @@ pub(super) async fn admit_inference_body(
     };
     let limit = usize::try_from(lease.generation().config().server.max_request_body_bytes)
         .unwrap_or(usize::MAX);
+    let ceiling = crate::request::resource_budget::effective_ceiling(limit);
+    let declared_length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if declared_length.is_some_and(|length| length > limit) {
+        return json_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({"detail": "Request body too large"}),
+        );
+    }
+    let reservation_size = declared_length.unwrap_or(limit);
+    let Some(reservation) =
+        crate::request::resource_budget::RawBodyReservation::try_acquire(reservation_size, ceiling)
+    else {
+        return error_body_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ClientSurface::ChatCompletions,
+            br#"{"detail":"Service unavailable"}"#.to_vec(),
+        );
+    };
     let body = std::mem::replace(request.body_mut(), Body::empty());
     let collected = match Limited::new(body, limit).collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -108,6 +130,7 @@ pub(super) async fn admit_inference_body(
         }
     };
     request.extensions_mut().insert(Arc::new(lease));
+    request.extensions_mut().insert(Arc::new(reservation));
     *request.body_mut() = Body::from(collected);
     next.run(request).await
 }

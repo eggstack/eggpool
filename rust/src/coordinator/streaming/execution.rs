@@ -251,7 +251,7 @@ impl StreamingExecution {
                 Chunk(Bytes),
                 Eof,
                 Idle,
-                Transport,
+                Transport(&'static str),
                 Gone,
             }
             let pull = {
@@ -270,7 +270,7 @@ impl StreamingExecution {
                                 PullBody::Chunk(chunk) => Pull::Chunk(chunk),
                                 PullBody::Eof => Pull::Eof,
                                 PullBody::Idle => Pull::Idle,
-                                PullBody::Transport => Pull::Transport,
+                                PullBody::Transport(class) => Pull::Transport(class),
                                 PullBody::Skip => continue,
                             }
                         }
@@ -285,8 +285,8 @@ impl StreamingExecution {
                 Pull::Idle => {
                     return store_idle_timeout(parts, facts, router, failure_engine);
                 }
-                Pull::Transport => {
-                    return store_midstream_transport(parts, facts, router, failure_engine);
+                Pull::Transport(class) => {
+                    return store_midstream_transport(parts, facts, router, failure_engine, class);
                 }
                 Pull::Eof => {
                     return store_eof(parts, facts, router, wire_resolver);
@@ -339,7 +339,7 @@ enum PullBody {
     Chunk(Bytes),
     Eof,
     Idle,
-    Transport,
+    Transport(&'static str),
     Skip,
 }
 
@@ -353,7 +353,7 @@ async fn pull_body(body: &mut crate::providers::ProviderBody, idle: Option<Durat
     };
     match next {
         None => PullBody::Eof,
-        Some(Err(_)) => PullBody::Transport,
+        Some(Err(error)) => PullBody::Transport(error.diagnostic_class()),
         Some(Ok(chunk)) if chunk.is_empty() => PullBody::Skip,
         Some(Ok(chunk)) => PullBody::Chunk(chunk),
     }

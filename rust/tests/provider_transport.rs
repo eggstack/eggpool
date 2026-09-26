@@ -55,6 +55,7 @@ enum ResponseMode {
     Redirect,
     SlowHeaders,
     Premature,
+    Trailers,
 }
 
 #[derive(Clone, Copy)]
@@ -1222,8 +1223,45 @@ fn write_response(stream: &mut TestStream, mode: ResponseMode) {
                 )
                 .unwrap();
         }
+        ResponseMode::Trailers => {
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\ntrailer: x-eggpool-test-trailer\r\nconnection: close\r\n\r\n2\r\nok\r\n0\r\nx-eggpool-test-trailer: first\r\nx-eggpool-test-trailer: second\r\n\r\n",
+                )
+                .unwrap();
+        }
     }
     stream.flush().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn response_trailers_are_retained_without_becoming_data_or_debug_values() {
+    let server = FixtureServer::http(ResponseMode::Trailers, 1);
+    let client = make_client(&server.http_url());
+    let mut response = client
+        .send(Method::GET, "/trailers", HeaderMap::new(), Bytes::new())
+        .await
+        .expect("trailer response");
+    assert_eq!(response.body.take_trailers(), None);
+    assert_eq!(
+        response
+            .body
+            .next()
+            .await
+            .expect("data frame")
+            .expect("data"),
+        Bytes::from_static(b"ok")
+    );
+    assert!(response.body.next().await.is_none());
+    let trailers = response.body.take_trailers().expect("observed trailers");
+    let values = trailers
+        .get_all("x-eggpool-test-trailer")
+        .iter()
+        .map(|value| value.to_str().expect("test trailer"))
+        .collect::<Vec<_>>();
+    assert_eq!(values, ["first", "second"]);
+    assert!(!format!("{:?}", response.body).contains("first"));
+    assert_eq!(response.body.take_trailers(), None);
 }
 
 fn make_tls_material() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
