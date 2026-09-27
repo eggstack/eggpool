@@ -104,15 +104,24 @@ by Plan 240 before a default change is considered.
 The landed M001 candidate is conditionally closed: it keeps every Plan 240
 invariant and makes the
 existing process-owned `checkpoint` task opportunistic instead of periodic-
-unconditional. Physical Pi/MMC target qualification remains outstanding
-(persistence M004 is blocked without a qualifying target; see below), so the
-60s/256-frame periodic strategy is neither accepted as sufficient nor rejected
-on target. `Database::checkpoint_maintenance` (in
-`rust/src/db/connection.rs`) runs on the same gate/worker with a
-crate-private `CheckpointMaintenancePolicy` (soft WAL-frame threshold, default
-256) and returns a bounded `CheckpointMaintenanceOutcome`
-(`not_due`/`gate_busy`/`below_threshold`/`checkpointed` plus scalar frame
-counts):
+unconditional. M004 (`plans/closure/persistence/004-status.md`, closed against
+HEAD `8113d264`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs
+and **rejected the periodic strategy** on the target class. Three 60s/256
+phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms with foreground
+publication `COMMIT` 522 ms – 10.9 s on the slowest request in every run;
+bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence
+1s/64 stress run all left the foreground tail; ordinary
+`--benchmark-samples 10` runs converged with backup / recovery / restart /
+shutdown / rehash / bounded-maintenance / graceful-shutdown all green but
+`--benchmark-samples 30` cannot complete because the residual auto-checkpoint
+tail exceeds the runner's 5 s per-request HTTP timeout. The M001 mechanism is
+**retained as additive-safe** per Plan 240 §9 and M004 §6.2 — no constant
+retune is authorized — but its performance claim is unfulfilled.
+`Database::checkpoint_maintenance` (in `rust/src/db/connection.rs`) runs on
+the same gate/worker with a crate-private `CheckpointMaintenancePolicy` (soft
+WAL-frame threshold, default 256) and returns a bounded
+`CheckpointMaintenanceOutcome` (`not_due`/`gate_busy`/`below_threshold`/
+`checkpointed` plus scalar frame counts):
 
 - the tick first compares the in-memory durable-transaction counter against
   its last observed watermark, so an idle process performs no SQLite work;
@@ -142,13 +151,16 @@ checkpoint ticks from the Plan 239 contamination rule, since the maintenance
 tick is the measured subject and per-record gate-wait phases already capture
 any foreground wait behind PASSIVE work.
 
-Physical qualification disposition (persistence M004, blocked): M004 collected
-0 Pi/MMC target runs — the qualification runner refuses non-Linux/aarch64
-hosts before any request, and no qualifying Pi-class MMC target was available.
-Production therefore stays on the conservative M001 default (60-second poll,
-256-frame soft threshold, unchanged 1000-page automatic fallback) with no
-retune. M001 remains conditionally closed per
-`plans/closure/persistence/001-status.md` §11; M004
-(`plans/closure/persistence/004-status.md`) is the blocked record; persistence
-M003 (conditional event-driven coordination) stays not started and is not
-promoted.
+Physical qualification disposition (persistence M004, closed): the periodic
+60s/256 candidate was rejected on the Pi 5 / ext4 / MMC target class because
+the maintenance tick fires only once during a typical ~3-5 s finite burst,
+observes `below_threshold` at its first watermark read, and the foreground
+publication `COMMIT` later owns the 1000-page automatic-checkpoint safety
+ceiling. The landed M001 mechanism stays as the conservative production
+owner (60-second poll, 256-frame soft threshold, unchanged 1000-page
+automatic fallback) with no retune. Persistence M003 (event-driven
+checkpoint coordination) is promoted from `not started` to `ready` and now
+awaits its own implementation plan with the architecture review gate the
+persistence roadmap §7 prescribes (lifecycle, cancellation, shutdown, WAL
+bounds, single-worker ownership, restart/reload/backup/restore/recovery
+semantics before any code change).

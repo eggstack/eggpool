@@ -19,9 +19,13 @@ Process-owned tasks cover opportunistic SQLite WAL checkpointing
 (`checkpoint`, every 60 seconds; the tick skips cheaply when no durable
 transaction completed since the previous tick and defers rather than
 queueing when the single database gate is busy, per persistence M001 —
-target performance qualification remains outstanding per blocked M004, so the
-60s/256-frame default is conservative and unproven on Pi/MMC rather than
-target-accepted),
+M004 (`plans/closure/persistence/004-status.md`, closed against HEAD
+`8113d264`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs and
+**rejected the periodic strategy** on the target class, so the 60s/256-frame
+default is now conservative and unproven-on-target rather than target-
+accepted; the landed mechanism is retained as additive-safe per Plan 240 §9
+and M004 §6.2, and persistence M003 (event-driven checkpoint coordination)
+is now the dependency-ready next milestone),
 metrics flushing (`metrics_flush` via `operations/metrics.rs::
 MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
 `operations/update.rs::UpdateCheckerState` + `register_update_checker`),

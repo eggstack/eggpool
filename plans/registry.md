@@ -14,11 +14,12 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Routing selection M001 (ordered quota-scoring and
-candidate-allocation cleanup, `plans/closure/routing-selection/001-status.md`). Legacy
-archive latest: Plan 250 (EggServe 0.3.0 direct-Tower migration,
-`7879cbf9`). Plans 244–245, 215–220, 241 remain historical per their own
-closure passes; the `146-*` duplicate pair is a known numbering accident.
+Most recently closed: Persistence M004 (physical checkpoint qualification
+and final disposition, periodic strategy rejected on the target class,
+`plans/closure/persistence/004-status.md`). Legacy archive latest: Plan 250
+(EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
+241 remain historical per their own closure passes; the `146-*` duplicate
+pair is a known numbering accident.
 
 ## Status vocabulary
 
@@ -40,28 +41,28 @@ closure passes; the `146-*` duplicate pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 blocked — physical checkpoint qualification and final disposition | M001 conditionally closed, M002 closed; M004 blocked without Pi/MMC target (see `plans/closure/persistence/004-status.md`); M003 stays not started. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 closed — periodic strategy insufficient on target; M003 promoted for separate architecture/design planning | M001 conditionally closed (periodic claim now disproven; mechanism retained as additive-safe); M002 closed; M003 ready for separate implementation plan; no other ready persistence work. |
 
 ## Dependency-ready implementation plans
 
-No dependency-ready implementation plans. Persistence M004 is blocked on its
-operational Pi/MMC target; persistence M003 stays conditional on future M004
-target evidence; routing-selection M002 stays evidence-gated; provider-transport
-M002 stays blocked on upstream API work.
+No dependency-ready implementation plans. Persistence M003 is promoted per
+the M004 closure but still requires its own focused implementation plan with
+the architecture review gate; routing-selection M002 stays evidence-gated;
+provider-transport M002 stays blocked on upstream API work.
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Persistence | M004 physical checkpoint qualification and final disposition | No qualifying Pi-class Linux/aarch64 MMC target available; runner refuses non-Linux/aarch64 hosts before any request (`plans/closure/persistence/004-status.md`) |
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
 
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Persistence M004 — physical checkpoint qualification and final disposition (periodic strategy rejected on target) | closed — M003 promoted | `plans/closure/persistence/004-status.md`, implementation `8113d264` (zero production Rust diff; thirteen accepted Pi 5 / ext4 / MMC physical runs) |
 | Routing selection M001 — ordered quota-scoring and candidate-allocation cleanup | closed | `plans/closure/routing-selection/001-status.md`, implementation `4db8000d` |
-| Persistence M001 — bounded passive checkpoint scheduling and target qualification | conditionally closed | `plans/closure/persistence/001-status.md`, implementation `6eae94db` |
+| Persistence M001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic claim now disproven by M004; mechanism retained as additive-safe) | `plans/closure/persistence/001-status.md`, implementation `6eae94db` |
 | Persistence M002 — single-gate tenure and metrics-flush allocation cleanup | closed | `plans/closure/persistence/002-status.md`, implementation `52494140` |
 | Request admission and wire M001 — inference body resource admission hardening | closed | `plans/closure/request-admission-wire/001-status.md`, implementation `a87790ad` |
 | Provider transport M004 — typed transport diagnostic evidence | closed | `plans/closure/provider-transport/004-status.md`, implementation `a87790ad` |
@@ -98,32 +99,12 @@ M002 remains blocked on upstream Eggfetch API work.
 
 Explicit user direction opens the persistence performance workstream at the current Rust baseline. Persistence M001 is dependency-ready against the completed Plan 239 diagnostic and Plan 240 design constraints; its physical SBC requirement is operational closure evidence, not a reason to invent a different storage architecture. Provider-transport M002 remains blocked and is unaffected.
 
-Persistence M001 is conditionally closed (`6eae94db` implementation, `plans/closure/persistence/001-status.md`): the bounded passive-checkpoint mechanism, tuning hooks, report plumbing, and host verification are landed; the physical Pi/MMC Work package C gate is the named condition for full closure.
+Persistence M001 is conditionally closed (`6eae94db` implementation, `plans/closure/persistence/001-status.md`): the bounded passive-checkpoint mechanism, tuning hooks, report plumbing, and host verification are landed. The M004 closure now resolves the physical-evidence condition with a rejection verdict; the M001 mechanism is retained as additive-safe and its performance claim is unfulfilled.
 
 Persistence M002 is closed (`52494140` implementation, `plans/closure/persistence/002-status.md`): gate-tenure and metrics-flush ownership cleanup with row/rebuffer equivalence.
 
 Routing-selection M001 is closed (`4db8000d` implementation, `plans/closure/routing-selection/001-status.md`): ordered quota-scoring and candidate-allocation cleanup with seam parity and twin-router determinism.
 
-Unblock audit (all three closures): persistence M003 stays not started behind M001's physical-evidence condition (it requires full target evidence to decide periodic-sufficient vs event-driven); routing-selection M002 stays not started — M001's closure satisfies its hard dependency, but its evidence dependency (representative 64/512/4096-entry affinity workload) was not produced here, so no implementation plan is authorized yet; provider-transport M002 remains blocked on upstream Eggfetch API work. No other eligible plans exist.
+Persistence M004 (`8113d264` zero-Rust-diff closure, `plans/closure/persistence/004-status.md`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs at `artifacts/qualification/m004/` against the production M001 mechanism. The 60s/256 candidate maxima were 1709 / 561 / 10 943 ms; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Three ordinary `--benchmark-samples 10` runs converged (`pending_requests=0`, `active_reservations=0`, peak RSS ≈ 18.2 MB) with backup / recovery / restart / shutdown / rehash / bounded-maintenance / graceful-shutdown all green. Periodic strategy is rejected on the target class; landed 60s/256 constants untouched per plan §6.2.
 
-
-Persistence M004 is registered as the follow-up for M001's named physical
-evidence condition. It does not reopen closed M002 or routing-selection M001.
-The pass must either target-qualify the periodic checkpoint strategy (optionally
-retuning only its existing internal cadence/soft-threshold constants) or record
-that periodic scheduling is insufficient and promote M003 for separate
-architecture/design planning. Routing-selection M002 remains evidence-gated on
-a representative 64/512/4096-entry affinity workload; Provider-transport M002
-remains blocked on upstream Eggfetch API work.
-
-Persistence M004 is blocked (`plans/closure/persistence/004-status.md`, baseline
-`d669c02c`, no production change): the Darwin/x86_64 host fails the runner's
-Linux/aarch64 + device-tree gate before any request, so 0 target runs exist and
-no keep/retune/reject decision was authorized.
-
-Unblock audit (M004 blocked closure): persistence M003 stays not started — promotion
-requires M004 target evidence proving periodic insufficiency, which was not
-collected; routing-selection M002 stays not started — its 64/512/4096-entry affinity
-workload was outside M004 scope and was not produced; provider-transport M002
-remains blocked on the upstream Eggfetch typed classification interface. No blocked
-work is promoted by this commit.
+Unblock audit (M004 closed): persistence M003 is promoted from `not started` to `ready` because the M004 evidence satisfies its hard dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M003 still requires its own implementation plan with the architecture review gate the persistence roadmap §7 prescribes (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, lifecycle/cancellation/shutdown/WAL bounds/single-worker ownership before code changes). No implementation plan is created by this closure. Routing-selection M002 stays not started — its 64/512/4096-entry affinity workload is still not produced and is outside M004 scope. Provider-transport M002 remains blocked on the upstream Eggfetch typed classification interface. No blocked work is promoted to a dependency-ready implementation plan by this commit.

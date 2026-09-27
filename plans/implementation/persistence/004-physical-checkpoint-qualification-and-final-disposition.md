@@ -1,8 +1,10 @@
 # Persistence Milestone 004 — Physical Checkpoint Qualification and Final Disposition
 
-Status: blocked
+Status: closed — periodic strategy insufficient on target; M003 promoted for separate architecture/design planning
 
 Repository baseline: `213e35e166a0b78030f4c53ff4003638b5e6c7d2`
+
+Closure baseline: `8113d264bc4488b22609d95d8fdcde1f632bc803`
 
 Source roadmap:
 
