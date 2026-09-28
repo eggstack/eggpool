@@ -41,25 +41,25 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M006 ready — SQLite NOOP and WAL-reset safety baseline | M003 architecture review/plan is registered but `blocked` on M006; no event-driven implementation is authorized until the engine-safety prerequisite closes. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 blocked — event-driven checkpoint coordination | M006 is closed; M003 awaits the separate `blocked -> ready` registry promotion and still needs physical Pi/MMC evidence at closure. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M006 SQLite NOOP and WAL-reset safety baseline | active | `plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md` | Upgrade the bundled SQLite stack and prove true-NOOP semantics before M003; no checkpoint scheduling changes in this milestone. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
-| Persistence | M003 event-driven checkpoint coordination | Hard dependency M006 is ready but not closed. The architecture-reviewed `003` plan is registered; implementation must wait for the true-NOOP/WAL-reset-fixed SQLite baseline and a separate `blocked -> ready` registry commit. |
+| Persistence | M003 event-driven checkpoint coordination | M006 is closed; implementation waits for the separate `blocked -> ready` registry commit recording the accepted baseline. |
 
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Persistence M006 — SQLite NOOP and WAL-reset safety baseline | closed — bundled SQLite 3.53.2; NOOP regression and full default/no-default qualification passed | `plans/closure/persistence/006-status.md`, implementation `c3a72720` |
 | Persistence M005 — M004 evidence and planning reconciliation corrective pass | closed — M004 evidence interpretation and M003 lifecycle corrected | `plans/closure/persistence/005-status.md`, guard `tests/tooling/test_persistence_m004_evidence.py` (17 tests; 14 accepted M004 artifacts machine-checked; zero production Rust diff) |
 | Persistence M004 — physical checkpoint qualification and final disposition (periodic strategy rejected on target) | closed — M003's evidence dependency satisfied; narration corrected by M005 | `plans/closure/persistence/004-status.md`, implementation `8113d264` (zero production Rust diff; 14 accepted Pi 5 / ext4 / MMC physical artifacts at `artifacts/qualification/m004/`) |
 | Routing selection M001 — ordered quota-scoring and candidate-allocation cleanup | closed | `plans/closure/routing-selection/001-status.md`, implementation `4db8000d` |

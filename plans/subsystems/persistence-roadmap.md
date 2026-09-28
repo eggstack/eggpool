@@ -171,7 +171,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: blocked — M006 SQLite safety baseline must close before implementation
+Status: blocked — M006 is closed; a separate registry status-change commit must promote M003 to ready
 
 Objective:
 
@@ -181,13 +181,13 @@ Dependencies:
 
 - Hard: M001 closure evidence must explicitly show the periodic strategy is insufficient — supplied by the M004 closure (`plans/closure/persistence/004-status.md`, closed 2026-09-27 against HEAD `8113d264`). **Satisfied.**
 - Architecture review: **satisfied for planning** by `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. Selected boundary is a successful-COMMIT-derived coalescing wake feeding the existing single process-owned checkpoint task; SQLite WAL hooks, per-request tasks, and second connections are rejected.
-- Hard: M006 SQLite NOOP/WAL-reset safety baseline. **Outstanding.** M003 must execute against the accepted M006 closure SHA.
+- Hard: M006 SQLite NOOP/WAL-reset safety baseline. **Satisfied** by `plans/closure/persistence/006-status.md`; M003 must execute against the accepted M006 closure SHA.
 - Own implementation plan at local number `003`: `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. **Registered but blocked on M006.**
 - Operational: focus on the same Pi/MMC target class; paired M006-baseline/M003-candidate physical evidence required at closure.
 
 Deliverable boundary:
 
-The architecture-reviewed implementation plan is registered, but implementation is not authorized until M006 closes. After M006 acceptance, a separate registry status-change commit may move M003 `blocked -> ready` after reconciling its execution baseline.
+The architecture-reviewed implementation plan is registered. M006 has closed; implementation remains unauthorized until the separate registry status-change commit moves M003 `blocked -> ready` and records the accepted M006 closure SHA as its execution baseline.
 
 Exit conditions:
 
@@ -269,7 +269,7 @@ See `plans/closure/persistence/005-status.md`.
 
 Class: invariant
 
-Status: ready
+Status: closed
 
 Objective:
 
@@ -294,7 +294,9 @@ Exit conditions:
 - true-NOOP regression guard green;
 - database/backup/recovery/lifecycle/full workspace green;
 - exact engine and feature graph recorded;
-- M003 hard dependency may then be promoted in a separate registry commit.
+- M003 hard dependency is satisfied; its blocked-to-ready promotion is recorded in a separate registry commit.
+
+**Closure:** See `plans/closure/persistence/006-status.md`.
 
 ## 8. Cross-cutting requirements
 
@@ -346,7 +348,7 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic strategy now disproven on target; mechanism retained as additive-safe) | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | physical Pi/MMC condition resolved by M004 rejection; performance claim unfulfilled |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination | blocked | plans/implementation/persistence/003-event-driven-checkpoint-coordination.md | — | hard dependency: M006 must close; architecture review complete; physical Pi/MMC evidence required at closure |
+| 003 — event-driven checkpoint coordination | blocked | plans/implementation/persistence/003-event-driven-checkpoint-coordination.md | — | M006 closed; awaiting separate registry promotion; physical Pi/MMC evidence required at closure |
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
-| 006 — SQLite NOOP and WAL-reset safety baseline | ready | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | — | none — dependency/engine prerequisite for M003 |
+| 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
