@@ -1,6 +1,6 @@
 # Persistence Milestone 005 — M004 Evidence and Planning Reconciliation Corrective Pass
 
-Status: active
+Status: closed — see `plans/closure/persistence/005-status.md`
 
 Repository baseline: `ba1423680fc279c4aff1253809d8509691477b73`
 

@@ -254,6 +254,13 @@ Exit conditions:
 - M003 lifecycle no longer implies implementation readiness before its architecture review and dedicated `003` plan.
 - Zero production Rust diff.
 
+**Closure (HEAD `be370a61` + this record):** 14 accepted M004 artifacts
+machine-checked by `tests/tooling/test_persistence_m004_evidence.py`; zero
+in-batch checkpoint ticks in every 30 s/60 s phase run; three in-window ticks,
+all `gate_busy`, in the 1s/64 stress run; M004's rejection outcome and no-retune
+decision preserved; M003 returned to `proposed` with local number 003 reserved.
+See `plans/closure/persistence/005-status.md`.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -306,4 +313,4 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
 | 003 — event-driven checkpoint coordination | proposed (evidence dependency satisfied; architecture review and dedicated `003` implementation plan outstanding) | — (number 003 reserved for `003-event-driven-checkpoint-coordination.md`) | — | no plan exists; not an implementation-handoff candidate |
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
-| 005 — M004 evidence and planning reconciliation corrective pass | active | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | — | none — committed artifacts are sufficient |
+| 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
