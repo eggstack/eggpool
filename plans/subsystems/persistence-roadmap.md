@@ -171,7 +171,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: ready
+Status: active
 
 Objective:
 
@@ -348,7 +348,7 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic strategy now disproven on target; mechanism retained as additive-safe) | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | physical Pi/MMC condition resolved by M004 rejection; performance claim unfulfilled |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination | ready | plans/implementation/persistence/003-event-driven-checkpoint-coordination.md | — | hard prerequisites closed; physical paired Pi/MMC evidence required at closure |
+| 003 — event-driven checkpoint coordination | active | plans/implementation/persistence/003-event-driven-checkpoint-coordination.md | — | hard prerequisites closed; physical paired Pi/MMC evidence required at closure |
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |

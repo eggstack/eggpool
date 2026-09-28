@@ -1,6 +1,6 @@
 # Persistence Milestone 003 — Event-Driven Checkpoint Coordination
 
-Status: ready
+Status: active
 
 Repository planning baseline: `b692ca26d674f45325f4b5867be479b2bc73e5c2`
 
