@@ -72,7 +72,7 @@ Current EggPool production state after persistence M001/M002/M004 is:
 - `Database::configure` keeps WAL/NORMAL and the ordinary SQLite automatic checkpoint threshold unchanged at the effective 1000-page fallback.
 - M001 (`6eae94db`, conditionally closed) made the existing process-owned `checkpoint` task opportunistic: a 60-second poll first checks the durable-transaction watermark, uses non-queueing `try_acquire`, observes WAL progress with `PRAGMA wal_checkpoint(NOOP)`, and runs PASSIVE only at the internal 256-frame soft threshold. Feature-only interval/threshold knobs and sanitized maintenance counters support target qualification.
 - M002 (`52494140`, closed) moved deterministic routing-decision preparation outside the database gate, removed the full `SelectionSnapshot` transaction clone, changed the metrics common path to move owned keys/batches, and prepares its repeated UPSERT once per flush transaction with row/rebuffer equivalence tests.
-- M004 (`plans/closure/persistence/004-status.md`, closed) collected thirteen accepted Pi 5 / ext4 / MMC physical runs (`artifacts/qualification/m004/`) against the production M001 mechanism at HEAD `8113d264`. Three 60s/256 phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms; the slowest request in every run correlated with foreground publication `COMMIT` 522 ms – 10.9 s and `wal_checkpoint_sequence_changed = true`. Three bounded matrix variants (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail; the 1s/64 stress run shows the maintenance tick fires 2 × `checkpointed`, 3 × `gate_busy` in a 2.8 s batch but the foreground still owns every 1000-page auto-checkpoint. Three ordinary `--benchmark-samples 10` runs (functional ids green, `pending_requests=0`, `active_reservations=0`, backup/recovery/restart/shutdown green) show the convergence evidence. The periodic strategy is **rejected on the target class**; per plan §6.2 no constant retune is authorized and the landed 60s/256 mechanism is retained as additive-safe. M003 (conditional event-driven checkpoint coordination) is **promoted** from `not started` to `ready` per plan §E3 and the roadmap §7 hard dependency now satisfied by M004 evidence; M003 still requires its own implementation plan with the architecture review gate.
+- M004 (`plans/closure/persistence/004-status.md`, closed) collected **14 accepted** Pi 5 / ext4 / MMC physical runs (`artifacts/qualification/m004/`: 11 phase-diagnostic runs plus 3 ordinary benchmark runs) against the production M001 mechanism at HEAD `8113d264`. Three 60s/256 phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms; the slowest request in every run correlated with foreground publication `COMMIT` 522 ms – 10.9 s and `wal_checkpoint_sequence_changed = true`. Three bounded matrix variants (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Measured-window checkpoint activity comes from the artifact `deltas` fields, never from the cumulative `baseline`/`final` snapshots: in every 30 s and 60 s run the checkpoint task tick delta is 0, so no checkpoint task ran inside the measured batch at all, and the single cumulative `below_threshold` already in the baseline is pre-batch history; the 1s/64 stress run recorded 3 in-batch checkpoint ticks and all three deferred with `gate_busy` (0 `checkpointed`, 0 `below_threshold`), with the foreground still owning every 1000-page auto-checkpoint. Three ordinary `--benchmark-samples 10` runs (functional ids green, `pending_requests=0`, `active_reservations=0`, backup/recovery/restart/shutdown green) show the convergence evidence. The periodic strategy is **rejected on the target class**; per plan §6.2 no constant retune is authorized and the landed 60s/256 mechanism is retained as additive-safe. M005 (`plans/closure/persistence/005-status.md`) machine-checks that corpus in `tests/tooling/test_persistence_m004_evidence.py` and is the authoritative correction layer for the M004 narration defects. M003 (conditional event-driven checkpoint coordination) is **proposed**: its hard evidence dependency is satisfied, but its architecture review and dedicated `plans/implementation/persistence/003-...` plan are not, so it is not implementation-ready.
 
 ## 5. Target architecture
 
@@ -86,11 +86,11 @@ Request publication/finalization continue to own their current transactions. Det
 
 - Legacy Plan 239 physical diagnostic → hard evidence dependency for M001.
 - Legacy Plan 240 design handoff → hard design constraint for M001.
-- M001 closure evidence showing periodic insufficiency → hard evidence dependency for M003. M004 closure now supplies this; M003 moves from `not started` to `ready`.
+- M001 closure evidence showing periodic insufficiency → hard evidence dependency for M003. M004 closure supplies this; M003 is `proposed` and stays there until its architecture review and dedicated `plans/implementation/persistence/003-...` implementation plan exist.
 - M004 Pi/MMC target → operational evidence dependency for M001 production-default acceptance (now satisfied by M004 rejection evidence; the landed M001 mechanism is retained as additive-safe and its performance claim is unfulfilled).
 - Current publication/finalization ownership contract → interface dependency for M002; already stable.
 - M001 and M002 are otherwise independent and may be implemented in either order.
-- M003 is dependency-ready: it inherits the M001 invariants, the Plan 240 design constraints, and the M004 evidence that periodic scheduling is insufficient on the target class. M003 still requires its own implementation plan with the architecture review gate described in §7.
+- M003's evidence dependency is met: it inherits the M001 invariants, the Plan 240 design constraints, and the M004 evidence that periodic scheduling is insufficient on the target class. Its remaining dependencies are the architecture review and its own implementation plan described in §7, so it is not a handoff candidate yet.
 
 ## 7. Milestones
 
@@ -169,19 +169,22 @@ Exit conditions:
 
 Class: infrastructure
 
+Status: proposed
+
 Objective:
 
 Design one process-owned coalesced checkpoint trigger that can intercept routine finite-burst WAL growth before the 1000-page automatic fallback without per-request task spawning or a second SQLite connection. The trigger must preserve the durability/safety semantics, the single-connection/gate/worker contract, and the existing maintenance-task boundary.
 
 Dependencies:
 
-- Hard: M001 closure evidence must explicitly show the periodic strategy is insufficient — supplied by the M004 closure (`plans/closure/persistence/004-status.md`, closed 2026-09-27 against HEAD `8113d264`).
-- Architecture review required before an implementation plan is written (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, no event-driven coordinator that grows into a process-lifecycle owner).
+- Hard: M001 closure evidence must explicitly show the periodic strategy is insufficient — supplied by the M004 closure (`plans/closure/persistence/004-status.md`, closed 2026-09-27 against HEAD `8113d264`). **Satisfied.**
+- Architecture review required before an implementation plan is written (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, no event-driven coordinator that grows into a process-lifecycle owner). **Outstanding.**
+- Own implementation plan at local number `003` (`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`). **Does not exist**; local number 003 is reserved for it. The M004 closure's suggestion of a `005-event-driven-...` plan is a superseded numbering statement retained as history only.
 - Operational: focus on the same Pi/MMC target class; physical evidence still required at closure.
 
 Deliverable boundary:
 
-No implementation plan is authorized by this roadmap yet — M003 still requires its own focused plan against the M004 evidence baseline.
+No implementation plan is authorized by this roadmap yet. The evidence dependency being satisfied is not implementation readiness: M003 becomes `ready` only when a separate registration commit adds its architecture review and the `003` implementation plan.
 
 Exit conditions:
 
@@ -221,7 +224,7 @@ Exit conditions:
 - If periodic scheduling is insufficient, M003 is promoted for separate design/implementation planning; M004 does not implement it.
 - Registry contains only actually-ready work in its dependency-ready table and current docs no longer overstate qualification.
 
-**Closure (2026-09-27, HEAD `8113d264`):** periodic strategy rejected on the target class. Thirteen accepted physical runs captured at `artifacts/qualification/m004/`. No allowed periodic candidate clears the plan §13 gates; landed 60s/256 mechanism retained as additive-safe (per plan §9); M003 promoted to `ready`. See `plans/closure/persistence/004-status.md`.
+**Closure (2026-09-27, HEAD `8113d264`):** periodic strategy rejected on the target class. **14 accepted** physical runs (11 phase-diagnostic + 3 ordinary benchmark) captured at `artifacts/qualification/m004/`. No allowed periodic candidate clears the plan §13 gates; landed 60s/256 mechanism retained as additive-safe (per plan §9); M003's evidence dependency satisfied. The closure's own evidence narration was corrected by M005 without editing the closed record. See `plans/closure/persistence/004-status.md` and `plans/closure/persistence/005-status.md`.
 
 
 ### Milestone 005 — M004 evidence and planning reconciliation corrective pass
@@ -301,6 +304,6 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic strategy now disproven on target; mechanism retained as additive-safe) | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | physical Pi/MMC condition resolved by M004 rejection; performance claim unfulfilled |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination | ready | — | — | M004 evidence supplies hard dependency; separate implementation plan with architecture review gate still required |
-| 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration under M005 corrective reconciliation | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
-| 005 — M004 evidence and planning reconciliation corrective pass | ready | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | — | none — committed artifacts are sufficient |
+| 003 — event-driven checkpoint coordination | proposed (evidence dependency satisfied; architecture review and dedicated `003` implementation plan outstanding) | — (number 003 reserved for `003-event-driven-checkpoint-coordination.md`) | — | no plan exists; not an implementation-handoff candidate |
+| 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
+| 005 — M004 evidence and planning reconciliation corrective pass | active | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | — | none — committed artifacts are sufficient |

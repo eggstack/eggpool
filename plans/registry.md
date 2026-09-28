@@ -41,13 +41,13 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M005 ready — M004 evidence/planning reconciliation corrective pass | M004 rejection outcome stands, but cumulative-vs-delta narration and M003 lifecycle/numbering require reconciliation before any event-driven handoff. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M005 active — M004 evidence/planning reconciliation corrective pass | M004 rejection outcome stands, but cumulative-vs-delta narration and M003 lifecycle/numbering require reconciliation before any event-driven handoff. M003 is `proposed`, not `ready`: its evidence dependency is satisfied but no architecture review or `003` implementation plan exists. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M005 M004 evidence and planning reconciliation corrective pass | ready | `plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md` | Documentation/evidence-only corrective pass; committed M004 artifacts are the source of truth; zero production Rust diff required. |
+| Persistence | M005 M004 evidence and planning reconciliation corrective pass | active | `plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md` | Documentation/evidence-only corrective pass; committed M004 artifacts are the source of truth; zero production Rust diff required. No other persistence plan is dependency-ready: M003 needs its architecture review and dedicated `003` plan first. |
 
 ## Blocked work
 
@@ -59,7 +59,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
-| Persistence M004 — physical checkpoint qualification and final disposition (periodic strategy rejected on target) | closed — M003 promoted | `plans/closure/persistence/004-status.md`, implementation `8113d264` (zero production Rust diff; thirteen accepted Pi 5 / ext4 / MMC physical runs) |
+| Persistence M004 — physical checkpoint qualification and final disposition (periodic strategy rejected on target) | closed — M003's evidence dependency satisfied; narration corrected by M005 | `plans/closure/persistence/004-status.md`, implementation `8113d264` (zero production Rust diff; 14 accepted Pi 5 / ext4 / MMC physical artifacts at `artifacts/qualification/m004/`) |
 | Routing selection M001 — ordered quota-scoring and candidate-allocation cleanup | closed | `plans/closure/routing-selection/001-status.md`, implementation `4db8000d` |
 | Persistence M001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic claim now disproven by M004; mechanism retained as additive-safe) | `plans/closure/persistence/001-status.md`, implementation `6eae94db` |
 | Persistence M002 — single-gate tenure and metrics-flush allocation cleanup | closed | `plans/closure/persistence/002-status.md`, implementation `52494140` |
@@ -104,15 +104,20 @@ Persistence M002 is closed (`52494140` implementation, `plans/closure/persistenc
 
 Routing-selection M001 is closed (`4db8000d` implementation, `plans/closure/routing-selection/001-status.md`): ordered quota-scoring and candidate-allocation cleanup with seam parity and twin-router determinism.
 
-Persistence M004 (`8113d264` zero-Rust-diff closure, `plans/closure/persistence/004-status.md`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs at `artifacts/qualification/m004/` against the production M001 mechanism. The 60s/256 candidate maxima were 1709 / 561 / 10 943 ms; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Three ordinary `--benchmark-samples 10` runs converged (`pending_requests=0`, `active_reservations=0`, peak RSS ≈ 18.2 MB) with backup / recovery / restart / shutdown / rehash / bounded-maintenance / graceful-shutdown all green. Periodic strategy is rejected on the target class; landed 60s/256 constants untouched per plan §6.2.
+Persistence M004 (`8113d264` zero-Rust-diff closure, `plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts at `artifacts/qualification/m004/` (11 phase-diagnostic runs plus 3 ordinary benchmark runs) against the production M001 mechanism. The 60s/256 candidate maxima were 1709 / 561 / 10 943 ms; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Three ordinary `--benchmark-samples 10` runs converged (`pending_requests=0`, `active_reservations=0`, peak RSS ≈ 18.2 MB) with backup / recovery / restart / shutdown / rehash / bounded-maintenance / graceful-shutdown all green. Periodic strategy is rejected on the target class; landed 60s/256 constants untouched per plan §6.2.
 
-Unblock audit (M004 closed): persistence M003 is promoted from `not started` to `ready` because the M004 evidence satisfies its hard dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M003 still requires its own implementation plan with the architecture review gate the persistence roadmap §7 prescribes (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, lifecycle/cancellation/shutdown/WAL bounds/single-worker ownership before code changes). No implementation plan is created by this closure. Routing-selection M002 stays not started — its 64/512/4096-entry affinity workload is still not produced and is outside M004 scope. Provider-transport M002 remains blocked on the upstream Eggfetch typed classification interface. No blocked work is promoted to a dependency-ready implementation plan by this commit.
+Unblock audit (M004 closed): the M004 evidence satisfies M003's hard dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M005 corrects the M004 record's reading of that evidence: measured-window checkpoint activity is zero in every 30 s/60 s phase run, and the 1s/64 stress run deferred all three in-window checkpoint ticks on the busy foreground gate, so M003 inherits concrete gate-contention evidence rather than in-batch PASSIVE checkpoint evidence. M003 is `proposed`, not `ready` — see the M005 audit below.
+
+Unblock audit (M005 reconciliation, in progress): persistence M003 moves from `ready` back to `proposed`. Its hard evidence dependency is satisfied, but the persistence roadmap §7 architecture review and its dedicated `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md` do not exist, so it is not an implementation-handoff candidate. Local number 003 is reserved for that future plan; the M004 closure's `005-event-driven-...` suggestion is a superseded numbering statement kept only as history. M003 may become `ready` only through a separate registration commit. Routing-selection M002 stays not started — its 64/512/4096-entry affinity workload is still not produced. Provider-transport M002 remains blocked on the upstream Eggfetch typed classification interface. No blocked work is promoted to a dependency-ready implementation plan by this commit.
 
 
-Persistence M005 is registered as the corrective layer for M004's evidence
+Persistence M005 is the corrective layer for M004's evidence
 interpretation and planning-lifecycle defects. The M004 periodic-strategy
 rejection remains the working architectural disposition, but no M003 runtime
-handoff is authorized until M005 closes. M005 must preserve the immutable M004
-closure, machine-check the committed artifact deltas, correct current docs, and
-reserve local implementation-plan number 003 for the future event-driven
-checkpoint milestone.
+handoff is authorized until M005 closes. M005 preserves the immutable M004
+closure, machine-checks the committed artifact deltas in
+`tests/tooling/test_persistence_m004_evidence.py`, corrects current docs, and
+reserves local implementation-plan number 003 for the future event-driven
+checkpoint milestone. The M004 closure's own accepted-artifact count and
+cumulative-vs-delta narration are historical text; M005's closure record is the
+authoritative correction.

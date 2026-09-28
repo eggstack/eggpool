@@ -105,11 +105,12 @@ The landed M001 candidate is conditionally closed: it keeps every Plan 240
 invariant and makes the
 existing process-owned `checkpoint` task opportunistic instead of periodic-
 unconditional. M004 (`plans/closure/persistence/004-status.md`, closed against
-HEAD `8113d264`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs
-and **rejected the periodic strategy** on the target class. Three 60s/256
-phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms with foreground
-publication `COMMIT` 522 ms – 10.9 s on the slowest request in every run;
-bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence
+HEAD `8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts at
+`artifacts/qualification/m004/` (11 phase-diagnostic runs plus 3 ordinary
+benchmark runs) and **rejected the periodic strategy** on the target class.
+Three 60s/256 phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms with
+foreground publication `COMMIT` 522 ms – 10.9 s on the slowest request in every
+run; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence
 1s/64 stress run all left the foreground tail; ordinary
 `--benchmark-samples 10` runs converged with backup / recovery / restart /
 shutdown / rehash / bounded-maintenance / graceful-shutdown all green but
@@ -151,16 +152,22 @@ checkpoint ticks from the Plan 239 contamination rule, since the maintenance
 tick is the measured subject and per-record gate-wait phases already capture
 any foreground wait behind PASSIVE work.
 
-Physical qualification disposition (persistence M004, closed): the periodic
-60s/256 candidate was rejected on the Pi 5 / ext4 / MMC target class because
-the maintenance tick fires only once during a typical ~3-5 s finite burst,
-observes `below_threshold` at its first watermark read, and the foreground
-publication `COMMIT` later owns the 1000-page automatic-checkpoint safety
-ceiling. The landed M001 mechanism stays as the conservative production
-owner (60-second poll, 256-frame soft threshold, unchanged 1000-page
-automatic fallback) with no retune. Persistence M003 (event-driven
-checkpoint coordination) is promoted from `not started` to `ready` and now
-awaits its own implementation plan with the architecture review gate the
-persistence roadmap §7 prescribes (lifecycle, cancellation, shutdown, WAL
-bounds, single-worker ownership, restart/reload/backup/restore/recovery
-semantics before any code change).
+Physical qualification disposition (persistence M004, closed; evidence
+narration corrected by persistence M005, `plans/closure/persistence/005-status.md`):
+the periodic 60s/256 candidate was rejected on the Pi 5 / ext4 / MMC target class
+because the long-cadence maintenance ticks do not run inside these finite bursts
+at all, and the foreground publication `COMMIT` therefore owns the 1000-page
+automatic-checkpoint safety ceiling. Read measured-window activity from the
+artifact `deltas` fields, not from the cumulative `baseline`/`final` snapshots:
+every 30 s and 60 s phase run recorded a checkpoint task tick delta of 0 and zero
+maintenance actions in the batch, so the single cumulative `below_threshold` in
+the baseline is pre-batch history; the 1s/64 stress run recorded 3 in-batch
+checkpoint ticks and all three deferred with `gate_busy` (0 `checkpointed`,
+0 `below_threshold`). The landed M001 mechanism stays as the conservative
+production owner (60-second poll, 256-frame soft threshold, unchanged 1000-page
+automatic fallback) with no retune. Persistence M003 (event-driven checkpoint
+coordination) is `proposed`: its hard evidence dependency is satisfied, but it
+awaits its architecture review and its own
+`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`
+plan (lifecycle, cancellation, shutdown, WAL bounds, single-worker ownership,
+restart/reload/backup/restore/recovery semantics before any code change).

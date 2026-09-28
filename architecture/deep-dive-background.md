@@ -20,12 +20,13 @@ Process-owned tasks cover opportunistic SQLite WAL checkpointing
 transaction completed since the previous tick and defers rather than
 queueing when the single database gate is busy, per persistence M001 —
 M004 (`plans/closure/persistence/004-status.md`, closed against HEAD
-`8113d264`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs and
+`8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts and
 **rejected the periodic strategy** on the target class, so the 60s/256-frame
 default is now conservative and unproven-on-target rather than target-
 accepted; the landed mechanism is retained as additive-safe per Plan 240 §9
 and M004 §6.2, and persistence M003 (event-driven checkpoint coordination)
-is now the dependency-ready next milestone),
+is `proposed` — its evidence dependency is satisfied, but no architecture
+review or `003` implementation plan exists yet),
 metrics flushing (`metrics_flush` via `operations/metrics.rs::
 MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
 `operations/update.rs::UpdateCheckerState` + `register_update_checker`),
