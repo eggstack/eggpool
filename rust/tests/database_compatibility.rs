@@ -125,6 +125,113 @@ async fn maintenance_checkpoint_preserves_wal_normal_autocheckpoint_and_close() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn bundled_sqlite_supports_observational_noop_and_fixed_wal_reset_baseline() {
+    let path = temporary_database_path("noop-baseline");
+    let database = open_database(&path).await;
+    let version = database
+        .call(|connection| {
+            connection.query_row("SELECT sqlite_version()", [], |row| row.get::<_, String>(0))
+        })
+        .await
+        .expect("bundled SQLite version is readable");
+    let version_parts = version
+        .split('.')
+        .map(|part| {
+            part.parse::<u32>()
+                .expect("numeric SQLite version component")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        version_parts.as_slice() >= &[3, 51, 3],
+        "bundled SQLite {version} predates the NOOP/WAL-reset safety floor"
+    );
+
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations apply");
+    database
+        .with_transaction(|connection| {
+            connection.execute_batch(
+                "CREATE TABLE noop_probe (value TEXT NOT NULL);\
+                 WITH RECURSIVE values_to_insert(value) AS (\
+                     VALUES(1) UNION ALL SELECT value + 1 FROM values_to_insert WHERE value < 32\
+                 ) INSERT INTO noop_probe SELECT printf('%064d', value) FROM values_to_insert;",
+            )
+        })
+        .await
+        .expect("bounded WAL work commits below the automatic threshold");
+
+    let noop = || async {
+        database
+            .call(|connection| {
+                connection.query_row("PRAGMA wal_checkpoint(NOOP)", [], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+            })
+            .await
+            .expect("NOOP observation succeeds")
+    };
+    let first = noop().await;
+    let second = noop().await;
+    assert_eq!(first.0, 0, "NOOP reports no competing checkpoint");
+    assert_eq!(
+        second, first,
+        "repeated NOOP does not advance checkpoint progress"
+    );
+    assert!(
+        first.1 > first.2,
+        "fixture leaves frames for explicit PASSIVE work"
+    );
+
+    let passive = database
+        .call(|connection| {
+            connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+        })
+        .await
+        .expect("PASSIVE checkpoint succeeds");
+    assert_eq!(passive.0, 0);
+    assert!(passive.2 >= first.1, "PASSIVE advances/converges the WAL");
+    database
+        .backup_to(path.with_extension("noop-backup.sqlite3"))
+        .await
+        .expect("backup remains available after checkpoint work");
+    database.close().await.expect("database closes");
+    for candidate in [
+        path.clone(),
+        path.with_extension("noop-backup.sqlite3"),
+        path.with_extension("sqlite3-wal"),
+        path.with_extension("sqlite3-shm"),
+    ] {
+        let _ = fs::remove_file(candidate);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn journal_size_limit_rejects_values_outside_sqlite_integer_range() {
+    let path = temporary_database_path("journal-limit-overflow");
+    let error = Database::open(DatabaseConfig {
+        path: path.to_string_lossy().into_owned(),
+        journal_size_limit: Some(u64::MAX),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect_err("SQLite signed integer boundary is checked");
+    assert!(error.to_string().contains("out of range"));
+    let _ = fs::remove_file(&path);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
     let path = temporary_database_path("historical");
     let database = open_database(&path).await;

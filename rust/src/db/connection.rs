@@ -1012,6 +1012,8 @@ impl Database {
             }
             connection.pragma_update(None, "synchronous", config.synchronous.as_str())?;
             if let Some(limit) = config.journal_size_limit {
+                let limit = i64::try_from(limit)
+                    .map_err(|error| SqliteError::ToSqlConversionFailure(Box::new(error)))?;
                 connection.pragma_update(None, "journal_size_limit", limit)?;
             }
             #[cfg(feature = "qualification-db-diagnostics")]

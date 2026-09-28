@@ -10,6 +10,16 @@ contributes the shared transaction/recovery contract. Migrations and their check
 embedded from `rust/assets/db/migrations/`; the runtime preserves the
 historical schema ledger and schema 54 contract.
 
+The asynchronous bundled engine is `tokio-rusqlite 0.8.0` over
+`rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`, bundling SQLite 3.53.2.
+The database compatibility suite guards that the runtime engine remains at
+least SQLite 3.51.3 and proves `PRAGMA wal_checkpoint(NOOP)` leaves WAL
+checkpoint progress unchanged before an explicit PASSIVE checkpoint. EggPool
+continues to own one connection, one serialized gate, and one worker with
+WAL/NORMAL and the 1000-page automatic-checkpoint fallback; schema 54 and
+backup/recovery ownership are unchanged. Persistence M006 records the
+dependency and compatibility evidence.
+
 The database uses WAL and one serialized primary connection. Durable request,
 attempt, reservation, usage, catalog, health, backup, and finalization writes
 run inside explicit caller-owned transactions. Commit/rollback ambiguity fails

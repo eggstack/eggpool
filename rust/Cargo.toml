@@ -100,7 +100,7 @@ tokio-stream = { version = "0.1", default-features = false, features = ["sync"] 
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
-tokio-rusqlite = { version = "0.7.0", features = ["bundled", "backup"] }
+tokio-rusqlite = { version = "0.8.0", features = ["bundled", "backup"] }
 zip = { version = "2.4.2", default-features = false }
 webpki-roots = "1"
 
