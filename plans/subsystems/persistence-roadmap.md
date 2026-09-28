@@ -70,7 +70,7 @@ SQLite documents the same mechanism: automatic WAL checkpoints are PASSIVE, defa
 Current EggPool production state after persistence M001/M002/M004 is:
 
 - `Database::configure` keeps WAL/NORMAL and the ordinary SQLite automatic checkpoint threshold unchanged at the effective 1000-page fallback.
-- M001 (`6eae94db`, conditionally closed) made the existing process-owned `checkpoint` task opportunistic: a 60-second poll first checks the durable-transaction watermark, uses non-queueing `try_acquire`, observes WAL progress with `PRAGMA wal_checkpoint(NOOP)`, and runs PASSIVE only at the internal 256-frame soft threshold. Feature-only interval/threshold knobs and sanitized maintenance counters support target qualification.
+- M001 (`6eae94db`, conditionally closed) made the existing process-owned `checkpoint` task opportunistic: a 60-second poll checks a transaction watermark, uses non-queueing `try_acquire`, intends to observe WAL progress with `PRAGMA wal_checkpoint(NOOP)`, and runs PASSIVE only at the internal 256-frame soft threshold. M006 research found the locked rusqlite 0.37/libsqlite3-sys 0.35 graph bundles SQLite 3.50.2, while SQLite added the NOOP checkpoint mode only in 3.51.0; the older pragma implementation defaults an unrecognized checkpoint mode to PASSIVE. M006 is therefore a correctness prerequisite before M003 can rely on observation-before-threshold semantics. The current `transactions` watermark is also incremented at transaction begin rather than successful COMMIT; M003 must introduce a separate successful-commit signal rather than repurpose this counter.
 - M002 (`52494140`, closed) moved deterministic routing-decision preparation outside the database gate, removed the full `SelectionSnapshot` transaction clone, changed the metrics common path to move owned keys/batches, and prepares its repeated UPSERT once per flush transaction with row/rebuffer equivalence tests.
 - M004 (`plans/closure/persistence/004-status.md`, closed) collected **14 accepted** Pi 5 / ext4 / MMC physical runs (`artifacts/qualification/m004/`: 11 phase-diagnostic runs plus 3 ordinary benchmark runs) against the production M001 mechanism at HEAD `8113d264`. Three 60s/256 phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms; the slowest request in every run correlated with foreground publication `COMMIT` 522 ms – 10.9 s and `wal_checkpoint_sequence_changed = true`. Three bounded matrix variants (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Measured-window checkpoint activity comes from the artifact `deltas` fields, never from the cumulative `baseline`/`final` snapshots: in every 30 s and 60 s run the checkpoint task tick delta is 0, so no checkpoint task ran inside the measured batch at all, and the single cumulative `below_threshold` already in the baseline is pre-batch history; the 1s/64 stress run recorded 3 in-batch checkpoint ticks and all three deferred with `gate_busy` (0 `checkpointed`, 0 `below_threshold`), with the foreground still owning every 1000-page auto-checkpoint. Three ordinary `--benchmark-samples 10` runs (functional ids green, `pending_requests=0`, `active_reservations=0`, backup/recovery/restart/shutdown green) show the convergence evidence. The periodic strategy is **rejected on the target class**; per plan §6.2 no constant retune is authorized and the landed 60s/256 mechanism is retained as additive-safe. M005 (`plans/closure/persistence/005-status.md`) machine-checks that corpus in `tests/tooling/test_persistence_m004_evidence.py` and is the authoritative correction layer for the M004 narration defects. M003 (conditional event-driven checkpoint coordination) is **proposed**: its hard evidence dependency is satisfied, but its architecture review and dedicated `plans/implementation/persistence/003-...` plan are not, so it is not implementation-ready.
 
@@ -90,7 +90,7 @@ Request publication/finalization continue to own their current transactions. Det
 - M004 Pi/MMC target → operational evidence dependency for M001 production-default acceptance (now satisfied by M004 rejection evidence; the landed M001 mechanism is retained as additive-safe and its performance claim is unfulfilled).
 - Current publication/finalization ownership contract → interface dependency for M002; already stable.
 - M001 and M002 are otherwise independent and may be implemented in either order.
-- M003's evidence dependency is met: it inherits the M001 invariants, the Plan 240 design constraints, and the M004 evidence that periodic scheduling is insufficient on the target class. Its remaining dependencies are the architecture review and its own implementation plan described in §7, so it is not a handoff candidate yet.
+- M003's evidence dependency is met: it inherits the M001 invariants, Plan 240 constraints, and M004/M005 evidence. New M006 is a hard correctness dependency because the current bundled SQLite 3.50.2 predates true `wal_checkpoint(NOOP)` and the WAL-reset fix. M003 cannot become implementation-ready until M006 closes and its own architecture-reviewed plan is registered.
 
 ## 7. Milestones
 
@@ -261,6 +261,38 @@ all `gate_busy`, in the 1s/64 stress run; M004's rejection outcome and no-retune
 decision preserved; M003 returned to `proposed` with local number 003 reserved.
 See `plans/closure/persistence/005-status.md`.
 
+
+### Milestone 006 — SQLite NOOP and WAL-reset safety baseline
+
+Class: invariant
+
+Status: ready
+
+Objective:
+
+Upgrade the bundled SQLite stack before M003 so `wal_checkpoint(NOOP)` is truly observational and the runtime is on a WAL-reset-fixed engine, while preserving one connection/gate/worker, WAL/NORMAL, the 1000-page automatic fallback, schema 54, and all public behavior.
+
+Dependencies:
+
+- Hard: M005 closed; current M004/M005 evidence accepted.
+- Interface: existing tokio-rusqlite `Connection` / rusqlite API boundary.
+- No Pi/MMC dependency for implementation; M003 owns physical performance qualification.
+
+Deliverable boundary:
+
+- tokio-rusqlite 0.8.x migration with reviewed rusqlite/libsqlite3-sys lock.
+- Bundled SQLite >= 3.51.3 (planned 3.53.2 baseline).
+- Regression proof that NOOP does not checkpoint frames.
+- No hooks feature, custom WAL hook, public config, schema change, second connection, or checkpoint-policy retune.
+
+Exit conditions:
+
+- dependency and MSRV qualification green;
+- true-NOOP regression guard green;
+- database/backup/recovery/lifecycle/full workspace green;
+- exact engine and feature graph recorded;
+- M003 hard dependency may then be promoted in a separate registry commit.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -314,3 +346,4 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 | 003 — event-driven checkpoint coordination | proposed (evidence dependency satisfied; architecture review and dedicated `003` implementation plan outstanding) | — (number 003 reserved for `003-event-driven-checkpoint-coordination.md`) | — | no plan exists; not an implementation-handoff candidate |
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
+| 006 — SQLite NOOP and WAL-reset safety baseline | ready | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | — | none — dependency/engine prerequisite for M003 |

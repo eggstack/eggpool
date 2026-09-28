@@ -41,13 +41,13 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M005 closed — M004 evidence/planning reconciliation corrective pass | M004's rejection outcome stands with its narration corrected by `plans/closure/persistence/005-status.md`. M003 is `proposed`, not `ready`: its evidence dependency is satisfied but no architecture review or `003` implementation plan exists. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M006 ready — SQLite NOOP and WAL-reset safety baseline | Current bundled SQLite 3.50.2 predates true `wal_checkpoint(NOOP)` and the WAL-reset fix. M006 must close before event-driven M003 can execute. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| — | none | — | — | No dependency-ready implementation plan remains. Persistence M005 closed; persistence M003 is `proposed` and needs its architecture review plus a registered `003` plan first. |
+| Persistence | M006 SQLite NOOP and WAL-reset safety baseline | ready | `plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md` | Upgrade the bundled SQLite stack and prove true-NOOP semantics before M003; no checkpoint scheduling changes in this milestone. |
 
 ## Blocked work
 
@@ -136,3 +136,12 @@ implementation-plan number 003 for the future event-driven checkpoint
 milestone. The M004 closure's own accepted-artifact count and
 cumulative-vs-delta narration remain historical text; M005's closure record is
 the authoritative correction. Zero production Rust change in the pass.
+
+
+Persistence M006 is registered as the dependency-ready engine-safety prerequisite
+for M003. Repository and upstream research found that the current
+tokio-rusqlite 0.7 / rusqlite 0.37 / libsqlite3-sys 0.35 graph bundles SQLite
+3.50.2, which predates the 3.51.0 NOOP checkpoint mode and the 3.51.3 WAL-reset
+fix. M006 changes no checkpoint scheduling policy; it must establish a
+true-observational NOOP and fixed bundled engine before event-driven checkpoint
+coordination is handed off.
