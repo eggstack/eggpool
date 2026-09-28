@@ -78,6 +78,8 @@ Current EggPool production state after persistence M001/M002/M004 is:
 
 The target remains one SQLite authority.
 
+For M003, the reviewed event design is a private successful-COMMIT sequence plus a coalescing Tokio wake emitted only after COMMIT success and database-gate release. The existing process-owned `checkpoint` task remains the sole lifecycle owner and waits on cancellation, the event, or its existing 60-second fallback. A custom SQLite WAL hook is explicitly rejected because SQLite's automatic checkpoint mechanism owns/replaces the same hook slot, and the 1000-page fallback must remain intact.
+
 Routine checkpointing should use the existing process-owned maintenance boundary and existing DB worker. The first production candidate must be opportunistic and bounded: inspect WAL state only after writes, avoid queueing a checkpoint behind an already-busy database, run PASSIVE work before the default automatic threshold when the target workload allows it, and retain the existing automatic checkpoint as a hard safety ceiling until physical evidence proves that a stronger policy is safe. If this narrow periodic strategy cannot prevent the measured foreground tail, it must stop rather than grow into an event-driven checkpoint subsystem inside the same milestone.
 
 Request publication/finalization continue to own their current transactions. Deterministic data preparation that does not require SQLite should happen before gate acquisition. Metrics flush should move existing owned data rather than recursively cloning it and should prepare its repeated UPSERT once per transaction.
@@ -169,7 +171,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: proposed
+Status: blocked — M006 SQLite safety baseline must close before implementation
 
 Objective:
 
@@ -178,13 +180,14 @@ Design one process-owned coalesced checkpoint trigger that can intercept routine
 Dependencies:
 
 - Hard: M001 closure evidence must explicitly show the periodic strategy is insufficient — supplied by the M004 closure (`plans/closure/persistence/004-status.md`, closed 2026-09-27 against HEAD `8113d264`). **Satisfied.**
-- Architecture review required before an implementation plan is written (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, no event-driven coordinator that grows into a process-lifecycle owner). **Outstanding.**
-- Own implementation plan at local number `003` (`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`). **Does not exist**; local number 003 is reserved for it. The M004 closure's suggestion of a `005-event-driven-...` plan is a superseded numbering statement retained as history only.
-- Operational: focus on the same Pi/MMC target class; physical evidence still required at closure.
+- Architecture review: **satisfied for planning** by `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. Selected boundary is a successful-COMMIT-derived coalescing wake feeding the existing single process-owned checkpoint task; SQLite WAL hooks, per-request tasks, and second connections are rejected.
+- Hard: M006 SQLite NOOP/WAL-reset safety baseline. **Outstanding.** M003 must execute against the accepted M006 closure SHA.
+- Own implementation plan at local number `003`: `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. **Registered but blocked on M006.**
+- Operational: focus on the same Pi/MMC target class; paired M006-baseline/M003-candidate physical evidence required at closure.
 
 Deliverable boundary:
 
-No implementation plan is authorized by this roadmap yet. The evidence dependency being satisfied is not implementation readiness: M003 becomes `ready` only when a separate registration commit adds its architecture review and the `003` implementation plan.
+The architecture-reviewed implementation plan is registered, but implementation is not authorized until M006 closes. After M006 acceptance, a separate registry status-change commit may move M003 `blocked -> ready` after reconciling its execution baseline.
 
 Exit conditions:
 
@@ -343,7 +346,7 @@ This roadmap closes when M004's target disposition is reconciled through M005's 
 |---|---|---|---|---|
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic strategy now disproven on target; mechanism retained as additive-safe) | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | physical Pi/MMC condition resolved by M004 rejection; performance claim unfulfilled |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
-| 003 — event-driven checkpoint coordination | proposed (evidence dependency satisfied; architecture review and dedicated `003` implementation plan outstanding) | — (number 003 reserved for `003-event-driven-checkpoint-coordination.md`) | — | no plan exists; not an implementation-handoff candidate |
+| 003 — event-driven checkpoint coordination | blocked | plans/implementation/persistence/003-event-driven-checkpoint-coordination.md | — | hard dependency: M006 must close; architecture review complete; physical Pi/MMC evidence required at closure |
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | ready | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | — | none — dependency/engine prerequisite for M003 |

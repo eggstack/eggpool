@@ -41,7 +41,7 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M006 ready — SQLite NOOP and WAL-reset safety baseline | Current bundled SQLite 3.50.2 predates true `wal_checkpoint(NOOP)` and the WAL-reset fix. M006 must close before event-driven M003 can execute. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M006 ready — SQLite NOOP and WAL-reset safety baseline | M003 architecture review/plan is registered but `blocked` on M006; no event-driven implementation is authorized until the engine-safety prerequisite closes. |
 
 ## Dependency-ready implementation plans
 
@@ -54,6 +54,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
+| Persistence | M003 event-driven checkpoint coordination | Hard dependency M006 is ready but not closed. The architecture-reviewed `003` plan is registered; implementation must wait for the true-NOOP/WAL-reset-fixed SQLite baseline and a separate `blocked -> ready` registry commit. |
 
 ## Recently closed
 
@@ -145,3 +146,14 @@ tokio-rusqlite 0.7 / rusqlite 0.37 / libsqlite3-sys 0.35 graph bundles SQLite
 fix. M006 changes no checkpoint scheduling policy; it must establish a
 true-observational NOOP and fixed bundled engine before event-driven checkpoint
 coordination is handed off.
+
+
+Persistence M003 architecture review is registered at
+`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`.
+The selected design uses a successful-COMMIT-derived coalescing wake after
+database-gate release and retains the existing single process-owned checkpoint
+task, 60-second fallback, 256-frame soft threshold, and 1000-page SQLite
+automatic fallback. SQLite WAL hooks, per-request task spawning, and a second
+connection/worker are explicitly rejected. M003 is `blocked` on M006 and may
+move to `ready` only after M006 closes in a separate registry status-change
+commit.
