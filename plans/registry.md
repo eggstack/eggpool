@@ -108,22 +108,17 @@ Routing-selection M001 is closed (`4db8000d` implementation, `plans/closure/rout
 
 Persistence M004 (`8113d264` zero-Rust-diff closure, `plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts at `artifacts/qualification/m004/` (11 phase-diagnostic runs plus 3 ordinary benchmark runs) against the production M001 mechanism. The 60s/256 candidate maxima were 1709 / 561 / 10 943 ms; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Three ordinary `--benchmark-samples 10` runs converged (`pending_requests=0`, `active_reservations=0`, peak RSS ≈ 18.2 MB) with backup / recovery / restart / shutdown / rehash / bounded-maintenance / graceful-shutdown all green. Periodic strategy is rejected on the target class; landed 60s/256 constants untouched per plan §6.2.
 
-Unblock audit (M004 closed): the M004 evidence satisfies M003's hard dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M005 corrects the M004 record's reading of that evidence: measured-window checkpoint activity is zero in every 30 s/60 s phase run, and the 1s/64 stress run deferred all three in-window checkpoint ticks on the busy foreground gate, so M003 inherits concrete gate-contention evidence rather than in-batch PASSIVE checkpoint evidence. M003 is `proposed`, not `ready` — see the M005 audit below.
+Unblock audit (M004 closed): the M004 evidence satisfies M003's hard evidence dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M005 corrects the M004 record's reading of that evidence: measured-window checkpoint activity is zero in every 30 s/60 s phase run, and the 1s/64 stress run deferred all three in-window checkpoint ticks on the busy foreground gate, so M003 inherits concrete gate-contention evidence rather than in-batch PASSIVE checkpoint evidence. At M005 closure this returned M003 to `proposed`; the current M006/M003 planning state is recorded below.
 
-Unblock audit (M005 closed): persistence M003 moves from `ready` back to
-`proposed`. Its hard evidence dependency is satisfied, but the persistence
-roadmap §7 architecture review and its dedicated
-`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`
-do not exist, so it is not an implementation-handoff candidate. Local number
-003 is reserved for that future plan; the M004 closure's `005-event-driven-...`
-suggestion is a superseded numbering statement kept only as history. M003 may
-become `ready` only through a separate registration commit. Routing-selection
-M002 stays not started — its 64/512/4096-entry affinity workload is still not
-produced. Provider-transport M002 remains blocked on the upstream Eggfetch
-typed classification interface. No blocked work is promoted and the
-dependency-ready implementation-plan table is now empty: M005 closed without
-unblocking any future plan, and M003's registration is the only remaining
-persistence planning action.
+Unblock audit (M005 closed, historical disposition): persistence M003 moved
+from `ready` back to `proposed` because its architecture review and dedicated
+`003` implementation plan did not yet exist. That M005 condition has now been
+addressed by the registered M003 plan, but new M006 research exposed a prior
+hard dependency: the locked SQLite 3.50.2 baseline predates true
+`wal_checkpoint(NOOP)` and the WAL-reset fix. M003 is therefore currently
+`blocked` on M006 rather than `proposed` or `ready`. Routing-selection M002
+stays evidence-gated and Provider-transport M002 remains blocked on the
+upstream Eggfetch typed classification interface.
 
 
 Persistence M005 is **closed** (`plans/closure/persistence/005-status.md`,
