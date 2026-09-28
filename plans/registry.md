@@ -41,14 +41,13 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M004 closed — periodic strategy insufficient on target; M003 promoted for separate architecture/design planning | M001 conditionally closed (periodic claim now disproven; mechanism retained as additive-safe); M002 closed; M003 ready for separate implementation plan; no other ready persistence work. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M005 ready — M004 evidence/planning reconciliation corrective pass | M004 rejection outcome stands, but cumulative-vs-delta narration and M003 lifecycle/numbering require reconciliation before any event-driven handoff. |
 
 ## Dependency-ready implementation plans
 
-No dependency-ready implementation plans. Persistence M003 is promoted per
-the M004 closure but still requires its own focused implementation plan with
-the architecture review gate; routing-selection M002 stays evidence-gated;
-provider-transport M002 stays blocked on upstream API work.
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+|---|---|---|---|---|
+| Persistence | M005 M004 evidence and planning reconciliation corrective pass | ready | `plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md` | Documentation/evidence-only corrective pass; committed M004 artifacts are the source of truth; zero production Rust diff required. |
 
 ## Blocked work
 
@@ -108,3 +107,12 @@ Routing-selection M001 is closed (`4db8000d` implementation, `plans/closure/rout
 Persistence M004 (`8113d264` zero-Rust-diff closure, `plans/closure/persistence/004-status.md`) collected thirteen accepted Pi 5 / ext4 / MMC physical runs at `artifacts/qualification/m004/` against the production M001 mechanism. The 60s/256 candidate maxima were 1709 / 561 / 10 943 ms; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence 1s/64 stress run all left the foreground tail. Three ordinary `--benchmark-samples 10` runs converged (`pending_requests=0`, `active_reservations=0`, peak RSS ≈ 18.2 MB) with backup / recovery / restart / shutdown / rehash / bounded-maintenance / graceful-shutdown all green. Periodic strategy is rejected on the target class; landed 60s/256 constants untouched per plan §6.2.
 
 Unblock audit (M004 closed): persistence M003 is promoted from `not started` to `ready` because the M004 evidence satisfies its hard dependency ("M001 closure evidence must explicitly show the periodic strategy is insufficient"). M003 still requires its own implementation plan with the architecture review gate the persistence roadmap §7 prescribes (no per-request task spawning, no second SQLite connection, no public checkpoint configuration, lifecycle/cancellation/shutdown/WAL bounds/single-worker ownership before code changes). No implementation plan is created by this closure. Routing-selection M002 stays not started — its 64/512/4096-entry affinity workload is still not produced and is outside M004 scope. Provider-transport M002 remains blocked on the upstream Eggfetch typed classification interface. No blocked work is promoted to a dependency-ready implementation plan by this commit.
+
+
+Persistence M005 is registered as the corrective layer for M004's evidence
+interpretation and planning-lifecycle defects. The M004 periodic-strategy
+rejection remains the working architectural disposition, but no M003 runtime
+handoff is authorized until M005 closes. M005 must preserve the immutable M004
+closure, machine-check the committed artifact deltas, correct current docs, and
+reserve local implementation-plan number 003 for the future event-driven
+checkpoint milestone.

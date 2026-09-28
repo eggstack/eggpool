@@ -223,6 +223,34 @@ Exit conditions:
 
 **Closure (2026-09-27, HEAD `8113d264`):** periodic strategy rejected on the target class. Thirteen accepted physical runs captured at `artifacts/qualification/m004/`. No allowed periodic candidate clears the plan §13 gates; landed 60s/256 mechanism retained as additive-safe (per plan §9); M003 promoted to `ready`. See `plans/closure/persistence/004-status.md`.
 
+
+### Milestone 005 — M004 evidence and planning reconciliation corrective pass
+
+Class: polish
+
+Objective:
+
+Correct M004's cumulative-vs-delta checkpoint narration, accepted-artifact count, M003 lifecycle/numbering, and current control-surface wording without changing runtime behavior or rewriting the immutable M004 closure.
+
+Dependencies:
+
+- Hard: M004 closure and committed `artifacts/qualification/m004/` evidence.
+- No operational hardware dependency; this pass consumes committed evidence only.
+
+Deliverable boundary:
+
+- Test-only evidence guard over the committed M004 artifact corpus.
+- Correct current roadmap/registry/architecture statements.
+- M005 closure as the authoritative correction layer.
+- M003 remains out of implementation scope; future event-driven planning retains local number 003.
+
+Exit conditions:
+
+- Current docs use measured-window `deltas`, not cumulative counters, for in-batch maintenance claims.
+- Artifact census is machine-verified.
+- M003 lifecycle no longer implies implementation readiness before its architecture review and dedicated `003` plan.
+- Zero production Rust diff.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -265,7 +293,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap closes when M004 resolves the physical checkpoint condition with target evidence or a truthful blocked disposition, M002 remains closed, no high/medium correctness finding remains, current persistence architecture/docs describe the resulting policy, and any need for event-driven checkpoint coordination is either explicitly rejected or represented by a separate reviewed milestone.
+This roadmap closes when M004's target disposition is reconciled through M005's evidence-corrective record, M002 remains closed, no high/medium correctness finding remains, current persistence architecture/docs describe the resulting policy accurately, and any need for event-driven checkpoint coordination is represented by a separately reviewed M003 implementation plan.
 
 ## 12. Milestone status
 
@@ -274,4 +302,5 @@ This roadmap closes when M004 resolves the physical checkpoint condition with ta
 | 001 — bounded passive checkpoint scheduling and target qualification | conditionally closed (periodic strategy now disproven on target; mechanism retained as additive-safe) | plans/implementation/persistence/001-bounded-passive-checkpoint-scheduling-and-qualification.md | plans/closure/persistence/001-status.md | physical Pi/MMC condition resolved by M004 rejection; performance claim unfulfilled |
 | 002 — single-gate tenure and metrics-flush allocation cleanup | closed | plans/implementation/persistence/002-single-gate-tenure-and-metrics-flush-allocation-cleanup.md | plans/closure/persistence/002-status.md | none |
 | 003 — event-driven checkpoint coordination | ready | — | — | M004 evidence supplies hard dependency; separate implementation plan with architecture review gate still required |
-| 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; M003 promoted | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — M003 is the next persistence milestone |
+| 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration under M005 corrective reconciliation | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
+| 005 — M004 evidence and planning reconciliation corrective pass | ready | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | — | none — committed artifacts are sufficient |
