@@ -47,7 +47,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M006 SQLite NOOP and WAL-reset safety baseline | ready | `plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md` | Upgrade the bundled SQLite stack and prove true-NOOP semantics before M003; no checkpoint scheduling changes in this milestone. |
+| Persistence | M006 SQLite NOOP and WAL-reset safety baseline | active | `plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md` | Upgrade the bundled SQLite stack and prove true-NOOP semantics before M003; no checkpoint scheduling changes in this milestone. |
 
 ## Blocked work
 

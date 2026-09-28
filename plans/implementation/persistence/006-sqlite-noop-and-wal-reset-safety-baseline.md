@@ -1,6 +1,6 @@
 # Persistence Milestone 006 — SQLite NOOP and WAL-Reset Safety Baseline
 
-Status: ready
+Status: active
 
 Repository baseline: `2fd4bce10822cc66f576a0f5054fe4dcab495403`
 
