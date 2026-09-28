@@ -41,19 +41,19 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 blocked — event-driven checkpoint coordination | M006 is closed; M003 awaits the separate `blocked -> ready` registry promotion and still needs physical Pi/MMC evidence at closure. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 ready — event-driven checkpoint coordination | M006 closed at `abfdb18b`; paired physical Pi/MMC qualification remains required at M003 closure. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Persistence | M003 event-driven checkpoint coordination | ready | `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md` | M006 closed at `abfdb18b`; preserve its SQLite 3.53.2 safety baseline and record paired target-class evidence. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
-| Persistence | M003 event-driven checkpoint coordination | M006 is closed; implementation waits for the separate `blocked -> ready` registry commit recording the accepted baseline. |
 
 ## Recently closed
 

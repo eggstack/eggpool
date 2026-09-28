@@ -1,12 +1,13 @@
 # Persistence Milestone 003 — Event-Driven Checkpoint Coordination
 
-Status: blocked — persistence M006 must close before implementation
+Status: ready
 
 Repository planning baseline: `b692ca26d674f45325f4b5867be479b2bc73e5c2`
 
 Execution baseline:
 
-- Re-resolve to the accepted persistence M006 closure commit before implementation.
+- Accepted persistence M006 closure: `abfdb18b` (`plans/closure/persistence/006-status.md`).
+- M003 implementation must use this engine-safety baseline.
 - If M006 materially changes the database/task ownership surfaces described below, stop and reconcile this plan before editing runtime code.
 
 Source roadmap:
@@ -98,19 +99,19 @@ The defect is foreground checkpoint ownership; moving explicit maintenance into 
 
 M003 is not authorized to remove the existing hard safety ceiling.
 
-## 3. Why this milestone is blocked rather than ready
+## 3. Readiness dependency resolution
 
 M004/M005 satisfy the evidence dependency: timer-only periodic scheduling is insufficient on the target class.
 
 The architecture review above satisfies the former design-planning dependency.
 
-However M006 is now a hard correctness dependency:
+M006 was the remaining hard correctness dependency:
 
 - the current locked SQLite 3.50.2 predates true `wal_checkpoint(NOOP)`;
 - M003 relies on an observational WAL query before deciding whether to run PASSIVE;
 - M006 must also move the bundled engine to a WAL-reset-fixed release before increasing manual checkpoint opportunity frequency.
 
-M003 may move `blocked -> ready` only in a separate registry commit after M006 closure is accepted and this plan is reconciled against the M006 implementation SHA.
+M006 closed in `abfdb18b`; the implementation baseline above records its accepted closure SHA. This separate registry status-change commit promotes M003 to ready.
 
 ## 4. Current implementation evidence
 
