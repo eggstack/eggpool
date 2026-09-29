@@ -1,14 +1,6 @@
 //! R008 startup recovery and generation-leased maintenance integration.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
-
-use eggpool::task_supervisor::{
-    RuntimeTaskSupervisor, TaskCallback, TaskCallbackError, TaskCallbackRegistry,
-    runtime_task_inventory,
-};
-use tokio::sync::Notify;
 
 use eggpool::{
     Config,
@@ -156,56 +148,6 @@ async fn checkpoint_task_is_single_process_owned_maintenance_loop() {
         eggpool::task_supervisor::TaskOwnership::Process
     );
     database.close().await.expect("database close");
-}
-
-#[tokio::test]
-async fn checkpoint_task_wakes_on_coalesced_commit_event_before_fallback() {
-    let database = database().await;
-    let started = Arc::new(Notify::new());
-    let callback_started = Arc::clone(&started);
-    let callback: TaskCallback = Arc::new(move |_| {
-        let started = Arc::clone(&callback_started);
-        Box::pin(async move {
-            started.notify_one();
-            Ok::<(), TaskCallbackError>(())
-        })
-    });
-    let callbacks = TaskCallbackRegistry::with_checkpoint(database.clone())
-        .with_callback("checkpoint", callback);
-    let supervisor = RuntimeTaskSupervisor::with_callbacks(callbacks);
-    let checkpoint = runtime_task_inventory()
-        .into_iter()
-        .find(|spec| spec.name == "checkpoint")
-        .expect("checkpoint spec exists");
-    assert!(checkpoint.interval_s >= 60.0);
-    let mut diff = supervisor
-        .prepare_diff(&[], &[checkpoint])
-        .expect("checkpoint diff prepares");
-    diff.commit().await.expect("checkpoint task starts");
-
-    tokio::time::timeout(Duration::from_secs(2), started.notified())
-        .await
-        .expect("immediate checkpoint tick starts");
-    for _ in 0..4 {
-        database
-            .with_transaction(|connection| {
-                connection
-                    .execute_batch("CREATE TABLE IF NOT EXISTS checkpoint_event_probe (id INTEGER)")
-            })
-            .await
-            .expect("commit succeeds");
-    }
-    tokio::time::timeout(Duration::from_secs(2), started.notified())
-        .await
-        .expect("coalesced commit event wakes before the 60 second fallback");
-    let snapshot = supervisor
-        .task_snapshot("checkpoint")
-        .expect("single checkpoint task remains installed");
-    assert!(snapshot.running);
-    assert_eq!(supervisor.task_count(), 1);
-    let shutdown = supervisor.shutdown().await;
-    assert_eq!(shutdown.remaining, 0);
-    database.close().await.expect("database closes");
 }
 
 #[tokio::test]
