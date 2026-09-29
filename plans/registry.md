@@ -41,7 +41,7 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 active — event-driven checkpoint coordination | M006 closed at `abfdb18b`; paired physical Pi/MMC qualification remains required at M003 closure. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
 
@@ -59,6 +59,7 @@ pair is a known numbering accident.
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
 | Persistence M006 — SQLite NOOP and WAL-reset safety baseline | closed — bundled SQLite 3.53.2; NOOP regression and full default/no-default qualification passed | `plans/closure/persistence/006-status.md`, implementation `c3a72720` |
+| Persistence M003 — event-driven checkpoint coordination | closed — rejected by paired Pi/MMC gates; candidate moved multi-second tails into finalization gate wait and was reverted | `plans/closure/persistence/003-status.md`, attempted implementation `b5d145fb`, revert `29bcbb4e` |
 | Persistence M005 — M004 evidence and planning reconciliation corrective pass | closed — M004 evidence interpretation and M003 lifecycle corrected | `plans/closure/persistence/005-status.md`, guard `tests/tooling/test_persistence_m004_evidence.py` (17 tests; 14 accepted M004 artifacts machine-checked; zero production Rust diff) |
 | Persistence M004 — physical checkpoint qualification and final disposition (periodic strategy rejected on target) | closed — M003's evidence dependency satisfied; narration corrected by M005 | `plans/closure/persistence/004-status.md`, implementation `8113d264` (zero production Rust diff; 14 accepted Pi 5 / ext4 / MMC physical artifacts at `artifacts/qualification/m004/`) |
 | Routing selection M001 — ordered quota-scoring and candidate-allocation cleanup | closed | `plans/closure/routing-selection/001-status.md`, implementation `4db8000d` |
@@ -142,12 +143,12 @@ true-observational NOOP and fixed bundled engine before event-driven checkpoint
 coordination is handed off.
 
 
-Persistence M003 architecture review is registered at
-`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`.
-The selected design uses a successful-COMMIT-derived coalescing wake after
-database-gate release and retains the existing single process-owned checkpoint
-task, 60-second fallback, 256-frame soft threshold, and 1000-page SQLite
-automatic fallback. SQLite WAL hooks, per-request task spawning, and a second
-connection/worker are explicitly rejected. M003 is `blocked` on M006 and may
-move to `ready` only after M006 closes in a separate registry status-change
-commit.
+Persistence M003 was unblocked after M006 closed and received paired physical
+qualification on a Raspberry Pi 5 / ext4 / MMC target. The event-assisted
+candidate reduced foreground publication COMMIT maxima to 349–376 µs but
+introduced 1.88–3.30 s finalization gate waits in all three runs; this fails
+M003's explicit no-tail-transfer gate. Its runtime implementation was reverted
+(`29bcbb4e`), and M003 is closed with a rejected outcome in
+`plans/closure/persistence/003-status.md`. No successor is eligible from this
+closure. Any future checkpoint redesign must be separately planned and must
+address storage stalls without transferring them to foreground gate wait.

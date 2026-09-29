@@ -1,6 +1,6 @@
 # Persistence Milestone 003 — Event-Driven Checkpoint Coordination
 
-Status: active
+Status: closed — event-assisted implementation rejected by paired Pi/MMC gates; runtime changes reverted
 
 Repository planning baseline: `b692ca26d674f45325f4b5867be479b2bc73e5c2`
 
@@ -627,7 +627,8 @@ Stop and re-plan if:
 
 ## 16. Handoff notes
 
-This plan is intentionally blocked until M006 closes.
+This plan was blocked until M006 closed; its paired target qualification and
+rejected closure are recorded below.
 
 When unblocked, implement the event source at the database transaction authority, not in publication/finalization call sites. That guarantees metrics, catalog/config writes, reload transactions, and future legitimate database writers share one commit-derived mechanism without duplicating hooks.
 
@@ -646,3 +647,15 @@ SQLite COMMIT succeeds
 Do not notify before gate release.
 
 The event path is an optimization. The 60-second fallback and SQLite 1000-page auto-checkpoint remain the recovery/safety layers.
+
+## 17. Closure disposition
+
+M003 is closed with a rejected implementation outcome. The event-assisted
+candidate passed code and lifecycle verification, but failed the physical
+acceptance gates: in all three paired Pi 5 runs, the multi-second foreground
+publication COMMIT tail moved into finalization database-gate wait. The runtime
+implementation was reverted in `29bcbb4e`; retained behavior is the M006
+SQLite 3.53.2 timer-only baseline. See
+`plans/closure/persistence/003-status.md` for paired measurements and the
+blocker audit. Any further checkpoint redesign requires a separately reviewed
+plan; M003's rejected event implementation is not production behavior.

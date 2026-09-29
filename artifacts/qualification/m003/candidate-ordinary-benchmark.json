@@ -1,0 +1,966 @@
+{
+  "backup": {
+    "archive_sha256": "a4b6971ab83852343f47204675be3a76cf03d1d4012f36e8aa42d2d137ee0c9a",
+    "archive_size_bytes": 703959,
+    "elapsed_ms": 139,
+    "member_count": 3
+  },
+  "benchmark": {
+    "cadence": {
+      "backup_enabled": "false",
+      "backup_interval_s": "86400",
+      "database_busy_timeout_ms": "10000",
+      "database_synchronous": "\"NORMAL\"",
+      "database_wal": "true",
+      "database_worker_threads": "1",
+      "metrics_aggregate_only": "true",
+      "metrics_cleanup_interval_s": "86400",
+      "metrics_event_loop_lag_enabled": "false",
+      "metrics_flush_interval_s": "120",
+      "metrics_max_buffered_events": "250",
+      "metrics_write_mode": "\"low_wear\"",
+      "model_info_enabled": "false",
+      "model_info_startup_refresh": "false",
+      "models_refresh_interval_s": "300",
+      "models_startup_refresh": "true",
+      "routing_trace_mode": "\"off\"",
+      "routing_trace_sample_rate": "0.0",
+      "server_access_log": "false",
+      "server_threads": "1"
+    },
+    "client_concurrency": 4,
+    "concurrency_batch_size": 32,
+    "config_fixture": "sbc-benchmark.toml",
+    "interpretation": "descriptive loopback characterization; no performance threshold applied",
+    "resource_summary": {
+      "baseline_peak_rss_bytes": 17891328,
+      "baseline_rss_bytes": 17891328,
+      "final_active_reservations": 0,
+      "final_finalization_jobs": 0,
+      "final_pending_requests": 0,
+      "final_rss_bytes": 18419712,
+      "peak_rss_bytes": 18419712
+    },
+    "runs": {
+      "concurrent_native_responses_finite": {
+        "batch_elapsed_ms": 969,
+        "client_concurrency": 4,
+        "completed_count": 32,
+        "cpu": {
+          "cpu_percent": 9.29,
+          "cpu_ticks": 9,
+          "cpu_time_ms": 90
+        },
+        "failed_count": 0,
+        "request_count": 32,
+        "requests_per_second": 33.017,
+        "status": "measured",
+        "timings": {
+          "maximum_elapsed_ms": 293,
+          "minimum_elapsed_ms": 5,
+          "p50_elapsed_ms": 9,
+          "p50_ttft_ms": 9,
+          "p95_elapsed_ms": 291,
+          "p95_ttft_ms": 291,
+          "sample_count": 32
+        }
+      },
+      "native_responses_finite": {
+        "cpu": {
+          "cpu_percent": 5.0,
+          "cpu_ticks": 3,
+          "cpu_time_ms": 30
+        },
+        "maximum_elapsed_ms": 344,
+        "minimum_elapsed_ms": 3,
+        "model": "q008-responses",
+        "p50_elapsed_ms": 3,
+        "p50_ttft_ms": 3,
+        "p95_elapsed_ms": 344,
+        "p95_ttft_ms": 344,
+        "sample_count": 10,
+        "status": "measured",
+        "streaming": false,
+        "warmup_count": 5
+      },
+      "native_responses_streaming": {
+        "cpu": {
+          "cpu_percent": 9.61,
+          "cpu_ticks": 4,
+          "cpu_time_ms": 40
+        },
+        "maximum_elapsed_ms": 227,
+        "minimum_elapsed_ms": 3,
+        "model": "q008-responses",
+        "p50_elapsed_ms": 4,
+        "p50_ttft_ms": 3,
+        "p95_elapsed_ms": 227,
+        "p95_ttft_ms": 3,
+        "sample_count": 10,
+        "status": "measured",
+        "streaming": true,
+        "warmup_count": 5
+      },
+      "translated_responses_to_messages_streaming": {
+        "cpu": {
+          "cpu_percent": 8.51,
+          "cpu_ticks": 4,
+          "cpu_time_ms": 40
+        },
+        "expected_upstream_path": "/messages",
+        "maximum_elapsed_ms": 221,
+        "minimum_elapsed_ms": 3,
+        "model": "q008-messages",
+        "p50_elapsed_ms": 4,
+        "p50_ttft_ms": 3,
+        "p95_elapsed_ms": 221,
+        "p95_ttft_ms": 4,
+        "sample_count": 10,
+        "status": "measured",
+        "streaming": true,
+        "upstream_proof": "fixture Messages path observed",
+        "upstream_request_delta": 15,
+        "warmup_count": 5
+      }
+    },
+    "sample_count": 10
+  },
+  "candidate": {
+    "binary_size_bytes": 31515320,
+    "build_elapsed_ms": 389000,
+    "build_mode": "on-device-release-build",
+    "build_profile": "release",
+    "repository_commit_sha": "b5d145fb6468dcb787e07559e3d0adeb7c1da804",
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "sha256": "4c7d63ff6afbca7a8533c4904a8730d94d5d000b8a31f74947bc6cb644f2782e"
+  },
+  "commands": [
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "version"
+      ],
+      "duration_ms": 5,
+      "id": "version",
+      "reason": "0.8.0",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "--help"
+      ],
+      "duration_ms": 4,
+      "id": "help",
+      "reason": "EggPool - aggregate OpenCode Go subscriptions. Usage: eggpool-m003-ordinary-b5d145fb [OPTIONS] [COMMAND] Commands: serve connect logout check-config edit getkey newkey configsetup configremote deploy accounts dashboard db models modelinfo stats onboard croncheck ensure-running migrate stop restart init-config help recover uninstall update set rehash runtime-status status backup version Options: --config <PATH> Path to the TOML configuration file. Falls back to $EGGPOOL_CONFIG, then ~/.config/eggpool/config.toml, then ./config.toml. -h, --help Print help -V, --version Print version",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "check-config"
+      ],
+      "duration_ms": 6,
+      "id": "check-config",
+      "reason": "Configuration loaded successfully from /tmp/eggpool-q008-l3rvyqzm/config.toml Server: 127.0.0.1:42777 Accounts: 1 Database: /tmp/eggpool-q008-l3rvyqzm/data-home/usage.sqlite3 Content digest: a0745738357a5f0d91d31d49ccc84808ab2a07996895090e4f0f566530e745bc",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "migrate"
+      ],
+      "duration_ms": 1494,
+      "id": "migrate",
+      "reason": "Migrations completed successfully Applied migrations: 54 Current schema: 54",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "accounts",
+        "list"
+      ],
+      "duration_ms": 6,
+      "id": "accounts-list",
+      "reason": "Configured accounts: fixture/q008-account Total: 1 accounts",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "modelinfo",
+        "list"
+      ],
+      "duration_ms": 9,
+      "id": "modelinfo-list",
+      "reason": "No model-info rows found.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "explain-dashboard",
+        "--json"
+      ],
+      "duration_ms": 9,
+      "id": "operator-stats",
+      "reason": "{ \"period\": \"24h\", \"bucket\": \"hour\", \"group_by\": \"provider_model\", \"queries\": [ { \"name\": \"fetch_timeseries\", \"plan\": [ \"SEARCH r USING COVERING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_grouped_timeseries\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_summary\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\" ] }, { \"name\": \"fetch_account_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_model_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (starte",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "transcoding",
+        "--json"
+      ],
+      "duration_ms": 9,
+      "id": "transcoding-stats",
+      "reason": "{ \"total\": 5, \"native_count\": 5, \"transcoded_count\": 0, \"per_direction\": {}, \"top_loss_warnings\": [], \"period\": \"24h\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "runtime-status",
+        "--json"
+      ],
+      "duration_ms": 6,
+      "id": "runtime-status",
+      "reason": "{ \"server\": { \"pid\": 601570, \"ppid\": 601554, \"uptime_seconds\": 4.5435877399999995, \"configured_server_threads\": 1, \"python_version\": null, \"rust_version\": \"0.8.0\" }, \"memory\": { \"rss_bytes\": null, \"vms_bytes\": null, \"open_fd_count\": null, \"thread_count\": 1 }, \"processes\": { \"eggpool_process_count\": 1, \"expected_worker_process_count\": 1, \"process_count_warning\": false }, \"background_tasks\": [ { \"name\": \"catalog_refresh\", \"running\": true, \"enabled\": true, \"tick_count\": 0, \"last_outcome\": null, \"in_tick\": false }, { \"name\": \"checkpoint\", \"running\": true, \"enabled\": true, \"tick_count\": 14, \"last_outcome\": \"success\", \"in_tick\": false }, { \"name\": \"metrics_flush\", \"running\": true, \"enabled\": true, \"tick_count\": 0, \"last_outcome\": null, \"in_tick\": false }, { \"name\"",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "rehash",
+        "--json"
+      ],
+      "duration_ms": 8,
+      "id": "rehash",
+      "reason": "{ \"ok\": true, \"stage\": \"commit\", \"exit_code\": 0, \"generation\": 1, \"changed_sections\": [], \"warnings\": [], \"restart_required\": [], \"retirement_pending\": false, \"message\": \"no changes\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "backup",
+        "--output-dir",
+        "<TEMP_ROOT>/backups"
+      ],
+      "duration_ms": 139,
+      "id": "backup",
+      "reason": "Wrote backup: /tmp/eggpool-q008-l3rvyqzm/backups/eggpool-backup-20260929-004443.zip included: config.toml included: usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/recovery/config.toml",
+        "recover",
+        "<TEMP_ROOT>/recovery/recovered.zip"
+      ],
+      "duration_ms": 132,
+      "id": "recover",
+      "reason": "Overwrite current configuration and database? [y/N] Restore complete. Restart the server to load the new config. config: /tmp/eggpool-q008-l3rvyqzm/recovery/config.toml db: /tmp/eggpool-q008-l3rvyqzm/recovery/usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "db",
+        "vacuum"
+      ],
+      "duration_ms": 90,
+      "id": "vacuum",
+      "reason": "Database vacuum completed successfully",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stop",
+        "--timeout",
+        "30"
+      ],
+      "duration_ms": 110,
+      "id": "stop",
+      "reason": "Stopping server (PID 601698)... Server stopped.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    }
+  ],
+  "durable": {
+    "active_reservations": 0,
+    "attempts": 85,
+    "pending_requests": 0,
+    "request_statuses": {
+      "completed": 85
+    },
+    "requests": 85,
+    "reservations": 85
+  },
+  "environment": {
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu_frequency_policy": "2400000",
+    "cpu_frequency_policy_end": "1500000",
+    "cpu_governor": "ondemand",
+    "cpu_governor_end": "ondemand",
+    "filesystem": "ext4",
+    "kernel": "6.8.0-1064-raspi",
+    "loopback_provider_path_counts": {
+      "/chat/completions": 3,
+      "/messages": 17,
+      "/responses": 65
+    },
+    "loopback_provider_requests": 85,
+    "os": "Ubuntu 24.04.4 LTS",
+    "os_version_id": "24.04",
+    "power_thermal_mode_celsius": 45.8,
+    "power_thermal_mode_celsius_end": 45.2,
+    "ram_bytes": 8322752512,
+    "root_storage_device_class": "mmc",
+    "soc_cpu_core_count": 4,
+    "storage_medium_class": "non-rotational"
+  },
+  "findings": [],
+  "functional": [
+    {
+      "body_bytes": 15,
+      "http_status": 200,
+      "id": "startup-readyz",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 272,
+      "http_status": 200,
+      "id": "model-listing",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 225,
+      "elapsed_ms": 5,
+      "http_status": 200,
+      "id": "chat_completions-finite",
+      "status": "pass",
+      "ttft_ms": 5
+    },
+    {
+      "body_bytes": 309,
+      "elapsed_ms": 3,
+      "http_status": 200,
+      "id": "responses-finite",
+      "status": "pass",
+      "ttft_ms": 3
+    },
+    {
+      "body_bytes": 213,
+      "elapsed_ms": 3,
+      "http_status": 200,
+      "id": "messages-finite",
+      "status": "pass",
+      "ttft_ms": 3
+    },
+    {
+      "body_bytes": 145,
+      "elapsed_ms": 3,
+      "http_status": 200,
+      "id": "chat_completions-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 2
+    },
+    {
+      "body_bytes": 270,
+      "elapsed_ms": 1813,
+      "http_status": 200,
+      "id": "responses-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 3
+    },
+    {
+      "body_bytes": 432,
+      "elapsed_ms": 3,
+      "http_status": 200,
+      "id": "messages-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 3
+    },
+    {
+      "id": "accounts-list",
+      "status": "pass"
+    },
+    {
+      "id": "modelinfo-list",
+      "status": "pass"
+    },
+    {
+      "id": "operator-stats",
+      "status": "pass"
+    },
+    {
+      "id": "transcoding-stats",
+      "status": "pass"
+    },
+    {
+      "id": "runtime-status",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 6324,
+      "http_status": 200,
+      "id": "dashboard-page",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 34187,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.css",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 45019,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 131072,
+      "http_status": 200,
+      "id": "dashboard-static-chart.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 1203,
+      "http_status": 200,
+      "id": "dashboard-static-favicon.svg",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 261,
+      "http_status": 200,
+      "id": "dashboard-static-theme.css?theme=Nord",
+      "status": "pass"
+    },
+    {
+      "id": "rehash-runtime-status",
+      "status": "pass"
+    },
+    {
+      "id": "backup-recover-isolated",
+      "recovered_database": true,
+      "status": "pass"
+    },
+    {
+      "id": "bounded-maintenance",
+      "status": "pass"
+    },
+    {
+      "id": "restart-reconcile",
+      "status": "pass"
+    },
+    {
+      "id": "graceful-shutdown",
+      "status": "pass"
+    }
+  ],
+  "isolated_temporary_root": true,
+  "manifest": "runtime-q001.v1",
+  "plan": "SBC qualification",
+  "python_reference": {
+    "reason": "optional same-board comparison was not supplied",
+    "status": "not-run"
+  },
+  "repeated_run_stability": {
+    "fd_counts": [
+      14,
+      14,
+      14,
+      14,
+      14,
+      14,
+      14,
+      14,
+      14,
+      14,
+      14
+    ],
+    "interpretation": "bounded samples for release characterization; no fixed performance threshold applied",
+    "logical_leaks": false,
+    "rss_bytes": [
+      16584704,
+      16588800,
+      17891328,
+      17891328,
+      17944576,
+      17977344,
+      18038784,
+      18419712,
+      18419712,
+      18419712,
+      17465344
+    ],
+    "samples": 11,
+    "status": "pass",
+    "thread_counts": [
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2,
+      2
+    ]
+  },
+  "request_workload_timings": {
+    "elapsed_ms": {
+      "finite_elapsed_ms": [
+        5,
+        3,
+        3
+      ],
+      "finite_ttft_ms": [
+        5,
+        3,
+        3
+      ],
+      "second_workload_elapsed_ms": [
+        4,
+        3
+      ],
+      "second_workload_ttft_ms": [
+        4,
+        3
+      ],
+      "streaming_elapsed_ms": [
+        3,
+        1813,
+        3
+      ],
+      "streaming_ttft_ms": [
+        2,
+        3,
+        3
+      ]
+    },
+    "interpretation": "bounded client-observed timings; first-byte values are diagnostic characterization, not an SLA",
+    "sample_count": 16
+  },
+  "resource_samples": [
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 561152,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "before-warmup",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 16584704,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 16584704,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95690752,
+      "wal_bytes": 82432,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 561152,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-warmup",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 16588800,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 16588800,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95690752,
+      "wal_bytes": 82432,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 6,
+      "cpu_percent": 0.0,
+      "db_bytes": 569344,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-first-workload",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 17891328,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 6
+      },
+      "requests": 6,
+      "reservations": 6,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17891328,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95825920,
+      "wal_bytes": 1108312,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 6,
+      "cpu_percent": 0.0,
+      "db_bytes": 569344,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "benchmark-baseline",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 17891328,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 6
+      },
+      "requests": 6,
+      "reservations": 6,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17891328,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95825920,
+      "wal_bytes": 1108312,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 21,
+      "cpu_percent": 0.0,
+      "db_bytes": 589824,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-native-responses-finite",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 17944576,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 21
+      },
+      "requests": 21,
+      "reservations": 21,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17944576,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95825920,
+      "wal_bytes": 1108312,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 36,
+      "cpu_percent": 0.0,
+      "db_bytes": 610304,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-native-responses-streaming",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 17977344,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 36
+      },
+      "requests": 36,
+      "reservations": 36,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17977344,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95825920,
+      "wal_bytes": 1108312,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 51,
+      "cpu_percent": 0.0,
+      "db_bytes": 647168,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-translated-streaming",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 18038784,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 51
+      },
+      "requests": 51,
+      "reservations": 51,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 18038784,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95825920,
+      "wal_bytes": 1124792,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 83,
+      "cpu_percent": 0.0,
+      "db_bytes": 692224,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-concurrency-4",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 18419712,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 83
+      },
+      "requests": 83,
+      "reservations": 83,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 18419712,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 96235520,
+      "wal_bytes": 1718072,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 83,
+      "cpu_percent": 0.0,
+      "db_bytes": 692224,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-benchmark-stabilization",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 18419712,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 83
+      },
+      "requests": 83,
+      "reservations": 83,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 18419712,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 3000,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 96235520,
+      "wal_bytes": 1718072,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 83,
+      "cpu_percent": 0.0,
+      "db_bytes": 692224,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-rehash-backup",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 18419712,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 83
+      },
+      "requests": 83,
+      "reservations": 83,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 18419712,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 96235520,
+      "wal_bytes": 1718072,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 85,
+      "cpu_percent": 0.0,
+      "db_bytes": 688128,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-second-workload",
+      "open_fd_count": 14,
+      "peak_rss_bytes": 17465344,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 85
+      },
+      "requests": 85,
+      "reservations": 85,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17465344,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 2,
+      "virtual_bytes": 95719424,
+      "wal_bytes": 469712,
+      "wire_flights": null
+    }
+  ],
+  "schema_version": "runtime-q008.v2",
+  "startup_to_ready_ms": 39,
+  "status": "pass"
+}
