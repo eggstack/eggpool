@@ -171,7 +171,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: active
+Status: closed — rejected by paired Pi/MMC acceptance gates; runtime changes reverted
 
 Objective:
 
@@ -182,16 +182,16 @@ Dependencies:
 - Hard: M001 closure evidence must explicitly show the periodic strategy is insufficient — supplied by the M004 closure (`plans/closure/persistence/004-status.md`, closed 2026-09-27 against HEAD `8113d264`). **Satisfied.**
 - Architecture review: **satisfied for planning** by `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. Selected boundary is a successful-COMMIT-derived coalescing wake feeding the existing single process-owned checkpoint task; SQLite WAL hooks, per-request tasks, and second connections are rejected.
 - Hard: M006 SQLite NOOP/WAL-reset safety baseline. **Satisfied** by `plans/closure/persistence/006-status.md`; implementation baseline is accepted closure `abfdb18b`.
-- Own implementation plan at local number `003`: `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. **Registered but blocked on M006.**
+- Own implementation plan at local number `003`: `plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`. **Closed with rejected disposition**; attempted runtime changes were reverted in `29bcbb4e`.
 - Operational: focus on the same Pi/MMC target class; paired M006-baseline/M003-candidate physical evidence required at closure.
 
 Deliverable boundary:
 
-The architecture-reviewed implementation plan is ready against accepted M006 closure `abfdb18b`. Physical paired Pi/MMC qualification remains required at closure.
+Paired Pi/MMC qualification is complete. The event-assisted candidate removed publication-COMMIT tails but transferred 1.88–3.30 second stalls into foreground finalization gate wait, violating the no-tail-transfer gate. M003 is closed rejected and its runtime implementation is absent from the retained tree.
 
 Exit conditions:
 
-A separate reviewed plan proves lifecycle, cancellation, shutdown, WAL bounds, single-worker ownership, restart/reload/backup/recovery semantics, and the bounded physical target-class evidence before any code change lands.
+Closure evidence is `plans/closure/persistence/003-status.md`. Any future checkpoint redesign must be a new bounded milestone and must prove that storage work neither returns to foreground COMMIT nor transfers into foreground database-gate wait.
 
 
 ### Milestone 004 — Physical checkpoint qualification and final disposition
@@ -340,7 +340,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap closes when M004's target disposition is reconciled through M005's evidence-corrective record, M002 remains closed, no high/medium correctness finding remains, current persistence architecture/docs describe the resulting policy accurately, and any need for event-driven checkpoint coordination is represented by a separately reviewed M003 implementation plan.
+This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. The workstream may close only when a later bounded design either eliminates the target-class tail without transferring it to foreground gate wait, or an explicit architectural/product decision accepts the residual behavior.
 
 ## 12. Milestone status
 

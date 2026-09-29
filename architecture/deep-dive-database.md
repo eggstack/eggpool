@@ -173,11 +173,4 @@ every 30 s and 60 s phase run recorded a checkpoint task tick delta of 0 and zer
 maintenance actions in the batch, so the single cumulative `below_threshold` in
 the baseline is pre-batch history; the 1s/64 stress run recorded 3 in-batch
 checkpoint ticks and all three deferred with `gate_busy` (0 `checkpointed`,
-0 `below_threshold`). The landed M001 mechanism stays as the conservative
-production owner (60-second poll, 256-frame soft threshold, unchanged 1000-page
-automatic fallback) with no retune. Persistence M003 (event-driven checkpoint
-coordination) is `proposed`: its hard evidence dependency is satisfied, but it
-awaits its architecture review and its own
-`plans/implementation/persistence/003-event-driven-checkpoint-coordination.md`
-plan (lifecycle, cancellation, shutdown, WAL bounds, single-worker ownership,
-restart/reload/backup/restore/recovery semantics before any code change).
+0 `below_threshold`). The landed M001 mechanism stays as the conservative production owner (60-second poll, 256-frame soft threshold, unchanged 1000-page automatic fallback) with no retune. Persistence M003 then tested a successful-COMMIT-derived coalescing wake on the same serialized database gate/worker. Physical Pi/MMC qualification showed the event path removed the publication-COMMIT checkpoint tail but transferred 1.88–3.30 second stalls into foreground finalization gate wait. The candidate was rejected and reverted in `29bcbb4e`; the retained runtime contains no M003 commit signal or event wake. See `plans/closure/persistence/003-status.md`. Any future checkpoint redesign must be separately planned against this tail-transfer evidence.

@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Persistence M005 (M004 evidence and planning
-reconciliation corrective pass, `plans/closure/persistence/005-status.md`).
+Most recently closed: Persistence M003 (event-driven checkpoint coordination,
+rejected by paired Pi/MMC acceptance gates and reverted; `plans/closure/persistence/003-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate

@@ -24,9 +24,7 @@ M004 (`plans/closure/persistence/004-status.md`, closed against HEAD
 **rejected the periodic strategy** on the target class, so the 60s/256-frame
 default is now conservative and unproven-on-target rather than target-
 accepted; the landed mechanism is retained as additive-safe per Plan 240 §9
-and M004 §6.2, and persistence M003 (event-driven checkpoint coordination)
-is `proposed` — its evidence dependency is satisfied, but no architecture
-review or `003` implementation plan exists yet),
+and M004 §6.2. Persistence M003 subsequently tested an event-assisted wake in this same process-owned task, but paired Pi/MMC qualification showed 1.88–3.30 second foreground finalization gate waits; the implementation was rejected and reverted, so the shipped checkpoint task remains timer-only),
 metrics flushing (`metrics_flush` via `operations/metrics.rs::
 MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
 `operations/update.rs::UpdateCheckerState` + `register_update_checker`),
