@@ -126,7 +126,7 @@ impl From<AdmissionError> for EndpointError {
     fn from(error: AdmissionError) -> Self {
         match error {
             AdmissionError::BodyTooLarge { .. } => Self::BodyTooLarge,
-            AdmissionError::InvalidJson | AdmissionError::TopLevelNotObject => Self::InvalidJson,
+            AdmissionError::InvalidJson(_) | AdmissionError::TopLevelNotObject => Self::InvalidJson,
             AdmissionError::StatefulResponsesFeature { field: "previous_response_id" } => {
                 Self::StatelessViolation(
                     "EggPool's /v1/responses is stateless only; previous_response_id is not supported."
@@ -166,9 +166,8 @@ impl EndpointError {
             | Self::InvalidStream
             | Self::Admission => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::NoEligibleRoute | Self::Claim | Self::Attempt | Self::Finalization => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::NoEligibleRoute | Self::Attempt => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -570,6 +569,10 @@ async fn resolve_concrete(
         // Strip any provider qualifier for the dispatched body: the upstream
         // does not understand EggPool's namespace. The qualifier survives as
         // a routing pin, matching the Python `provider_id` context field.
+        // B25 wire preservation: native no-rewrite path reuses ingress `Bytes` backing
+        // via cheap refcount clone (preserves canonical allocation/order/whitespace).
+        // Provider-qualified rewrite re-encodes only on actual model-id change
+        // (compacts whitespace, preserves parsed `Value` key order; `Bytes::clone` is refcounted).
         let concrete_body = if model_id != model_value.trim() {
             parsed
                 .object_mut()?
@@ -782,7 +785,7 @@ pub async fn execute_endpoint(
     let parsed =
         parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
             AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
-            AdmissionError::InvalidJson => EndpointError::InvalidJson,
+            AdmissionError::InvalidJson(_) => EndpointError::InvalidJson,
             AdmissionError::TopLevelNotObject => EndpointError::InvalidJson,
             _ => EndpointError::Admission,
         })?;

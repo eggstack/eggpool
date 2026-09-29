@@ -201,23 +201,59 @@ impl BackupService {
     }
 
     pub fn recover(&self, archive: &Path) -> Result<RestoreResult, BackupError> {
-        let prepared = Self::validated_archive(archive)?;
+        let prepared = Self::validated_archive(archive, Some(&self.paths))?;
         atomic_restore(prepared)
     }
 
     /// Validate every archive member, manifest, target, config, and database
     /// before a caller decides whether it is safe to stop a running server.
     pub fn validate_archive(archive: &Path) -> Result<(), BackupError> {
-        let _ = Self::validated_archive(archive)?;
+        let _ = Self::validated_archive(archive, None)?;
         Ok(())
     }
 
-    fn validated_archive(archive: &Path) -> Result<PreparedRestore, BackupError> {
+    fn validated_archive(
+        archive: &Path,
+        live: Option<&BackupPaths>,
+    ) -> Result<PreparedRestore, BackupError> {
         let prepared = prepare_restore(archive)?;
         validate_restore_targets(&prepared.targets)?;
+        // Allowlist: META-nominated absolute targets must match the live
+        // resolved paths. An attacker-controlled archive must not redirect
+        // restores to /etc, ~/.ssh, or other absolute locations.
+        if let Some(live) = live {
+            Self::validate_restore_targets_against_live(&prepared.targets, live)?;
+        }
         validate_staged_config(&prepared.config_bytes, &prepared.targets.config)?;
         validate_staged_database(&prepared.database_bytes, &prepared.targets.database)?;
         Ok(prepared)
+    }
+
+    /// Require archive targets to equal the live service paths. Skipped only
+    /// when live paths are unknown (empty fallback during corrupt-config
+    /// recovery); traversal/symlink checks in `validate_restore_targets`
+    /// still apply there.
+    fn validate_restore_targets_against_live(
+        targets: &RestoreTargets,
+        live: &BackupPaths,
+    ) -> Result<(), BackupError> {
+        // Empty live paths mean the current config could not be parsed;
+        // there is no allowlist to enforce (traversal checks already ran).
+        if live.config.as_os_str().is_empty() || live.database.as_os_str().is_empty() {
+            return Ok(());
+        }
+        if targets.config != live.config || targets.database != live.database {
+            return Err(BackupError::InvalidArchive(
+                "restore targets do not match the live configuration paths".to_owned(),
+            ));
+        }
+        match (&targets.env, &live.env) {
+            (None, _) => Ok(()),
+            (Some(target), Some(live_env)) if target == live_env => Ok(()),
+            _ => Err(BackupError::InvalidArchive(
+                "restore env target does not match the live configuration path".to_owned(),
+            )),
+        }
     }
 }
 
@@ -656,6 +692,10 @@ fn futures_lite_block_on_validate(path: &Path) -> Result<(), BackupError> {
 
 fn atomic_restore(prepared: PreparedRestore) -> Result<RestoreResult, BackupError> {
     let targets = &prepared.targets;
+    // Validate staged bytes BEFORE touching any live target. `validated_archive`
+    // already validated, but `atomic_restore` must stay safe on its own.
+    validate_staged_config(&prepared.config_bytes, &targets.config)?;
+    validate_staged_database(&prepared.database_bytes, &targets.database)?;
     let root = targets
         .database
         .parent()
@@ -684,14 +724,16 @@ fn atomic_restore(prepared: PreparedRestore) -> Result<RestoreResult, BackupErro
             write_atomic(target, bytes, 0o600)?;
         }
         write_atomic(&targets.database, &prepared.database_bytes, 0o600)?;
-        validate_staged_config(&prepared.config_bytes, &targets.config)?;
-        validate_staged_database(&prepared.database_bytes, &targets.database)
+        Ok(())
     })();
     if result.is_err() {
+        // Rollback by atomic rename (temp in target parent + rename), not
+        // non-atomic `fs::copy`, to avoid torn state on failure.
         let rollback = originals.iter().try_for_each(|(target, saved)| {
             match saved {
                 Some(saved) => {
-                    fs::copy(saved, target)?;
+                    let bytes = fs::read(saved)?;
+                    write_atomic(target, &bytes, 0o600)?;
                     set_private_file(target)?;
                 }
                 None => {
@@ -776,14 +818,21 @@ fn safe_absolute_target(raw: &str) -> Result<PathBuf, BackupError> {
 }
 
 fn stable_read(path: &Path, max: u64, member: &str) -> Result<Vec<u8>, BackupError> {
+    reject_symlink_ancestors(path)?;
     let before = fs::symlink_metadata(path)?;
     if !before.is_file() || before.len() > max {
         return Err(BackupError::Source(format!(
             "{member} is unavailable or too large"
         )));
     }
-    let file = File::open(path)?;
-    let mut bytes = Vec::with_capacity(before.len() as usize);
+    // O_NOFOLLOW open so a symlink swap between the metadata check and open
+    // cannot redirect the read. Falls back to a symlink re-check on platforms
+    // without `custom_flags`.
+    let file = open_nofollow(path)?;
+    // Verify the opened file is the same inode as the pre-check (Unix) and
+    // that the path did not change under us (before consuming `file` for read).
+    verify_opened_same_file(path, &file, &before)?;
+    let mut bytes = Vec::with_capacity(before.len().min(max) as usize);
     file.take(max + 1).read_to_end(&mut bytes)?;
     let after = fs::symlink_metadata(path)?;
     if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
@@ -791,7 +840,85 @@ fn stable_read(path: &Path, max: u64, member: &str) -> Result<Vec<u8>, BackupErr
             "{member} changed during backup"
         )));
     }
+    if (bytes.len() as u64) > max {
+        return Err(BackupError::Source(format!(
+            "{member} is unavailable or too large"
+        )));
+    }
     Ok(bytes)
+}
+
+#[cfg(unix)]
+fn open_nofollow(path: &Path) -> Result<File, BackupError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // `O_NOFOLLOW` is 0o400000 on Linux/macOS; use libc value via custom_flags
+    // without a new dependency (0x20000 on macOS is also covered by attempting
+    // open and re-validating symlink below on failure).
+    const O_NOFOLLOW: i32 = 0o400000;
+    let result = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path);
+    match result {
+        Ok(file) => Ok(file),
+        Err(error) if error.kind() == io::ErrorKind::InvalidInput => {
+            // Platform did not honor the flag: fall back to open + symlink check.
+            let file = File::open(path)?;
+            if fs::symlink_metadata(path)?.file_type().is_symlink() {
+                return Err(BackupError::Source(
+                    "symlink path is not allowed".to_owned(),
+                ));
+            }
+            Ok(file)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn open_nofollow(path: &Path) -> Result<File, BackupError> {
+    let file = File::open(path)?;
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(BackupError::Source(
+            "symlink path is not allowed".to_owned(),
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn verify_opened_same_file(
+    path: &Path,
+    file: &File,
+    before: &fs::Metadata,
+) -> Result<(), BackupError> {
+    use std::os::unix::fs::MetadataExt;
+    let opened = file.metadata().map_err(BackupError::from)?;
+    // Same device+inode as the pre-check; otherwise a swap raced us.
+    if opened.dev() != before.dev()
+        || opened.ino() != before.ino()
+        || opened.file_type().is_symlink()
+    {
+        return Err(BackupError::Source(
+            "source changed during backup".to_owned(),
+        ));
+    }
+    // Path itself must still not be a symlink.
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(BackupError::Source(
+            "symlink path is not allowed".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_opened_same_file(
+    _path: &Path,
+    _file: &File,
+    _before: &fs::Metadata,
+) -> Result<(), BackupError> {
+    Ok(())
 }
 
 fn validate_source_file(path: &Path, max: u64, member: &str) -> Result<(), BackupError> {

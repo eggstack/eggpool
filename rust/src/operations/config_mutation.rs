@@ -29,6 +29,7 @@ const BUNDLED_PROVIDERS: &str = include_str!("../../assets/providers/_templates.
 include!(concat!(env!("OUT_DIR"), "/eggpool_config_assets.rs"));
 
 static MUTATION_PATHS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+static MUTATION_TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 struct MutationGuard {
     path: PathBuf,
@@ -189,11 +190,38 @@ fn no_op_result<T>(path: &Path, value: T) -> Result<MutationResult<T>, MutationE
 }
 
 fn existing_mode(path: &Path) -> Result<Option<fs::Permissions>, MutationError> {
-    match fs::metadata(path) {
-        Ok(metadata) => Ok(Some(metadata.permissions())),
+    // Use symlink_metadata so a symlink swap is not followed for mode capture.
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(MutationError::Invalid(
+                    "configuration path is a symlink".into(),
+                ));
+            }
+            Ok(Some(metadata.permissions()))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(MutationError::Read(error)),
     }
+}
+
+/// Reject symlink ancestors (including the target itself) before mutating.
+/// The in-process `lock_mutation` does not serialize CLI/server races across
+/// processes; this at least closes symlink-swap TOCTOU between check and
+/// rename. Cross-process `flock` would require a new dependency and is
+/// documented as a limitation.
+fn reject_symlink_ancestors(path: &Path) -> Result<(), MutationError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if fs::symlink_metadata(&current).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            if current == Path::new("/tmp") || current == Path::new("/var") {
+                continue;
+            }
+            return Err(MutationError::Invalid("symlink path is not allowed".into()));
+        }
+    }
+    Ok(())
 }
 
 fn atomic_replace(
@@ -201,16 +229,24 @@ fn atomic_replace(
     bytes: &[u8],
     mode: Option<fs::Permissions>,
 ) -> Result<(), MutationError> {
+    reject_symlink_ancestors(path)?;
     let parent = path
         .parent()
         .filter(|value| !value.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    reject_symlink_ancestors(parent)?;
     fs::create_dir_all(parent).map_err(MutationError::Write)?;
     let name = path
         .file_name()
         .ok_or_else(|| MutationError::Invalid("configuration path has no file name".into()))?
         .to_string_lossy();
-    let temporary = parent.join(format!(".{name}.tmp-{}", std::process::id()));
+    // Unpredictable temp (pid + counter) with `create_new` so concurrent
+    // CLI/server writers do not collide on a predictable name.
+    let temporary = parent.join(format!(
+        ".{name}.tmp-{}-{}",
+        std::process::id(),
+        MUTATION_TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]

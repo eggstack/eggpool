@@ -91,17 +91,29 @@ impl MigrationRunner {
             return Err(DatabaseError::ReadOnlyMigration);
         }
 
-        for migration in &pending {
-            let name = migration.name.to_owned();
-            let sql = migration.sql.to_owned();
-            let version = migration.version as i64;
+        // Atomic across versions: a crash or concurrent migrator cannot leave
+        // a partial ledger. `BEGIN IMMEDIATE` serializes concurrent writers;
+        // all pending migrations commit together or not at all.
+        if !pending.is_empty() {
+            let pending_sql: Vec<(i64, String, String)> = pending
+                .iter()
+                .map(|migration| {
+                    (
+                        migration.version as i64,
+                        migration.name.to_owned(),
+                        migration.sql.to_owned(),
+                    )
+                })
+                .collect();
             self.database
                 .with_transaction(move |connection| {
-                    connection.execute_batch(&sql)?;
-                    connection.execute(
-                        "INSERT INTO _migrations (version, name) VALUES (?1, ?2)",
-                        (version, name),
-                    )?;
+                    for (version, name, sql) in &pending_sql {
+                        connection.execute_batch(sql)?;
+                        connection.execute(
+                            "INSERT INTO _migrations (version, name) VALUES (?1, ?2)",
+                            (version, name),
+                        )?;
+                    }
                     Ok(())
                 })
                 .await?;
@@ -120,6 +132,21 @@ impl MigrationRunner {
 
     async fn ensure_ledger(&self) -> Result<(), DatabaseError> {
         if self.database.config().read_only {
+            // Fail closed when the ledger is missing instead of leaving
+            // `applied()` to hit a missing table.
+            let exists = self
+                .database
+                .call(|connection| {
+                    let mut statement = connection.prepare(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_migrations'",
+                    )?;
+                    let count: i64 = statement.query_row([], |row| row.get(0))?;
+                    Ok(count > 0)
+                })
+                .await?;
+            if !exists {
+                return Err(DatabaseError::ReadOnlyMigration);
+            }
             return Ok(());
         }
         self.database

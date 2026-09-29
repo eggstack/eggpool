@@ -103,6 +103,10 @@ pub enum TransportError {
     /// HTTP framing or protocol validation failed.
     #[error("provider HTTP protocol failed")]
     Protocol,
+    /// Internal transport fault (e.g. trace abort) that is retryable and
+    /// penalizes health, unlike caller cancellation.
+    #[error("provider transport fault")]
+    TransportFault,
     /// The caller cancelled the transport future.
     #[error("provider transport was cancelled")]
     Cancelled,
@@ -131,6 +135,7 @@ impl TransportError {
             Self::Read => "read",
             Self::ResponseBodyTooLarge => "response_body_too_large",
             Self::Protocol => "protocol",
+            Self::TransportFault => "transport_fault",
             Self::Cancelled => "cancelled",
         }
     }
@@ -1088,7 +1093,7 @@ fn map_eggfetch_error(
         EggfetchError::RetryBudgetExhausted { .. } | EggfetchError::RetryNotConfigured => {
             return TransportError::Protocol;
         }
-        EggfetchError::TraceCallbackAborted => return TransportError::Cancelled,
+        EggfetchError::TraceCallbackAborted => return TransportError::TransportFault,
         EggfetchError::Unsupported(_) => return TransportError::Configuration,
         _ => {}
     }

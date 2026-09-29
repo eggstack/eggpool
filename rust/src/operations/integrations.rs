@@ -1286,7 +1286,14 @@ fn resolve_opencode_config_path(
 
 fn load_manifest(path: &Path) -> Option<OwnershipManifest> {
     let bytes = fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    if crate::request::admission::check_json_depth_bytes(&bytes).is_err() {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    if crate::request::admission::validate_value_depth(&value, 0).is_err() {
+        return None;
+    }
+    serde_json::from_value(value).ok()
 }
 
 fn save_manifest(path: &Path, manifest: &OwnershipManifest) -> Result<(), IntegrationError> {
@@ -2273,10 +2280,21 @@ fn positive_u64(value: Option<&Value>) -> Option<u64> {
 }
 
 fn json_object(raw: &str) -> Value {
-    serde_json::from_str(raw)
-        .ok()
-        .filter(Value::is_object)
-        .unwrap_or_else(|| Value::Object(Map::new()))
+    if crate::request::admission::check_json_depth_bytes(raw.as_bytes()).is_err() {
+        return Value::Object(Map::new());
+    }
+    let value: Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => return Value::Object(Map::new()),
+    };
+    if crate::request::admission::validate_value_depth(&value, 0).is_err() {
+        return Value::Object(Map::new());
+    }
+    if value.is_object() {
+        value
+    } else {
+        Value::Object(Map::new())
+    }
 }
 
 fn display_name(model_id: &str, display_name: Option<&str>, metadata: &Value) -> String {

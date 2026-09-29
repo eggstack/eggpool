@@ -104,11 +104,20 @@ pub(super) async fn admit_inference_body(
         );
     };
     let ceiling = crate::request::resource_budget::effective_ceiling(limit);
-    let declared_length = request
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok());
+    // Malformed Content-Length is a client error, not an absent value: fail
+    // closed with 400 instead of granting the cheap 32 KiB reservation path.
+    let declared_length = match request.headers().get(header::CONTENT_LENGTH) {
+        None => None,
+        Some(value) => match value.to_str().ok().and_then(|v| v.parse::<usize>().ok()) {
+            Some(length) => Some(length),
+            None => {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"detail": "Invalid Content-Length"}),
+                );
+            }
+        },
+    };
     if declared_length.is_some_and(|length| length > limit) {
         return json_response(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -126,10 +135,9 @@ pub(super) async fn admit_inference_body(
         initial_reservation,
         ceiling,
     ) else {
-        return error_body_response(
-            StatusCode::SERVICE_UNAVAILABLE,
+        return backpressure_response(
             surface,
-            endpoint_error_body(surface, "Service unavailable"),
+            endpoint_error_body(surface, "Service busy: body budget exhausted"),
         );
     };
     let body = std::mem::replace(request.body_mut(), Body::empty());
@@ -146,10 +154,9 @@ pub(super) async fn admit_inference_body(
     };
     let overage = collected.len().saturating_sub(initial_reservation);
     if !reservation.try_grow(overage, ceiling) {
-        return error_body_response(
-            StatusCode::SERVICE_UNAVAILABLE,
+        return backpressure_response(
             surface,
-            endpoint_error_body(surface, "Service unavailable"),
+            endpoint_error_body(surface, "Service busy: body budget exhausted"),
         );
     }
     request.extensions_mut().insert(Arc::new(lease));
@@ -163,6 +170,17 @@ pub(super) fn is_inference_path(path: &str) -> bool {
         path,
         "/v1/chat/completions" | "/v1/messages" | "/v1/responses" | "/v1/responses/compact"
     )
+}
+
+/// Backpressure (body-budget exhaustion) is retryable client backoff, not an
+/// outage: 429 with `Retry-After` so clients back off instead of treating it
+/// as a 503 outage.
+fn backpressure_response(surface: crate::wire::ir::ClientSurface, detail: Vec<u8>) -> Response {
+    let mut response = error_body_response(StatusCode::TOO_MANY_REQUESTS, surface, detail);
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 pub(super) fn validate_server_key(config: &Config) -> Result<(), ServerError> {

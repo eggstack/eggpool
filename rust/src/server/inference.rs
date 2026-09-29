@@ -243,7 +243,7 @@ async fn finish_stream_execution(
                         break;
                     }
                 }
-                None | Some(Err(_)) => {
+                None => {
                     // Best-effort: terminal usage/finalization after the stream
                     // ends; the downstream body is already fixed.
                     if let Some(metrics) = &metrics
@@ -253,6 +253,21 @@ async fn finish_stream_execution(
                     }
                     let _ = execution
                         .complete(crate::coordinator::DownstreamResult::Delivered)
+                        .await;
+                    break;
+                }
+                Some(Err(_)) => {
+                    // Midstream decode/transport failure after partial bytes is
+                    // not a clean delivery: record it as cancelled so
+                    // finalization/usage accounting does not count it as
+                    // success.
+                    if let Some(metrics) = &metrics
+                        && let Some(event) = execution.usage_metric_event()
+                    {
+                        let _ = metrics.record_usage_async(event).await;
+                    }
+                    let _ = execution
+                        .complete(crate::coordinator::DownstreamResult::Cancelled)
                         .await;
                     break;
                 }

@@ -646,7 +646,19 @@ async fn fetch_account(
         );
     }
     let raw: Value = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
+        Ok(value) => {
+            // Bounded secondary ingress: reject over-deep provider payloads.
+            if crate::request::admission::check_json_depth_bytes(&bytes).is_err()
+                || crate::request::admission::validate_value_depth(&value, 0).is_err()
+            {
+                return failed_fetch(
+                    account_name,
+                    provider_id,
+                    base_observation(status_code, Some("Invalid JSON response".into()), 0),
+                );
+            }
+            value
+        }
         Err(_) => {
             return failed_fetch(
                 account_name,

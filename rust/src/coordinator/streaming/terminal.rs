@@ -526,7 +526,9 @@ fn effects_midstream_data(
     let usage = parts.midstream_usage();
     FinalizationData {
         outcome: FinalizationOutcome::MidstreamError,
-        status_code: Some(StatusCode::OK.as_u16()),
+        // Midstream failures must never masquerade as 200 OK in durable
+        // success-rate queries; the synthetic status stays absent.
+        status_code: None,
         input_tokens: bounded_i64(usage.as_ref().and_then(|usage| usage.input_tokens)),
         output_tokens: bounded_i64(usage.as_ref().and_then(|usage| usage.output_tokens)),
         cache_read_tokens: bounded_i64(
@@ -571,7 +573,8 @@ fn local_midstream_data(
 ) -> FinalizationData {
     FinalizationData {
         outcome: FinalizationOutcome::MidstreamError,
-        status_code: Some(StatusCode::OK.as_u16()),
+        // See effects_midstream_data: never record 200 for a failure.
+        status_code: None,
         cost_microdollars: 0,
         cache_counter_status: Some("not_reported".to_owned()),
         latency_ms: duration_i64(parts.elapsed()),
@@ -647,6 +650,8 @@ fn responses_terminal_data(
 ) -> FinalizationData {
     let mut data = success_terminal_data(parts, facts, usage);
     data.outcome = FinalizationOutcome::MidstreamError;
+    // Terminal midstream failures are not 200 successes.
+    data.status_code = None;
     data.error_class = Some("ResponsesTerminalEvent".into());
     data.error_detail = Some(if failed {
         "terminal_failure".into()
@@ -667,6 +672,8 @@ fn eof_failure_data(
 ) -> FinalizationData {
     let mut data = success_terminal_data(parts, facts, usage);
     data.outcome = FinalizationOutcome::MidstreamError;
+    // EOF failures are not 200 successes.
+    data.status_code = None;
     data.error_class = Some(match outcome {
         OUTCOME_EMPTY_EOF => "EmptyEof".into(),
         OUTCOME_MALFORMED_EOF => "MalformedEof".into(),

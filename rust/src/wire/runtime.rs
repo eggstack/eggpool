@@ -297,7 +297,7 @@ pub struct StreamIntent {
 }
 
 /// The fully admitted request and its selected-profile provider body.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct PreparedRequest {
     pub identity: WireRuntimeIdentity,
     pub admission: AdmittedRequest,
@@ -308,6 +308,24 @@ pub struct PreparedRequest {
     pub notices: Vec<AdaptationNotice>,
     pub bytes: WireByteFacts,
     pub stream: StreamIntent,
+}
+
+impl std::fmt::Debug for PreparedRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: admission trees may carry prompts/bodies/keys, and body
+        // values are omitted to avoid duplication (EncodedWireBody is already
+        // redacted). CanonicalRequest's Debug is redacted (lengths only), so
+        // it is safe to include for structural diagnostics.
+        // Only bounded lengths/counts are emitted.
+        formatter
+            .debug_struct("PreparedRequest")
+            .field("identity", &self.identity)
+            .field("canonical", &self.canonical)
+            .field("bytes", &self.bytes)
+            .field("stream", &self.stream)
+            .field("notice_count", &self.notices.len())
+            .finish()
+    }
 }
 
 /// Minimal provider-dispatch result.  The coordinator does not need the
@@ -910,7 +928,26 @@ impl WireRuntime {
             });
         }
         let value: Value = match serde_json::from_slice(body) {
-            Ok(value) => value,
+            Ok(value) => {
+                // Bounded secondary ingress: reject over-deep payloads as malformed.
+                if crate::request::admission::check_json_depth_bytes(body).is_err()
+                    || crate::request::admission::validate_value_depth(&value, 0).is_err()
+                {
+                    return Ok(CompactResponse {
+                        identity,
+                        outcome: CompactResponseOutcome::Malformed {
+                            error: provider_malformed_error(
+                                context.selected_profile.definition.surface,
+                            ),
+                        },
+                        metadata: None,
+                        usage: None,
+                        client_body: None,
+                        bytes,
+                    });
+                }
+                value
+            }
             Err(_) => {
                 return Ok(CompactResponse {
                     identity,
@@ -965,7 +1002,13 @@ impl WireRuntime {
         status: u16,
         context: &WireRuntimeContext,
     ) -> Option<ProviderErrorEvidence> {
+        if crate::request::admission::check_json_depth_bytes(body).is_err() {
+            return None;
+        }
         let value: Value = serde_json::from_slice(body).ok()?;
+        if crate::request::admission::validate_value_depth(&value, 0).is_err() {
+            return None;
+        }
         let codec = self.response_codec(context).ok()?;
         match codec.decode_response(&value, status).ok()?.value {
             DecodedProviderPayload::Error(error) => Some(error),
@@ -1031,7 +1074,30 @@ impl WireRuntime {
         let identity = WireRuntimeIdentity::from_context(context);
         let codec = self.response_codec(context)?;
         let value: Value = match serde_json::from_slice(body) {
-            Ok(value) => value,
+            Ok(value) => {
+                // Bounded secondary ingress: reject over-deep payloads as malformed.
+                if crate::request::admission::check_json_depth_bytes(body).is_err()
+                    || crate::request::admission::validate_value_depth(&value, 0).is_err()
+                {
+                    let error =
+                        provider_malformed_error(context.selected_profile.definition.surface);
+                    return Ok(FiniteResponse {
+                        identity,
+                        outcome: FiniteResponseOutcome::Malformed { error },
+                        metadata: None,
+                        usage: None,
+                        adaptation: AdaptationSummary::from_notices(&[]),
+                        notices: Vec::new(),
+                        client_body: None,
+                        bytes: WireByteFacts {
+                            input_bytes: body.len(),
+                            output_bytes: 0,
+                            bytes_observed: body.len(),
+                        },
+                    });
+                }
+                value
+            }
             Err(_) => {
                 let error = provider_malformed_error(context.selected_profile.definition.surface);
                 return Ok(FiniteResponse {
@@ -1456,6 +1522,14 @@ fn classify_freeform_output(
         };
         if freeform_names.contains(name) {
             let arguments = block.arguments.as_deref().unwrap_or_default();
+            if crate::request::admission::check_json_depth_bytes(arguments.as_bytes()).is_err() {
+                return Err(WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.input".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                }));
+            }
             let parsed: Value = serde_json::from_str(arguments).map_err(|_| {
                 WireRuntimeError::ResponseAdaptation(CodecError {
                     reason: CodecReasonCode::MalformedProviderResponse,
@@ -1464,6 +1538,14 @@ fn classify_freeform_output(
                     target_surface: Some(WireSurface::OpenaiResponses),
                 })
             })?;
+            if crate::request::admission::validate_value_depth(&parsed, 0).is_err() {
+                return Err(WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.input".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                }));
+            }
             let input = parsed
                 .as_object()
                 .filter(|object| object.len() == 1)
@@ -1487,6 +1569,14 @@ fn classify_freeform_output(
         // reaching Codex as native search calls.
         if deferred_names.contains(name) {
             let arguments = block.arguments.as_deref().unwrap_or_default();
+            if crate::request::admission::check_json_depth_bytes(arguments.as_bytes()).is_err() {
+                return Err(WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.tool_search".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                }));
+            }
             let value: Value = serde_json::from_str(arguments).map_err(|_| {
                 WireRuntimeError::ResponseAdaptation(CodecError {
                     reason: CodecReasonCode::MalformedProviderResponse,
@@ -1495,6 +1585,14 @@ fn classify_freeform_output(
                     target_surface: Some(WireSurface::OpenaiResponses),
                 })
             })?;
+            if crate::request::admission::validate_value_depth(&value, 0).is_err() {
+                return Err(WireRuntimeError::ResponseAdaptation(CodecError {
+                    reason: CodecReasonCode::MalformedProviderResponse,
+                    field: Some("tool_call.arguments.tool_search".into()),
+                    source_surface: Some(surface),
+                    target_surface: Some(WireSurface::OpenaiResponses),
+                }));
+            }
             let canonical = crate::wire::ir::validate_tool_search_arguments_value(&value)
                 .ok_or_else(|| {
                     WireRuntimeError::ResponseAdaptation(CodecError {
@@ -1556,7 +1654,7 @@ fn map_admission_error(error: AdmissionError, context: &WireRuntimeContext) -> C
         AdmissionError::InvalidField { field } => {
             (CodecReasonCode::MalformedSourceRequest, Some(field.into()))
         }
-        AdmissionError::InvalidJson
+        AdmissionError::InvalidJson(_)
         | AdmissionError::TopLevelNotObject
         | AdmissionError::InvalidModel => (CodecReasonCode::MalformedSourceRequest, None),
         AdmissionError::StatefulResponsesFeature { field } => (

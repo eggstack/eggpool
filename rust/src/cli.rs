@@ -122,6 +122,10 @@ pub enum ConnectCommand {
 pub struct NewkeyArgs {
     #[arg(long = "show-old")]
     pub show_old: bool,
+    /// Print the new key in plaintext. By default only a redacted form is
+    /// shown because stdout is captured by logs/systemd/journal.
+    #[arg(long = "show-secrets")]
+    pub show_secrets: bool,
 }
 #[derive(Debug, clap::Args)]
 pub struct OnboardArgs {

@@ -43,8 +43,8 @@ impl Default for AdmissionOptions {
 pub enum AdmissionError {
     #[error("request body exceeds configured limit")]
     BodyTooLarge { length: usize, limit: usize },
-    #[error("request JSON is invalid")]
-    InvalidJson,
+    #[error("request JSON is invalid: {0}")]
+    InvalidJson(String),
     #[error("request JSON top level must be an object")]
     TopLevelNotObject,
     #[error("request model must be a non-empty string")]
@@ -110,7 +110,7 @@ impl std::fmt::Debug for NativeRequestPreservation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct AdmittedRequest {
     pub canonical: CanonicalRequest,
     pub native_preservation: Option<NativeRequestPreservation>,
@@ -119,16 +119,42 @@ pub struct AdmittedRequest {
     pub context_tokens: u64,
 }
 
+impl std::fmt::Debug for AdmittedRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: canonical/native trees may carry prompts/bodies.
+        formatter
+            .debug_struct("AdmittedRequest")
+            .field("raw_body_bytes", &self.raw_body_bytes)
+            .field("reservation_tokens", &self.reservation_tokens)
+            .field("context_tokens", &self.context_tokens)
+            .field(
+                "has_native_preservation",
+                &self.native_preservation.is_some(),
+            )
+            .finish()
+    }
+}
+
 /// The bounded, already-parsed request boundary used by the HTTP coordinator.
 ///
 /// The value is kept private to the native runtime so callers cannot bypass
 /// the body-size and depth checks.  It is consumed by admission after endpoint
 /// classification, which lets model resolution mutate the one parsed tree
 /// without reparsing serialized bytes.
-#[derive(Debug)]
 pub(crate) struct ParsedRequestBody {
     pub(crate) raw_body: bytes::Bytes,
     pub(crate) value: Value,
+}
+
+impl std::fmt::Debug for ParsedRequestBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: raw bytes/value may carry prompts/bodies.
+        formatter
+            .debug_struct("ParsedRequestBody")
+            .field("raw_body_bytes", &self.raw_body.len())
+            .field("is_object", &self.value.is_object())
+            .finish()
+    }
 }
 
 impl ParsedRequestBody {
@@ -157,13 +183,25 @@ impl ParsedRequestBody {
 /// source-native compact JSON is preserved separately when same-surface
 /// forwarding is legal. No prompt, replacement history, or summary text is
 /// retained beyond the bounded request lifetime.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CompactAdmittedRequest {
     pub canonical: CanonicalRequest,
     pub native_preservation: NativeRequestPreservation,
     pub raw_body_bytes: usize,
     pub reservation_tokens: u64,
     pub context_tokens: u64,
+}
+
+impl std::fmt::Debug for CompactAdmittedRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redacted: canonical/native trees may carry prompts/history.
+        formatter
+            .debug_struct("CompactAdmittedRequest")
+            .field("raw_body_bytes", &self.raw_body_bytes)
+            .field("reservation_tokens", &self.reservation_tokens)
+            .field("context_tokens", &self.context_tokens)
+            .finish()
+    }
 }
 
 impl CompactAdmittedRequest {
@@ -449,12 +487,52 @@ pub fn affinity_identity_input(
 }
 
 fn parse_once(raw_body: &[u8]) -> Result<Value, AdmissionError> {
-    let value: Value = serde_json::from_slice(raw_body).map_err(|_| AdmissionError::InvalidJson)?;
+    // Fail fast on deep nesting before allocating the full DOM: a lightweight
+    // byte scan bounds depth without parsing, then the full decode preserves
+    // the serde offset/cause for diagnostics.
+    check_json_depth_bytes(raw_body)?;
+    let value: Value = serde_json::from_slice(raw_body)
+        .map_err(|error| AdmissionError::InvalidJson(error.to_string()))?;
     validate_value_depth(&value, 0)?;
     Ok(value)
 }
 
-fn validate_value_depth(value: &Value, depth: usize) -> Result<(), AdmissionError> {
+/// Byte-level nesting pre-check that skips string literals and escapes.
+/// Returns `DepthLimit` when object/array nesting reaches `MAX_JSON_DEPTH`
+/// without allocating a DOM.
+pub(crate) fn check_json_depth_bytes(raw: &[u8]) -> Result<(), AdmissionError> {
+    let mut depth: usize = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in raw {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                depth = depth.saturating_add(1);
+                if depth > MAX_JSON_DEPTH {
+                    return Err(AdmissionError::DepthLimit);
+                }
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_value_depth(value: &Value, depth: usize) -> Result<(), AdmissionError> {
     if depth >= MAX_JSON_DEPTH {
         return Err(AdmissionError::DepthLimit);
     }

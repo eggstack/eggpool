@@ -50,7 +50,7 @@
     {"path": "modelinfo show", "owner": "O007", "options": []},
     {"path": "models", "owner": "O007", "options": []},
     {"path": "models refresh", "owner": "O007", "options": []},
-    {"path": "newkey", "owner": "O004", "options": ["--show-old"]},
+    {"path": "newkey", "owner": "O004", "options": ["--show-old", "--show-secrets"]},
     {"path": "onboard", "owner": "O004", "options": ["--providers"]},
     {"path": "recover", "owner": "O006", "options": []},
     {"path": "rehash", "owner": "O003", "options": ["--json"]},

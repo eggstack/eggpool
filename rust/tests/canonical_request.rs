@@ -259,7 +259,7 @@ fn presence_distinguishes_missing_null_false_and_zero() {
 fn malformed_and_oversized_requests_fail_before_canonicalization() {
     assert!(matches!(
         admit_request(b"{", AdmissionOptions::default()),
-        Err(AdmissionError::InvalidJson)
+        Err(AdmissionError::InvalidJson(_))
     ));
     assert!(matches!(
         admit_request(b"[]", AdmissionOptions::default()),

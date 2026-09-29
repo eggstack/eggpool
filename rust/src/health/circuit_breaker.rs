@@ -123,11 +123,15 @@ impl CircuitBreaker {
         }
     }
 
+    /// Fail-closed gating view: poisoned locks deny new work. `state()` and
+    /// `stats()` below are best-effort diagnostics that report `Open` on
+    /// poison so dashboards do not show a healthy breaker while gating is
+    /// denying traffic.
     pub fn state(&self) -> CircuitState {
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .state
+        match self.inner.lock() {
+            Ok(inner) => inner.state,
+            Err(_) => CircuitState::Open,
+        }
     }
 
     pub fn can_request(&self) -> bool {
@@ -163,6 +167,46 @@ impl CircuitBreaker {
                     inner.probe_acquired_at = Some(now);
                     inner.probe_in_flight = true;
                     true
+                }
+            }
+        }
+    }
+
+    /// Cancel-safe probe acquisition. The returned guard releases the
+    /// half-open slot on drop, so a cancelled request cannot stall the
+    /// breaker in one-probe-forever. Callers that complete the probe must
+    /// still call `record_success`/`record_failure` (which consume the slot)
+    /// and may drop the guard afterwards; dropping without recording only
+    /// releases the slot.
+    pub fn try_acquire_probe(&self) -> Option<ProbeGuard> {
+        let now = self.now();
+        let mut inner = self.inner.lock().ok()?;
+        match inner.state {
+            CircuitState::Closed => Some(ProbeGuard {
+                breaker: self.clone(),
+                armed: false,
+            }),
+            CircuitState::Open if self.recovery_elapsed(&inner) => {
+                inner.state = CircuitState::HalfOpen;
+                inner.last_state_change = now;
+                inner.probe_acquired_at = Some(now);
+                inner.probe_in_flight = true;
+                Some(ProbeGuard {
+                    breaker: self.clone(),
+                    armed: true,
+                })
+            }
+            CircuitState::Open => None,
+            CircuitState::HalfOpen => {
+                if inner.probe_in_flight {
+                    None
+                } else {
+                    inner.probe_acquired_at = Some(now);
+                    inner.probe_in_flight = true;
+                    Some(ProbeGuard {
+                        breaker: self.clone(),
+                        armed: true,
+                    })
                 }
             }
         }
@@ -234,14 +278,28 @@ impl CircuitBreaker {
     }
 
     pub fn stats(&self) -> CircuitStats {
-        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-        CircuitStats {
-            state: inner.state,
-            failure_count: inner.failure_count,
-            success_count: inner.success_count,
-            last_failure_at: inner.last_failure_at,
-            last_state_change: inner.last_state_change,
-            probe_in_flight: inner.probe_in_flight,
+        match self.inner.lock() {
+            Ok(inner) => CircuitStats {
+                state: inner.state,
+                failure_count: inner.failure_count,
+                success_count: inner.success_count,
+                last_failure_at: inner.last_failure_at,
+                last_state_change: inner.last_state_change,
+                probe_in_flight: inner.probe_in_flight,
+            },
+            Err(error) => {
+                let inner = error.into_inner();
+                // Fail-closed diagnostic view: report Open while preserving
+                // counters from the poisoned snapshot.
+                CircuitStats {
+                    state: CircuitState::Open,
+                    failure_count: inner.failure_count,
+                    success_count: inner.success_count,
+                    last_failure_at: inner.last_failure_at,
+                    last_state_change: inner.last_state_change,
+                    probe_in_flight: true,
+                }
+            }
         }
     }
 
@@ -253,5 +311,38 @@ impl CircuitBreaker {
         inner
             .last_failure_at
             .is_some_and(|failure| self.now() - failure >= self.recovery_timeout)
+    }
+}
+
+/// RAII lease for a half-open probe slot. Dropping without an explicit
+/// `record_success`/`record_failure` releases the slot so cancellation cannot
+/// stall the breaker. Closed-state acquisitions are no-ops on drop.
+pub struct ProbeGuard {
+    breaker: CircuitBreaker,
+    armed: bool,
+}
+
+impl ProbeGuard {
+    /// Disarm the guard after the probe completed via `record_success` or
+    /// `record_failure` (also fine to drop armed: drop only releases).
+    pub fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.breaker.release_probe();
+        }
+    }
+}
+
+impl std::fmt::Debug for ProbeGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProbeGuard")
+            .field("armed", &self.armed)
+            .finish()
     }
 }

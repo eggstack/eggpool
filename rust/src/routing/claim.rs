@@ -7,6 +7,9 @@ use std::{
 
 use thiserror::Error;
 
+static CLAIM_BOOK_POISONED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 use crate::{
     health::HealthManager,
     quota::{QuotaEstimator, QuotaInvariantError, RoutingScore},
@@ -36,6 +39,8 @@ pub enum ClaimError {
     UnknownAccount { account_name: String },
     #[error("active ownership for claim account {account_name:?} would underflow")]
     ActiveOwnershipUnderflow { account_name: String },
+    #[error("claim book is poisoned; new claims are refused until restart")]
+    Poisoned,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,24 +404,34 @@ pub(crate) fn book() -> Arc<Mutex<ClaimBook>> {
     Arc::new(Mutex::new(ClaimBook::default()))
 }
 
-/// Rebuild the claim book after a poisoned lock instead of reusing
-/// potentially inconsistent state. A previous holder panicking must not turn
-/// one bad request path into double-claim/quota drift: the poisoned state is
-/// discarded and callers validate the rebuilt (empty) state before mutating,
-/// which fails closed as `UnknownAccount` for in-flight claims.
+/// Fail closed on a poisoned lock without discarding in-flight counts.
+/// A previous holder panicking must not turn one bad path into quota drift:
+/// the poisoned snapshot is preserved and new publishes are refused until
+/// restart/recovery, while conversions/releases on preserved counts can still
+/// drain. Poison is operator-visible via `tracing::error`.
 fn lock_book(book: &Arc<Mutex<ClaimBook>>) -> std::sync::MutexGuard<'_, ClaimBook> {
     book.lock().unwrap_or_else(|error| {
-        let mut guard = error.into_inner();
-        *guard = ClaimBook::default();
-        guard
+        tracing::error!("claim book lock poisoned; new claims refused until restart");
+        CLAIM_BOOK_POISONED.store(true, std::sync::atomic::Ordering::SeqCst);
+        error.into_inner()
     })
+}
+
+pub(crate) fn is_claim_book_poisoned() -> bool {
+    CLAIM_BOOK_POISONED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 pub(crate) fn publish(
     book: &Arc<Mutex<ClaimBook>>,
     mut claim: SelectionClaim,
 ) -> Result<SelectionClaim, ClaimError> {
+    if is_claim_book_poisoned() {
+        return Err(ClaimError::Poisoned);
+    }
     let mut state = lock_book(book);
+    if is_claim_book_poisoned() {
+        return Err(ClaimError::Poisoned);
+    }
     state.next_id = state.next_id.saturating_add(1);
     let id = state.next_id;
     *state

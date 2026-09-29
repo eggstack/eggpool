@@ -139,8 +139,15 @@ impl ControlRequest {
         if frame[..frame.len() - 1].contains(&b'\n') {
             return Err(ProtocolError::MultipleFrames);
         }
-        let value: Value = serde_json::from_slice(&frame[..frame.len() - 1])
-            .map_err(|_| ProtocolError::InvalidJson)?;
+        let body = &frame[..frame.len() - 1];
+        // Bounded secondary ingress: depth pre-check before DOM allocation.
+        if crate::request::admission::check_json_depth_bytes(body).is_err() {
+            return Err(ProtocolError::InvalidJson);
+        }
+        let value: Value = serde_json::from_slice(body).map_err(|_| ProtocolError::InvalidJson)?;
+        if crate::request::admission::validate_value_depth(&value, 0).is_err() {
+            return Err(ProtocolError::InvalidJson);
+        }
         let object = value.as_object().ok_or(ProtocolError::NotObject)?;
         let protocol_version = object
             .get("protocol_version")

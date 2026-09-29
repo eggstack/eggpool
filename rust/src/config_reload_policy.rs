@@ -195,27 +195,47 @@ pub fn classify_transition(
         if matches!(path, "providers" | "accounts") {
             continue;
         }
-        let Some(old_field) = value_at(&old_value, path) else {
-            continue;
-        };
-        let Some(new_field) = value_at(&new_value, path) else {
-            continue;
-        };
-        if old_field == new_field {
-            continue;
+        let old_field = value_at(&old_value, path);
+        let new_field = value_at(&new_value, path);
+        match (old_field, new_field) {
+            (None, None) => continue,
+            (Some(old_field), Some(new_field)) => {
+                if old_field == new_field {
+                    continue;
+                }
+                let (old_display, new_display) = if path == "model_routers" {
+                    (
+                        display_router_count(old_field),
+                        display_router_count(new_field),
+                    )
+                } else {
+                    (
+                        display_value(old_field, is_secret_path(path), path),
+                        display_value(new_field, is_secret_path(path), path),
+                    )
+                };
+                changes.push(change(path, old_display, new_display, is_secret_path(path)));
+            }
+            // Added/removed fields are real changes, not no-ops: emit a
+            // record so `disposition_for` (RestartRequired by default)
+            // forces a restart instead of silently treating it as live.
+            (None, Some(new_field)) => {
+                let new_display = if path == "model_routers" {
+                    display_router_count(new_field)
+                } else {
+                    display_value(new_field, is_secret_path(path), path)
+                };
+                changes.push(change(path, "<absent>", new_display, is_secret_path(path)));
+            }
+            (Some(old_field), None) => {
+                let old_display = if path == "model_routers" {
+                    display_router_count(old_field)
+                } else {
+                    display_value(old_field, is_secret_path(path), path)
+                };
+                changes.push(change(path, old_display, "<absent>", is_secret_path(path)));
+            }
         }
-        let (old_display, new_display) = if path == "model_routers" {
-            (
-                display_router_count(old_field),
-                display_router_count(new_field),
-            )
-        } else {
-            (
-                display_value(old_field, is_secret_path(path), path),
-                display_value(new_field, is_secret_path(path), path),
-            )
-        };
-        changes.push(change(path, old_display, new_display, is_secret_path(path)));
     }
 
     changes.sort_by(|left, right| left.path.cmp(&right.path));

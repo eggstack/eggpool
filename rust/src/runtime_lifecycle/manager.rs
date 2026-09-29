@@ -247,6 +247,25 @@ impl RuntimeManager {
         }
     }
 
+    /// Bounded retirement drain with an explicit deadline. Returns `true`
+    /// when all retirements drained before the deadline, `false` on expiry
+    /// (with evidence preserved by the caller via task counts).
+    pub async fn drain_retirements_with_deadline(&self, deadline: tokio::time::Instant) -> bool {
+        loop {
+            self.reap_retirements();
+            if self.retirement_task_count() == 0 {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            // Bound each yield by the remaining deadline so a stuck task
+            // cannot spin past shutdown.
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let _ = tokio::time::timeout(remaining, tokio::task::yield_now()).await;
+        }
+    }
+
     /// Adopt every generation for process shutdown and close it exactly once.
     /// Live retirement deliberately keeps failed old generations resident;
     /// process exit may force that final boundary because no accepted work can
@@ -282,14 +301,8 @@ impl RuntimeManager {
             }
         }
 
-        if !forced {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if tokio::time::timeout(remaining, self.drain_retirements())
-                .await
-                .is_err()
-            {
-                forced = true;
-            }
+        if !forced && !self.drain_retirements_with_deadline(deadline).await {
+            forced = true;
         }
 
         if forced {
@@ -313,6 +326,10 @@ impl RuntimeManager {
                 // A failed graceful finalization boundary must not leave
                 // process-owned transports open.  The second call is
                 // idempotent and only completes the forced provider close.
+                // Recompute the deadline: the first `remaining` may already be
+                // expired, which would turn this into a zero-timeout abort
+                // with lost evidence.
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
                 let report = slot.generation().force_close_with_timeout(remaining).await;
                 slot.set_state(GenerationSlotState::FailedClose);
                 closed_generations.push(report);

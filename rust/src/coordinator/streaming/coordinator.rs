@@ -1223,11 +1223,14 @@ impl StreamingCoordinator {
         dispatch_phase: &str,
         downstream_started: bool,
     ) -> FailureObservation {
-        let mut observation = FailureObservation::response(
-            identity.attempt_id,
-            attempt_number,
-            status.unwrap_or(StatusCode::BAD_GATEWAY),
-        );
+        // Local-preparation failures carry no upstream status: use the
+        // local-only observation instead of inventing a synthetic 502.
+        let mut observation = match status {
+            Some(status) => {
+                FailureObservation::response(identity.attempt_id, attempt_number, status)
+            }
+            None => FailureObservation::local(identity.attempt_id, attempt_number),
+        };
         observation.source = source;
         observation.status = status.map(|value| value.as_u16());
         observation.category_hint = category_hint;

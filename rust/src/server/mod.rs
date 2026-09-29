@@ -21,7 +21,24 @@ use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
 };
 use inference::{chat_completions, messages, responses, responses_compact};
-use middleware::{admit_inference_body, authenticate, map_generation_error, validate_server_key};
+use middleware::{
+    admit_inference_body, authenticate, is_loopback_host, map_generation_error, validate_server_key,
+};
+
+/// Loud startup warning when running without an API key (loopback dev mode
+/// only). Non-loopback without a key is already a startup error via
+/// `validate_server_key`; loopback without a key is wide open by design and
+/// must be operator-visible. See `docs/deployment.md`.
+fn warn_if_unauthenticated_loopback(config: &Config) {
+    if config.resolved_server_api_key().is_none() && is_loopback_host(&config.server.host) {
+        tracing::warn!(
+            host = config.server.host.as_str(),
+            "server.api_key is not configured: loopback listener is UNAUTHENTICATED (dev convenience). \
+             Set [server].api_key (or api_key_env) before binding a non-loopback host; \
+             see docs/deployment.md"
+        );
+    }
+}
 
 use axum::{
     Router,
@@ -739,6 +756,7 @@ pub async fn run_with_digest(
     config_path: Option<std::path::PathBuf>,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
+    warn_if_unauthenticated_loopback(&config);
     ensure_start_state(&config).await?;
     if config.server.threads != 1 {
         tracing::warn!(
@@ -909,6 +927,8 @@ pub async fn serve_listener(
     database: db::Database,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
+    validate_server_key(&config)?;
+    warn_if_unauthenticated_loopback(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -975,6 +995,8 @@ pub async fn serve_listener_with_inference(
     inference: Arc<InferenceState>,
     listener: TcpListener,
 ) -> Result<(), ServerError> {
+    validate_server_key(&config)?;
+    warn_if_unauthenticated_loopback(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {

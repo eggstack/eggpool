@@ -271,18 +271,7 @@ impl AccountQuota {
             QuotaWindowName::Weekly,
             QuotaWindowName::Monthly,
         ] {
-            let cost = self
-                .get_persisted_cost(window, now)
-                .saturating_add(self.policy.cost_offset(window))
-                .saturating_add(self.reserved_cost);
-            let requests = self
-                .get_persisted_requests(window)
-                .saturating_add(self.policy.request_offset(window))
-                .saturating_add(self.reserved_requests);
-            let tokens = self
-                .get_persisted_tokens(window, now)
-                .saturating_add(self.policy.token_offset(window))
-                .saturating_add(self.reserved_tokens);
+            let (cost, requests, tokens) = self.window_totals(window, now);
             if self
                 .policy
                 .cost_capacity(window)
@@ -302,6 +291,25 @@ impl AccountQuota {
         true
     }
 
+    /// Shared window math for admission (`is_within_limits`) and scoring
+    /// (`remaining_capacity`). Reserved usage applies to every window; the
+    /// at-capacity (`>=`) rule is the single exhaustion boundary.
+    fn window_totals(&mut self, window: QuotaWindowName, now: f64) -> (i64, i64, i64) {
+        let cost = self
+            .get_persisted_cost(window, now)
+            .saturating_add(self.policy.cost_offset(window))
+            .saturating_add(self.reserved_cost);
+        let requests = self
+            .get_persisted_requests(window)
+            .saturating_add(self.policy.request_offset(window))
+            .saturating_add(self.reserved_requests);
+        let tokens = self
+            .get_persisted_tokens(window, now)
+            .saturating_add(self.policy.token_offset(window))
+            .saturating_add(self.reserved_tokens);
+        (cost, requests, tokens)
+    }
+
     pub fn remaining_capacity(&mut self, now: f64) -> f64 {
         let mut remaining = Vec::new();
         for window in [
@@ -309,41 +317,15 @@ impl AccountQuota {
             QuotaWindowName::Weekly,
             QuotaWindowName::Monthly,
         ] {
+            let (cost, requests, tokens) = self.window_totals(window, now);
             if let Some(capacity) = self.policy.cost_capacity(window) {
-                remaining.push(remaining_ratio(
-                    self.get_persisted_cost(window, now)
-                        .saturating_add(self.policy.cost_offset(window))
-                        .saturating_add(if window == QuotaWindowName::FiveHour {
-                            self.reserved_cost
-                        } else {
-                            0
-                        }),
-                    capacity,
-                ));
+                remaining.push(remaining_ratio(cost, capacity));
             }
             if let Some(capacity) = self.policy.request_capacity(window) {
-                remaining.push(remaining_ratio(
-                    self.get_persisted_requests(window)
-                        .saturating_add(self.policy.request_offset(window))
-                        .saturating_add(if window == QuotaWindowName::FiveHour {
-                            self.reserved_requests
-                        } else {
-                            0
-                        }),
-                    capacity,
-                ));
+                remaining.push(remaining_ratio(requests, capacity));
             }
             if let Some(capacity) = self.policy.token_capacity(window) {
-                remaining.push(remaining_ratio(
-                    self.get_persisted_tokens(window, now)
-                        .saturating_add(self.policy.token_offset(window))
-                        .saturating_add(if window == QuotaWindowName::FiveHour {
-                            self.reserved_tokens
-                        } else {
-                            0
-                        }),
-                    capacity,
-                ));
+                remaining.push(remaining_ratio(tokens, capacity));
             }
         }
         remaining.into_iter().reduce(f64::min).unwrap_or(1.0)

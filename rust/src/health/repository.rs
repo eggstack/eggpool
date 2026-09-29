@@ -120,7 +120,7 @@ impl AccountBackoffRepository {
         limit: u32,
     ) -> Result<Vec<AccountBackoffRecord>, AccountBackoffRepositoryError> {
         let limit = i64::from(limit.min(5_000));
-        let rows = self.database.call(move |connection| {
+        let mut rows = self.database.call(move |connection| {
             let mut statement = connection.prepare("SELECT id,account_id,model_id,reason,status_code,error_class,consecutive_failures,backoff_until,last_failure_at,updated_at FROM account_backoffs ORDER BY account_id,model_id,reason LIMIT ?1")?;
             statement.query_map([limit + 1], |row| Ok(RawBackoff {
                 id: row.get(0)?, account_id: row.get(1)?, model_id: row.get(2)?, reason: row.get(3)?,
@@ -128,10 +128,16 @@ impl AccountBackoffRepository {
                 backoff_until: row.get(7)?, last_failure_at: row.get(8)?, updated_at: row.get(9)?,
             }))?.collect::<Result<Vec<_>, _>>()
         }).await?;
+        // Truncate instead of failing closed: one noisy account must not
+        // black out health hydration. Overflow is bounded and observable via
+        // truncation.
         if rows.len() > usize::try_from(limit).unwrap_or(5_000) {
-            return Err(AccountBackoffRepositoryError::Invalid(
-                "hydration limit exceeded".to_owned(),
-            ));
+            tracing::warn!(
+                limit,
+                rows = rows.len(),
+                "account backoff hydration truncated: limit exceeded"
+            );
+            rows.truncate(usize::try_from(limit).unwrap_or(5_000));
         }
         rows.into_iter().map(parse_backoff).collect()
     }

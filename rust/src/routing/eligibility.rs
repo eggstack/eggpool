@@ -379,10 +379,13 @@ fn candidate_for_account(
         catalog.get_provider_model(&facts.canonical_model_id, &identity.provider_id);
     if let Some(quarantine) = quarantine {
         let upstream_model_id = provider_model.map(|model| model.model_id.as_str());
+        // Missing protocol is its own quarantine partition, never "openai":
+        // collapsing to "openai" would let unclassifiable candidates bypass
+        // an exact persisted quarantine (fail-open routing).
         let upstream_protocol = provider_model
             .and_then(|model| model.protocol.as_deref())
             .or(facts.requested_protocol.as_deref())
-            .unwrap_or("openai");
+            .unwrap_or("unknown");
         let exact_upstream = upstream_model_id.is_some_and(|upstream_model_id| {
             quarantine.is_model_quarantined_for(
                 &identity.provider_id,

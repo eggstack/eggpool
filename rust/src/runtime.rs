@@ -72,7 +72,9 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
         Some(Command::Edit) => edit(&config_path)?,
         Some(Command::Getkey) => getkey(&config_path)?,
-        Some(Command::Newkey(args)) => newkey(&config_path, args.show_old).await?,
+        Some(Command::Newkey(args)) => {
+            newkey(&config_path, args.show_old, args.show_secrets).await?
+        }
         Some(Command::InitConfig { target, force }) => {
             init_config(target.as_deref(), &config_path, force)?
         }
@@ -1960,7 +1962,7 @@ fn getkey(path: &Path) -> Result<(), BootstrapError> {
     Ok(())
 }
 
-async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
+async fn newkey(path: &Path, show_old: bool, show_secrets: bool) -> Result<(), BootstrapError> {
     let old = config_mutation::read_server_key(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let key =
@@ -1969,7 +1971,7 @@ async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let written = mutation.value;
     if let Some(old) = old {
-        if show_old {
+        if show_old && show_secrets {
             println!("Old key (expired): {old}");
         } else {
             println!(
@@ -1978,7 +1980,16 @@ async fn newkey(path: &Path, show_old: bool) -> Result<(), BootstrapError> {
             );
         }
     }
-    println!("New key (use this): {key}");
+    // Secrets are redacted by default: stdout is captured by logs/journal.
+    // Pass --show-secrets only on an operator console to see the new key.
+    if show_secrets {
+        println!("New key (use this): {key}");
+    } else {
+        println!(
+            "New key (redacted): {}. Re-run with --show-secrets on a secure console to view it once.",
+            config_mutation::redact_key(&key)
+        );
+    }
     if !written {
         eprintln!(
             "Warning: [server] api_key_env owns the server key; rotate that environment variable instead."
@@ -2007,7 +2018,9 @@ fn init_config(target: Option<&Path>, resolved: &Path, force: bool) -> Result<()
 async fn set_config(path: &Path, key: &str, value: &str) -> Result<(), BootstrapError> {
     let mutation = config_mutation::set_server_value_with_transition(path, key, value)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
-    println!("Set {key} = {value} in {}.", path.display());
+    // Never echo the value: stdout is captured by logs/journal and the value
+    // may be a secret.
+    println!("Set {key} in {}.", path.display());
     let outcome = config_mutation::apply_after_mutation(
         path,
         ApplyMode::RestartIfRunning,

@@ -1010,13 +1010,16 @@ impl FiniteCoordinator {
                 ) {
                     Ok(value) => value,
                     Err(error) => {
+                        // Upstream body was unadaptable: 502 (bad gateway),
+                        // not 500. Record health effects and run the standard
+                        // retry classifier instead of dropping the cause.
                         let observation = self.observation(
                             &identity,
                             &candidate.profile,
                             attempt_number,
-                            FailureSource::LocalPreparation,
-                            Some(upstream.status),
-                            Some(FailureCategory::Fatal),
+                            FailureSource::ProviderResponse,
+                            Some(StatusCode::BAD_GATEWAY),
+                            None,
                             None,
                             alternate_wire_available,
                             "response_adaptation",
@@ -1025,26 +1028,48 @@ impl FiniteCoordinator {
                         if first {
                             self.apply_effects(&published.claim, &effects);
                         }
-                        let error_class = match &error {
-                            crate::wire::WireRuntimeError::BodyTooLarge => "ResponseBodyTooLarge",
-                            _ => "ResponseAdaptation",
-                        };
+                        let _ = error;
+                        if self.should_retry(&effects) {
+                            self.cleanup_failed_attempt(
+                                &published,
+                                self.retry_cleanup_data(
+                                    &identity,
+                                    upstream_protocol,
+                                    &effects,
+                                    Some(StatusCode::BAD_GATEWAY),
+                                    upstream.upstream_request_id.clone(),
+                                    upstream.headers_elapsed,
+                                    request_bytes,
+                                    body.len(),
+                                ),
+                            )
+                            .await?;
+                            self.prepare_next(
+                                &mut attempt_number,
+                                &mut preferred_account,
+                                &mut excluded_accounts,
+                                &identity,
+                                &effects,
+                            );
+                            continue;
+                        }
                         let response = self.error_response(
                             request.client_surface,
                             &request.proxy_request_id,
                             attempt_number,
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            StatusCode::BAD_GATEWAY,
                             "compact response could not be adapted for the client",
                         );
-                        let data = self.local_failure_data(
+                        let data = self.failure_data(
                             &identity,
-                            &candidate.profile,
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            error_class,
+                            upstream_protocol,
+                            &effects,
+                            Some(StatusCode::BAD_GATEWAY),
+                            upstream.upstream_request_id.clone(),
+                            upstream.headers_elapsed,
                             request_bytes,
+                            body.len(),
                         );
-                        let _ = error;
-                        let _ = effects;
                         return Ok(self.pending_terminal(
                             published.identity,
                             Some(published.claim),
@@ -1544,11 +1569,14 @@ impl FiniteCoordinator {
         alternate_wire_available: bool,
         dispatch_phase: &str,
     ) -> FailureObservation {
-        let mut observation = FailureObservation::response(
-            identity.attempt_id,
-            attempt_number,
-            status.unwrap_or(StatusCode::BAD_GATEWAY),
-        );
+        // Local-preparation failures carry no upstream status: use the
+        // local-only observation instead of inventing a synthetic 502.
+        let mut observation = match status {
+            Some(status) => {
+                FailureObservation::response(identity.attempt_id, attempt_number, status)
+            }
+            None => FailureObservation::local(identity.attempt_id, attempt_number),
+        };
         observation.source = source;
         observation.status = status.map(|value| value.as_u16());
         observation.category_hint = category_hint;

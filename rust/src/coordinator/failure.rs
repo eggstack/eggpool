@@ -81,6 +81,19 @@ pub struct FailureObservation {
 }
 
 impl FailureObservation {
+    /// Local-preparation failure with no upstream evidence. Never invents a
+    /// synthetic upstream status (e.g. 502): `status` stays `None` so
+    /// quarantine/health cannot record phantom upstream failures.
+    pub fn local(attempt_id: i64, attempt_number: u32) -> Self {
+        let mut observation = Self::response(attempt_id, attempt_number, StatusCode::OK);
+        observation.source = FailureSource::LocalPreparation;
+        observation.status = None;
+        observation.dispatch_phase = "local_preparation".into();
+        observation.transport_phase = Some("local_preparation".into());
+        observation.error_class = Some("local_preparation".into());
+        observation
+    }
+
     pub fn response(attempt_id: i64, attempt_number: u32, status: StatusCode) -> Self {
         Self {
             attempt_id,
