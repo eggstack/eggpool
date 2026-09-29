@@ -135,6 +135,8 @@ pub enum FinalizationError {
     IncompatibleCommand,
     #[error("finalization worker exhausted bounded retries: {0}")]
     RetryExhausted(String),
+    #[error("finalization already completed; terminal ownership was consumed")]
+    AlreadyTransitioned,
     #[error("injected crash fault at {point:?}")]
     Injected { point: CrashFaultPoint },
 }
@@ -851,9 +853,14 @@ impl FinalizationSupervisor {
     }
 
     pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
-        Arc::get_mut(&mut self.inner)
-            .expect("retry delay configured before supervisor sharing")
-            .retry_delay = retry_delay;
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.retry_delay = retry_delay;
+        } else {
+            debug_assert!(
+                false,
+                "retry delay must be configured before supervisor sharing"
+            );
+        }
         self
     }
 
@@ -861,9 +868,14 @@ impl FinalizationSupervisor {
     /// registration and completion boundaries. Must be called before the
     /// supervisor is shared.
     pub fn with_fault_injector(mut self, injector: CoordinatorFaultInjector) -> Self {
-        Arc::get_mut(&mut self.inner)
-            .expect("fault injector configured before supervisor sharing")
-            .fault_injector = Some(injector);
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.fault_injector = Some(injector);
+        } else {
+            debug_assert!(
+                false,
+                "fault injector must be configured before supervisor sharing"
+            );
+        }
         self
     }
 

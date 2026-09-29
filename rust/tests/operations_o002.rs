@@ -403,7 +403,7 @@ async fn server_runtime_owns_control_shutdown_after_m8_readiness() {
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         Config::default(),

@@ -46,7 +46,7 @@ async fn startup_recovery_converges_multiple_bounded_passes_without_provider_wor
         .await
         .expect("seed crash leftovers");
 
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let report = process.reconcile_startup().await.expect("startup recovery");
     assert!(report.passes >= 2);
     assert_eq!(report.requests_interrupted, 501);
@@ -65,7 +65,7 @@ async fn startup_recovery_converges_multiple_bounded_passes_without_provider_wor
 #[tokio::test]
 async fn maintenance_capabilities_are_registered_or_explicitly_deferred() {
     let database = database().await;
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let capabilities = process.task_capability_inventory();
     let by_name = capabilities
         .into_iter()
@@ -136,7 +136,7 @@ async fn checkpoint_task_is_single_process_owned_maintenance_loop() {
     assert_eq!(checkpoint.callback_kind, "checkpoint");
 
     let database = database().await;
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let capabilities = process.task_capability_inventory();
     let checkpoint_capability = capabilities
         .iter()

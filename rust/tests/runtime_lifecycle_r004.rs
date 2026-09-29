@@ -27,7 +27,7 @@ async fn fixture() -> (
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database);
+    let process = ProcessRuntime::new(database).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         Config::default(),

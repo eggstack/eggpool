@@ -2,7 +2,14 @@ use std::io;
 
 use thiserror::Error;
 
-/// Errors that can terminate the native EggPool process.
+/// Process exit-code ownership.
+///
+/// This module owns only top-level process errors (`AppError` /
+/// `BootstrapError`) and their exit codes. HTTP/status mappings are owned by
+/// their modules: `coordinator/endpoints.rs` (`EndpointError::status`),
+/// `coordinator/finite.rs` (provider-failure statuses), and
+/// `server/middleware.rs` (generation errors). Add new HTTP variants at the
+/// owning site, not here.
 #[derive(Debug, Error)]
 pub enum AppError {
     /// Clap owns user-facing parser/help/version rendering.

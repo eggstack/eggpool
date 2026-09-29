@@ -17,7 +17,7 @@ async fn process_runtime() -> ProcessRuntime {
         .run()
         .await
         .expect("migrations run");
-    ProcessRuntime::new(database)
+    ProcessRuntime::new(database).expect("process runtime builds")
 }
 
 fn provider_config() -> ProviderConfig {

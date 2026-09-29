@@ -239,7 +239,7 @@ async fn generation_task_leases_the_current_generation_each_tick() {
         .run()
         .await
         .expect("migrations");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let first =
         RuntimeGenerationFactory::prepare(&process, Config::default(), "r006-a".to_owned(), 1)
             .await
@@ -306,7 +306,7 @@ async fn cancellation_while_generation_admission_is_closed_leaks_no_lease() {
         .run()
         .await
         .expect("migrations");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let generation =
         RuntimeGenerationFactory::prepare(&process, Config::default(), "r006-gate".to_owned(), 1)
             .await
@@ -393,7 +393,7 @@ async fn process_runtime_owns_one_shared_supervisor() {
     let database = Database::open(DatabaseConfig::default())
         .await
         .expect("database");
-    let process = ProcessRuntime::new(database);
+    let process = ProcessRuntime::new(database).expect("process runtime builds");
     // Cloned handles still address one bounded task map: a commit through one
     // handle is visible through the other.
     let left = process.task_supervisor();

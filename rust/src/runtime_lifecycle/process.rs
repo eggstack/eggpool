@@ -87,22 +87,21 @@ impl std::fmt::Debug for ProcessRuntime {
 }
 
 impl ProcessRuntime {
-    pub fn new(database: Database) -> Self {
+    pub fn new(database: Database) -> Result<Self, GenerationBuildError> {
         let checkpoint_database = database.clone();
         let metrics_coalescer = Arc::new(crate::operations::metrics::MetricsWriteCoalescer::new(
             &crate::config::MetricsConfig::default(),
             database.clone(),
         ));
         let update_checker = Arc::new(crate::operations::update::UpdateCheckerState::new(
-            crate::operations::update::UpdateService::new()
-                .expect("default release authority URI is valid"),
+            crate::operations::update::UpdateService::new()?,
         ));
         let mut callbacks =
             crate::task_supervisor::TaskCallbackRegistry::with_generation_maintenance(
                 checkpoint_database,
             );
         callbacks.register_update_checker(Arc::clone(&update_checker));
-        Self {
+        Ok(Self {
             database,
             model_router_affinity: Arc::new(ModelRouterAffinity::new()),
             wire_profile_resolver: WireResolver::new(WireResolverConfig::default()),
@@ -114,7 +113,7 @@ impl ProcessRuntime {
             next_reload_owner: Arc::new(AtomicU64::new(1)),
             startup_recovery_report: Arc::new(Mutex::new(None)),
             diagnostics: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
-        }
+        })
     }
 
     /// Production startup authority: the process-owned resolver is created
@@ -125,7 +124,7 @@ impl ProcessRuntime {
         config: &Config,
     ) -> Result<Self, GenerationBuildError> {
         let wire_policy = WireResolverConfig::from_config(&config.routing.wire_negotiation)?;
-        let mut runtime = Self::new(database);
+        let mut runtime = Self::new(database)?;
         runtime.wire_profile_resolver = WireResolver::new(wire_policy);
         runtime.metrics_coalescer =
             Arc::new(crate::operations::metrics::MetricsWriteCoalescer::new(
@@ -138,10 +137,13 @@ impl ProcessRuntime {
         Ok(runtime)
     }
 
-    pub fn with_config_path(database: Database, config_path: impl Into<PathBuf>) -> Self {
-        let mut runtime = Self::new(database);
+    pub fn with_config_path(
+        database: Database,
+        config_path: impl Into<PathBuf>,
+    ) -> Result<Self, GenerationBuildError> {
+        let mut runtime = Self::new(database)?;
         runtime.config_path = Some(config_path.into());
-        runtime
+        Ok(runtime)
     }
 
     pub fn with_config_path_and_config(

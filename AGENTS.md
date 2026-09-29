@@ -172,8 +172,11 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   restart-required; diagnostics stay secret-free. `[integrations].advertise_base_url`
   is live-reloadable profile output only and never changes the listen socket;
   do not overload `[server].host` for client advertisement.
-- `rust/src/error.rs` owns HTTP/status mappings — read it before adding variants,
-  keep context explicit, retain causes.
+- `rust/src/error.rs` owns process exit codes only (`AppError`/`BootstrapError`).
+  HTTP/status mappings live with their owners: `coordinator/endpoints.rs`
+  (`EndpointError::status`), `coordinator/finite.rs` (provider-failure
+  statuses), `server/middleware.rs` (generation errors) — read the owning
+  module before adding variants, keep context explicit, retain causes.
 - `runtime.rs` adapts CLI to operations; reusable lifecycle lives in
   `operations/lifecycle.rs`, compact proxy/provider health aggregation in
   `operations/status.rs` (shared readiness with `readyz`, no outbound probes,

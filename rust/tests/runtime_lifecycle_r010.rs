@@ -29,7 +29,7 @@ async fn fixture() -> (TempDir, Database, ProcessRuntime, RuntimeManager, Config
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let config = Config::default();
     let candidate = RuntimeGenerationFactory::prepare(
         &process,

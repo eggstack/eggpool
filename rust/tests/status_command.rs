@@ -337,7 +337,7 @@ async fn status_endpoint_is_authenticated_bounded_and_secret_free() {
         )
         .await
         .expect("ping records");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
     config.server.api_key = Some("status-endpoint-key".to_owned());
     config.database.path = root.path().join("usage.sqlite3").display().to_string();
@@ -417,7 +417,7 @@ async fn integration_profile_is_authenticated_deterministic_and_secret_free() {
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
     config.server.api_key = Some("integration-endpoint-key".to_owned());
     config.server.host = "0.0.0.0".to_owned();
@@ -631,7 +631,7 @@ async fn public_dashboard_default_renders_without_api_key_and_keeps_sensitive_ro
             .run()
             .await
             .expect("migrations run");
-        let process = ProcessRuntime::new(database.clone());
+        let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
         let mut config = Config::default();
         assert!(
             Config::default().dashboard.public,
@@ -722,7 +722,7 @@ async fn integration_profile_does_not_inherit_dashboard_public_exemption() {
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
     config.server.api_key = Some("dashboard-public-key".to_owned());
     config.dashboard.public = true;

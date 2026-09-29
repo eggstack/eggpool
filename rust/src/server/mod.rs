@@ -183,7 +183,11 @@ impl BodyTaskTracker {
     }
 
     fn active_count(&self) -> usize {
-        self.inner.active.lock().expect("body task lock").len()
+        self.inner
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
     }
 
     fn spawn<F>(&self, future: F)
@@ -200,7 +204,7 @@ impl BodyTaskTracker {
                 .inner
                 .active
                 .lock()
-                .expect("body task lock")
+                .unwrap_or_else(|error| error.into_inner())
                 .remove(&id)
                 .is_some();
             if removed {
@@ -210,7 +214,7 @@ impl BodyTaskTracker {
         self.inner
             .active
             .lock()
-            .expect("body task lock")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(id, handle.abort_handle());
         let _ = started.send(());
     }
@@ -231,7 +235,11 @@ impl BodyTaskTracker {
 
     fn abort_all(&self) -> usize {
         let handles = {
-            let mut active = self.inner.active.lock().expect("body task lock");
+            let mut active = self
+                .inner
+                .active
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let handles = active.values().cloned().collect::<Vec<_>>();
             active.clear();
             handles

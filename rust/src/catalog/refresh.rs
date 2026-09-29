@@ -212,7 +212,10 @@ impl CatalogService {
 
     /// Obtain a cheap, stable D002 snapshot for diagnostics/tests.
     pub async fn cache_snapshot(&self) -> super::CacheSnapshot {
-        self.catalog.lock().expect("catalog cache lock").snapshot()
+        self.catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .snapshot()
     }
 
     pub async fn refresh(&self) -> Result<CatalogRefreshResult, CatalogRefreshError> {
@@ -361,9 +364,16 @@ impl CatalogService {
         if state.cache_loaded {
             return Ok(());
         }
-        let mut hydrated = self.catalog.lock().expect("catalog cache lock").clone();
+        let mut hydrated = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         hydrated.hydrate_from_db(&self.database).await?;
-        *self.catalog.lock().expect("catalog cache lock") = hydrated;
+        *self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = hydrated;
         state.cache_loaded = true;
         Ok(())
     }
@@ -373,7 +383,10 @@ impl CatalogService {
         only_account: Option<&str>,
     ) -> Result<(), CatalogRefreshError> {
         let _state = self.state.lock().await;
-        let mut cache = self.catalog.lock().expect("catalog cache lock");
+        let mut cache = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         for (provider_id, provider) in &self.config.providers {
             let models = static_models(provider);
             if models.is_empty() {
@@ -397,7 +410,10 @@ impl CatalogService {
         events: &mut Vec<CatalogModelEvent>,
     ) -> Result<RefreshOutcome, CatalogRefreshError> {
         let mut state = self.state.lock().await;
-        let mut cache = self.catalog.lock().expect("catalog cache lock");
+        let mut cache = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         state.pending_pings.push(fetch.observation.clone());
         if fetch.outcome != RefreshOutcome::SuccessEmpty
             && fetch.outcome != RefreshOutcome::SuccessPartial
@@ -471,7 +487,10 @@ impl CatalogService {
                 .all()
                 .map(|identity| (identity.account_name.clone(), identity.account_id));
             (
-                self.catalog.lock().expect("catalog cache lock").clone(),
+                self.catalog
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone(),
                 state.pending_refresh.clone(),
                 state.pending_pings.clone(),
                 accounts.collect::<BTreeMap<_, _>>(),

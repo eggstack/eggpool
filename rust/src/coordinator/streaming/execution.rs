@@ -165,11 +165,15 @@ impl StreamingExecution {
     }
 
     pub fn mark_started(&self) {
-        self.completion.handoff().mark_started();
+        if let Ok(handoff) = self.completion.handoff() {
+            handoff.mark_started();
+        }
     }
 
     pub fn handoff_started(&self) -> bool {
-        self.completion.handoff().started()
+        self.completion
+            .handoff()
+            .is_ok_and(|handoff| handoff.started())
     }
 
     /// Return the bounded scalar terminal usage event before stream ownership
@@ -495,12 +499,11 @@ impl PendingStreamFinalization {
         }
     }
 
-    fn handoff(&self) -> &ResponseHandoffState {
-        &self
-            .parts
+    fn handoff(&self) -> Result<&ResponseHandoffState, FinalizationError> {
+        self.parts
             .as_ref()
-            .expect("pending stream finalization exists")
-            .handoff
+            .map(|parts| &parts.handoff)
+            .ok_or(FinalizationError::AlreadyTransitioned)
     }
 
     fn phase(&self) -> StreamPhase {
@@ -530,7 +533,7 @@ impl PendingStreamFinalization {
         let mut parts = self
             .parts
             .take()
-            .expect("pending stream finalization exists");
+            .ok_or(FinalizationError::AlreadyTransitioned)?;
         if parts.handoff.started()
             && matches!(parts.phase, StreamPhase::DownstreamPending)
             && parts.stream.is_some()

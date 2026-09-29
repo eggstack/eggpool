@@ -143,7 +143,11 @@ impl RoutingRouter {
 
     pub fn build_routing_plan(&self, facts: &RoutingRequestFacts) -> RoutingPlan {
         let active = claim::active_snapshot(&self.state.claims);
-        let catalog = self.state.catalog.lock().expect("catalog lock");
+        let catalog = self
+            .state
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let (candidates, exclusions) = eligibility::build_eligible_candidates(
             &self.state.registry,
             &catalog,
@@ -183,7 +187,7 @@ impl RoutingRouter {
                 .state
                 .catalog
                 .lock()
-                .expect("catalog lock")
+                .unwrap_or_else(|error| error.into_inner())
                 .snapshot()
                 .model_ids
                 .len(),
@@ -212,7 +216,7 @@ impl RoutingRouter {
         self.state
             .recovery_attempt_at
             .lock()
-            .expect("recovery lock")
+            .unwrap_or_else(|error| error.into_inner())
             .len()
     }
 
@@ -223,7 +227,7 @@ impl RoutingRouter {
         self.state
             .catalog
             .lock()
-            .expect("catalog lock")
+            .unwrap_or_else(|error| error.into_inner())
             .snapshot()
             .model_ids
             .len()
@@ -236,7 +240,7 @@ impl RoutingRouter {
         self.state
             .catalog
             .lock()
-            .expect("catalog lock")
+            .unwrap_or_else(|error| error.into_inner())
             .exposed_model_ids()
     }
 
@@ -259,7 +263,11 @@ impl RoutingRouter {
     /// Return the full catalog snapshot for per-provider model counts.
     /// Read-only; never performs provider or DB work.
     pub fn catalog_snapshot(&self) -> crate::catalog::CacheSnapshot {
-        self.state.catalog.lock().expect("catalog lock").snapshot()
+        self.state
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .snapshot()
     }
 
     /// Return immutable account identities for the active generation.
@@ -311,7 +319,11 @@ impl RoutingRouter {
         self.maybe_recover_missing_support(facts, exclude_accounts);
         let _guard = self.selection_lock.lock().await;
         let active = claim::active_snapshot(&self.state.claims);
-        let catalog = self.state.catalog.lock().expect("catalog lock");
+        let catalog = self
+            .state
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let (mut candidates, mut exclusions) = eligibility::build_eligible_candidates(
             &self.state.registry,
             &catalog,
@@ -692,13 +704,17 @@ impl RoutingRouter {
             .state
             .catalog
             .lock()
-            .expect("catalog lock")
+            .unwrap_or_else(|error| error.into_inner())
             .has_model(&facts.canonical_model_id)
         {
             return;
         }
         let now = (self.state.recovery_clock)();
-        let catalog = self.state.catalog.lock().expect("catalog lock");
+        let catalog = self
+            .state
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let missing: Vec<String> = self
             .state
             .registry
@@ -731,7 +747,7 @@ impl RoutingRouter {
                 .state
                 .recovery_attempt_at
                 .lock()
-                .expect("recovery lock");
+                .unwrap_or_else(|error| error.into_inner());
             attempts.retain(|_, timestamp| {
                 now - *timestamp < self.state.recovery_min_interval_s.max(1.0)
             });

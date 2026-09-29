@@ -124,12 +124,12 @@ impl CircuitBreaker {
     pub fn state(&self) -> CircuitState {
         self.inner
             .lock()
-            .expect("circuit lock is not poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .state
     }
 
     pub fn can_request(&self) -> bool {
-        let inner = self.inner.lock().expect("circuit lock is not poisoned");
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         match inner.state {
             CircuitState::Closed => true,
             CircuitState::Open => self.recovery_elapsed(&inner),
@@ -141,7 +141,7 @@ impl CircuitBreaker {
 
     pub fn allow_request(&self) -> bool {
         let now = self.now();
-        let mut inner = self.inner.lock().expect("circuit lock is not poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         match inner.state {
             CircuitState::Closed => true,
             CircuitState::Open if self.recovery_elapsed(&inner) => {
@@ -168,13 +168,13 @@ impl CircuitBreaker {
     pub fn release_probe(&self) {
         self.inner
             .lock()
-            .expect("circuit lock is not poisoned")
+            .unwrap_or_else(|error| error.into_inner())
             .probe_acquired_at = None;
     }
 
     pub fn record_success(&self) {
         let now = self.now();
-        let mut inner = self.inner.lock().expect("circuit lock is not poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         match inner.state {
             CircuitState::HalfOpen => {
                 inner.success_count = inner.success_count.saturating_add(1);
@@ -194,7 +194,7 @@ impl CircuitBreaker {
 
     pub fn record_failure(&self) {
         let now = self.now();
-        let mut inner = self.inner.lock().expect("circuit lock is not poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         match inner.state {
             CircuitState::HalfOpen => {
                 inner.state = CircuitState::Open;
@@ -218,7 +218,7 @@ impl CircuitBreaker {
 
     pub fn reset(&self) {
         let now = self.now();
-        *self.inner.lock().expect("circuit lock is not poisoned") = CircuitInner {
+        *self.inner.lock().unwrap_or_else(|error| error.into_inner()) = CircuitInner {
             state: CircuitState::Closed,
             failure_count: 0,
             success_count: 0,
@@ -229,7 +229,7 @@ impl CircuitBreaker {
     }
 
     pub fn stats(&self) -> CircuitStats {
-        let inner = self.inner.lock().expect("circuit lock is not poisoned");
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         CircuitStats {
             state: inner.state,
             failure_count: inner.failure_count,

@@ -129,7 +129,7 @@ async fn invalid_startup_and_live_staging_return_errors_instead_of_panicking() {
     config.routing.wire_negotiation.min_negotiation_interval_s = f64::MAX;
 
     assert!(ProcessRuntime::new_with_config(database.clone(), &config).is_err());
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     assert!(process.stage_wire_resolver_policy(&config).is_err());
     database.close().await.expect("database closes");
 }

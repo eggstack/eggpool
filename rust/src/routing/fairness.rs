@@ -95,7 +95,11 @@ impl FairnessRotor {
     }
 
     pub fn key_count(&self) -> usize {
-        self.state.lock().expect("fairness lock").positions.len()
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .positions
+            .len()
     }
 
     pub fn preview<T>(&self, key: &FairnessKey, candidates: &[T]) -> (Vec<usize>, usize) {
@@ -103,7 +107,7 @@ impl FairnessRotor {
         let position = self
             .state
             .lock()
-            .expect("fairness lock")
+            .unwrap_or_else(|error| error.into_inner())
             .positions
             .get(&key.to_key_string())
             .copied()
@@ -133,7 +137,7 @@ impl FairnessRotor {
         let position = self
             .state
             .lock()
-            .expect("fairness lock")
+            .unwrap_or_else(|error| error.into_inner())
             .positions
             .get(&key.to_key_string())
             .copied()
@@ -150,7 +154,7 @@ impl FairnessRotor {
             return;
         }
         let key = key.to_key_string();
-        let mut state = self.state.lock().expect("fairness lock");
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.positions.contains_key(&key) {
             state.lru.retain(|item| item != &key);
         } else if state.positions.len() >= FAIRNESS_KEY_HARD_CAP

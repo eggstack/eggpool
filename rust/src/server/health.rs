@@ -130,10 +130,14 @@ pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
     let (file_size_bytes, wal_size_bytes) = if db_path == ":memory:" {
         (None, None)
     } else {
-        let file_size = std::fs::metadata(db_path)
+        // Async metadata so status polls never block the current-thread
+        // runtime on filesystem latency.
+        let file_size = tokio::fs::metadata(db_path)
+            .await
             .ok()
             .map(|metadata| metadata.len());
-        let wal_size = std::fs::metadata(format!("{db_path}-wal"))
+        let wal_size = tokio::fs::metadata(format!("{db_path}-wal"))
+            .await
             .ok()
             .map(|metadata| metadata.len());
         (file_size, wal_size)
@@ -217,12 +221,11 @@ pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
     #[cfg(feature = "qualification-db-diagnostics")]
     {
         let mut body = body;
-        if let Value::Object(object) = &mut body {
-            object.insert(
-                "database_qualification".to_owned(),
-                serde_json::to_value(state.database.qualification_snapshot())
-                    .expect("qualification snapshot serializes"),
-            );
+        if let Value::Object(object) = &mut body
+            && let Some(snapshot) = state.database.qualification_snapshot()
+            && let Ok(value) = serde_json::to_value(snapshot)
+        {
+            object.insert("database_qualification".to_owned(), value);
         }
         json_response(StatusCode::OK, body)
     }

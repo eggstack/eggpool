@@ -350,13 +350,13 @@ impl Database {
     }
 
     #[cfg(feature = "qualification-db-diagnostics")]
-    pub fn qualification_snapshot(&self) -> crate::db::QualificationDbSnapshot {
-        let mut snapshot = self.inner.qualification.snapshot();
+    pub fn qualification_snapshot(&self) -> Option<crate::db::QualificationDbSnapshot> {
+        let mut snapshot = self.inner.qualification.snapshot()?;
         snapshot.checkpoint_maintenance = self
             .inner
             .checkpoint_stats
             .snapshot(CheckpointMaintenancePolicy::effective().soft_wal_frames);
-        snapshot
+        Some(snapshot)
     }
 
     pub async fn close(&self) -> Result<(), DatabaseError> {
@@ -1443,7 +1443,9 @@ mod qualification_tests {
             .with_transaction(|_connection| Err::<(), _>(SqliteError::InvalidQuery))
             .await
             .expect_err("transaction rolls back");
-        let snapshot = database.qualification_snapshot();
+        let snapshot = database
+            .qualification_snapshot()
+            .expect("pragmas captured during configure");
         assert_eq!(snapshot.effective.journal_mode, "memory");
         assert_eq!(snapshot.records.len(), 2);
         assert!(snapshot.records[0].success);

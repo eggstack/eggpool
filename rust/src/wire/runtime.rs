@@ -543,7 +543,12 @@ impl WireRuntime {
                 let mut value = preservation.parsed.clone();
                 value
                     .as_object_mut()
-                    .expect("admission only retains an object")
+                    .ok_or(WireRuntimeError::RequestAdaptation(CodecError {
+                        reason: CodecReasonCode::MalformedSourceRequest,
+                        field: None,
+                        source_surface: Some(WireSurface::OpenaiResponses),
+                        target_surface: Some(WireSurface::OpenaiResponses),
+                    }))?
                     .insert(
                         "model".into(),
                         Value::String(context.upstream_model_id.clone()),
@@ -830,7 +835,12 @@ impl WireRuntime {
         let mut value = admission.native_preservation.parsed.clone();
         value
             .as_object_mut()
-            .expect("compact admission only retains an object")
+            .ok_or(WireRuntimeError::RequestAdaptation(CodecError {
+                reason: CodecReasonCode::MalformedSourceRequest,
+                field: None,
+                source_surface: Some(WireSurface::OpenaiResponses),
+                target_surface: Some(context.selected_profile.definition.surface),
+            }))?
             .insert(
                 "model".into(),
                 Value::String(context.upstream_model_id.clone()),

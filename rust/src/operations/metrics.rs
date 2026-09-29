@@ -507,8 +507,8 @@ fn canonical_bucket_start(value: &str) -> Option<String> {
     let value = value.trim();
     let (date, time) = value.split_once('T')?;
     let time = time.strip_suffix('Z').unwrap_or(time);
-    if date.len() == 10 && time.len() >= 8 {
-        Some(format!("{date} {}", &time[..8]))
+    if date.len() == 10 {
+        time.get(..8).map(|prefix| format!("{date} {prefix}"))
     } else {
         None
     }
@@ -534,4 +534,22 @@ fn format_utc_timestamp(seconds: i64) -> String {
     let minute = day_seconds % 3_600 / 60;
     let second = day_seconds % 60;
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bucket_start_rejects_corrupt_timestamps_without_panicking() {
+        assert_eq!(
+            canonical_bucket_start("2026-09-29T12:34:56Z"),
+            Some("2026-09-29 12:34:56".to_owned())
+        );
+        // A multi-byte timestamp straddling the 8-byte truncation boundary
+        // must yield None, not panic on str slicing.
+        assert_eq!(canonical_bucket_start("2026-09-29T12:34:5é"), None);
+        assert_eq!(canonical_bucket_start("not-a-timestamp"), None);
+        assert_eq!(canonical_bucket_start("2026-09-29"), None);
+    }
 }

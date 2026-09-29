@@ -108,18 +108,28 @@ impl std::fmt::Debug for FiniteExecution {
         formatter
             .debug_struct("FiniteExecution")
             .field("response", &self.response)
-            .field("handoff_started", &self.completion.handoff().started())
+            .field(
+                "handoff_started",
+                &self
+                    .completion
+                    .handoff()
+                    .is_ok_and(|handoff| handoff.started()),
+            )
             .finish()
     }
 }
 
 impl FiniteExecution {
     pub fn mark_started(&self) {
-        self.completion.handoff().mark_started();
+        if let Ok(handoff) = self.completion.handoff() {
+            handoff.mark_started();
+        }
     }
 
     pub fn handoff_started(&self) -> bool {
-        self.completion.handoff().started()
+        self.completion
+            .handoff()
+            .is_ok_and(|handoff| handoff.started())
     }
 
     /// Return the bounded scalar terminal usage event before ownership is
@@ -864,7 +874,7 @@ impl FiniteCoordinator {
                         continue;
                     }
                     let status = if is_body_too_large {
-                        StatusCode::BAD_GATEWAY
+                        StatusCode::PAYLOAD_TOO_LARGE
                     } else if source == FailureSource::LocalPreparation {
                         StatusCode::BAD_REQUEST
                     } else {
@@ -950,7 +960,7 @@ impl FiniteCoordinator {
                         continue;
                     }
                     let status = if is_body_too_large {
-                        StatusCode::BAD_GATEWAY
+                        StatusCode::PAYLOAD_TOO_LARGE
                     } else if source == FailureSource::LocalPreparation {
                         StatusCode::BAD_REQUEST
                     } else {
@@ -1876,19 +1886,21 @@ impl PendingFinalization {
         }
     }
 
-    fn handoff(&self) -> &ResponseHandoffState {
-        &self
-            .parts
+    fn handoff(&self) -> Result<&ResponseHandoffState, FinalizationError> {
+        self.parts
             .as_ref()
-            .expect("pending finalization exists")
-            .handoff
+            .map(|parts| &parts.handoff)
+            .ok_or(FinalizationError::AlreadyTransitioned)
     }
 
     async fn complete(
         &mut self,
         downstream: DownstreamResult,
     ) -> Result<FinalizationResult, FinalizationError> {
-        let mut parts = self.parts.take().expect("pending finalization exists");
+        let mut parts = self
+            .parts
+            .take()
+            .ok_or(FinalizationError::AlreadyTransitioned)?;
         let handoff_started = parts.handoff.started();
         if downstream != DownstreamResult::Delivered {
             parts.data.outcome = if handoff_started {

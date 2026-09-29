@@ -64,8 +64,8 @@ fn parse_qualification_checkpoint_interval(value: &str) -> Result<f64, TaskSpecE
         name: "checkpoint".to_owned(),
     })?;
     if interval.is_finite()
-        && interval >= QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S
-        && interval <= QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S
+        && (QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S..=QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S)
+            .contains(&interval)
     {
         Ok(interval)
     } else {
@@ -734,6 +734,8 @@ pub enum TaskSpecError {
     ShuttingDown,
     #[error("task diff has already been finalized")]
     AlreadyFinalized,
+    #[error("prepared task state does not match the computed diff")]
+    InconsistentPreparedState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1243,12 +1245,16 @@ impl PreparedTaskDiff {
             if let Some(task) = self.remove_task(&spec.0.name) {
                 stop_task(task).await;
             }
-            let task = prepared.next().expect("prepared rescheduled state");
+            let task = prepared
+                .next()
+                .ok_or(TaskSpecError::InconsistentPreparedState)?;
             task.reschedule_count.fetch_add(1, Ordering::Relaxed);
             self.insert_and_start(task).await;
         }
         for spec in &self.diff.added {
-            let task = prepared.next().expect("prepared added state");
+            let task = prepared
+                .next()
+                .ok_or(TaskSpecError::InconsistentPreparedState)?;
             debug_assert_eq!(task.spec.name, spec.name);
             self.insert_and_start(task).await;
         }

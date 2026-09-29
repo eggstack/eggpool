@@ -117,7 +117,11 @@ impl std::fmt::Debug for HealthManager {
             .debug_struct("HealthManager")
             .field(
                 "account_count",
-                &self.accounts.lock().expect("health lock").len(),
+                &self
+                    .accounts
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .len(),
             )
             .finish()
     }
@@ -143,7 +147,10 @@ impl HealthManager {
     }
 
     pub fn register_account(&self, account_id: i64, account_name: &str) {
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let clock = Arc::clone(&self.clock);
         accounts
             .entry(account_name.to_owned())
@@ -173,7 +180,7 @@ impl HealthManager {
     pub fn accounts(&self) -> Vec<AccountHealthSnapshot> {
         self.accounts
             .lock()
-            .expect("health lock")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .map(AccountHealth::snapshot)
             .collect()
@@ -182,7 +189,7 @@ impl HealthManager {
     pub fn snapshot(&self, account_name: &str) -> Option<AccountHealthSnapshot> {
         self.accounts
             .lock()
-            .expect("health lock")
+            .unwrap_or_else(|error| error.into_inner())
             .get(account_name)
             .map(AccountHealth::snapshot)
     }
@@ -208,7 +215,10 @@ impl HealthManager {
     }
 
     pub fn is_account_healthy_read_only(&self, account_name: &str) -> bool {
-        let accounts = self.accounts.lock().expect("health lock");
+        let accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get(account_name) else {
             return true;
         };
@@ -217,7 +227,10 @@ impl HealthManager {
     }
 
     pub fn is_model_healthy_read_only(&self, account_name: &str, model_id: &str) -> bool {
-        let accounts = self.accounts.lock().expect("health lock");
+        let accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get(account_name) else {
             return true;
         };
@@ -230,7 +243,10 @@ impl HealthManager {
     /// Acquire the breaker probe slot after the caller has completed its
     /// read-only candidate checks. This is the only health claim operation.
     pub fn try_acquire_request(&self, account_name: &str, model_id: &str) -> bool {
-        let accounts = self.accounts.lock().expect("health lock");
+        let accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get(account_name) else {
             return false;
         };
@@ -244,14 +260,22 @@ impl HealthManager {
     }
 
     pub fn release_request(&self, account_name: &str) {
-        if let Some(account) = self.accounts.lock().expect("health lock").get(account_name) {
+        if let Some(account) = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(account_name)
+        {
             account.circuit_breaker.release_probe();
         }
     }
 
     pub fn record_success(&self, account_name: &str, model_id: Option<&str>) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -274,7 +298,10 @@ impl HealthManager {
 
     pub fn record_failure(&self, account_name: &str, reason: BackoffReason) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -293,7 +320,10 @@ impl HealthManager {
 
     pub fn record_cooldown(&self, account_name: &str, reason: BackoffReason, delay: f64) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -312,7 +342,10 @@ impl HealthManager {
 
     pub fn disable_account(&self, account_name: &str, reason: &str, duration: Option<f64>) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -331,7 +364,10 @@ impl HealthManager {
 
     pub fn enable_account(&self, account_name: &str) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -352,7 +388,10 @@ impl HealthManager {
         terminal: bool,
     ) {
         let now = self.now();
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return;
         };
@@ -378,7 +417,7 @@ impl HealthManager {
         if let Some(account) = self
             .accounts
             .lock()
-            .expect("health lock")
+            .unwrap_or_else(|error| error.into_inner())
             .get_mut(account_name)
         {
             account.disabled_models.remove(model_id);
@@ -391,7 +430,10 @@ impl HealthManager {
         account_name: &str,
         advertised: &BTreeSet<String>,
     ) -> usize {
-        let mut accounts = self.accounts.lock().expect("health lock");
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get_mut(account_name) else {
             return 0;
         };

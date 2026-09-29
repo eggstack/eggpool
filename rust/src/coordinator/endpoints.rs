@@ -118,6 +118,8 @@ pub enum EndpointError {
     Attempt,
     #[error("Finalization failed")]
     Finalization,
+    #[error("Internal effect application failed")]
+    Internal,
 }
 
 impl From<AdmissionError> for EndpointError {
@@ -171,6 +173,7 @@ impl EndpointError {
             | Self::Attempt
             | Self::Finalization => StatusCode::SERVICE_UNAVAILABLE,
             Self::PublicationConflict => StatusCode::CONFLICT,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -443,7 +446,7 @@ fn map_finite_error(error: super::FiniteCoordinatorError) -> EndpointError {
         Finite::Claim(_) => EndpointError::Claim,
         Finite::Attempt(_) => EndpointError::Attempt,
         Finite::Finalization(_) => EndpointError::Finalization,
-        Finite::Effects(_) => EndpointError::Attempt,
+        Finite::Effects(_) => EndpointError::Internal,
     }
 }
 
@@ -460,13 +463,17 @@ fn map_stream_error(error: super::StreamingCoordinatorError) -> EndpointError {
         Stream::Claim(_) => EndpointError::Claim,
         Stream::Attempt(_) => EndpointError::Attempt,
         Stream::Finalization(_) => EndpointError::Finalization,
-        Stream::Effects(_) => EndpointError::Attempt,
+        Stream::Effects(_) => EndpointError::Internal,
     }
 }
 
 fn map_publication_error(error: super::PublicationError) -> EndpointError {
     match error {
         super::PublicationError::DuplicateConflict { .. } => EndpointError::PublicationConflict,
+        super::PublicationError::InvalidInput(_) => EndpointError::Admission,
+        super::PublicationError::ClaimIdentity(_)
+        | super::PublicationError::Claim(_)
+        | super::PublicationError::Compensation { .. } => EndpointError::Claim,
         _ => EndpointError::Attempt,
     }
 }

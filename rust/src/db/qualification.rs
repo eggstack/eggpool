@@ -127,15 +127,12 @@ impl QualificationCollector {
         });
     }
 
-    pub(crate) fn snapshot(&self) -> QualificationDbSnapshot {
-        let state = self.state.lock().expect("qualification collector lock");
-        QualificationDbSnapshot {
+    pub(crate) fn snapshot(&self) -> Option<QualificationDbSnapshot> {
+        let state = self.state.lock().ok()?;
+        Some(QualificationDbSnapshot {
             schema_version: SCHEMA_VERSION.to_owned(),
             collector_capacity: RECORD_CAPACITY,
-            effective: state
-                .effective
-                .clone()
-                .expect("qualification pragmas captured during database configure"),
+            effective: state.effective.clone()?,
             latest_record_seq: state.next_record_seq,
             records: state.records.iter().cloned().collect(),
             checkpoint_maintenance: QualificationCheckpointMaintenance {
@@ -148,7 +145,7 @@ impl QualificationCollector {
                 last_log_frames: 0,
                 last_checkpointed_frames: 0,
             },
-        }
+        })
     }
 }
 
@@ -178,7 +175,9 @@ mod tests {
                 success: true,
             });
         }
-        let snapshot = collector.snapshot();
+        let snapshot = collector
+            .snapshot()
+            .expect("pragmas captured before snapshot");
         assert_eq!(snapshot.collector_capacity, RECORD_CAPACITY);
         assert_eq!(snapshot.latest_record_seq, (RECORD_CAPACITY + 2) as u64);
         assert_eq!(snapshot.records.len(), RECORD_CAPACITY);
@@ -206,7 +205,10 @@ mod tests {
             total_us: 6,
             success: false,
         });
-        let record = &collector.snapshot().records[0];
+        let record = &collector
+            .snapshot()
+            .expect("pragmas captured before snapshot")
+            .records[0];
         assert_eq!(record.kind, "finalization");
         assert_eq!(record.commit_us, None);
         assert!(!record.success);

@@ -172,7 +172,11 @@ impl fmt::Debug for ModelQuarantine {
             .debug_struct("ModelQuarantine")
             .field(
                 "entry_count",
-                &self.entries.lock().expect("quarantine lock").len(),
+                &self
+                    .entries
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .len(),
             )
             .field("suspected_ttl", &self.suspected_ttl)
             .field("quarantined_ttl", &self.quarantined_ttl)
@@ -211,7 +215,10 @@ impl ModelQuarantine {
     }
 
     pub fn is_model_quarantined(&self, key: &QuarantineKey, now: f64) -> bool {
-        let entries = self.entries.lock().expect("quarantine lock");
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(entry) = entries.get(key) else {
             return false;
         };
@@ -252,7 +259,10 @@ impl ModelQuarantine {
         now: f64,
     ) -> QuarantineEntry {
         let reason = reason.into();
-        let mut entries = self.entries.lock().expect("quarantine lock");
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let expired = entries
             .get(&key)
             .is_some_and(|entry| entry.expiry.is_some_and(|expiry| now >= expiry));
@@ -332,7 +342,7 @@ impl ModelQuarantine {
         };
         self.entries
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(|error| error.into_inner())
             .insert(key, entry.clone());
         Ok(entry)
     }
@@ -348,7 +358,7 @@ impl ModelQuarantine {
     pub fn get_entry(&self, key: &QuarantineKey) -> Option<QuarantineEntry> {
         self.entries
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(|error| error.into_inner())
             .get(key)
             .cloned()
     }
@@ -356,7 +366,7 @@ impl ModelQuarantine {
     pub fn list_entries(&self, now: f64, include_expired: bool) -> Vec<QuarantineEntry> {
         self.entries
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(|error| error.into_inner())
             .values()
             .filter(|entry| {
                 entry.state != QuarantineState::Healthy
@@ -367,7 +377,10 @@ impl ModelQuarantine {
     }
 
     pub fn prune_expired(&self, now: f64) -> usize {
-        let mut entries = self.entries.lock().expect("quarantine lock");
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let keys: Vec<QuarantineKey> = entries
             .iter()
             .filter(|(_, entry)| {
@@ -391,7 +404,10 @@ impl ModelQuarantine {
         {
             return;
         }
-        let mut entries = self.entries.lock().expect("quarantine lock");
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(existing) = entries.get(&entry.key) else {
             entries.insert(entry.key.clone(), entry);
             return;
@@ -418,7 +434,10 @@ impl ModelQuarantine {
     }
 
     fn clear_key(&self, key: &QuarantineKey, reason: &str, now: f64, allow_terminal: bool) -> bool {
-        let mut entries = self.entries.lock().expect("quarantine lock");
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let Some(entry) = entries.get_mut(key) else {
             return false;
         };

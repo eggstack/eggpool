@@ -260,7 +260,7 @@ impl SelectionClaim {
     }
 
     pub fn rollback_claim(&self) -> Result<ClaimTransition, ClaimError> {
-        let mut book = self.book.lock().expect("claim lock");
+        let mut book = lock_book(&self.book);
         let state = book
             .claims
             .get(&self.id)
@@ -284,7 +284,7 @@ impl SelectionClaim {
     }
 
     pub fn convert_claim_after_durable_publication(&self) -> Result<ClaimTransition, ClaimError> {
-        let mut book = self.book.lock().expect("claim lock");
+        let mut book = lock_book(&self.book);
         let claim = book
             .claims
             .get(&self.id)
@@ -307,7 +307,7 @@ impl SelectionClaim {
     }
 
     pub fn release_active_claim(&self) -> Result<ClaimTransition, ClaimError> {
-        let mut book = self.book.lock().expect("claim lock");
+        let mut book = lock_book(&self.book);
         let claim = book
             .claims
             .get(&self.id)
@@ -335,7 +335,7 @@ impl SelectionClaim {
     /// ownership.  C006 calls this after durable terminal convergence; the
     /// separate bit keeps duplicate finalization from subtracting twice.
     pub fn release_quota_reservation(&self) -> Result<ClaimTransition, ClaimError> {
-        let mut book = self.book.lock().expect("claim lock");
+        let mut book = lock_book(&self.book);
         let claim = book
             .claims
             .get(&self.id)
@@ -382,11 +382,19 @@ pub(crate) fn book() -> Arc<Mutex<ClaimBook>> {
     Arc::new(Mutex::new(ClaimBook::default()))
 }
 
+/// Recover the claim-book guard after a poisoned lock instead of crashing the
+/// process. A previous holder panicking must not turn one bad request path
+/// into a full proxy outage; callers still validate the recovered state
+/// before mutating it.
+fn lock_book(book: &Arc<Mutex<ClaimBook>>) -> std::sync::MutexGuard<'_, ClaimBook> {
+    book.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 pub(crate) fn publish(
     book: &Arc<Mutex<ClaimBook>>,
     mut claim: SelectionClaim,
 ) -> Result<SelectionClaim, ClaimError> {
-    let mut state = book.lock().expect("claim lock");
+    let mut state = lock_book(book);
     state.next_id = state.next_id.saturating_add(1);
     let id = state.next_id;
     *state
@@ -432,12 +440,11 @@ fn prune_terminal_claims(book: &mut ClaimBook) {
 }
 
 pub(crate) fn active_snapshot(book: &Arc<Mutex<ClaimBook>>) -> BTreeMap<String, i64> {
-    book.lock().expect("claim lock").active_requests.clone()
+    lock_book(book).active_requests.clone()
 }
 
 pub(crate) fn active_count(book: &Arc<Mutex<ClaimBook>>, account_name: &str) -> i64 {
-    book.lock()
-        .expect("claim lock")
+    lock_book(book)
         .active_requests
         .get(account_name)
         .copied()
@@ -445,5 +452,5 @@ pub(crate) fn active_count(book: &Arc<Mutex<ClaimBook>>, account_name: &str) -> 
 }
 
 pub(crate) fn claim_ids(book: &Arc<Mutex<ClaimBook>>) -> usize {
-    book.lock().expect("claim lock").claims.len()
+    lock_book(book).claims.len()
 }

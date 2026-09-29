@@ -571,9 +571,10 @@ impl QuotaEstimator {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, EstimatorState> {
-        self.state
-            .lock()
-            .expect("quota state mutex is not poisoned")
+        // Recover after a poisoned lock so one panicking holder cannot crash
+        // the proxy on the next request; quota invariants are still checked
+        // on the recovered state by every caller.
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 

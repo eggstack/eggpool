@@ -8,7 +8,7 @@
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -482,6 +482,13 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
 /// that view, which would otherwise make the application-level duplicate
 /// member contract unobservable.  Only the bounded central directory is
 /// scanned; payload validation remains owned by `ZipArchive` below.
+///
+/// The scan is memory-bounded: the EOCD record is located within the trailing
+/// window (22-byte record plus up to 64 KiB of ZIP comment per the format),
+/// and only the central-directory window is read. Payload bytes are never
+/// loaded.
+const EOCD_SEARCH_WINDOW: u64 = 65_536 + 22;
+
 fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupError> {
     let size = fs::metadata(archive_path)?.len();
     if size > MAX_ARCHIVE_BYTES {
@@ -490,48 +497,62 @@ fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupErr
         ));
     }
     let mut file = File::open(archive_path)?;
-    let mut bytes = Vec::with_capacity(size as usize);
-    file.read_to_end(&mut bytes)?;
-    let Some(eocd) = bytes.windows(4).rposition(|window| window == b"PK\x05\x06") else {
+    let window = size.min(EOCD_SEARCH_WINDOW);
+    file.seek(SeekFrom::End(-(window as i64)))?;
+    let mut tail = vec![0u8; window as usize];
+    file.read_exact(&mut tail)?;
+    let Some(relative) = tail.windows(4).rposition(|window| window == b"PK\x05\x06") else {
         return Ok(());
     };
-    if eocd + 22 > bytes.len() {
+    if relative + 22 > tail.len() {
         return Ok(());
     }
-    let central_size = u32::from_le_bytes(bytes[eocd + 12..eocd + 16].try_into().unwrap()) as usize;
+    let eocd_absolute = size - window + relative as u64;
+    let central_size =
+        u32::from_le_bytes(tail[relative + 12..relative + 16].try_into().unwrap()) as u64;
     let central_offset =
-        u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
-    if central_size == u32::MAX as usize || central_offset == u32::MAX as usize {
+        u32::from_le_bytes(tail[relative + 16..relative + 20].try_into().unwrap()) as u64;
+    if central_size == u64::from(u32::MAX) || central_offset == u64::from(u32::MAX) {
         return Ok(());
     }
     let central_end = central_offset
         .checked_add(central_size)
         .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
-    if central_offset > bytes.len() || central_end > bytes.len() || central_end > eocd {
+    if central_offset > size || central_end > size || central_end > eocd_absolute {
         return Ok(());
     }
+    let central_offset = usize::try_from(central_offset)
+        .map_err(|_| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+    let central_len = usize::try_from(central_size)
+        .map_err(|_| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+    central_offset
+        .checked_add(central_len)
+        .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+    file.seek(SeekFrom::Start(central_offset as u64))?;
+    let mut central = vec![0u8; central_len];
+    file.read_exact(&mut central)?;
     let mut names = BTreeSet::<Vec<u8>>::new();
-    let mut cursor = central_offset;
-    while cursor < central_end {
-        if cursor + 46 > central_end || &bytes[cursor..cursor + 4] != b"PK\x01\x02" {
+    let mut cursor = 0usize;
+    while cursor < central_len {
+        if cursor + 46 > central_len || &central[cursor..cursor + 4] != b"PK\x01\x02" {
             return Ok(());
         }
         let name_len =
-            u16::from_le_bytes(bytes[cursor + 28..cursor + 30].try_into().unwrap()) as usize;
+            u16::from_le_bytes(central[cursor + 28..cursor + 30].try_into().unwrap()) as usize;
         let extra_len =
-            u16::from_le_bytes(bytes[cursor + 30..cursor + 32].try_into().unwrap()) as usize;
+            u16::from_le_bytes(central[cursor + 30..cursor + 32].try_into().unwrap()) as usize;
         let comment_len =
-            u16::from_le_bytes(bytes[cursor + 32..cursor + 34].try_into().unwrap()) as usize;
+            u16::from_le_bytes(central[cursor + 32..cursor + 34].try_into().unwrap()) as usize;
         let name_start = cursor + 46;
         let record_len = 46usize
             .checked_add(name_len)
             .and_then(|length| length.checked_add(extra_len))
             .and_then(|length| length.checked_add(comment_len))
             .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
-        if cursor + record_len > central_end {
+        if cursor + record_len > central_len {
             return Ok(());
         }
-        if !names.insert(bytes[name_start..name_start + name_len].to_vec()) {
+        if !names.insert(central[name_start..name_start + name_len].to_vec()) {
             return Err(BackupError::InvalidArchive(
                 "unexpected or duplicate member".to_owned(),
             ));
@@ -902,8 +923,12 @@ fn is_backup_name(path: &Path) -> bool {
             return false;
         };
         rest.ends_with(".zip")
-            && rest.len() >= 20
-            && rest[..15].chars().all(|c| c.is_ascii_digit() || c == '-')
+            && rest.len() >= 19
+            && rest.get(..15).is_some_and(|prefix| {
+                prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'-')
+            })
     })
 }
 fn set_private_dir(path: &Path) -> Result<(), BackupError> {
@@ -946,4 +971,24 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
     (y + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_names_match_generated_stamps_and_reject_non_boundary_names() {
+        let genuine = backup_filename_at(UNIX_EPOCH + Duration::from_secs(1_786_771_200));
+        assert!(genuine.starts_with("eggpool-backup-"));
+        assert!(genuine.ends_with(".zip"));
+        assert!(is_backup_name(Path::new(&genuine)));
+        // A multi-byte name straddling the 15-byte prefix boundary must be
+        // rejected, not panic on str slicing.
+        assert!(!is_backup_name(Path::new(
+            "eggpool-backup-12345678901234é.zip"
+        )));
+        assert!(!is_backup_name(Path::new("eggpool-backup-short.zip")));
+        assert!(!is_backup_name(Path::new("other-20260812-000000.zip")));
+    }
 }

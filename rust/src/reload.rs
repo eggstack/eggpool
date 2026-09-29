@@ -140,6 +140,8 @@ enum ReloadPreparationError {
     Read,
     #[error("persistence delta could not be prepared")]
     Persistence,
+    #[error("account identifier space is exhausted")]
+    AccountIdExhausted,
 }
 
 #[derive(Debug, Clone)]
@@ -819,7 +821,13 @@ fn account_projections_with_new_ids(
     config: &Config,
     existing: &[Account],
 ) -> Result<(Vec<AccountProjection>, Vec<Account>), ReloadPreparationError> {
-    let mut next_id = existing.iter().map(|row| row.id).max().unwrap_or(0) + 1;
+    let mut next_id = existing
+        .iter()
+        .map(|row| row.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(ReloadPreparationError::AccountIdExhausted)?;
     let by_name: BTreeMap<&str, &Account> = existing
         .iter()
         .map(|row| (row.name.as_str(), row))
@@ -835,11 +843,13 @@ fn account_projections_with_new_ids(
         let id = by_name.get(account.name.as_str()).map_or_else(
             || {
                 let id = next_id;
-                next_id += 1;
-                id
+                next_id = next_id
+                    .checked_add(1)
+                    .ok_or(ReloadPreparationError::AccountIdExhausted)?;
+                Ok(id)
             },
-            |row| row.id,
-        );
+            |row| Ok(row.id),
+        )?;
         projection.push(AccountProjection {
             id,
             config: account.clone(),
@@ -1061,4 +1071,24 @@ async fn load_auth_rows(
                 .collect()
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_account_ids_reject_exhausted_identifier_space() {
+        let existing = vec![Account {
+            id: i64::MAX,
+            name: "old".to_owned(),
+            api_key_env: "EGGPOOL_API_KEY".to_owned(),
+            enabled: true,
+            weight: 1.0,
+            provider_id: "provider".to_owned(),
+        }];
+        let error = account_projections_with_new_ids(&Config::default(), &existing)
+            .expect_err("i64::MAX account id must not wrap");
+        assert!(matches!(error, ReloadPreparationError::AccountIdExhausted));
+    }
 }

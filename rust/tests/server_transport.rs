@@ -58,7 +58,7 @@ async fn runtime_fixture_with_generation_components(
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let mut config = Config::default();
     config.server.api_key = Some("test-key-transport".to_owned());
     config.server.max_request_body_bytes = max_request_body_bytes;
@@ -848,7 +848,7 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
         })
         .await
         .expect("fixture model is catalogued");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),
@@ -1103,7 +1103,7 @@ async fn compact_capable_runtime(
         })
         .await
         .expect("fixture model is catalogued");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),
@@ -1321,7 +1321,7 @@ async fn eggserve_040_streaming_stays_incremental_without_trailers() {
         })
         .await
         .expect("fixture model is catalogued");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),
@@ -1513,7 +1513,7 @@ async fn unknown_body_reservation_releases_at_stream_handoff() {
         })
         .await
         .expect("fixture model is catalogued");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),

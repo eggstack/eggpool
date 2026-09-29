@@ -6,6 +6,8 @@
 
 use std::{
     env, fs,
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -540,12 +542,18 @@ fn find_program(name: &str, path: &[PathBuf]) -> Option<PathBuf> {
 }
 
 fn looks_like_native_executable(path: &Path) -> bool {
-    let Ok(bytes) = fs::read(path) else {
+    // Only the 4-byte magic prefix is needed; never pull an entire binary
+    // into memory to classify it.
+    let Ok(mut file) = File::open(path) else {
         return false;
     };
-    bytes.starts_with(b"\x7fELF")
-        || bytes.starts_with(b"\xcf\xfa\xed\xfe")
-        || bytes.starts_with(b"\xfe\xed\xfa\xcf")
+    let mut header = [0u8; 4];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    header.starts_with(b"\x7fELF")
+        || header == [0xcf, 0xfa, 0xed, 0xfe]
+        || header == [0xfe, 0xed, 0xfa, 0xcf]
 }
 
 fn read_bounded(path: &Path) -> std::io::Result<String> {

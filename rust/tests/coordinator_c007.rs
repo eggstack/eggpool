@@ -1198,7 +1198,7 @@ async fn finite_provider_body_limit_is_terminal_without_retry() {
         .await
         .expect("limit violation executes terminally");
     assert_eq!(server.count(), 1, "resource violation never retries");
-    assert_eq!(execution.response.status, StatusCode::BAD_GATEWAY);
+    assert_eq!(execution.response.status, StatusCode::PAYLOAD_TOO_LARGE);
     execution.mark_started();
     let result = execution
         .complete(DownstreamResult::Delivered)

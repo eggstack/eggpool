@@ -48,6 +48,8 @@ pub enum GenerationBuildError {
     },
     #[error("generation database precondition failed: {0}")]
     Database(#[from] DatabaseError),
+    #[error("process update service construction failed: {0}")]
+    Update(#[from] crate::operations::update::UpdateError),
 }
 pub struct RuntimeGeneration {
     generation_id: u64,

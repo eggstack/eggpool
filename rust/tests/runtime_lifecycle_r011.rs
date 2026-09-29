@@ -52,7 +52,7 @@ async fn fixture(install_tasks: bool) -> Fixture {
         .run()
         .await
         .expect("migrations run");
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         Config::default(),
@@ -552,7 +552,7 @@ async fn startup_recovery_precedes_first_request_and_same_db_remains_readable() 
         .await
         .expect("seed interrupted request");
 
-    let process = ProcessRuntime::new(database.clone());
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
     let recovery = process
         .reconcile_startup()
         .await
