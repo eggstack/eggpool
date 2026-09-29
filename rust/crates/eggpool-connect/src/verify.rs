@@ -53,8 +53,8 @@ pub fn validate_local(
             let lines: Vec<String> = config_text.lines().map(str::to_owned).collect();
             let table = "model_providers.eggpool";
             let base = eggpool_client_config::text::table_value(&lines, table, "base_url");
-            if base.as_deref() != Some(remote.base_url.trim_end_matches('/'))
-                && base.as_deref() != Some(remote.base_url.as_str())
+            if base.as_deref().map(|s| s.trim_end_matches('/'))
+                != Some(remote.base_url.trim_end_matches('/'))
             {
                 return Err(ConnectError::Validation {
                     detail: "installed Codex provider base_url differs".to_owned(),
@@ -196,6 +196,13 @@ pub async fn validate_native<R: ProcessRunner>(
                             2000
                         )
                     ),
+                });
+            }
+            // Require EggPool evidence in the models output; a stub exiting 0
+            // must not pass.
+            if !models.stdout.contains("eggpool") {
+                return Err(ConnectError::Validation {
+                    detail: "codex debug models output missing eggpool provider".to_owned(),
                 });
             }
             // The generated catalog must parse under the strict parser; the

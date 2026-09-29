@@ -145,7 +145,11 @@ def test_q008_default_mode_selects_v1_and_benchmark_mode_selects_v2() -> None:
     ordinary = run_qualification(binary=Path("/not/a/candidate"), benchmark_samples=0)
     assert ordinary["schema_version"] == SCHEMA_V1
     assert "benchmark" not in ordinary
-    extended = run_qualification(binary=Path("/not/a/candidate"), benchmark_samples=30)
+    extended = run_qualification(
+        binary=Path("/not/a/candidate"),
+        benchmark_samples=30,
+        config_fixture=BENCHMARK_FIXTURE,
+    )
     assert extended["schema_version"] == SCHEMA_V2
     assert "benchmark" not in extended
 
@@ -318,7 +322,9 @@ def test_237_diagnostic_mode_defaults_off_and_keeps_schemas() -> None:
     assert ordinary["schema_version"] == SCHEMA_V1
     assert ordinary["schema_version"] == "runtime-q008.v1"
     benchmark_only = run_qualification(
-        binary=Path("/not/a/candidate"), benchmark_samples=30
+        binary=Path("/not/a/candidate"),
+        benchmark_samples=30,
+        config_fixture=BENCHMARK_FIXTURE,
     )
     assert benchmark_only["schema_version"] == SCHEMA_V2
     assert benchmark_only["schema_version"] == "runtime-q008.v2"
@@ -326,6 +332,7 @@ def test_237_diagnostic_mode_defaults_off_and_keeps_schemas() -> None:
     diagnostic_fail_fast = run_qualification(
         binary=Path("/not/a/candidate"),
         benchmark_samples=30,
+        config_fixture=BENCHMARK_FIXTURE,
         diagnose_finite_tail=60,
     )
     assert diagnostic_fail_fast["schema_version"] == SCHEMA_V2

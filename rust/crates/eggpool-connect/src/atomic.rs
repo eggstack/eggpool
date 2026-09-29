@@ -114,6 +114,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<Option<u32>, ConnectErr
         fs::create_dir_all(parent).map_err(|error| ConnectError::Mutation {
             detail: format!("cannot create parent {}: {error}", parent.display()),
         })?;
+        // TOCTOU: reject symlinked parents after creation so a swapped
+        // `~/.config/opencode -> /etc` cannot redirect the rename.
+        let parent_metadata =
+            fs::symlink_metadata(parent).map_err(|error| ConnectError::Mutation {
+                detail: format!("cannot stat parent {}: {error}", parent.display()),
+            })?;
+        if parent_metadata.file_type().is_symlink() {
+            return Err(ConnectError::UnsafeConfig {
+                detail: format!("parent {} is a symlink", parent.display()),
+            });
+        }
     }
     let temp = temp_path_for(path);
     let mut options = OpenOptions::new();

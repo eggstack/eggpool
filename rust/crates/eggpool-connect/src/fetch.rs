@@ -129,24 +129,34 @@ pub async fn fetch_integration_profile(
         });
     }
 
-    let body = response.into_body();
-    // Bound the response before buffering: one byte over the portable limit
-    // is enough to fail closed without unbounded allocation.
-    let limit = (MAX_INTEGRATION_PROFILE_BYTES + 1) as u64;
-    let collected = tokio::time::timeout(FETCH_TIMEOUT, body.collect())
-        .await
-        .map_err(|_| ConnectError::AuthNetwork {
-            detail: "EggPool response timed out".to_owned(),
-        })?
-        .map_err(|error| ConnectError::AuthNetwork {
-            detail: format!("cannot read EggPool response: {error}"),
-        })?;
-    let bytes = collected.to_bytes();
-    if bytes.len() as u64 > limit {
-        return Err(ConnectError::AuthNetwork {
-            detail: "integration profile exceeds bounded size".to_owned(),
-        });
+    let mut body = response.into_body();
+    // Bound before buffering: stream frames with early TooLarge so a
+    // malicious server cannot OOM the helper.
+    let limit = MAX_INTEGRATION_PROFILE_BYTES + 1;
+    let mut output = Vec::new();
+    loop {
+        let frame = tokio::time::timeout(FETCH_TIMEOUT, body.frame())
+            .await
+            .map_err(|_| ConnectError::AuthNetwork {
+                detail: "EggPool response timed out".to_owned(),
+            })?
+            .transpose()
+            .map_err(|error| ConnectError::AuthNetwork {
+                detail: format!("cannot read EggPool response: {error}"),
+            })?;
+        let Some(frame) = frame else {
+            break;
+        };
+        if let Some(data) = frame.data_ref() {
+            if output.len().saturating_add(data.len()) > limit {
+                return Err(ConnectError::AuthNetwork {
+                    detail: "integration profile exceeds bounded size".to_owned(),
+                });
+            }
+            output.extend_from_slice(data);
+        }
     }
+    let bytes = output;
     if bytes.len() > MAX_INTEGRATION_PROFILE_BYTES {
         return Err(ConnectError::AuthNetwork {
             detail: "integration profile exceeds bounded size".to_owned(),

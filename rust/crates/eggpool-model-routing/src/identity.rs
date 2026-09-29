@@ -172,7 +172,7 @@ fn bounded_utf8(value: &str, max_bytes: usize) -> Vec<u8> {
 
 fn bounded_identity_field(role: &str, text: &str, max_bytes: usize) -> Vec<u8> {
     let role_bytes = role.as_bytes();
-    let framing_bytes = 2 + role_bytes.len() + 4;
+    let framing_bytes = 2 + role_bytes.len() + 4 + 8 + 8;
     if max_bytes <= framing_bytes {
         return Vec::new();
     }
@@ -180,10 +180,24 @@ fn bounded_identity_field(role: &str, text: &str, max_bytes: usize) -> Vec<u8> {
     if text_bytes.is_empty() {
         return Vec::new();
     }
+    // Bind the full length plus a middle-content sample so sessions sharing
+    // only head+tail cannot collide.
+    let full_len = text.len() as u64;
+    let mid = text.len() / 2;
+    let mid_sample: u64 = text
+        .as_bytes()
+        .iter()
+        .skip(mid.saturating_sub(32))
+        .take(64)
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            hash.wrapping_mul(0x100000001b3).wrapping_add(*byte as u64)
+        });
     let mut field = Vec::with_capacity(framing_bytes + text_bytes.len());
     field.extend((role_bytes.len() as u16).to_be_bytes());
     field.extend(role_bytes);
     field.extend((text_bytes.len() as u32).to_be_bytes());
+    field.extend(full_len.to_be_bytes());
+    field.extend(mid_sample.to_be_bytes());
     field.extend(text_bytes);
     field
 }

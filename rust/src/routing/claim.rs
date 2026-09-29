@@ -151,6 +151,7 @@ impl SelectionSnapshot {
 struct OwnedClaim {
     state: ClaimState,
     quota_released: bool,
+    converted: bool,
 }
 
 #[derive(Debug, Default)]
@@ -318,6 +319,7 @@ impl SelectionClaim {
             });
         };
         claim.state = ClaimState::Converted;
+        claim.converted = true;
         Ok(ClaimTransition::Converted)
     }
 
@@ -362,9 +364,7 @@ impl SelectionClaim {
             .ok_or_else(|| ClaimError::UnknownAccount {
                 account_name: self.account_name.clone(),
             })?;
-        if claim.quota_released
-            || matches!(claim.state, ClaimState::Pending | ClaimState::RolledBack)
-        {
+        if claim.quota_released || !claim.converted {
             return Ok(ClaimTransition::AlreadyTransitioned);
         }
         self.estimator.remove_reservation(
@@ -380,6 +380,15 @@ impl SelectionClaim {
         };
         claim.quota_released = true;
         Ok(ClaimTransition::Released)
+    }
+
+    /// Release both active-count ownership and the converted quota
+    /// reservation. Prefer this at terminal convergence so a forgotten second
+    /// call cannot inflate `reserved_*` forever.
+    pub fn release_all(&self) -> Result<(ClaimTransition, ClaimTransition), ClaimError> {
+        let active = self.release_active_claim()?;
+        let quota = self.release_quota_reservation()?;
+        Ok((active, quota))
     }
 }
 
@@ -448,6 +457,7 @@ pub(crate) fn publish(
         OwnedClaim {
             state: ClaimState::Pending,
             quota_released: false,
+            converted: false,
         },
     );
     state.terminal_order.push_back(id);

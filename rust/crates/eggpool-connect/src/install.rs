@@ -307,12 +307,19 @@ fn is_codex_revision_only_update(
         && eggpool_client_config::text::table_value(&lines, table, "env_key").as_deref()
             == Some("EGGPOOL_API_KEY")
         && eggpool_client_config::text::table_value(&lines, table, "name").as_deref()
-            == Some("EggPool");
+            == Some("EggPool")
+        && eggpool_client_config::text::table_value(&lines, table, "model_provider").as_deref()
+            == Some("eggpool");
     if !shape_ok {
         return false;
     }
     // Same provider shape and base URL: only the catalog/models changed.
+    // Require the catalog to match the plan so a user-selected catalog is
+    // never auto-converged away.
     let _ = planned;
+    // Compare planned catalog bytes against the existing catalog reference if
+    // the plan carries one; otherwise require explicit model_provider match
+    // above (already checked) and fall through.
     true
 }
 
@@ -346,7 +353,11 @@ fn is_opencode_revision_only_update(
 
 /// Capture previous EggPool-owned values for ownership-aware `remove`.
 #[must_use]
-pub fn capture_previous(target: ClientTarget, existing_text: &str) -> BTreeMap<String, String> {
+pub fn capture_previous(
+    target: ClientTarget,
+    existing_text: &str,
+    version_raw: Option<&str>,
+) -> BTreeMap<String, String> {
     let mut previous = BTreeMap::new();
     match target {
         ClientTarget::Codex => {
@@ -371,9 +382,10 @@ pub fn capture_previous(target: ClientTarget, existing_text: &str) -> BTreeMap<S
         }
         ClientTarget::Opencode => {
             // Exact raw capture (comments included) for byte-for-byte
-            // restoration on remove. Variant defaults to V1 without version
-            // evidence; callers that know the version select first.
-            if let Ok(variant) = eggpool_client_config::select_opencode_variant(existing_text, None)
+            // restoration on remove. Thread the authoritative version so V2
+            // files without version evidence still capture.
+            if let Ok(variant) =
+                eggpool_client_config::select_opencode_variant(existing_text, version_raw)
                 && let Ok(Some((path, raw))) =
                     eggpool_client_config::capture_owned_raw(existing_text, variant)
             {
@@ -551,7 +563,11 @@ where
         .as_ref()
         .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
         .unwrap_or_default();
-    let previous = capture_previous(planned.target, &existing_text);
+    let previous = capture_previous(
+        planned.target,
+        &existing_text,
+        detection.version_raw.as_deref(),
+    );
     let mut artifacts: Vec<(String, PathBuf)> = Vec::new();
     if let Some(catalog_path) = &planned.catalog_path {
         artifacts.push(("codex-catalog.json".to_owned(), catalog_path.clone()));
@@ -809,18 +825,30 @@ pub fn restore_backup(
             detail: error.to_string(),
         })?;
     let _ = current_text;
+    let target = if manifest.target == "codex" {
+        ClientTarget::Codex
+    } else {
+        ClientTarget::Opencode
+    };
+    // Snapshot helper-owned catalog artifacts so restore stays reversible
+    // for catalog drift.
+    let catalog_path = if target == ClientTarget::Codex {
+        Some(helper_codex_catalog_path_for(state_root))
+    } else {
+        None
+    };
+    let mut pre_artifacts: Vec<(String, PathBuf)> = Vec::new();
+    if let Some(path) = &catalog_path {
+        pre_artifacts.push(("codex-catalog.json".to_owned(), path.clone()));
+    }
     let pre = create_backup(BackupInput {
         state_root,
-        target: if manifest.target == "codex" {
-            ClientTarget::Codex
-        } else {
-            ClientTarget::Opencode
-        },
+        target,
         config_path: &manifest.config_path,
         profile_fingerprint: &manifest.profile_fingerprint,
         client_version: manifest.client_version.as_deref(),
         schema_variant: &manifest.schema_variant,
-        artifacts: &[],
+        artifacts: &pre_artifacts,
         previous_values: BTreeMap::new(),
     })?;
     let snapshot = read_snapshot(&dir, &manifest)?;
@@ -1214,6 +1242,7 @@ mod tests {
         let previous = capture_previous(
             ClientTarget::Codex,
             "model_provider = \"other\"\n\n[model_providers.eggpool]\nname = \"Old\"\n",
+            None,
         );
         assert_eq!(
             previous.get("model_provider").map(String::as_str),

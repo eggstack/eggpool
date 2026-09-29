@@ -441,7 +441,16 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             }
             (Some(401), _) => {
                 category = FailureCategory::Authentication;
+                account_effect = "failure";
+                circuit_effect = "failure";
+                persist_backoff = true;
+                backoff_reason = Some("authentication_failed");
                 evidence_class = "http_401_ambiguous".into();
+                provider_attributable = true;
+                if retryable {
+                    retry_scope = RetryScope::Account;
+                    action = NextAction::RetryAccount;
+                }
             }
             (Some(402), _)
             | (Some(403), "quota_exhausted")
@@ -508,7 +517,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 }
                 client_outcome = "timeout";
             }
-            (Some(429), _) | (Some(409 | 422), "rate_limited") => {
+            (Some(429), _) | (Some(425), _) | (Some(409 | 422), "rate_limited") => {
                 category = FailureCategory::RateLimit;
                 account_effect = "rate_limit";
                 persist_backoff = true;

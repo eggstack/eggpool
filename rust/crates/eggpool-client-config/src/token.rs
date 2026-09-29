@@ -73,13 +73,8 @@ pub fn decode_profile(token: &str) -> Result<ConnectionProfileV1, ClientConfigEr
             detail: "token contains whitespace or control characters".to_owned(),
         });
     }
-    // Bound allocation: base64 expands 4 chars to at most 3 bytes.
-    let max_decoded_estimate = payload
-        .len()
-        .saturating_mul(3)
-        .saturating_div(4)
-        .saturating_add(4);
-    if max_decoded_estimate > MAX_DECODED_BYTES.saturating_add(1024) {
+    // Bound allocation: reject over-long payloads before base64 decoding.
+    if payload.len() > MAX_TOKEN_CHARS {
         return Err(ClientConfigError::TooLarge {
             detail: "token payload exceeds bounded size".to_owned(),
         });

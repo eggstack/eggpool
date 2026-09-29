@@ -32,7 +32,15 @@ NATIVE_PAYLOADS = {
     "elf-62": (b"\x7fELF" + b"\0" * 14 + (62).to_bytes(2, "little") + b"helper"),
     "elf-183": (b"\x7fELF" + b"\0" * 14 + (183).to_bytes(2, "little") + b"helper"),
     "macho": (b"\xcf\xfa\xed\xfe" + (0x0100000C).to_bytes(4, "little") + b"helper"),
-    "pe": (b"MZ" + b"\0" * 62 + b"helper"),
+    # Minimal valid PE: MZ header with e_lfanew -> PE sig + COFF Machine 0x8664.
+    "pe": (
+        b"MZ"
+        + b"\0" * 58
+        + (64).to_bytes(4, "little")
+        + b"PE\x00\x00"
+        + (0x8664).to_bytes(2, "little")
+        + b"helper"
+    ),
 }
 TARGET_PAYLOAD = {
     "connect-linux-x86_64": "elf-62",

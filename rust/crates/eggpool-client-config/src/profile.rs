@@ -235,13 +235,19 @@ pub fn validate_base_url(base_url: &str) -> Result<(), ClientConfigError> {
     } else {
         return Err(ClientConfigError::InvalidBaseUrl);
     };
-    if rest.is_empty() || !rest.contains('.') && rest != "localhost" && !rest.starts_with("127.") {
-        // Require an authority-like remainder; loopback and dotted hosts pass,
-        // bare empty authorities fail. This is intentionally narrow without a
-        // URL parser dependency.
-        if rest.is_empty() || rest.starts_with('/') || rest.starts_with(':') && rest.len() < 2 {
-            return Err(ClientConfigError::InvalidBaseUrl);
-        }
+    if rest.is_empty() || rest.starts_with('/') || rest.starts_with(':') {
+        return Err(ClientConfigError::InvalidBaseUrl);
+    }
+    // Explicit authority parse: reject single-label hosts unless loopback.
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority.split('@').next_back().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    let is_loopback = host == "localhost" || host.starts_with("127.") || host == "[::1]";
+    if !is_loopback && !host.contains('.') {
+        return Err(ClientConfigError::InvalidBaseUrl);
+    }
+    if host.is_empty() {
+        return Err(ClientConfigError::InvalidBaseUrl);
     }
     if !base_url.contains("://") {
         return Err(ClientConfigError::InvalidBaseUrl);

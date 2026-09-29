@@ -822,11 +822,11 @@ pub fn looks_like_eggpool_entry(value: &Value, variant: ClientSchemaVariant) -> 
         ClientSchemaVariant::OpencodeV2 => value
             .get("package")
             .and_then(Value::as_str)
-            .is_some_and(|package| package.contains("openai")),
+            .is_some_and(|package| package == OPENCODE_V2_RESPONSES_PACKAGE),
         _ => value
             .get("npm")
             .and_then(Value::as_str)
-            .is_some_and(|npm| npm.contains("openai")),
+            .is_some_and(|npm| npm == OPENCODE_RESPONSES_NPM),
     }
 }
 

@@ -1009,6 +1009,18 @@ impl Database {
             connection.pragma_update(None, "busy_timeout", config.busy_timeout_ms)?;
             if !config.read_only && config.wal {
                 connection.pragma_update(None, "journal_mode", "WAL")?;
+                // `:memory:` databases legitimately stay `memory`; file DBs
+                // must actually land in WAL.
+                if config.path != ":memory:" {
+                    let mode: String =
+                        connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                    if !mode.eq_ignore_ascii_case("wal") {
+                        return Err(SqliteError::SqliteFailure(
+                            tokio_rusqlite::rusqlite::ffi::Error::new(14),
+                            Some(format!("journal_mode is {mode}, expected wal")),
+                        ));
+                    }
+                }
             }
             connection.pragma_update(None, "synchronous", config.synchronous.as_str())?;
             if let Some(limit) = config.journal_size_limit {
@@ -1287,6 +1299,27 @@ impl DatabaseTransaction {
             }
             Err(_) => Err(DatabaseError::WorkerClosed),
         }
+    }
+}
+
+impl Drop for DatabaseTransaction {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        // A dropped in-transaction holder would brick writes (next BEGIN
+        // IMMEDIATE fails). Best-effort async rollback; the permit drops with
+        // `self` to release the gate regardless.
+        tracing::error!("database transaction dropped without commit or rollback");
+        let connection = self.database.inner.connection.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = connection
+                    .call(|connection| connection.execute_batch("ROLLBACK"))
+                    .await;
+            });
+        }
+        self.finished = true;
     }
 }
 

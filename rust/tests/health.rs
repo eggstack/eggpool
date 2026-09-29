@@ -188,7 +188,7 @@ fn quarantine_is_exact_key_bounded_and_terminal_recovery_is_authoritative() {
         )
         .expect("authoritative terminal state");
     assert_eq!(terminal.state, QuarantineState::TerminalWithdrawn);
-    assert!(!quarantine.is_model_quarantined(&key, 104.0));
+    assert!(quarantine.is_model_quarantined(&key, 104.0));
     assert!(quarantine.clear_authoritative_reappearance(&key, 105.0));
     assert_eq!(
         quarantine.get_entry(&key).expect("audit row").state,

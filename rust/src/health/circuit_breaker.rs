@@ -150,6 +150,16 @@ impl CircuitBreaker {
         let Ok(mut inner) = self.inner.lock() else {
             return false;
         };
+        // A leaked/cancelled probe must not stall HalfOpen forever: if the
+        // in-flight probe is older than the recovery timeout, reclaim it.
+        if inner.probe_in_flight
+            && inner
+                .probe_acquired_at
+                .is_some_and(|acquired| (now - acquired) > self.recovery_timeout.max(1.0))
+        {
+            inner.probe_in_flight = false;
+            inner.probe_acquired_at = None;
+        }
         match inner.state {
             CircuitState::Closed => true,
             CircuitState::Open if self.recovery_elapsed(&inner) => {
@@ -181,6 +191,14 @@ impl CircuitBreaker {
     pub fn try_acquire_probe(&self) -> Option<ProbeGuard> {
         let now = self.now();
         let mut inner = self.inner.lock().ok()?;
+        if inner.probe_in_flight
+            && inner
+                .probe_acquired_at
+                .is_some_and(|acquired| (now - acquired) > self.recovery_timeout.max(1.0))
+        {
+            inner.probe_in_flight = false;
+            inner.probe_acquired_at = None;
+        }
         match inner.state {
             CircuitState::Closed => Some(ProbeGuard {
                 breaker: self.clone(),

@@ -229,18 +229,19 @@ impl BackupService {
         Ok(prepared)
     }
 
-    /// Require archive targets to equal the live service paths. Skipped only
+    /// Require archive targets to equal the live service paths. Fail closed
     /// when live paths are unknown (empty fallback during corrupt-config
-    /// recovery); traversal/symlink checks in `validate_restore_targets`
-    /// still apply there.
+    /// recovery) instead of skipping the allowlist.
     fn validate_restore_targets_against_live(
         targets: &RestoreTargets,
         live: &BackupPaths,
     ) -> Result<(), BackupError> {
         // Empty live paths mean the current config could not be parsed;
-        // there is no allowlist to enforce (traversal checks already ran).
+        // fail closed rather than allowing arbitrary absolute writes.
         if live.config.as_os_str().is_empty() || live.database.as_os_str().is_empty() {
-            return Ok(());
+            return Err(BackupError::InvalidArchive(
+                "live configuration paths are unknown; restore refused".to_owned(),
+            ));
         }
         if targets.config != live.config || targets.database != live.database {
             return Err(BackupError::InvalidArchive(

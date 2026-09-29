@@ -12,11 +12,12 @@ use crate::{
     Config,
     coordinator::{
         FinalizationDrainError, FinalizationSupervisor, InferenceState, TerminalReferenceOwner,
-        WireResolverConfigError, build_inference_state_with_shared,
+        WireResolver, WireResolverConfigError, build_inference_state_with_shared,
         build_inference_state_with_shared_and_accounts, compile_provider_profiles,
     },
     db::{Account, DatabaseError},
     providers::{ProviderClientPool, ProviderClientPoolCloseReport, ProviderClientPoolError},
+    wire::WireSurface,
 };
 
 use super::{
@@ -339,11 +340,14 @@ pub enum CandidateOwnership {
     Aborted,
 }
 
+type WirePreferenceRollback = Option<(WireResolver, Vec<(String, String, WireSurface, bool)>)>;
+
 #[derive(Debug, Clone)]
 struct CandidateInner {
     state: CandidateOwnership,
     generation: Option<Arc<RuntimeGeneration>>,
     close_report: Option<GenerationCloseReport>,
+    wire_rollback: WirePreferenceRollback,
 }
 
 /// Explicit owner for an unpublished generation candidate.
@@ -370,12 +374,13 @@ impl std::fmt::Debug for PreparedGeneration {
 }
 
 impl PreparedGeneration {
-    fn new(generation: Arc<RuntimeGeneration>) -> Self {
+    fn new(generation: Arc<RuntimeGeneration>, wire_rollback: WirePreferenceRollback) -> Self {
         Self {
             inner: Arc::new(Mutex::new(CandidateInner {
                 state: CandidateOwnership::Prepared,
                 generation: Some(generation),
                 close_report: None,
+                wire_rollback,
             })),
             abort_notify: Arc::new(Notify::new()),
         }
@@ -409,6 +414,8 @@ impl PreparedGeneration {
             return Err(CandidateTransferError { state: inner.state });
         }
         inner.state = CandidateOwnership::Transferred;
+        // Candidate prefs become live with the transfer; drop the rollback.
+        inner.wire_rollback = None;
         inner.generation.take().ok_or(CandidateTransferError {
             state: CandidateOwnership::Transferred,
         })
@@ -425,6 +432,11 @@ impl PreparedGeneration {
                 match inner.state {
                     CandidateOwnership::Prepared => {
                         inner.state = CandidateOwnership::Aborting;
+                        // Restore live wire prefs: the aborted candidate never
+                        // publishes, so its prefs must not leak into traffic.
+                        if let Some((resolver, previous)) = inner.wire_rollback.take() {
+                            resolver.set_configured_preferences(previous);
+                        }
                         inner.generation.take()
                     }
                     CandidateOwnership::Aborting => None,
@@ -465,13 +477,16 @@ impl PreparedGeneration {
 
 impl Drop for PreparedGeneration {
     fn drop(&mut self) {
-        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner()).state;
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(
-            state,
+            inner.state,
             CandidateOwnership::Prepared | CandidateOwnership::Aborting
         ) {
+            if let Some((resolver, previous)) = inner.wire_rollback.take() {
+                resolver.set_configured_preferences(previous);
+            }
             tracing::error!(
-                ?state,
+                state = ?inner.state,
                 "prepared generation dropped before explicit ownership transfer or abort"
             );
         }
@@ -572,6 +587,10 @@ impl RuntimeGenerationFactory {
                         })
                 })
         });
+        // Snapshot live preferences before mutating so an aborted candidate
+        // prepare restores them instead of leaking candidate prefs into live
+        // traffic.
+        let previous_preferences = process.wire_profile_resolver().get_configured_preferences();
         process
             .wire_profile_resolver()
             .set_configured_preferences(configured_preferences);
@@ -580,7 +599,15 @@ impl RuntimeGenerationFactory {
         // compilation succeeds.  They remain untouched by candidate abort.
         let affinity = process.model_router_affinity();
         let wire_resolver = process.wire_profile_resolver();
-        let provider_clients = ProviderClientPool::from_config(&config)?;
+        let provider_clients = match ProviderClientPool::from_config(&config) {
+            Ok(pool) => pool,
+            Err(error) => {
+                process
+                    .wire_profile_resolver()
+                    .set_configured_preferences(previous_preferences);
+                return Err(error.into());
+            }
+        };
         let inference = match match durable_accounts {
             Some(accounts) => {
                 build_inference_state_with_shared_and_accounts(
@@ -610,6 +637,9 @@ impl RuntimeGenerationFactory {
         } {
             Ok(inference) => inference,
             Err(detail) => {
+                process
+                    .wire_profile_resolver()
+                    .set_configured_preferences(previous_preferences);
                 return Err(GenerationBuildError::Graph {
                     detail,
                     provider_clients: provider_clients.close(),
@@ -625,6 +655,9 @@ impl RuntimeGenerationFactory {
             provider_clients,
             finalization,
         ));
-        Ok(PreparedGeneration::new(generation))
+        Ok(PreparedGeneration::new(
+            generation,
+            Some((process.wire_profile_resolver(), previous_preferences)),
+        ))
     }
 }

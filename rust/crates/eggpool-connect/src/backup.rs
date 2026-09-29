@@ -19,6 +19,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use eggpool_client_config::{ClientTarget, sha256_hex};
@@ -143,9 +144,45 @@ pub fn create_backup(input: BackupInput<'_>) -> Result<BackupRecord, ConnectErro
     let pre_bytes = existing.as_deref().unwrap_or(b"");
     let pre_sha256 = sha256_hex(pre_bytes);
 
-    let id = new_backup_id();
-    let dir = backups_root.join(&id);
-    ensure_private_dir(&dir)?;
+    // Collision-safe backup dir: retry with a fresh ID on AlreadyExists.
+    let (id, dir) = {
+        let mut id = new_backup_id();
+        let mut dir = backups_root.join(&id);
+        for _ in 0..16 {
+            match fs::create_dir(&dir) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    id = new_backup_id();
+                    dir = backups_root.join(&id);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(ConnectError::Backup {
+                        detail: format!("cannot create {}: {error}", dir.display()),
+                    });
+                }
+            }
+        }
+        // Verify the final dir exists and is a directory (bounded retries).
+        let metadata = fs::metadata(&dir).map_err(|error| ConnectError::Backup {
+            detail: format!("cannot stat {}: {error}", dir.display()),
+        })?;
+        if !metadata.is_dir() {
+            return Err(ConnectError::Backup {
+                detail: format!("backup path {} is not a directory", dir.display()),
+            });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|error| {
+                ConnectError::Backup {
+                    detail: format!("cannot chmod {}: {error}", dir.display()),
+                }
+            })?;
+        }
+        (id, dir)
+    };
 
     // Snapshot generated artifacts (pre-write bytes, byte-exact).
     let mut records = Vec::with_capacity(input.artifacts.len());
@@ -199,7 +236,7 @@ pub fn create_backup(input: BackupInput<'_>) -> Result<BackupRecord, ConnectErro
     write_private_file(&dir.join("manifest.json"), &rendered)?;
 
     // Conservative retention: keep newest N per target, never the only point.
-    let _ = enforce_retention(state_root, input.target);
+    enforce_retention(state_root, input.target)?;
 
     Ok(BackupRecord { id, dir, manifest })
 }
@@ -359,18 +396,27 @@ fn enforce_retention(state_root: &Path, target: ClientTarget) -> Result<(), Conn
     // beyond the bound, oldest first, and stops at the bound.
     for stale in manifests.iter().skip(BACKUP_RETENTION_PER_TARGET) {
         let dir = backups_root_for(state_root).join(&stale.backup_id);
-        let _ = fs::remove_dir_all(&dir);
+        fs::remove_dir_all(&dir).map_err(|error| ConnectError::Backup {
+            detail: format!("cannot prune {}: {error}", dir.display()),
+        })?;
     }
     Ok(())
 }
+
+static BACKUP_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn new_backup_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let rand = std::process::id() as u128 ^ (nanos & 0xffff_ffff);
-    format!("b{nanos:x}-{rand:x}")
+    let counter = BACKUP_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    // 64-bit random via system time + pid + counter folded (no extra deps);
+    // collisions across same-nanosecond backups are resolved by create_new
+    // retry at the call site.
+    let rand = (std::process::id() as u128).wrapping_mul(0x9e3779b97f4a7c15)
+        ^ (nanos ^ ((counter as u128) << 64));
+    format!("b{nanos:x}-{rand:x}-{counter:x}")
 }
 
 fn now_unix() -> u64 {
@@ -404,7 +450,8 @@ fn ensure_private_dir(path: &Path) -> Result<(), ConnectError> {
 
 fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), ConnectError> {
     let mut options = OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    // Fail-closed on existing files so a backup-ID collision cannot clobber.
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -421,11 +468,17 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), ConnectError> {
     file.flush().map_err(|error| ConnectError::Backup {
         detail: format!("cannot flush {}: {error}", path.display()),
     })?;
-    let _ = file.sync_all();
+    file.sync_all().map_err(|error| ConnectError::Backup {
+        detail: format!("cannot sync {}: {error}", path.display()),
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            ConnectError::Backup {
+                detail: format!("cannot chmod {}: {error}", path.display()),
+            }
+        })?;
     }
     Ok(())
 }

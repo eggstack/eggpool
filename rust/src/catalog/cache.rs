@@ -372,9 +372,17 @@ impl ModelCatalogCache {
             if row.model_id == DEPRECATED_MODEL_ID || !row.enabled {
                 continue;
             }
-            let Some((name, _, enabled)) = account_by_id.get(&row.account_id) else {
+            let Some((name, provider, enabled)) = account_by_id.get(&row.account_id) else {
                 return Err(CatalogCacheError::UnknownAccount(row.account_id));
             };
+            // Skip stale cross-provider rows: only admit support when the
+            // (model, account.provider) pair exists in provider_models.
+            if !self
+                .provider_models
+                .contains_key(&(row.model_id.clone(), provider.clone()))
+            {
+                continue;
+            }
             if *enabled {
                 self.account_support
                     .entry(row.model_id)

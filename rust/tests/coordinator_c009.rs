@@ -1568,10 +1568,7 @@ async fn bad_requests_do_not_require_restart_for_recovery() {
     )
     .await
     .expect("malformed upstream is terminal");
-    assert_eq!(
-        bad_execution.response.status,
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
+    assert_eq!(bad_execution.response.status, StatusCode::BAD_GATEWAY);
     bad_execution.mark_started();
     let _ = bad_execution
         .complete(DownstreamResult::Delivered)

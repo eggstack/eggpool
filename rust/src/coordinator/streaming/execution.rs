@@ -321,11 +321,11 @@ impl StreamingExecution {
                             return store_translation_error(parts, facts, router, failure_engine);
                         }
                         Decoded::Forward(bytes, saw_terminal) => {
-                            let provider_bytes = parts
+                            let client_bytes = parts
                                 .stream
                                 .as_ref()
-                                .map_or(0, |stream| stream.provider_bytes);
-                            parts.data.bytes_emitted = bounded_usize(provider_bytes);
+                                .map_or(0, |stream| stream.client_bytes);
+                            parts.data.bytes_emitted = bounded_usize(client_bytes);
                             if saw_terminal {
                                 parts.phase = StreamPhase::TerminalEvidence;
                             }
@@ -585,6 +585,13 @@ impl PendingStreamFinalizationParts {
         self.stream
             .as_ref()
             .map(|stream| stream.provider_bytes)
+            .unwrap_or_else(|| self.data.bytes_emitted.max(0) as usize)
+    }
+
+    pub(crate) fn client_bytes(&self) -> usize {
+        self.stream
+            .as_ref()
+            .map(|stream| stream.client_bytes)
             .unwrap_or_else(|| self.data.bytes_emitted.max(0) as usize)
     }
 

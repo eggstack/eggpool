@@ -1743,7 +1743,7 @@ def _combine_diagnostic_sample(
     t2_ns = provider_timing[2] if provider_timing is not None else None
     observed_phase = last_phase
     if provider_timing is None and not timed_out and observed_phase == "completed":
-        observed_phase = "completed"
+        observed_phase = "unknown"
     elif provider_timing is None and timed_out:
         observed_phase = "timeout"
     return DiagnosticSample(
@@ -1972,7 +1972,9 @@ def _sequential_benchmark(
         model is not None or streaming is not None or terminal_marker is not None
     )
     active_marker = terminal_marker if legacy_override else case.terminal_marker
-    expected_upstream = None if legacy_override else case.expected_upstream_path
+    # Derive upstream proof from the active model even under legacy overrides
+    # so translated cases cannot pass as native.
+    expected_upstream = case.expected_upstream_path
     upstream_before = (
         provider.upstream_count(expected_upstream)
         if provider is not None and expected_upstream is not None
@@ -2298,6 +2300,11 @@ def run_qualification(
         raise ValueError(
             "publication-storage diagnostic mode does not run the benchmark corpus"
         )
+    if (
+        benchmark_samples > 0
+        and config_fixture.resolve() != BENCHMARK_FIXTURE.resolve()
+    ):
+        raise ValueError("benchmark corpus requires the benchmark fixture")
     if diagnose_publication_storage is not None:
         if config_fixture.resolve() != BENCHMARK_FIXTURE.resolve():
             raise ValueError(

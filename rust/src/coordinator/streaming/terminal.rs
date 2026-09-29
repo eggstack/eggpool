@@ -335,9 +335,14 @@ pub(crate) fn store_eof(
         .map(|stream| completion_compat_allowed(&stream.completion_policy))
         .unwrap_or(false);
     // Legacy non-SSE pass-through ends complete at EOF (Python parity);
-    // SSE completion rules apply to event-stream responses only.
+    // SSE completion rules apply to event-stream responses only. An empty
+    // passthrough body is not success: require observed bytes first.
     let classification = if is_passthrough {
-        StreamEofClass::Complete
+        if parts.stream_bytes() > 0 {
+            StreamEofClass::Complete
+        } else {
+            StreamEofClass::EmptyEof
+        }
     } else {
         match summary.as_ref() {
             None => StreamEofClass::MalformedEof,
@@ -552,7 +557,7 @@ fn effects_midstream_data(
         latency_ms: duration_i64(parts.elapsed()),
         first_byte_ms: parts.first_byte_ms(),
         bytes_received: bounded_usize(facts.request_bytes),
-        bytes_emitted: bounded_usize(parts.stream_bytes()),
+        bytes_emitted: bounded_usize(parts.client_bytes()),
         upstream_request_id: bounded_request_id(parts.upstream_request_id()),
         error_class: Some(error_class.to_owned()),
         error_detail: Some(effects.client_outcome.clone()),
@@ -580,7 +585,7 @@ fn local_midstream_data(
         latency_ms: duration_i64(parts.elapsed()),
         first_byte_ms: parts.first_byte_ms(),
         bytes_received: bounded_usize(facts.request_bytes),
-        bytes_emitted: bounded_usize(parts.stream_bytes()),
+        bytes_emitted: bounded_usize(parts.client_bytes()),
         upstream_request_id: bounded_request_id(parts.upstream_request_id()),
         error_class: Some(error_class.to_owned()),
         error_detail: Some("midstream failure without retry".to_owned()),
@@ -634,7 +639,7 @@ fn success_terminal_data(
         latency_ms: duration_i64(parts.elapsed()),
         first_byte_ms: parts.first_byte_ms(),
         bytes_received: bounded_usize(facts.request_bytes),
-        bytes_emitted: bounded_usize(parts.stream_bytes()),
+        bytes_emitted: bounded_usize(parts.client_bytes()),
         upstream_request_id: bounded_request_id(parts.upstream_request_id()),
         release_reason: Some("completed".into()),
         downstream_started: parts.handoff.started(),

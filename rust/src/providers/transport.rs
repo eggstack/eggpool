@@ -797,6 +797,22 @@ fn join_provider_target(base: &Uri, target: &str) -> Result<Uri, TransportError>
     if relative.scheme().is_some() || relative.authority().is_some() || target.starts_with("//") {
         return Err(TransportError::InvalidTarget);
     }
+    // Reject path traversal and special segments.
+    if target.contains('\\') || target.contains('\0') {
+        return Err(TransportError::InvalidTarget);
+    }
+    for segment in target.split(['/', '?', '#']) {
+        if matches!(segment, "." | "..") {
+            return Err(TransportError::InvalidTarget);
+        }
+        if segment.chars().any(|c| c.is_control()) {
+            return Err(TransportError::InvalidTarget);
+        }
+    }
+    // Fragments are dropped downstream; reject them explicitly.
+    if target.contains('#') {
+        return Err(TransportError::InvalidTarget);
+    }
     let relative_path = relative.path();
     let relative_path = if relative_path.is_empty() {
         "/"
@@ -840,9 +856,11 @@ fn join_provider_target(base: &Uri, target: &str) -> Result<Uri, TransportError>
 
 fn validate_config(config: &ProviderHttpConfig) -> Result<(), TransportError> {
     if config.max_connections == 0
+        || config.max_connections > 1_024
         || config.max_keepalive == 0
         || config.max_keepalive > config.max_connections
         || config.max_request_body_bytes == 0
+        || config.max_request_body_bytes > 32 * 1024 * 1024
         || config.connect_timeout.is_zero()
         || config.read_timeout.is_zero()
         || config.write_timeout.is_zero()

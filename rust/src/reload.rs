@@ -740,20 +740,21 @@ fn read_input(
     default_path: Option<&Path>,
 ) -> Result<(PathBuf, Vec<u8>), ReloadPreparationError> {
     match input {
-        ReloadInput::Path(path) => read_bounded(path).map(|bytes| (path.clone(), bytes)),
+        ReloadInput::Path(path) => read_bounded(path)
+            .map(|bytes| (path.clone(), bytes))
+            .or_else(|_| {
+                default_path
+                    .map(|path| read_bounded(path).map(|bytes| (path.to_owned(), bytes)))
+                    .transpose()
+                    .map_err(|_| ReloadPreparationError::Read)?
+                    .ok_or(ReloadPreparationError::Read)
+            }),
         ReloadInput::Bytes {
             canonical_path,
             content,
         } if content.len() <= MAX_CONFIG_BYTES => Ok((canonical_path.clone(), content.clone())),
         ReloadInput::Bytes { .. } => Err(ReloadPreparationError::Read),
     }
-    .or_else(|_| {
-        default_path
-            .map(|path| read_bounded(path).map(|bytes| (path.to_owned(), bytes)))
-            .transpose()
-            .map_err(|_| ReloadPreparationError::Read)?
-            .ok_or(ReloadPreparationError::Read)
-    })
 }
 
 fn read_bounded(path: &Path) -> Result<Vec<u8>, ReloadPreparationError> {

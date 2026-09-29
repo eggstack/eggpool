@@ -88,6 +88,10 @@ pub fn classify_failure_category(
     if status_code == Some(402) {
         return BackoffReason::QuotaExhausted;
     }
+    // Explicit auth statuses win even without an error class.
+    if matches!(status_code, Some(401 | 403)) {
+        return BackoffReason::AuthenticationFailed;
+    }
     if status_code == Some(408) {
         return BackoffReason::ConnectTimeout;
     }
@@ -107,9 +111,17 @@ pub fn classify_failure_category(
     {
         return BackoffReason::ContextLimitExceeded;
     }
+    // Timeout-shaped classes win over auth substrings (e.g.
+    // `authentication_timeout` is a timeout per the frozen boundary).
+    if error_class.contains("connecttimeout")
+        || error_class.contains("connect_timeout")
+        || error_class.contains("authentication_timeout")
+    {
+        return BackoffReason::ConnectTimeout;
+    }
     if AUTH_FAILURE_CLASSES
         .iter()
-        .any(|candidate| *candidate == error_class)
+        .any(|candidate| error_class.contains(candidate))
     {
         return BackoffReason::AuthenticationFailed;
     }

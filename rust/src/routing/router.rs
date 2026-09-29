@@ -601,6 +601,7 @@ impl RoutingRouter {
         if !fairness.applied {
             return Some(fairness);
         }
+        let original_count = fairness.candidate_count;
         let band = std::mem::take(&mut fairness.ordered_accounts)
             .into_iter()
             .filter(|account| !rejected_accounts.contains(account.as_str()))
@@ -609,7 +610,10 @@ impl RoutingRouter {
             .iter()
             .position(|account| account == &selected.account_name)
         {
-            fairness.candidate_count = band.len();
+            // Commit the original ordering width so a probe-filtered band
+            // still advances the contested rotor key instead of stalling on
+            // the blocked head.
+            fairness.candidate_count = original_count.max(band.len());
             fairness.selected_index = Some(selected_index);
             fairness.selected_account_name = Some(selected.account_name.clone());
             fairness.ordered_accounts = band;

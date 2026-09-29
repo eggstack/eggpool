@@ -1255,13 +1255,22 @@ impl PreparedTaskDiff {
         let prepared = std::mem::take(&mut self.prepared);
         let mut prepared = prepared.into_iter();
         for spec in &self.diff.removed {
+            if self.supervisor.is_shutting_down() {
+                return Err(TaskSpecError::ShuttingDown);
+            }
             if let Some(task) = self.remove_task(&spec.name) {
                 stop_task(task).await;
             }
         }
         for spec in &self.diff.rescheduled {
+            if self.supervisor.is_shutting_down() {
+                return Err(TaskSpecError::ShuttingDown);
+            }
             if let Some(task) = self.remove_task(&spec.0.name) {
                 stop_task(task).await;
+            }
+            if self.supervisor.is_shutting_down() {
+                return Err(TaskSpecError::ShuttingDown);
             }
             let task = prepared
                 .next()
@@ -1270,6 +1279,9 @@ impl PreparedTaskDiff {
             self.insert_and_start(task).await;
         }
         for spec in &self.diff.added {
+            if self.supervisor.is_shutting_down() {
+                return Err(TaskSpecError::ShuttingDown);
+            }
             let task = prepared
                 .next()
                 .ok_or(TaskSpecError::InconsistentPreparedState)?;

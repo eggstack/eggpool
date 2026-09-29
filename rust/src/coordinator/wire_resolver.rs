@@ -452,11 +452,8 @@ impl WireResolver {
             };
             (rank, candidate.profile.priority, candidate.surface())
         });
-        if let Some(fixed) = fixed
-            && candidates
-                .first()
-                .is_some_and(|candidate| candidate.surface() == fixed)
-        {
+        if let Some(fixed) = fixed {
+            candidates.retain(|candidate| candidate.surface() == fixed);
             candidates.truncate(1);
         }
         increment_metric(&mut state, "wire_selection", config.max_metric_labels);
@@ -654,6 +651,18 @@ impl WireResolver {
                 .insert((provider_id, model_id), (surface, fixed));
         }
         trim_preference_state(&mut state, config.max_provider_state);
+    }
+
+    pub fn get_configured_preferences(&self) -> Vec<(String, String, WireSurface, bool)> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .configured_preferences
+            .iter()
+            .map(|((provider_id, model_id), (surface, fixed))| {
+                (provider_id.clone(), model_id.clone(), *surface, *fixed)
+            })
+            .collect()
     }
 
     pub fn set_metadata_hint(&self, provider_id: &str, model_id: &str, surface: WireSurface) {

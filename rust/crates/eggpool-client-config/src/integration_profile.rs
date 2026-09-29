@@ -128,7 +128,7 @@ impl AgentIntegrationProfileV1 {
                 });
             }
             if let Some(previous) = last {
-                if model.public_id.as_str() < previous {
+                if model.public_id.as_str() <= previous {
                     return Err(ClientConfigError::InvalidField {
                         field: "models".to_owned(),
                         detail: "models are not in deterministic order".to_owned(),

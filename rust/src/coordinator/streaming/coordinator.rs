@@ -248,6 +248,12 @@ impl StreamingCoordinator {
                         true,
                     );
                     let upstream_protocol = identity.upstream_protocol.clone();
+                    let body = if last.body.len() > MAX_CLIENT_ERROR_BYTES {
+                        Bytes::copy_from_slice(&last.body[..MAX_CLIENT_ERROR_BYTES])
+                    } else {
+                        last.body.clone()
+                    };
+                    let provider_bytes = body.len();
                     let data = self.failure_data(
                         &identity,
                         &upstream_protocol,
@@ -256,14 +262,14 @@ impl StreamingCoordinator {
                         last.upstream_request_id,
                         last.headers_elapsed,
                         request_bytes,
-                        last.body.len(),
+                        provider_bytes,
                         false,
                     );
                     return Ok(self.pending_terminal(
                         identity,
                         None,
                         headers,
-                        Some(last.body),
+                        Some(body),
                         data,
                         StreamPhase::Closed,
                     ));
@@ -421,15 +427,21 @@ impl StreamingCoordinator {
             {
                 Ok(value) => value,
                 Err(error) => {
+                    let (status, error_class) = match &error {
+                        crate::coordinator::AttemptError::Wire(
+                            crate::wire::WireRuntimeError::BodyTooLarge,
+                        ) => (StatusCode::PAYLOAD_TOO_LARGE, "RequestBodyTooLarge"),
+                        _ => (StatusCode::BAD_GATEWAY, "RequestAdaptation"),
+                    };
                     let headers = StreamClientHeaders {
-                        status: StatusCode::BAD_REQUEST,
+                        status,
                         headers: self.error_headers(&request.proxy_request_id, attempt_number),
                     };
-                    let data = self.local_failure_data(
+                    let data = self.upstream_prep_failure_data(
                         &identity,
                         &candidate.profile,
-                        StatusCode::BAD_REQUEST,
-                        "LocalPreparation",
+                        status,
+                        error_class,
                         request_bytes,
                     );
                     let _ = error;
@@ -533,7 +545,9 @@ impl StreamingCoordinator {
                 },
             };
             // Phase 2: upstream headers accepted, downstream not started.
-            if upstream.status.as_u16() >= 400 {
+            // Only 2xx starts a live stream; 3xx (redirects are disabled in
+            // transport) and other non-2xx terminalize here.
+            if !(200..300).contains(&upstream.status.as_u16()) {
                 let body = match upstream
                     .body
                     .read_to_bytes(self.max_provider_body_bytes)
@@ -741,14 +755,14 @@ impl StreamingCoordinator {
                                 self.apply_effects(&published.claim, &effects);
                             }
                             let headers = StreamClientHeaders {
-                                status: StatusCode::INTERNAL_SERVER_ERROR,
+                                status: StatusCode::BAD_GATEWAY,
                                 headers: self
                                     .error_headers(&request.proxy_request_id, attempt_number),
                             };
-                            let data = self.local_failure_data(
+                            let data = self.upstream_prep_failure_data(
                                 &identity,
                                 &candidate.profile,
-                                StatusCode::INTERNAL_SERVER_ERROR,
+                                StatusCode::BAD_GATEWAY,
                                 "MalformedResponse",
                                 request_bytes,
                             );
@@ -768,13 +782,13 @@ impl StreamingCoordinator {
                     },
                     Err(error) => {
                         let headers = StreamClientHeaders {
-                            status: StatusCode::INTERNAL_SERVER_ERROR,
+                            status: StatusCode::BAD_GATEWAY,
                             headers: self.error_headers(&request.proxy_request_id, attempt_number),
                         };
-                        let data = self.local_failure_data(
+                        let data = self.upstream_prep_failure_data(
                             &identity,
                             &candidate.profile,
-                            StatusCode::INTERNAL_SERVER_ERROR,
+                            StatusCode::BAD_GATEWAY,
                             "ResponseAdaptation",
                             request_bytes,
                         );
@@ -1519,6 +1533,21 @@ impl StreamingCoordinator {
             upstream_protocol: Some(protocol_for_surface(profile.definition.surface).into()),
             ..FinalizationData::default()
         }
+    }
+
+    fn upstream_prep_failure_data(
+        &self,
+        identity: &FinalizationIdentity,
+        profile: &ConfiguredWireProfile,
+        status: StatusCode,
+        error_class: &str,
+        request_bytes: usize,
+    ) -> FinalizationData {
+        let mut data =
+            self.local_failure_data(identity, profile, status, error_class, request_bytes);
+        data.outcome = FinalizationOutcome::UpstreamError;
+        data.release_reason = Some("attempt_failed".into());
+        data
     }
 
     #[allow(clippy::too_many_arguments)]

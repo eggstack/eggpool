@@ -270,14 +270,19 @@ impl ModelQuarantineRepository {
         limit: u32,
     ) -> Result<Vec<ModelQuarantineRecord>, ModelQuarantineRepositoryError> {
         let limit = i64::from(limit.min(5_000));
-        let rows = self.database.call(move |connection| {
+        let mut rows = self.database.call(move |connection| {
             let mut statement = connection.prepare("SELECT id,provider_id,account_id,canonical_model_id,upstream_model_id,upstream_protocol,state,evidence_provenance,reason,first_observed,last_observed,observation_count,expiry,cleared_at,clear_reason,last_status_code,last_error_class FROM model_quarantine ORDER BY last_observed DESC LIMIT ?1")?;
             statement.query_map([limit + 1], raw_quarantine_from_row)?.collect::<Result<Vec<_>, _>>()
         }).await?;
+        // Truncate like backoffs instead of failing closed: oversized
+        // quarantine must not restore zero entries (fail-open routing).
         if rows.len() > usize::try_from(limit).unwrap_or(5_000) {
-            return Err(ModelQuarantineRepositoryError::Invalid(
-                "hydration limit exceeded".to_owned(),
-            ));
+            tracing::warn!(
+                limit,
+                rows = rows.len(),
+                "model quarantine hydration truncated: limit exceeded"
+            );
+            rows.truncate(usize::try_from(limit).unwrap_or(5_000));
         }
         rows.into_iter().map(parse_quarantine).collect()
     }

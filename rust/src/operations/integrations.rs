@@ -780,7 +780,15 @@ pub fn apply_overrides(
         let valid_scheme = uri
             .scheme_str()
             .is_some_and(|scheme| matches!(scheme, "http" | "https"));
-        if !valid_scheme || uri.authority().is_none() || base_url.chars().any(char::is_whitespace) {
+        // Reject credential-bearing URLs (userinfo `@`).
+        let has_userinfo = uri
+            .authority()
+            .is_some_and(|authority| authority.as_str().contains('@'));
+        if !valid_scheme
+            || uri.authority().is_none()
+            || has_userinfo
+            || base_url.chars().any(char::is_whitespace)
+        {
             return Err(IntegrationError::InvalidBaseUrl);
         }
         let normalized = base_url.trim_end_matches('/').to_owned();

@@ -92,14 +92,14 @@ fn exact_r001_field_dispositions_are_ported() {
             .iter()
             .filter(|(_, disposition)| disposition == "live")
             .count(),
-        60
+        61
     );
     assert_eq!(
         actual
             .iter()
             .filter(|(_, disposition)| disposition == "restart_required")
             .count(),
-        94
+        93
     );
 }
 

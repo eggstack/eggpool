@@ -424,7 +424,13 @@ impl ReleaseClient {
     pub fn with_release_api(value: &str) -> Result<Self, UpdateError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let release_api: Uri = value.parse().map_err(|_| UpdateError::InvalidArtifactUrl)?;
-        if release_api.scheme_str() != Some("https") && release_api.scheme_str() != Some("http") {
+        // Require HTTPS for release metadata; allow HTTP only for loopback
+        // test overrides.
+        let is_loopback_http = release_api.scheme_str() == Some("http")
+            && release_api
+                .host()
+                .is_some_and(|host| host == "127.0.0.1" || host == "localhost" || host == "[::1]");
+        if release_api.scheme_str() != Some("https") && !is_loopback_http {
             return Err(UpdateError::InvalidArtifactUrl);
         }
         let mut connector = HttpConnector::new();
@@ -491,10 +497,18 @@ impl ReleaseClient {
                 .as_deref()
                 .ok_or(UpdateError::IntegrityMissing)?;
             let digest = parse_digest(digest_text).ok_or(UpdateError::IntegrityMalformed)?;
-            let download_url = asset
+            let download_url: http::Uri = asset
                 .browser_download_url
                 .parse()
                 .map_err(|_| UpdateError::InvalidArtifactUrl)?;
+            // Artifact fetches require HTTPS (loopback HTTP only for tests).
+            let is_loopback_http = download_url.scheme_str() == Some("http")
+                && download_url.host().is_some_and(|host| {
+                    host == "127.0.0.1" || host == "localhost" || host == "[::1]"
+                });
+            if download_url.scheme_str() != Some("https") && !is_loopback_http {
+                return Err(UpdateError::InvalidArtifactUrl);
+            }
             artifact = Some(ArtifactDescriptor {
                 name: asset.name,
                 download_url,
@@ -521,7 +535,7 @@ impl ReleaseClient {
             return Err(UpdateError::ArtifactTooLarge);
         }
         let bytes = self
-            .get_bytes(artifact.download_url.clone(), MAX_ARTIFACT_BYTES)
+            .get_bytes(artifact.download_url.clone(), MAX_ARTIFACT_BYTES, false)
             .await?;
         if artifact.size.is_some_and(|size| size != bytes.len() as u64) {
             return Err(UpdateError::ArtifactSizeMismatch);
@@ -538,20 +552,29 @@ impl ReleaseClient {
         uri: Uri,
         max_bytes: usize,
     ) -> Result<T, UpdateError> {
-        let bytes = self.get_bytes(uri, max_bytes).await?;
+        let bytes = self.get_bytes(uri, max_bytes, true).await?;
         serde_json::from_slice(&bytes).map_err(|_| UpdateError::MetadataJson)
     }
 
-    async fn get_bytes(&self, uri: Uri, max_bytes: usize) -> Result<Vec<u8>, UpdateError> {
-        timeout(OVERALL_TIMEOUT, self.get_bytes_inner(uri, max_bytes))
-            .await
-            .map_err(|_| UpdateError::MetadataTransport)?
+    async fn get_bytes(
+        &self,
+        uri: Uri,
+        max_bytes: usize,
+        is_metadata: bool,
+    ) -> Result<Vec<u8>, UpdateError> {
+        timeout(
+            OVERALL_TIMEOUT,
+            self.get_bytes_inner(uri, max_bytes, is_metadata),
+        )
+        .await
+        .map_err(|_| UpdateError::MetadataTransport)?
     }
 
     async fn get_bytes_inner(
         &self,
         mut uri: Uri,
         max_bytes: usize,
+        is_metadata: bool,
     ) -> Result<Vec<u8>, UpdateError> {
         let original = uri.clone();
         for redirect in 0..=MAX_REDIRECTS {
@@ -584,8 +607,7 @@ impl ReleaseClient {
             }
             if response.status() != StatusCode::OK {
                 let status = response.status().as_u16();
-                return if original.path().ends_with("/latest") || original.path().contains("/tags/")
-                {
+                return if is_metadata {
                     Err(UpdateError::MetadataStatus(status))
                 } else {
                     Err(UpdateError::ArtifactStatus(status))
@@ -662,7 +684,9 @@ fn join_path(base: &Uri, suffix: &str) -> Result<Uri, UpdateError> {
 }
 
 fn resolve_redirect(base: &Uri, location: &str) -> Result<Uri, UpdateError> {
-    if let Ok(uri) = location.parse::<Uri>() {
+    if let Ok(uri) = location.parse::<Uri>()
+        && uri.scheme().is_some()
+    {
         return Ok(uri);
     }
     if !location.starts_with('/') {
@@ -681,7 +705,15 @@ fn trusted_redirect(original: &Uri, next: &Uri) -> bool {
     let Some(scheme) = next.scheme_str() else {
         return false;
     };
-    if scheme != "https" && scheme != "http" {
+    // HTTPS only; HTTP allowed solely for loopback test overrides.
+    if scheme == "http" {
+        let is_loopback = next
+            .host()
+            .is_some_and(|host| host == "127.0.0.1" || host == "localhost" || host == "[::1]");
+        if !is_loopback {
+            return false;
+        }
+    } else if scheme != "https" {
         return false;
     }
     if original.authority() == next.authority() {
@@ -1612,6 +1644,18 @@ fn recover_stale_lock(path: &Path, executable: &Path) -> Result<bool, UpdateErro
     let Some(recorded_path) = record.get("executable").and_then(serde_json::Value::as_str) else {
         return Ok(false);
     };
+    // PID reuse guard: a lock older than one hour is stale even if the pid
+    // still lives.
+    if let Some(created_at) = record.get("created_at").and_then(serde_json::Value::as_u64) {
+        let now = unix_timestamp();
+        if now.saturating_sub(created_at) > 3_600 {
+            match fs::remove_file(path) {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+                Err(error) => return Err(UpdateError::Io(error)),
+            }
+        }
+    }
     let expected_path = fs::canonicalize(executable).unwrap_or_else(|_| executable.to_owned());
     if recorded_path != expected_path.to_string_lossy()
         || pid == 0
@@ -1653,8 +1697,24 @@ where
     let parent = executable
         .parent()
         .ok_or(UpdateError::UnsupportedInstallPath)?;
-    let stage = parent.join(format!(".eggpool-update-{}.stage", std::process::id()));
-    let rollback = parent.join(format!(".eggpool-update-{}.rollback", std::process::id()));
+    // Random suffix so concurrent updaters cannot collide on pid-only names.
+    let nonce: u64 = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        std::process::id().hash(&mut hasher);
+        std::time::SystemTime::now().hash(&mut hasher);
+        std::thread::current().id().hash(&mut hasher);
+        hasher.finish()
+    };
+    let stage = parent.join(format!(
+        ".eggpool-update-{pid}-{nonce:x}.stage",
+        pid = std::process::id()
+    ));
+    let rollback = parent.join(format!(
+        ".eggpool-update-{pid}-{nonce:x}.rollback",
+        pid = std::process::id()
+    ));
     let result = async {
         write_private_stage(&stage, bytes)?;
         #[cfg(unix)]
@@ -1671,6 +1731,10 @@ where
         if fs::rename(&stage, executable).is_err() {
             let _ = fs::rename(&rollback, executable);
             return Err(UpdateError::ReplacementFailed);
+        }
+        // Fsync the parent directory so the rename survives a crash.
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
         }
         if self_check(executable, target).await.is_err() {
             let _ = fs::remove_file(executable);
@@ -1714,12 +1778,35 @@ fn validate_managed_executable(path: &Path) -> Result<(), UpdateError> {
         if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.nlink() > 1 {
             return Err(UpdateError::UnsafeExecutable);
         }
+        // Reject group/other-writable files.
+        if metadata.mode() & 0o022 != 0 {
+            return Err(UpdateError::UnsafeExecutable);
+        }
     }
     let parent = path.parent().ok_or(UpdateError::UnsupportedInstallPath)?;
     if !parent.is_dir() || fs::metadata(parent).is_err() {
         return Err(UpdateError::UnsupportedInstallPath);
     }
-    let probe = parent.join(format!(".eggpool-update-probe-{}", std::process::id()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(parent_metadata) = fs::metadata(parent) {
+            // Reject world-writable parents and parents not owned by euid.
+            if parent_metadata.mode() & 0o002 != 0
+                || parent_metadata.uid() != nix::unistd::geteuid().as_raw()
+            {
+                return Err(UpdateError::UnsafeExecutable);
+            }
+        }
+    }
+    let probe = parent.join(format!(
+        ".eggpool-update-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
     OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1757,13 +1844,27 @@ async fn self_check(path: &Path, target: &ReleaseVersion) -> Result<(), UpdateEr
         .await
         .map_err(|_| UpdateError::SelfCheckFailed)?
         .map_err(|_| UpdateError::SelfCheckFailed)?;
-    if !output.status.success()
-        || output.stdout.len() > MAX_SELF_CHECK_OUTPUT
-        || !output
-            .stdout
-            .windows(target.as_str().len())
-            .any(|window| window == target.as_str().as_bytes())
-    {
+    if !output.status.success() || output.stdout.len() > MAX_SELF_CHECK_OUTPUT {
+        return Err(UpdateError::SelfCheckFailed);
+    }
+    // Version proof: accept an `eggpool <version>` line or a bare version
+    // line, but reject error-shaped lines so `error: 0.8.0 not found` cannot
+    // false-pass on a substring.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let target_text = target.as_str();
+    let expected = format!("eggpool {target_text}");
+    let matched = stdout.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed == expected || trimmed == target_text {
+            return true;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("error") || lower.contains("not found") || lower.contains("fail") {
+            return false;
+        }
+        trimmed.contains(target_text)
+    });
+    if !matched {
         return Err(UpdateError::SelfCheckFailed);
     }
     Ok(())

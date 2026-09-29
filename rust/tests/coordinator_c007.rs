@@ -755,7 +755,7 @@ async fn finite_malformed_success_is_terminal_without_retry() {
         .await
         .expect("malformed executes terminally");
     assert_eq!(server.count(), 1, "malformed never retries");
-    assert_eq!(execution.response.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(execution.response.status, StatusCode::BAD_GATEWAY);
     execution.mark_started();
     let result = execution
         .complete(DownstreamResult::Delivered)
@@ -764,7 +764,7 @@ async fn finite_malformed_success_is_terminal_without_retry() {
     assert!(result.progress.completed);
     assert_eq!(server.count(), 1, "no post-handoff replay");
     let (status, _, _, _, _, _) = db_request_row(&fixture.database, proxy_id).await;
-    assert_eq!(status, "client_error");
+    assert_eq!(status, "error");
     server.join().await;
     fixture.database.close().await.expect("database closes");
 }

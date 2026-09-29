@@ -2353,6 +2353,10 @@ fn reload_exit_code(response: &crate::operations::control::ControlResponse) -> u
     match response.stage.as_str() {
         "reload_in_progress" => EXIT_RELOAD_BUSY,
         "preparation" | "reconciliation" | "commit" | "activation" => EXIT_PREPARATION_FAILED,
+        // Aborted/compensation failures surface as stage "error"; map them to
+        // preparation-failed instead of generic validation error.
+        "error" => EXIT_PREPARATION_FAILED,
+        "retirement" => EXIT_RELOAD_BUSY,
         _ => EXIT_VALIDATION,
     }
 }

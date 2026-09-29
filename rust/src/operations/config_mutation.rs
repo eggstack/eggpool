@@ -146,6 +146,9 @@ fn mutation_path(path: &Path) -> PathBuf {
 }
 
 fn lock_mutation(path: &Path) -> Result<MutationGuard, MutationError> {
+    // In-process only: concurrent CLI processes can still interleave
+    // read-modify-write cycles and lose updates. Callers needing
+    // cross-process safety must coordinate externally (e.g. `flock(2)`).
     let path = mutation_path(path);
     let paths = MUTATION_PATHS.get_or_init(|| Mutex::new(BTreeSet::new()));
     let mut active = paths.lock().unwrap_or_else(|e| e.into_inner());

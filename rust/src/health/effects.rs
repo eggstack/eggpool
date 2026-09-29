@@ -40,7 +40,7 @@ impl HealthEffect {
             category,
             model_id: None,
             upstream_model_id: None,
-            upstream_protocol: "openai".to_owned(),
+            upstream_protocol: "unknown".to_owned(),
             status_code: None,
             error_class: None,
             retry_after_seconds: None,

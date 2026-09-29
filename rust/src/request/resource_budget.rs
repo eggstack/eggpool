@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) const MIN_RAW_BODY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_RAW_BODY_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 static IN_USE_RAW_BODY_BYTES: OnceLock<AtomicUsize> = OnceLock::new();
 
 fn in_use() -> &'static AtomicUsize {
@@ -11,7 +12,9 @@ fn in_use() -> &'static AtomicUsize {
 }
 
 pub(crate) fn effective_ceiling(live_limit: usize) -> usize {
-    MIN_RAW_BODY_BUDGET_BYTES.max(live_limit)
+    MIN_RAW_BODY_BUDGET_BYTES
+        .max(live_limit)
+        .min(MAX_RAW_BODY_BUDGET_BYTES)
 }
 
 pub(crate) struct RawBodyReservation {
@@ -67,20 +70,33 @@ impl RawBodyReservation {
 
 impl Drop for RawBodyReservation {
     fn drop(&mut self) {
-        let prior = in_use().fetch_sub(self.amount, Ordering::AcqRel);
-        debug_assert!(prior >= self.amount);
+        let counter = in_use();
+        let mut current = counter.load(Ordering::Acquire);
+        loop {
+            let next = current.saturating_sub(self.amount);
+            match counter.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_RAW_BODY_BUDGET_BYTES, RawBodyReservation, effective_ceiling};
+    use super::{
+        MAX_RAW_BODY_BUDGET_BYTES, MIN_RAW_BODY_BUDGET_BYTES, RawBodyReservation, effective_ceiling,
+    };
 
     #[test]
     fn effective_budget_has_floor_and_tracks_large_live_limits() {
         assert_eq!(effective_ceiling(0), MIN_RAW_BODY_BUDGET_BYTES);
         assert_eq!(effective_ceiling(1), 64 * 1024 * 1024);
-        assert_eq!(effective_ceiling(1024 * 1024 * 1024), 1024 * 1024 * 1024);
+        assert_eq!(
+            effective_ceiling(1024 * 1024 * 1024),
+            MAX_RAW_BODY_BUDGET_BYTES
+        );
     }
 
     #[test]

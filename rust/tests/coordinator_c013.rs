@@ -337,9 +337,11 @@ async fn c013_wire_precedence_ttl_eviction_and_concurrency_are_bounded() {
         vec![chat.clone(), messages.clone()],
         base + Duration::from_secs(3),
     );
-    assert_eq!(
-        still_suppressed.candidates[0].surface(),
-        WireSurface::OpenaiChatCompletions
+    // A fixed pin is fail-closed: rejecting the pinned surface within its
+    // TTL yields no eligible candidates rather than falling back.
+    assert!(
+        still_suppressed.candidates.is_empty(),
+        "fixed pin with rejected surface is fail-closed"
     );
     let after_cooldown = resolver.resolve(
         "p",

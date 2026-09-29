@@ -72,11 +72,29 @@ impl Transaction {
     }
 
     pub fn advance(&mut self, next: Phase) -> Result<(), ConnectError> {
-        if next <= self.phase {
+        // Strict succession: skipping phases (e.g. Decoded->Committed
+        // bypassing backup) is rejected.
+        let expected = match self.phase {
+            Phase::Decoded => Phase::RemoteProfileValidated,
+            Phase::RemoteProfileValidated => Phase::ClientDetected,
+            Phase::ClientDetected => Phase::MutationPlanned,
+            Phase::MutationPlanned => Phase::BackupCommitted,
+            Phase::BackupCommitted => Phase::ConfigWritten,
+            Phase::ConfigWritten => Phase::LocalParseValidated,
+            Phase::LocalParseValidated => Phase::ClientNativeValidated,
+            Phase::ClientNativeValidated => Phase::Committed,
+            Phase::Committed => {
+                return Err(ConnectError::Io {
+                    detail: "transaction is already committed".to_owned(),
+                });
+            }
+        };
+        if next != expected {
             return Err(ConnectError::Io {
                 detail: format!(
-                    "transaction moved backwards from {} to {}",
+                    "transaction must advance from {} to {}, not {}",
                     self.phase.name(),
+                    expected.name(),
                     next.name()
                 ),
             });

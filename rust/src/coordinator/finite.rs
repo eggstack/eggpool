@@ -40,6 +40,18 @@ use super::{
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
 
+/// Map a wire-preparation failure to a downstream status and error class.
+/// Encoding overflow is a server-side wire limit (never a client error);
+/// adaptation rejections are upstream faults.
+fn wire_prep_failure(error: &AttemptError) -> (StatusCode, &'static str) {
+    match error {
+        AttemptError::Wire(crate::wire::WireRuntimeError::BodyTooLarge) => {
+            (StatusCode::PAYLOAD_TOO_LARGE, "RequestBodyTooLarge")
+        }
+        _ => (StatusCode::BAD_GATEWAY, "RequestAdaptation"),
+    }
+}
+
 /// The last upstream response received before terminal exhaustion. Python's
 /// `_handle_exhausted` prefers this real response over a synthetic envelope,
 /// so C007 retains it to preserve pass-through status/body semantics when
@@ -603,14 +615,22 @@ impl FiniteCoordinator {
                 // synthetic envelope when at least one dispatch returned.
                 if let (Some(identity), Some(last)) = (last_identity.clone(), last_upstream.clone())
                 {
+                    // Bound pass-through egress to the synthetic error envelope
+                    // (512 bytes) so a 10 MiB provider body cannot amplify.
+                    let body = if last.body.len() > MAX_CLIENT_ERROR_BYTES {
+                        Bytes::copy_from_slice(&last.body[..MAX_CLIENT_ERROR_BYTES])
+                    } else {
+                        last.body.clone()
+                    };
                     let response = self.client_response(
                         last.status,
                         &last.headers,
-                        last.body.clone(),
+                        body.clone(),
                         &request.proxy_request_id,
                         attempt_number.saturating_sub(1).max(1),
                     );
                     let upstream_protocol = identity.upstream_protocol.clone();
+                    let provider_bytes = body.len();
                     let data = self.failure_data(
                         &identity,
                         &upstream_protocol,
@@ -619,7 +639,7 @@ impl FiniteCoordinator {
                         last.upstream_request_id,
                         last.headers_elapsed,
                         request_bytes,
-                        last.body.len(),
+                        provider_bytes,
                     );
                     return Ok(self.pending_terminal(identity, None, response, data));
                 }
@@ -761,18 +781,19 @@ impl FiniteCoordinator {
                 {
                     Ok(value) => value,
                     Err(error) => {
+                        let (status, error_class) = wire_prep_failure(&error);
                         let response = self.error_response(
                             request.client_surface,
                             &request.proxy_request_id,
                             attempt_number,
-                            StatusCode::BAD_REQUEST,
+                            status,
                             "compact request could not be prepared for the selected provider",
                         );
-                        let data = self.local_failure_data(
+                        let data = self.upstream_prep_failure_data(
                             &identity,
                             &candidate.profile,
-                            StatusCode::BAD_REQUEST,
-                            "LocalPreparation",
+                            status,
+                            error_class,
                             request_bytes,
                         );
                         let _ = error;
@@ -791,18 +812,19 @@ impl FiniteCoordinator {
                 match self.attempts.prepare_borrowed(borrowed_input, admitted) {
                     Ok(value) => value,
                     Err(error) => {
+                        let (status, error_class) = wire_prep_failure(&error);
                         let response = self.error_response(
                             request.client_surface,
                             &request.proxy_request_id,
                             attempt_number,
-                            StatusCode::BAD_REQUEST,
+                            status,
                             "request could not be prepared for the selected provider",
                         );
-                        let data = self.local_failure_data(
+                        let data = self.upstream_prep_failure_data(
                             &identity,
                             &candidate.profile,
-                            StatusCode::BAD_REQUEST,
-                            "LocalPreparation",
+                            status,
+                            error_class,
                             request_bytes,
                         );
                         let _ = error;
@@ -1289,10 +1311,10 @@ impl FiniteCoordinator {
                     if first {
                         self.apply_effects(&published.claim, &effects);
                     }
-                    // M6 client-surface encoding (including loss rejection and
-                    // client-body bounds) failed after a decodable upstream
-                    // response. Python converges this as a client-error
-                    // terminal via _LocalDispatchError; never retry.
+                    // M6 client-surface encoding failed after a decodable upstream
+                    // response. The upstream payload arrived but could not be
+                    // adapted, so this is an upstream fault, never a client
+                    // error; never retry.
                     let error_class = match &error {
                         crate::wire::WireRuntimeError::BodyTooLarge => "ResponseBodyTooLarge",
                         _ => "ResponseAdaptation",
@@ -1301,13 +1323,13 @@ impl FiniteCoordinator {
                         request.client_surface,
                         &request.proxy_request_id,
                         attempt_number,
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_GATEWAY,
                         "provider response could not be adapted for the client",
                     );
-                    let data = self.local_failure_data(
+                    let data = self.upstream_prep_failure_data(
                         &identity,
                         &candidate.profile,
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_GATEWAY,
                         error_class,
                         request_bytes,
                     );
@@ -1338,7 +1360,7 @@ impl FiniteCoordinator {
                         .map(|body| body.bytes.clone())
                         .unwrap_or_else(|| Bytes::from_static(b"{}"));
                     let status = upstream.status;
-                    let provider_bytes = body.len();
+                    let bytes_emitted = client_body.len();
                     let upstream_request_id = upstream.upstream_request_id.clone();
                     let headers_elapsed = upstream.headers_elapsed;
                     let total_elapsed = request_start.elapsed();
@@ -1356,7 +1378,7 @@ impl FiniteCoordinator {
                         headers_elapsed,
                         total_elapsed,
                         request_bytes,
-                        provider_bytes,
+                        bytes_emitted,
                         upstream_request_id,
                     );
                     return Ok(self.pending_terminal(
@@ -1497,21 +1519,19 @@ impl FiniteCoordinator {
                         self.apply_effects(&published.claim, &effects);
                     }
                     // A 2xx body that M6 cannot decode as the selected
-                    // surface is a terminal client-error in Python
-                    // (_LocalDispatchError stage response_adaptation), not a
-                    // retryable upstream error. Converge with retained C006
-                    // ownership and never replay.
+                    // surface is upstream garbage, not a client error.
+                    // Converge with retained C006 ownership and never replay.
                     let response = self.error_response(
                         request.client_surface,
                         &request.proxy_request_id,
                         attempt_number,
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_GATEWAY,
                         "provider returned a malformed finite response",
                     );
-                    let data = self.local_failure_data(
+                    let data = self.upstream_prep_failure_data(
                         &identity,
                         &candidate.profile,
-                        StatusCode::INTERNAL_SERVER_ERROR,
+                        StatusCode::BAD_GATEWAY,
                         "MalformedResponse",
                         request_bytes,
                     );
@@ -1820,6 +1840,21 @@ impl FiniteCoordinator {
             upstream_protocol: Some(protocol_for_surface(profile.definition.surface).into()),
             ..FinalizationData::default()
         }
+    }
+
+    fn upstream_prep_failure_data(
+        &self,
+        identity: &FinalizationIdentity,
+        profile: &ConfiguredWireProfile,
+        status: StatusCode,
+        error_class: &str,
+        request_bytes: usize,
+    ) -> FinalizationData {
+        let mut data =
+            self.local_failure_data(identity, profile, status, error_class, request_bytes);
+        data.outcome = FinalizationOutcome::UpstreamError;
+        data.release_reason = Some("attempt_failed".into());
+        data
     }
 
     fn client_response(

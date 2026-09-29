@@ -277,6 +277,9 @@ pub fn build_eligible_candidates(
         candidate.score.tier = candidate.priority;
         candidate.score.requires_transcode = candidate.requires_transcode;
     }
+    // Intentional: higher priority tiers always beat lower tiers regardless
+    // of load; fairness rotation applies only within the same priority band.
+    // This strict tiering is operator-configured precedence, not starvation.
     scored.sort_by(|left, right| {
         let native_order = if policy.scorer.prefer_native {
             left.requires_transcode.cmp(&right.requires_transcode)
@@ -447,11 +450,17 @@ fn candidate_for_account(
         return None;
     }
     let resolved_protocol = provider_model.and_then(|model| model.protocol.clone());
-    let requires_transcode = facts.requested_protocol.as_ref().is_some_and(|requested| {
-        resolved_protocol
-            .as_ref()
-            .is_some_and(|resolved| resolved != requested)
-    });
+    // A catalog miss with a requested protocol must not masquerade as native:
+    // force transcode so scorer native preference and protocol_mismatch apply.
+    let requires_transcode = if resolved_protocol.is_none() && facts.requested_protocol.is_some() {
+        true
+    } else {
+        facts.requested_protocol.as_ref().is_some_and(|requested| {
+            resolved_protocol
+                .as_ref()
+                .is_some_and(|resolved| resolved != requested)
+        })
+    };
     if requires_transcode
         && facts
             .transcode_protocols

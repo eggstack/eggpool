@@ -44,11 +44,7 @@ def _require(value: object, label: str) -> str:
 
 def _check_no_unsupported_files(artifact_dir: Path, expected: set[str]) -> None:
     actual = {path.name for path in artifact_dir.rglob("*") if path.is_file()}
-    unexpected = sorted(
-        name
-        for name in actual - expected
-        if name.endswith((".whl", ".tar.gz")) or name.startswith("eggpool-")
-    )
+    unexpected = sorted(actual - expected)
     if unexpected:
         raise ValidationError(f"unsupported or unmanifested artifact: {unexpected[0]}")
 

@@ -55,7 +55,7 @@ CONNECT_TARGETS: Final = {
         "os": "windows",
         "arch": "x86_64",
         "kind": "pe",
-        "machine": 0,
+        "machine": 0x8664,
         "exe_suffix": ".exe",
     },
 }
@@ -88,6 +88,14 @@ def _native_kind_and_arch(payload: bytes) -> tuple[str, int]:
         endian = "<" if payload[:4] == b"\xcf\xfa\xed\xfe" else ">"
         return "macho", struct.unpack_from(f"{endian}I", payload, 4)[0]
     if payload.startswith(b"MZ") and len(payload) >= 64:
+        # Parse COFF Machine from e_lfanew.
+        e_lfanew = struct.unpack_from("<I", payload, 60)[0]
+        if (
+            e_lfanew + 6 <= len(payload)
+            and payload[e_lfanew : e_lfanew + 4] == b"PE\x00\x00"
+        ):
+            machine = struct.unpack_from("<H", payload, e_lfanew + 4)[0]
+            return "pe", machine
         return "pe", 0
     raise ConnectInspectionError("helper executable is not ELF, Mach-O, or PE")
 
@@ -137,7 +145,7 @@ def inspect_connect_artifact(
         raise ConnectInspectionError(
             "helper executable format disagrees with target class"
         )
-    if kind != "pe" and machine != target["machine"]:
+    if machine != target["machine"]:
         raise ConnectInspectionError(
             "helper executable arch disagrees with target class"
         )

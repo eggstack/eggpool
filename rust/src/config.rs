@@ -426,6 +426,8 @@ pub struct DashboardConfig {
     pub enabled: bool,
     pub public: bool,
     pub theme: String,
+    /// Deprecated unused key: the dashboard always uses embedded assets.
+    /// Retained for config compatibility; has no effect.
     pub themes_dir: Option<String>,
     pub retain_request_stats_days: u64,
     pub retain_event_days: u64,
@@ -1621,6 +1623,16 @@ impl Config {
         {
             return Err(ConfigError::validation(
                 "server.max_request_body_bytes must be greater than zero and no greater than 1 GiB",
+            ));
+        }
+        if self.metrics.flush_interval_s == 0 {
+            return Err(ConfigError::validation(
+                "metrics.flush_interval_s must be greater than zero",
+            ));
+        }
+        if self.metrics.cleanup_interval_s == 0 {
+            return Err(ConfigError::validation(
+                "metrics.cleanup_interval_s must be greater than zero",
             ));
         }
         let wire = &self.routing.wire_negotiation;

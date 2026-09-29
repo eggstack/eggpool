@@ -217,6 +217,11 @@ pub fn validate_codex_catalog_json(
     catalog_json: &str,
     api_key: &str,
 ) -> Result<usize, ClientConfigError> {
+    if catalog_json.len() > 1024 * 1024 {
+        return Err(ClientConfigError::TooLarge {
+            detail: "Codex catalog exceeds 1 MiB".to_owned(),
+        });
+    }
     let value: Value = serde_json::from_str(catalog_json)?;
     let models = value
         .get("models")
@@ -224,6 +229,11 @@ pub fn validate_codex_catalog_json(
         .ok_or_else(|| ClientConfigError::Drift {
             detail: "Codex catalog is missing the models array".to_owned(),
         })?;
+    if models.len() > 1000 {
+        return Err(ClientConfigError::TooLarge {
+            detail: "Codex catalog exceeds 1000 models".to_owned(),
+        });
+    }
     for model in models {
         let object = model.as_object().ok_or_else(|| ClientConfigError::Drift {
             detail: "Codex catalog entry is not an object".to_owned(),
@@ -261,6 +271,20 @@ pub fn validate_codex_catalog_json(
             return Err(ClientConfigError::Drift {
                 detail: "Codex catalog entry is missing supported_reasoning_levels".to_owned(),
             });
+        }
+        // Full builder contract: visibility, shell_type, supported_in_api,
+        // input_modalities must be present.
+        for field in [
+            "visibility",
+            "shell_type",
+            "supported_in_api",
+            "input_modalities",
+        ] {
+            if object.get(field).is_none() {
+                return Err(ClientConfigError::Drift {
+                    detail: format!("Codex catalog entry is missing {field}"),
+                });
+            }
         }
         let has_base_instructions = object
             .get("base_instructions")

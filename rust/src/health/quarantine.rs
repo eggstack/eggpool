@@ -14,6 +14,41 @@ use super::MAX_NONTERMINAL_BACKOFF_SECONDS;
 pub const DEFAULT_SUSPECTED_TTL: f64 = 120.0;
 pub const DEFAULT_QUARANTINED_TTL: f64 = 300.0;
 pub const DEFAULT_PROMOTION_THRESHOLD: u32 = 2;
+const QUARANTINE_ENTRY_HARD_CAP: usize = 4_096;
+
+fn prune_to_cap(entries: &mut BTreeMap<QuarantineKey, QuarantineEntry>, now: f64) {
+    if entries.len() <= QUARANTINE_ENTRY_HARD_CAP {
+        return;
+    }
+    // Drop expired entries first.
+    let expired: Vec<QuarantineKey> = entries
+        .iter()
+        .filter(|(_, entry)| {
+            entry.state != QuarantineState::TerminalWithdrawn
+                && entry.expiry.is_some_and(|expiry| now >= expiry)
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in expired {
+        entries.remove(&key);
+        if entries.len() <= QUARANTINE_ENTRY_HARD_CAP {
+            return;
+        }
+    }
+    // Evict oldest by last_observed (never terminal first).
+    while entries.len() > QUARANTINE_ENTRY_HARD_CAP {
+        let oldest = entries
+            .iter()
+            .filter(|(_, entry)| entry.state != QuarantineState::TerminalWithdrawn)
+            .min_by(|left, right| left.1.last_observed.total_cmp(&right.1.last_observed))
+            .map(|(key, _)| key.clone())
+            .or_else(|| entries.keys().next().cloned());
+        let Some(oldest) = oldest else {
+            break;
+        };
+        entries.remove(&oldest);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,7 +259,9 @@ impl ModelQuarantine {
         };
         matches!(
             entry.state,
-            QuarantineState::Suspected | QuarantineState::Quarantined
+            QuarantineState::Suspected
+                | QuarantineState::Quarantined
+                | QuarantineState::TerminalWithdrawn
         ) && entry.expiry.is_none_or(|expiry| now < expiry)
     }
 
@@ -309,6 +346,7 @@ impl ModelQuarantine {
             last_error_class: error_class,
         };
         entries.insert(key, entry.clone());
+        prune_to_cap(&mut entries, now);
         entry
     }
 
@@ -340,10 +378,12 @@ impl ModelQuarantine {
             last_status_code: None,
             last_error_class: None,
         };
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(key, entry.clone());
+            .unwrap_or_else(|error| error.into_inner());
+        entries.insert(key, entry.clone());
+        prune_to_cap(&mut entries, now);
         Ok(entry)
     }
 
@@ -431,6 +471,7 @@ impl ModelQuarantine {
             return;
         }
         entries.insert(entry.key.clone(), entry);
+        prune_to_cap(&mut entries, now);
     }
 
     fn clear_key(&self, key: &QuarantineKey, reason: &str, now: f64, allow_terminal: bool) -> bool {

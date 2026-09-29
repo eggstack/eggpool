@@ -870,8 +870,13 @@ pub async fn execute_compact_finite(
     proxy_request_id: String,
 ) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
     const SURFACE: ClientSurface = ClientSurface::Responses;
-    let parsed = parse_request_body(raw_body, state.max_body_bytes)
-        .map_err(|_| EndpointError::InvalidJson)?;
+    let parsed =
+        parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
+            AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
+            AdmissionError::InvalidJson(_) => EndpointError::InvalidJson,
+            AdmissionError::TopLevelNotObject => EndpointError::InvalidJson,
+            _ => EndpointError::Admission,
+        })?;
     let payload = parsed.object()?;
     if let Some(rejection) = validate_responses_stateless(payload) {
         return Err(EndpointError::StatelessViolation(rejection));
@@ -1189,7 +1194,9 @@ fn fallback_profiles(provider_id: &str, provider: &ProviderConfig) -> Vec<Config
     for protocol in &provider.protocols {
         let surface = match protocol.as_str() {
             "anthropic" => WireSurface::AnthropicMessages,
-            _ => WireSurface::OpenaiChatCompletions,
+            "openai" => WireSurface::OpenaiChatCompletions,
+            "gemini" => WireSurface::GeminiGenerateContent,
+            _ => continue,
         };
         let (request_codec, response_codec, stream_codec) = match surface {
             WireSurface::OpenaiChatCompletions => (
@@ -1201,6 +1208,11 @@ fn fallback_profiles(provider_id: &str, provider: &ProviderConfig) -> Vec<Config
                 WireCodecId::AnthropicMessages,
                 WireCodecId::AnthropicMessages,
                 WireCodecId::AnthropicMessagesSse,
+            ),
+            WireSurface::GeminiGenerateContent => (
+                WireCodecId::GeminiGenerateContent,
+                WireCodecId::GeminiGenerateContent,
+                WireCodecId::GeminiGenerateContentSse,
             ),
             _ => continue,
         };

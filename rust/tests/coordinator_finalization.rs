@@ -383,8 +383,8 @@ fn failure_policy_keeps_wire_account_and_handoff_scopes_distinct() {
 fn failure_policy_distinguishes_ambiguous_credentials_and_model_evidence() {
     let ambiguous = FailureObservation::response(1, 1, http::StatusCode::UNAUTHORIZED);
     let effects = classify(&ambiguous, RetryPolicy::default());
-    assert_eq!(effects.account_effect, "none");
-    assert!(!effects.retry);
+    assert_eq!(effects.account_effect, "failure");
+    assert!(effects.retry);
 
     let explicit = FailureObservation::response(1, 1, http::StatusCode::UNAUTHORIZED)
         .signal("credential_invalid");

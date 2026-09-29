@@ -92,6 +92,9 @@ impl AccountHealth {
     }
 
     fn is_model_disabled(&self, model_id: &str, now: f64) -> bool {
+        if self.terminal_models.contains(model_id) {
+            return true;
+        }
         if self.is_disabled(now) {
             return true;
         }
@@ -187,11 +190,42 @@ impl HealthManager {
     }
 
     pub fn snapshot(&self, account_name: &str) -> Option<AccountHealthSnapshot> {
-        self.accounts
+        let now = self.now();
+        let mut accounts = self
+            .accounts
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(account_name)
-            .map(AccountHealth::snapshot)
+            .unwrap_or_else(|error| error.into_inner());
+        let account = accounts.get_mut(account_name)?;
+        // Lazily normalize expired timed disables so diagnostics agree with
+        // gating instead of reporting healthy-gated accounts as unhealthy.
+        if account.disabled_until.is_some_and(|until| now >= until)
+            && account.health_state != "authentication_failed"
+        {
+            account.disabled_until = None;
+            account.disabled_reason.clear();
+            account.is_healthy = true;
+            if account.health_state == "disabled" {
+                account.health_state = "healthy".to_owned();
+            }
+        }
+        // Lazily drop expired per-model disables for the same reason.
+        let expired_models: Vec<String> = account
+            .disabled_models
+            .iter()
+            .filter_map(|(model, until)| {
+                if until.is_some_and(|expiry| now >= expiry)
+                    && !account.terminal_models.contains(model)
+                {
+                    Some(model.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for model in expired_models {
+            account.disabled_models.remove(&model);
+        }
+        Some(account.snapshot())
     }
 
     pub fn get_account_health(&self, account_name: &str) -> Option<AccountHealthSnapshot> {
@@ -461,7 +495,13 @@ impl HealthManager {
         let mut applied = 0;
         for record in records {
             let Some(account_name) = account_names.get(&record.account_id) else {
-                return Err(HealthManagerError::UnknownAccount(record.account_id));
+                // Skip-and-warn on stale rows so one unknown account does not
+                // fail-closed the entire hydration batch.
+                eprintln!(
+                    "health hydrate: skipping backoff for unknown account {}",
+                    record.account_id
+                );
+                continue;
             };
             let reason = record.reason;
             if reason == BackoffReason::AuthenticationFailed {

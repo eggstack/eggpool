@@ -544,7 +544,9 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         ReloadDisposition::RestartRequired,
     ),
     ("dashboard.theme", ReloadDisposition::RestartRequired),
-    ("dashboard.themes_dir", ReloadDisposition::RestartRequired),
+    // Deprecated unused key (embedded dashboard assets); changing it is a
+    // no-op and never requires a restart.
+    ("dashboard.themes_dir", ReloadDisposition::Live),
     (
         "database.busy_timeout_ms",
         ReloadDisposition::RestartRequired,

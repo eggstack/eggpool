@@ -48,11 +48,16 @@ pub(super) async fn integration_profile(
         }
     };
     let config = lease.generation().config().clone();
-    let base_url = config
-        .integrations
-        .advertise_base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://{}:{}/v1", config.server.host, config.server.port));
+    let base_url = match crate::operations::integrations::resolve_advertised_base_url(&config, None)
+    {
+        Ok(url) => url,
+        Err(_) => {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": "integration profile unavailable"}),
+            );
+        }
+    };
     let profile = match crate::operations::integrations::build_integration_profile(
         &config,
         &state.database,
@@ -168,7 +173,10 @@ pub(super) async fn runtime_status(State(state): State<AppState>) -> Response {
     let runtime_manager = diagnostics
         .as_ref()
         .and_then(|snapshot| serde_json::to_value(snapshot).ok());
+    let degraded = state.process.is_none();
     let body = json!({
+        "status": if degraded { "degraded" } else { "ok" },
+        "degraded": degraded,
         "server": {
             "pid": std::process::id(),
             "ppid": parent_pid(),

@@ -683,6 +683,17 @@ impl SemanticSelector {
         }
         let body = serde_json::to_vec(&Value::Object(body_payload))
             .map_err(|error| SelectorDispatchError::Encode(error.to_string()))?;
+        // Selector dispatches allocate an extra retained body outside the
+        // ingress admission budget. Reserve backpressure budget first so
+        // virtual requests cannot bypass body limits.
+        let _selector_reservation =
+            crate::request::resource_budget::RawBodyReservation::try_acquire(
+                body.len(),
+                crate::request::resource_budget::MAX_RAW_BODY_BUDGET_BYTES,
+            )
+            .ok_or_else(|| {
+                SelectorDispatchError::Admission("selector body budget exhausted".into())
+            })?;
         let mut request = FiniteRequest::new(
             next_selector_request_id(&router.virtual_model),
             Bytes::from(body),
