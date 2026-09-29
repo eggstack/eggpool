@@ -166,14 +166,13 @@ impl EndpointError {
             | Self::InvalidStream
             | Self::Admission => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::NoEligibleRoute
-            | Self::MissingProvider { .. }
-            | Self::MissingWireProfile { .. }
-            | Self::Claim
-            | Self::Attempt
-            | Self::Finalization => StatusCode::SERVICE_UNAVAILABLE,
+            Self::NoEligibleRoute | Self::Claim | Self::Attempt | Self::Finalization => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::PublicationConflict => StatusCode::CONFLICT,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -245,6 +244,8 @@ pub fn parse_provider_qualified_model(
     let Some((base, candidate)) = normalized.rsplit_once('/') else {
         return (normalized, None);
     };
+    let base = base.trim();
+    let candidate = candidate.trim();
     if base.is_empty() || candidate.is_empty() {
         return (normalized, None);
     }
@@ -476,7 +477,10 @@ fn map_publication_error(error: super::PublicationError) -> EndpointError {
         super::PublicationError::ClaimIdentity(_)
         | super::PublicationError::Claim(_)
         | super::PublicationError::Compensation { .. } => EndpointError::Claim,
-        _ => EndpointError::Attempt,
+        super::PublicationError::Database(_)
+        | super::PublicationError::PostCommit { .. }
+        | super::PublicationError::Injected { .. }
+        | super::PublicationError::PriorAttemptNotFinalized => EndpointError::Internal,
     }
 }
 
@@ -893,6 +897,9 @@ pub async fn execute_compact_finite(
     .map_err(EndpointError::from)?;
     if compact.canonical.model != resolved.concrete_model {
         return Err(EndpointError::Admission);
+    }
+    if resolved.concrete_body.len() > state.max_body_bytes {
+        return Err(EndpointError::BodyTooLarge);
     }
     let mut routing_facts = compact.routing_facts(state.routing_inputs(SURFACE));
     routing_facts.provider_id = resolved.provider_id.clone();

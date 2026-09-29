@@ -349,7 +349,8 @@ fn validate_production_package_authority(
             environment,
             ..
         } => {
-            let manager = fs::canonicalize(manager).unwrap_or_default();
+            let manager =
+                fs::canonicalize(manager).map_err(crate::operations::deploy::DeployError::Io)?;
             let expected_home = Path::new(deploy::PRODUCTION_PACKAGE_HOME);
             manager.is_absolute()
                 && !manager.starts_with("/root")

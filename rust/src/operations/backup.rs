@@ -411,7 +411,9 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
             CONFIG_BASENAME => config = Some(bytes),
             ENV_BASENAME => env = Some(bytes),
             DB_BASENAME => database = Some(bytes),
-            _ => unreachable!(),
+            _ => {
+                return Err(BackupError::InvalidArchive("unknown member".to_owned()));
+            }
         }
     }
     let metadata =

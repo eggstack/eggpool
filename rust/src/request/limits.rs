@@ -45,7 +45,7 @@ pub fn estimate_reservation_tokens(body: &[u8]) -> u64 {
 pub fn estimate_context_input_tokens(body: &[u8], value: &Value, extra_input_tokens: u64) -> u64 {
     let payload_estimate = estimate_json_value_tokens(value);
     let byte_floor = ceil_div(body.len() as u64, ESTIMATED_CONTEXT_BYTES_PER_TOKEN_FLOOR);
-    payload_estimate.max(
+    payload_estimate.saturating_add(extra_input_tokens).max(
         byte_floor
             .saturating_add(extra_input_tokens)
             .max(CONTEXT_ESTIMATE_MIN_TOKENS),

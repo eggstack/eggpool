@@ -498,9 +498,9 @@ impl QuotaEstimator {
         require_non_negative(tokens, "reservation tokens")?;
         require_non_negative(cost, "reservation cost")?;
         let mut state = self.lock();
-        subtract_counter(&mut state.reserved_requests, account_name, requests);
-        subtract_counter(&mut state.reserved_tokens, account_name, tokens);
-        subtract_counter(&mut state.reserved_cost, account_name, cost);
+        checked_subtract_counter(&mut state.reserved_requests, account_name, requests)?;
+        checked_subtract_counter(&mut state.reserved_tokens, account_name, tokens)?;
+        checked_subtract_counter(&mut state.reserved_cost, account_name, cost)?;
         sync_mirrors(&mut state, account_name);
         Ok(())
     }
@@ -593,9 +593,19 @@ fn add_counter(map: &mut BTreeMap<String, i64>, name: &str, value: i64) {
     map.insert(name.to_owned(), saturating_add(current, value));
 }
 
-fn subtract_counter(map: &mut BTreeMap<String, i64>, name: &str, value: i64) {
+fn checked_subtract_counter(
+    map: &mut BTreeMap<String, i64>,
+    name: &str,
+    value: i64,
+) -> Result<(), QuotaInvariantError> {
     let current = *map.get(name).unwrap_or(&0);
-    map.insert(name.to_owned(), (current - value).max(0));
+    if current < value {
+        return Err(QuotaInvariantError::ReservationOwnershipUnderflow {
+            account: name.to_owned(),
+        });
+    }
+    map.insert(name.to_owned(), current - value);
+    Ok(())
 }
 
 fn sync_mirrors(state: &mut EstimatorState, name: &str) {

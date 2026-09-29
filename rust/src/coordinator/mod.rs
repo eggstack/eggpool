@@ -22,7 +22,7 @@ pub use attempt::{
 pub use failure::{
     EffectLedger, EffectLedgerError, FailureCategory, FailureDecisionEngine, FailureEffects,
     FailureObservation, FailureSource, NextAction, ProviderModelPresence, RetryPolicy, RetryScope,
-    classify, parse_retry_after,
+    classify, is_wire_rejection_signal, parse_retry_after,
 };
 pub use finalization::{
     DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationDrainError,

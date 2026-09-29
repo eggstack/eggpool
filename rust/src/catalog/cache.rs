@@ -962,9 +962,30 @@ impl ModelCatalogCache {
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect(),
-                toggle: CapabilityStatus::Unknown,
-                effort: CapabilityStatus::Unknown,
-                budget: CapabilityStatus::Unknown,
+                toggle: if rows
+                    .iter()
+                    .all(|row| row.thinking.toggle == rows[0].thinking.toggle)
+                {
+                    rows[0].thinking.toggle
+                } else {
+                    CapabilityStatus::Unknown
+                },
+                effort: if rows
+                    .iter()
+                    .all(|row| row.thinking.effort == rows[0].thinking.effort)
+                {
+                    rows[0].thinking.effort
+                } else {
+                    CapabilityStatus::Unknown
+                },
+                budget: if rows
+                    .iter()
+                    .all(|row| row.thinking.budget == rows[0].thinking.budget)
+                {
+                    rows[0].thinking.budget
+                } else {
+                    CapabilityStatus::Unknown
+                },
                 budget_tokens_min: rows
                     .iter()
                     .filter_map(|row| row.thinking.budget_tokens_min)
@@ -1239,6 +1260,8 @@ pub fn parse_model_provider(
     let Some((base, candidate)) = normalized.rsplit_once('/') else {
         return (normalized.into(), None);
     };
+    let base = base.trim();
+    let candidate = candidate.trim();
     if base.is_empty() || candidate.is_empty() || !known_providers.contains(candidate) {
         return (normalized.into(), None);
     }

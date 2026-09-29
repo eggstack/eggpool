@@ -552,6 +552,9 @@ impl RoutingRouter {
             .iter()
             .map(|index| band[*index].clone())
             .collect();
+        // Random preview (`apply=false`) returns identity order without
+        // committing a random choice; it must not claim to have applied.
+        let preview = self.state.policy.fairness_mode == FairnessMode::Random && !apply;
         let decision = FairnessDecision {
             mode: match self.state.policy.fairness_mode {
                 FairnessMode::RoundRobin => "round_robin",
@@ -559,16 +562,24 @@ impl RoutingRouter {
                 FairnessMode::Off => "off",
             }
             .into(),
-            applied: true,
+            applied: !preview,
             key: key.to_key_string(),
             scope: self.scope_name(),
             candidate_count: band.len(),
             anchor_score: Some(best.score.final_score()),
-            selected_index: Some(0),
-            selected_account_name: ordered_band
-                .first()
-                .map(|candidate| candidate.account_name.clone()),
-            reason: "ok".into(),
+            selected_index: if preview { None } else { Some(0) },
+            selected_account_name: if preview {
+                None
+            } else {
+                ordered_band
+                    .first()
+                    .map(|candidate| candidate.account_name.clone())
+            },
+            reason: if preview {
+                "preview".into()
+            } else {
+                "ok".into()
+            },
             ordered_accounts: ordered_band
                 .iter()
                 .map(|candidate| candidate.account_name.clone())

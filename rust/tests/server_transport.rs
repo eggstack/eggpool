@@ -645,7 +645,7 @@ async fn eggpool_live_body_limit_applies_to_content_length_and_chunked_bodies() 
 }
 
 #[tokio::test]
-async fn aggregate_unknown_body_admission_rejects_without_reading_and_recovers() {
+async fn aggregate_unknown_body_admission_uses_small_reservation_and_recovers() {
     let (_directory, database, runtime) = runtime_fixture_with_body_limit(64 * 1024 * 1024).await;
     let handle = runtime.handle();
     let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -662,13 +662,17 @@ async fn aggregate_unknown_body_admission_rejects_without_reading_and_recovers()
         .await
         .expect("send first upload headers");
 
-    let rejected = request(
+    // Missing-length requests take a small initial reservation (not the full
+    // limit), so a second concurrent chunked upload is admitted to body
+    // reading instead of being rejected pre-read with 503. The terminated
+    // empty body fails admission downstream, never with 503.
+    let second = request(
         address,
-        b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+        b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n0\r\n\r\n",
     )
     .await;
-    assert!(rejected.starts_with("HTTP/1.1 503"), "{rejected}");
-    assert!(!rejected.contains("67108864"), "{rejected}");
+    assert!(!second.starts_with("HTTP/1.1 503"), "{second}");
+    assert!(!second.contains("67108864"), "{second}");
     drop(admitted);
 
     let recovery = request(

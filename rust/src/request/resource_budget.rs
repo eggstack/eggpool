@@ -35,6 +35,30 @@ impl RawBodyReservation {
         }
     }
 
+    pub(crate) fn try_grow(&mut self, additional: usize, ceiling: usize) -> bool {
+        if additional == 0 {
+            return true;
+        }
+        let counter = in_use();
+        let mut current = counter.load(Ordering::Acquire);
+        loop {
+            let Some(next) = current.checked_add(additional) else {
+                return false;
+            };
+            if next > ceiling {
+                return false;
+            }
+            match counter.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    self.amount = self.amount.saturating_add(additional);
+                    return true;
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
     #[cfg(test)]
     fn in_use_for_test() -> usize {
         in_use().load(Ordering::Acquire)

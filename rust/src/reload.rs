@@ -428,7 +428,14 @@ impl ReloadService {
             );
         }
         let expected_generation = active.generation_id();
-        let generation_id = expected_generation.saturating_add(1);
+        let Some(generation_id) = expected_generation.checked_add(1) else {
+            return self.result_with_diff(
+                ReloadResultCategory::Aborted,
+                "generation_id_exhausted",
+                &diff,
+                false,
+            );
+        };
         let (persistence, durable_accounts) = match PersistenceDelta::prepare(
             &self.process.database(),
             &old_config,

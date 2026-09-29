@@ -1547,14 +1547,14 @@ impl FiniteCoordinator {
         let mut observation = FailureObservation::response(
             identity.attempt_id,
             attempt_number,
-            status.unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            status.unwrap_or(StatusCode::BAD_GATEWAY),
         );
         observation.source = source;
         observation.status = status.map(|value| value.as_u16());
         observation.category_hint = category_hint;
         observation.response_started = false;
         observation.downstream_started = false;
-        observation.wire_rejection = signal.is_some();
+        observation.wire_rejection = signal.is_some_and(super::is_wire_rejection_signal);
         observation.provider_id = Some(identity.provider_id.clone());
         observation.account_name = Some(identity.account_name.clone());
         observation.model_id = Some(identity.model_id.clone());

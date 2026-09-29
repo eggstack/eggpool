@@ -1,5 +1,6 @@
-use super::inference::error_body_response;
+use super::inference::{error_body_response, surface_for_path};
 use super::*;
+use crate::coordinator::endpoint_error_body;
 
 pub(super) async fn authenticate(
     State(state): State<AppState>,
@@ -83,18 +84,25 @@ pub(super) async fn admit_inference_body(
     if !is_inference_path(request.uri().path()) {
         return next.run(request).await;
     }
+    let surface = surface_for_path(request.uri().path());
     let lease = match state.runtime.acquire().await {
         Ok(lease) => lease,
         Err(error) => {
             return error_body_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                ClientSurface::ChatCompletions,
-                format!(r#"{{"detail":"{}"}}"#, error).into_bytes(),
+                surface,
+                endpoint_error_body(surface, &error.to_string()),
             );
         }
     };
-    let limit = usize::try_from(lease.generation().config().server.max_request_body_bytes)
-        .unwrap_or(usize::MAX);
+    let Ok(limit) = usize::try_from(lease.generation().config().server.max_request_body_bytes)
+    else {
+        return error_body_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            surface,
+            endpoint_error_body(surface, "Invalid body limit"),
+        );
+    };
     let ceiling = crate::request::resource_budget::effective_ceiling(limit);
     let declared_length = request
         .headers()
@@ -107,14 +115,21 @@ pub(super) async fn admit_inference_body(
             json!({"detail": "Request body too large"}),
         );
     }
-    let reservation_size = declared_length.unwrap_or(limit);
-    let Some(reservation) =
-        crate::request::resource_budget::RawBodyReservation::try_acquire(reservation_size, ceiling)
-    else {
+    // Small initial reservation avoids exhausting the process budget on
+    // missing/large declarations; the actual byte count is accounted after
+    // collection so lying declarations cannot under-reserve.
+    const INITIAL_RESERVATION_BYTES: usize = 32 * 1024;
+    let initial_reservation = declared_length
+        .map(|length| length.min(INITIAL_RESERVATION_BYTES))
+        .unwrap_or(INITIAL_RESERVATION_BYTES);
+    let Some(mut reservation) = crate::request::resource_budget::RawBodyReservation::try_acquire(
+        initial_reservation,
+        ceiling,
+    ) else {
         return error_body_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            ClientSurface::ChatCompletions,
-            br#"{"detail":"Service unavailable"}"#.to_vec(),
+            surface,
+            endpoint_error_body(surface, "Service unavailable"),
         );
     };
     let body = std::mem::replace(request.body_mut(), Body::empty());
@@ -129,6 +144,14 @@ pub(super) async fn admit_inference_body(
             );
         }
     };
+    let overage = collected.len().saturating_sub(initial_reservation);
+    if !reservation.try_grow(overage, ceiling) {
+        return error_body_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            surface,
+            endpoint_error_body(surface, "Service unavailable"),
+        );
+    }
     request.extensions_mut().insert(Arc::new(lease));
     request.extensions_mut().insert(Arc::new(reservation));
     *request.body_mut() = Body::from(collected);
@@ -188,11 +211,16 @@ pub(super) fn verify_api_key(headers: &HeaderMap, expected: &str) -> bool {
         .unwrap_or("");
     let left = fixed_key(provided);
     let right = fixed_key(expected);
+    // Always fold over the full 512-byte pads before combining with the
+    // shape bits, so shape validity does not short-circuit the compare.
     let different = left
         .iter()
         .zip(right.iter())
         .fold(0u8, |accumulator, (a, b)| accumulator | (a ^ b));
-    valid_key_shape(provided) && valid_key_shape(expected) && different == 0
+    let provided_ok = u8::from(valid_key_shape(provided));
+    let expected_ok = u8::from(valid_key_shape(expected));
+    let match_ok = u8::from(different == 0);
+    (provided_ok & expected_ok & match_ok) == 1
 }
 
 pub(super) fn fixed_key(value: &str) -> [u8; 512] {
@@ -206,9 +234,5 @@ pub(super) fn fixed_key(value: &str) -> [u8; 512] {
 }
 
 pub(super) fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim().trim_matches(['[', ']']);
-    normalized == "localhost"
-        || normalized == "127.0.0.1"
-        || normalized == "::1"
-        || normalized == "0:0:0:0:0:0:0:1"
+    crate::config::is_loopback_host(host)
 }

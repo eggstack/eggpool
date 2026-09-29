@@ -4,7 +4,10 @@
 //! surface.  It retains only bounded scalar timing and pragma facts in memory.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use serde::Serialize;
 
@@ -42,6 +45,7 @@ pub struct QualificationDbSnapshot {
     pub effective: QualificationEffectivePragmas,
     pub latest_record_seq: u64,
     pub records: Vec<QualificationTransactionRecord>,
+    pub dropped_records: u64,
     pub checkpoint_maintenance: QualificationCheckpointMaintenance,
 }
 
@@ -82,6 +86,7 @@ struct CollectorState {
 #[derive(Debug)]
 pub(crate) struct QualificationCollector {
     state: Mutex<CollectorState>,
+    dropped_records: AtomicU64,
 }
 
 impl QualificationCollector {
@@ -92,6 +97,7 @@ impl QualificationCollector {
                 next_record_seq: 0,
                 records: VecDeque::with_capacity(RECORD_CAPACITY),
             }),
+            dropped_records: AtomicU64::new(0),
         }
     }
 
@@ -105,7 +111,9 @@ impl QualificationCollector {
     pub(crate) fn record(&self, input: QualificationRecordInput) {
         // Recording is deliberately best-effort: a concurrent read of the
         // authenticated projection must never make a transaction wait.
+        // Contended drops are counted so sequence gaps are explainable.
         let Ok(mut state) = self.state.try_lock() else {
+            self.dropped_records.fetch_add(1, Ordering::Relaxed);
             return;
         };
         state.next_record_seq = state.next_record_seq.saturating_add(1);
@@ -128,13 +136,16 @@ impl QualificationCollector {
     }
 
     pub(crate) fn snapshot(&self) -> Option<QualificationDbSnapshot> {
-        let state = self.state.lock().ok()?;
+        // Poison indicates a prior holder panicked: rebuild rather than hide
+        // effective pragmas. `None` is reserved for "pragmas not captured yet".
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         Some(QualificationDbSnapshot {
             schema_version: SCHEMA_VERSION.to_owned(),
             collector_capacity: RECORD_CAPACITY,
             effective: state.effective.clone()?,
             latest_record_seq: state.next_record_seq,
             records: state.records.iter().cloned().collect(),
+            dropped_records: self.dropped_records.load(Ordering::Relaxed),
             checkpoint_maintenance: QualificationCheckpointMaintenance {
                 soft_threshold_frames: 0,
                 not_due: 0,

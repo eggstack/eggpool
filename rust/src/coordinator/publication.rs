@@ -327,7 +327,9 @@ impl PublicationService {
                     Ok(ClaimTransition::RolledBack | ClaimTransition::AlreadyTransitioned) => {
                         Ok(PublicationOutcome::AlreadyPublished(identity))
                     }
-                    Ok(_) => unreachable!("rollback returned a conversion transition"),
+                    Ok(transition) => Err(PublicationError::InvalidInput(format!(
+                        "unexpected claim transition after duplicate publication: {transition:?}"
+                    ))),
                     Err(compensation) => Err(PublicationError::Claim(compensation)),
                 },
                 TransactionOutcome::Conflict => self.rollback_after_error(
@@ -336,8 +338,12 @@ impl PublicationService {
                         proxy_request_id: input.proxy_request_id,
                     },
                 ),
-                TransactionOutcome::Created { .. } => unreachable!(),
-                TransactionOutcome::PriorAttemptNotFinalized => unreachable!(),
+                TransactionOutcome::Created { .. } => Err(PublicationError::InvalidInput(
+                    "unexpected created outcome after duplicate-publication branch".to_owned(),
+                )),
+                TransactionOutcome::PriorAttemptNotFinalized => {
+                    self.rollback_after_error(claim, PublicationError::PriorAttemptNotFinalized)
+                }
             };
         };
 
@@ -523,7 +529,7 @@ impl PublicationService {
                             provider_id: existing_provider_id,
                             model_id: existing_model_id.clone(),
                             upstream_model_id: existing_model_id,
-                            client_protocol: existing_protocol,
+                            client_protocol: input.client_protocol,
                             upstream_protocol,
                             attempt_number: input.attempt_number,
                         }));
@@ -774,7 +780,9 @@ impl PublicationService {
     ) -> Result<PublicationOutcome, PublicationError> {
         match claim.rollback_claim() {
             Ok(ClaimTransition::RolledBack | ClaimTransition::AlreadyTransitioned) => Err(primary),
-            Ok(_) => unreachable!("rollback returned a conversion transition"),
+            Ok(transition) => Err(PublicationError::InvalidInput(format!(
+                "unexpected claim transition during rollback: {transition:?}"
+            ))),
             Err(compensation) => Err(PublicationError::Compensation {
                 primary: Box::new(primary),
                 compensation,

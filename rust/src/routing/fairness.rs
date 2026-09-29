@@ -154,7 +154,13 @@ impl FairnessRotor {
             return;
         }
         let key = key.to_key_string();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        // Rebuild on poison: a panicking holder may have left positions/lru
+        // inconsistent, so discard rather than advancing a corrupt rotor.
+        let mut state = self.state.lock().unwrap_or_else(|error| {
+            let mut guard = error.into_inner();
+            *guard = RotorState::default();
+            guard
+        });
         if state.positions.contains_key(&key) {
             state.lru.retain(|item| item != &key);
         } else if state.positions.len() >= FAIRNESS_KEY_HARD_CAP
@@ -163,7 +169,9 @@ impl FairnessRotor {
             state.positions.remove(&oldest);
         }
         let position = state.positions.get(&key).copied().unwrap_or(0);
-        state.positions.insert(key.clone(), position + 1);
+        state
+            .positions
+            .insert(key.clone(), position.saturating_add(1));
         state.lru.push_back(key);
     }
 

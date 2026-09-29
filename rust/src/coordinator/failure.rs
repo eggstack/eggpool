@@ -290,8 +290,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
             | FailureSource::LocalPreparation
             | FailureSource::Database
             | FailureSource::Cancellation
-    ) || matches!(observation.category_hint, Some(FailureCategory::BadRequest))
-        && observation.source == FailureSource::Client;
+    ) || matches!(observation.category_hint, Some(FailureCategory::BadRequest));
     let retryable = !observation.response_started
         && !observation.downstream_started
         && observation.attempt_number < policy.max_attempts;
@@ -617,6 +616,19 @@ fn wire_evidence_class(signal: &str) -> &'static str {
     }
 }
 
+/// Only genuine wire/adaptation signals force `WireRejected`. Rate-limit,
+/// quota, credential, and model-absence signals must keep their own
+/// backoff/quarantine path instead of hijacking quota/auth handling.
+pub fn is_wire_rejection_signal(signal: &str) -> bool {
+    matches!(
+        signal,
+        "wire_auth_mismatch"
+            | "wire_surface_unsupported"
+            | "wire_schema_mismatch"
+            | "model_unsupported_on_surface"
+    )
+}
+
 fn normalize_signal(value: &str) -> String {
     value
         .chars()
@@ -675,14 +687,25 @@ fn parse_rfc1123(value: &str) -> Option<i64> {
         return None;
     }
     let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let leap_days = |y: i64| y / 4 - y / 100 + y / 400;
+    let leap_days = |y: i64| {
+        y.checked_div(4)?
+            .checked_sub(y.checked_div(100)?)?
+            .checked_add(y.checked_div(400)?)
+    };
     let years = year.checked_sub(1970)?;
-    let mut days = years * 365 + leap_days(year - 1) - leap_days(1969);
+    let mut days = years
+        .checked_mul(365)?
+        .checked_add(leap_days(year.checked_sub(1)?)?)?
+        .checked_sub(leap_days(1969)?)?;
     for index in 1..month {
-        days += i64::from(month_days[(index - 1) as usize]);
+        days = days.checked_add(i64::from(month_days[(index - 1) as usize]))?;
         if index == 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
-            days += 1;
+            days = days.checked_add(1)?;
         }
     }
-    Some(days * 86_400 + (i64::from(day) - 1) * 86_400 + hour * 3_600 + minute * 60 + second)
+    days.checked_mul(86_400)?
+        .checked_add((i64::from(day) - 1).checked_mul(86_400)?)?
+        .checked_add(hour.checked_mul(3_600)?)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)
 }

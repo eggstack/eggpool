@@ -47,6 +47,7 @@ struct CircuitInner {
     last_failure_at: Option<f64>,
     last_state_change: f64,
     probe_acquired_at: Option<f64>,
+    probe_in_flight: bool,
 }
 
 /// Diagnostic snapshot of the breaker, with no secret or request data.
@@ -113,6 +114,7 @@ impl CircuitBreaker {
                 last_failure_at: None,
                 last_state_change: now,
                 probe_acquired_at: None,
+                probe_in_flight: false,
             })),
             clock: Arc::new(clock),
             failure_threshold: failure_threshold.max(1),
@@ -129,36 +131,37 @@ impl CircuitBreaker {
     }
 
     pub fn can_request(&self) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let Ok(inner) = self.inner.lock() else {
+            return false;
+        };
         match inner.state {
             CircuitState::Closed => true,
             CircuitState::Open => self.recovery_elapsed(&inner),
-            CircuitState::HalfOpen => inner
-                .probe_acquired_at
-                .is_none_or(|acquired| self.now() - acquired >= self.recovery_timeout),
+            CircuitState::HalfOpen => !inner.probe_in_flight,
         }
     }
 
     pub fn allow_request(&self) -> bool {
         let now = self.now();
-        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let Ok(mut inner) = self.inner.lock() else {
+            return false;
+        };
         match inner.state {
             CircuitState::Closed => true,
             CircuitState::Open if self.recovery_elapsed(&inner) => {
                 inner.state = CircuitState::HalfOpen;
                 inner.last_state_change = now;
                 inner.probe_acquired_at = Some(now);
+                inner.probe_in_flight = true;
                 true
             }
             CircuitState::Open => false,
             CircuitState::HalfOpen => {
-                if inner
-                    .probe_acquired_at
-                    .is_some_and(|acquired| now - acquired < self.recovery_timeout)
-                {
+                if inner.probe_in_flight {
                     false
                 } else {
                     inner.probe_acquired_at = Some(now);
+                    inner.probe_in_flight = true;
                     true
                 }
             }
@@ -166,10 +169,9 @@ impl CircuitBreaker {
     }
 
     pub fn release_probe(&self) {
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .probe_acquired_at = None;
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner.probe_acquired_at = None;
+        inner.probe_in_flight = false;
     }
 
     pub fn record_success(&self) {
@@ -179,6 +181,7 @@ impl CircuitBreaker {
             CircuitState::HalfOpen => {
                 inner.success_count = inner.success_count.saturating_add(1);
                 inner.probe_acquired_at = None;
+                inner.probe_in_flight = false;
                 if inner.success_count >= self.success_threshold {
                     inner.state = CircuitState::Closed;
                     inner.failure_count = 0;
@@ -203,6 +206,7 @@ impl CircuitBreaker {
                 inner.last_failure_at = Some(now);
                 inner.last_state_change = now;
                 inner.probe_acquired_at = None;
+                inner.probe_in_flight = false;
             }
             CircuitState::Closed => {
                 inner.failure_count = inner.failure_count.saturating_add(1);
@@ -225,6 +229,7 @@ impl CircuitBreaker {
             last_failure_at: None,
             last_state_change: now,
             probe_acquired_at: None,
+            probe_in_flight: false,
         };
     }
 
@@ -236,7 +241,7 @@ impl CircuitBreaker {
             success_count: inner.success_count,
             last_failure_at: inner.last_failure_at,
             last_state_change: inner.last_state_change,
-            probe_in_flight: inner.probe_acquired_at.is_some(),
+            probe_in_flight: inner.probe_in_flight,
         }
     }
 

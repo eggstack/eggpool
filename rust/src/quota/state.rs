@@ -274,27 +274,15 @@ impl AccountQuota {
             let cost = self
                 .get_persisted_cost(window, now)
                 .saturating_add(self.policy.cost_offset(window))
-                .saturating_add(if window == QuotaWindowName::FiveHour {
-                    self.reserved_cost
-                } else {
-                    0
-                });
+                .saturating_add(self.reserved_cost);
             let requests = self
                 .get_persisted_requests(window)
                 .saturating_add(self.policy.request_offset(window))
-                .saturating_add(if window == QuotaWindowName::FiveHour {
-                    self.reserved_requests
-                } else {
-                    0
-                });
+                .saturating_add(self.reserved_requests);
             let tokens = self
                 .get_persisted_tokens(window, now)
                 .saturating_add(self.policy.token_offset(window))
-                .saturating_add(if window == QuotaWindowName::FiveHour {
-                    self.reserved_tokens
-                } else {
-                    0
-                });
+                .saturating_add(self.reserved_tokens);
             if self
                 .policy
                 .cost_capacity(window)

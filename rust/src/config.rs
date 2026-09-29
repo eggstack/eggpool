@@ -56,7 +56,7 @@ impl ConfigError {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ServerConfig {
     pub host: String,
@@ -67,6 +67,21 @@ pub struct ServerConfig {
     pub access_log: bool,
     pub threads: u32,
     pub max_request_body_bytes: u64,
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("api_key_env", &self.api_key_env)
+            .field("log_level", &self.log_level)
+            .field("access_log", &self.access_log)
+            .field("threads", &self.threads)
+            .field("max_request_body_bytes", &self.max_request_body_bytes)
+            .finish()
+    }
 }
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -276,7 +291,7 @@ impl Default for RoutingConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PricingCatalogEntry {
     pub enabled: bool,
@@ -286,6 +301,20 @@ pub struct PricingCatalogEntry {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub options: BTreeMap<String, toml::Value>,
+}
+
+impl std::fmt::Debug for PricingCatalogEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PricingCatalogEntry")
+            .field("enabled", &self.enabled)
+            .field("priority", &self.priority)
+            .field("ttl_seconds", &self.ttl_seconds)
+            .field("max_entries", &self.max_entries)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("options", &self.options)
+            .finish()
+    }
 }
 impl Default for PricingCatalogEntry {
     fn default() -> Self {
@@ -444,7 +473,7 @@ pub struct ProxyConfig {
     pub url: Option<String>,
     pub url_env: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct AccountConfig {
     pub name: String,
@@ -458,6 +487,33 @@ pub struct AccountConfig {
     pub proxy: Option<String>,
     pub proxy_url: Option<String>,
     pub proxy_url_env: Option<String>,
+}
+
+impl std::fmt::Debug for AccountConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountConfig")
+            .field("name", &self.name)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("api_key_env", &self.api_key_env)
+            .field("enabled", &self.enabled)
+            .field("weight", &self.weight)
+            .field(
+                "five_hour_offset_microdollars",
+                &self.five_hour_offset_microdollars,
+            )
+            .field(
+                "weekly_offset_microdollars",
+                &self.weekly_offset_microdollars,
+            )
+            .field(
+                "monthly_offset_microdollars",
+                &self.monthly_offset_microdollars,
+            )
+            .field("proxy", &self.proxy)
+            .field("proxy_url", &self.proxy_url)
+            .field("proxy_url_env", &self.proxy_url_env)
+            .finish()
+    }
 }
 impl Default for AccountConfig {
     fn default() -> Self {
@@ -511,12 +567,22 @@ impl Default for ProviderAuthConfig {
         }
     }
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderStaticHeaderConfig {
     pub name: String,
     pub value: Option<String>,
     pub value_env: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderStaticHeaderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderStaticHeaderConfig")
+            .field("name", &self.name)
+            .field("value", &self.value.as_ref().map(|_| "[REDACTED]"))
+            .field("value_env", &self.value_env)
+            .finish()
+    }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
@@ -940,7 +1006,51 @@ pub fn normalize_advertise_base_url(raw: &str) -> Result<String, ConfigError> {
     ))
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Shared loopback-host check for bind and advertisement paths.
+///
+/// Covers `localhost` (case-insensitive), the full `127.0.0.0/8` range,
+/// `::1` (including `0:0:0:0:0:0:0:1`), and IPv4-mapped loopback
+/// (`::ffff:127.0.0.1` and the full mapped `127/8` range).
+pub fn is_loopback_host(host: &str) -> bool {
+    let normalized = host.trim().trim_matches(['[', ']']);
+    if normalized.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let without_zone = normalized.split('%').next().unwrap_or(normalized);
+    if let Ok(addr) = without_zone.parse::<std::net::IpAddr>() {
+        match addr {
+            std::net::IpAddr::V4(v4) => return v4.is_loopback(),
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return true;
+                }
+                // IPv4-mapped loopback (`::ffff:127.0.0.1`, full 127/8).
+                if let Some(mapped) = v6.to_ipv4_mapped()
+                    && mapped.is_loopback()
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    // Fall back to textual 127/8 and mapped forms when parsing fails
+    // (e.g. zone IDs or unusual bracketing).
+    let lower = without_zone.to_ascii_lowercase();
+    if lower == "::1" || lower == "0:0:0:0:0:0:0:1" {
+        return true;
+    }
+    if let Some(mapped) = lower.strip_prefix("::ffff:") {
+        let mapped = mapped.trim_matches(['[', ']']);
+        if let Ok(addr) = mapped.parse::<std::net::IpAddr>() {
+            return addr.is_loopback();
+        }
+        return mapped.split('.').next() == Some("127");
+    }
+    lower.split('.').next().is_some_and(|first| first == "127")
+        && without_zone.split('.').count() == 4
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelInfoSourceConfig {
     pub enabled: bool,
@@ -951,6 +1061,21 @@ pub struct ModelInfoSourceConfig {
     pub api_key_env: Option<String>,
     pub max_entries: u64,
     pub options: BTreeMap<String, toml::Value>,
+}
+
+impl std::fmt::Debug for ModelInfoSourceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelInfoSourceConfig")
+            .field("enabled", &self.enabled)
+            .field("priority", &self.priority)
+            .field("ttl_seconds", &self.ttl_seconds)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("api_key_env", &self.api_key_env)
+            .field("max_entries", &self.max_entries)
+            .field("options", &self.options)
+            .finish()
+    }
 }
 impl Default for ModelInfoSourceConfig {
     fn default() -> Self {

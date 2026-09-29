@@ -591,22 +591,25 @@ impl WireRuntime {
             let output = codec
                 .encode_request(&request, &context.selected_profile)
                 .map_err(WireRuntimeError::RequestAdaptation)?;
-            let value = output.value;
-            let encoded = encode_compact_json_bounded(&value, context.max_encoded_body_bytes)
-                .map_err(|error| match error {
-                    crate::request::BodyEncodingError::TooLarge { .. } => {
-                        WireRuntimeError::BodyTooLarge
-                    }
-                    crate::request::BodyEncodingError::Serialize(_) => {
-                        WireRuntimeError::BodySerialization
-                    }
-                })?;
             notices.extend(output.notices);
             let notices = apply_adaptation_policy(
-                crate::wire::CodecOutput { value, notices },
+                crate::wire::CodecOutput {
+                    value: output.value,
+                    notices,
+                },
                 &context.adaptation_policy,
             )
             .map_err(WireRuntimeError::RequestAdaptation)?;
+            let encoded =
+                encode_compact_json_bounded(&notices.value, context.max_encoded_body_bytes)
+                    .map_err(|error| match error {
+                        crate::request::BodyEncodingError::TooLarge { .. } => {
+                            WireRuntimeError::BodyTooLarge
+                        }
+                        crate::request::BodyEncodingError::Serialize(_) => {
+                            WireRuntimeError::BodySerialization
+                        }
+                    })?;
             (
                 EncodedWireBody {
                     value: Some(notices.value),

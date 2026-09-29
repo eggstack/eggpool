@@ -232,7 +232,14 @@ async fn finish_stream_execution(
             match execution.next_chunk().await {
                 Some(Ok(chunk)) => {
                     if sender.send(Ok(chunk)).await.is_err() {
-                        drop(execution);
+                        if let Some(metrics) = &metrics
+                            && let Some(event) = execution.usage_metric_event()
+                        {
+                            let _ = metrics.record_usage_async(event).await;
+                        }
+                        let _ = execution
+                            .complete(crate::coordinator::DownstreamResult::Cancelled)
+                            .await;
                         break;
                     }
                 }
@@ -258,16 +265,25 @@ async fn finish_stream_execution(
 
 pub(super) fn error_body_response(
     status: StatusCode,
-    surface: ClientSurface,
+    _surface: ClientSurface,
     detail: Vec<u8>,
 ) -> Response {
+    // `detail` is already shaped by `endpoint_error_body` for `_surface`
+    // (Messages uses `{"type":"error",...}`, others use OpenAI shape).
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    let _ = surface;
     (status, headers, Bytes::from(detail)).into_response()
+}
+
+pub(super) fn surface_for_path(path: &str) -> ClientSurface {
+    match path {
+        "/v1/messages" => ClientSurface::Messages,
+        "/v1/responses" | "/v1/responses/compact" => ClientSurface::Responses,
+        _ => ClientSurface::ChatCompletions,
+    }
 }
 
 /// Incoming headers forwarded toward provider selection, minus credentials

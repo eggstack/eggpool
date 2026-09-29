@@ -399,12 +399,17 @@ pub(crate) fn book() -> Arc<Mutex<ClaimBook>> {
     Arc::new(Mutex::new(ClaimBook::default()))
 }
 
-/// Recover the claim-book guard after a poisoned lock instead of crashing the
-/// process. A previous holder panicking must not turn one bad request path
-/// into a full proxy outage; callers still validate the recovered state
-/// before mutating it.
+/// Rebuild the claim book after a poisoned lock instead of reusing
+/// potentially inconsistent state. A previous holder panicking must not turn
+/// one bad request path into double-claim/quota drift: the poisoned state is
+/// discarded and callers validate the rebuilt (empty) state before mutating,
+/// which fails closed as `UnknownAccount` for in-flight claims.
 fn lock_book(book: &Arc<Mutex<ClaimBook>>) -> std::sync::MutexGuard<'_, ClaimBook> {
-    book.lock().unwrap_or_else(|error| error.into_inner())
+    book.lock().unwrap_or_else(|error| {
+        let mut guard = error.into_inner();
+        *guard = ClaimBook::default();
+        guard
+    })
 }
 
 pub(crate) fn publish(

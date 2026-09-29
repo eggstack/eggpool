@@ -220,7 +220,7 @@ impl HealthManager {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get(account_name) else {
-            return true;
+            return false;
         };
         let now = self.now();
         self.account_effectively_healthy(account, now) && account.circuit_breaker.can_request()
@@ -232,7 +232,7 @@ impl HealthManager {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let Some(account) = accounts.get(account_name) else {
-            return true;
+            return false;
         };
         let now = self.now();
         self.account_effectively_healthy(account, now)

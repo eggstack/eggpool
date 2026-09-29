@@ -343,11 +343,7 @@ pub struct RemoteIntegrationContext {
 }
 
 fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim().trim_matches(['[', ']']);
-    normalized.eq_ignore_ascii_case("localhost")
-        || normalized == "127.0.0.1"
-        || normalized == "::1"
-        || normalized == "0:0:0:0:0:0:0:1"
+    crate::config::is_loopback_host(host)
 }
 
 fn is_wildcard_host(host: &str) -> bool {
