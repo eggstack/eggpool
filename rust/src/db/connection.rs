@@ -7,7 +7,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use tokio_rusqlite::{Connection as AsyncConnection, Error as AsyncSqliteError};
 
 type SqliteConnection = tokio_rusqlite::rusqlite::Connection;
@@ -233,6 +233,8 @@ struct DatabaseInner {
     physical_closed: AtomicBool,
     calls: AtomicU64,
     transactions: AtomicU64,
+    successful_commits: AtomicU64,
+    commit_notify: Arc<Notify>,
     config: DatabaseConfig,
     checkpoint_stats: CheckpointMaintenanceStats,
     #[cfg(feature = "qualification-db-diagnostics")]
@@ -321,6 +323,8 @@ impl Database {
                 physical_closed: AtomicBool::new(false),
                 calls: AtomicU64::new(0),
                 transactions: AtomicU64::new(0),
+                successful_commits: AtomicU64::new(0),
+                commit_notify: Arc::new(Notify::new()),
                 config,
                 checkpoint_stats: CheckpointMaintenanceStats::default(),
                 #[cfg(feature = "qualification-db-diagnostics")]
@@ -345,8 +349,13 @@ impl Database {
         }
     }
 
-    pub(crate) fn transaction_count(&self) -> u64 {
-        self.inner.transactions.load(Ordering::Relaxed)
+    #[cfg(test)]
+    pub(crate) fn successful_commit_count(&self) -> u64 {
+        self.inner.successful_commits.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn commit_notifier(&self) -> Arc<Notify> {
+        Arc::clone(&self.inner.commit_notify)
     }
 
     #[cfg(feature = "qualification-db-diagnostics")]
@@ -549,6 +558,16 @@ impl Database {
             })
             .await;
         drop(permit);
+        let committed = match &result {
+            #[cfg(feature = "qualification-db-diagnostics")]
+            Ok(envelope) => matches!(&envelope.outcome, TransactionCallResult::Completed(Ok(_))),
+            #[cfg(not(feature = "qualification-db-diagnostics"))]
+            Ok(Ok(_)) => true,
+            _ => false,
+        };
+        if committed {
+            self.signal_successful_commit();
+        }
         #[cfg(feature = "qualification-db-diagnostics")]
         let total_us = elapsed_us(started_at);
         match result {
@@ -752,7 +771,7 @@ impl Database {
 
     /// Opportunistic maintenance checkpoint for the process-owned task
     /// (persistence M001). The tick never queues behind foreground work: when
-    /// no durable transaction completed since `observed_transactions` was last
+    /// no successful commit completed since `observed_commits` was last
     /// updated, no SQLite work runs; when the gate is already owned, the tick
     /// defers. WAL state is observed through SQLite itself
     /// (`PRAGMA wal_checkpoint(NOOP)`), and PASSIVE work runs only once the
@@ -761,10 +780,10 @@ impl Database {
     pub(crate) async fn checkpoint_maintenance(
         &self,
         policy: CheckpointMaintenancePolicy,
-        observed_transactions: &AtomicU64,
+        observed_commits: &AtomicU64,
     ) -> Result<CheckpointMaintenanceOutcome, DatabaseError> {
-        let current = self.inner.transactions.load(Ordering::Relaxed);
-        if current == observed_transactions.load(Ordering::Relaxed) {
+        let current = self.inner.successful_commits.load(Ordering::Acquire);
+        if current == observed_commits.load(Ordering::Relaxed) {
             self.inner
                 .checkpoint_stats
                 .not_due
@@ -833,7 +852,7 @@ impl Database {
             | MaintenanceInspection::Checkpointed(progress) => progress,
             MaintenanceInspection::Deferred => unreachable!("deferred inspection returned above"),
         };
-        observed_transactions.store(current, Ordering::Relaxed);
+        observed_commits.store(current, Ordering::Relaxed);
         self.inner
             .checkpoint_stats
             .last_log_frames
@@ -867,6 +886,13 @@ impl Database {
             .checkpoint_stats
             .failures
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn signal_successful_commit(&self) {
+        self.inner
+            .successful_commits
+            .fetch_add(1, Ordering::Release);
+        self.inner.commit_notify.notify_one();
     }
 
     /// Rebuild the database through SQLite's dedicated maintenance command.
@@ -1227,6 +1253,7 @@ impl DatabaseTransaction {
             Ok(()) => {
                 self.finished = true;
                 self.permit.take();
+                self.database.signal_successful_commit();
                 Ok(())
             }
             Err(error) => {
@@ -1460,11 +1487,99 @@ mod maintenance_tests {
     use std::sync::atomic::AtomicU64;
 
     #[tokio::test(flavor = "current_thread")]
+    async fn successful_commit_signal_excludes_rollback_and_covers_both_commit_owners() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        let notify = database.commit_notifier();
+        assert_eq!(database.successful_commit_count(), 0);
+
+        database
+            .with_transaction(|_| Err::<(), _>(SqliteError::InvalidQuery))
+            .await
+            .expect_err("body error rolls back");
+        assert_eq!(database.successful_commit_count(), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), notify.notified())
+                .await
+                .is_err()
+        );
+
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE commit_signal_probe (id INTEGER)")
+            })
+            .await
+            .expect("ordinary transaction commits");
+        assert_eq!(database.successful_commit_count(), 1);
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("ordinary commit notifies");
+
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch(
+                    "CREATE TABLE commit_signal_parent (id INTEGER PRIMARY KEY);\
+                     CREATE TABLE commit_signal_child (parent_id INTEGER REFERENCES commit_signal_parent(id) DEFERRABLE INITIALLY DEFERRED);",
+                )
+            })
+            .await
+            .expect("deferred constraint fixture commits");
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("fixture commit notifies");
+        let before_failed_commit = database.successful_commit_count();
+        database
+            .with_transaction(|connection| {
+                connection.execute(
+                    "INSERT INTO commit_signal_child (parent_id) VALUES (99)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect_err("deferred constraint rejects COMMIT");
+        assert_eq!(database.successful_commit_count(), before_failed_commit);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), notify.notified())
+                .await
+                .is_err()
+        );
+
+        database
+            .begin_transaction()
+            .await
+            .expect("explicit transaction begins")
+            .rollback()
+            .await
+            .expect("explicit rollback succeeds");
+        assert_eq!(database.successful_commit_count(), 2);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), notify.notified())
+                .await
+                .is_err()
+        );
+
+        database
+            .begin_transaction()
+            .await
+            .expect("explicit transaction begins")
+            .commit()
+            .await
+            .expect("explicit transaction commits");
+        assert_eq!(database.successful_commit_count(), 3);
+        tokio::time::timeout(Duration::from_secs(1), notify.notified())
+            .await
+            .expect("explicit commit notifies");
+        database.close().await.expect("database closes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn idle_tick_reports_not_due_without_sqlite_work() {
         let database = Database::open(DatabaseConfig::default())
             .await
             .expect("database opens");
-        let observed = AtomicU64::new(database.transaction_count());
+        let observed = AtomicU64::new(database.successful_commit_count());
         let calls_before = database.stats().calls;
         let outcome = database
             .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &observed)

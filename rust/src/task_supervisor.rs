@@ -398,6 +398,7 @@ pub enum TaskCallbackError {
 #[derive(Clone, Default)]
 pub struct TaskCallbackRegistry {
     callbacks: BTreeMap<String, TaskCallback>,
+    checkpoint_database: Option<Database>,
 }
 
 impl std::fmt::Debug for TaskCallbackRegistry {
@@ -435,15 +436,16 @@ impl TaskCallbackRegistry {
     /// generation-leased maintenance callbacks and M9 supplies update/backup.
     ///
     /// Persistence M001: the checkpoint tick is opportunistic maintenance on
-    /// the existing worker. It skips cheaply when no durable transaction
+    /// the existing worker. It skips cheaply when no successful commit
     /// completed since the previous tick and defers (rather than queueing)
     /// when the single database gate is already owned by foreground work.
     /// Only scalar outcome categories are retained; database detail never
     /// enters task diagnostics.
     pub fn with_checkpoint(database: Database) -> Self {
-        let observed = Arc::new(AtomicU64::new(database.transaction_count()));
+        let observed = Arc::new(AtomicU64::new(0));
         let policy = crate::db::CheckpointMaintenancePolicy::effective();
-        Self::new().with_callback(
+        let checkpoint_database = database.clone();
+        let mut registry = Self::new().with_callback(
             "checkpoint",
             task_callback(move |_| {
                 let database = database.clone();
@@ -467,7 +469,9 @@ impl TaskCallbackRegistry {
                     }
                 }
             }),
-        )
+        );
+        registry.checkpoint_database = Some(checkpoint_database);
+        registry
     }
 
     /// Register the M5 catalog refresh and bounded historical retention
@@ -784,6 +788,7 @@ pub struct RuntimeTaskSnapshot {
 struct TaskState {
     spec: RuntimeTaskSpec,
     callback: TaskCallback,
+    checkpoint_notify: Option<Arc<Notify>>,
     cancel: watch::Sender<TaskControl>,
     cancel_notify: Notify,
     cancelled: AtomicBool,
@@ -797,11 +802,16 @@ struct TaskState {
 }
 
 impl TaskState {
-    fn new(spec: RuntimeTaskSpec, callback: TaskCallback) -> Arc<Self> {
+    fn new(
+        spec: RuntimeTaskSpec,
+        callback: TaskCallback,
+        checkpoint_database: Option<Database>,
+    ) -> Arc<Self> {
         let (cancel, _) = watch::channel(TaskControl::Running);
         Arc::new(Self {
             spec,
             callback,
+            checkpoint_notify: checkpoint_database.as_ref().map(Database::commit_notifier),
             cancel,
             cancel_notify: Notify::new(),
             cancelled: AtomicBool::new(false),
@@ -1135,6 +1145,9 @@ impl RuntimeTaskSupervisor {
                     callbacks
                         .get(&spec.callback_kind)
                         .expect("callback validated during preflight"),
+                    (spec.name == "checkpoint")
+                        .then(|| callbacks.checkpoint_database.clone())
+                        .flatten(),
                 )
             })
             .collect();
@@ -1405,10 +1418,36 @@ async fn run_task(state: Arc<TaskState>, supervisor: Arc<SupervisorInner>) {
             state.running.store(false, Ordering::Release);
             return;
         }
-        if !wait_or_cancel(&state, Duration::from_secs_f64(state.spec.interval_s)).await {
+        let keep_running = if state.spec.name == "checkpoint" {
+            wait_checkpoint_or_cancel(&state, Duration::from_secs_f64(state.spec.interval_s)).await
+        } else {
+            wait_or_cancel(&state, Duration::from_secs_f64(state.spec.interval_s)).await
+        };
+        if !keep_running {
             state.running.store(false, Ordering::Release);
             return;
         }
+    }
+}
+
+async fn wait_checkpoint_or_cancel(state: &TaskState, delay: Duration) -> bool {
+    let Some(notify) = &state.checkpoint_notify else {
+        return wait_or_cancel(state, delay).await;
+    };
+    let cancelled = state.cancel_notify.notified();
+    let committed = notify.notified();
+    if state.cancelled.load(Ordering::Acquire) {
+        return false;
+    }
+    tokio::select! {
+        biased;
+        _ = cancelled => false,
+        _ = committed => {
+            !state.cancelled.load(Ordering::Acquire)
+        },
+        _ = tokio::time::sleep(delay) => {
+            !state.cancelled.load(Ordering::Acquire)
+        },
     }
 }
 
