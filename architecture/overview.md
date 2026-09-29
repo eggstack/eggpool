@@ -75,7 +75,7 @@ fail closed on validation, commit, or ownership ambiguity.
 `AppError` to `ExitCode` (`Command` code, `Interrupted` → 130, else 1).
 `rust/src/lib.rs` declares the module tree (with `forbid(unsafe_code)`) and
 re-exports the CLI/config/error boundary. `rust/src/cli.rs` owns the Clap
-command tree (33 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
+command tree (34 commands: `serve`, `connect`, `logout`, `check-config`, `edit`, `getkey`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
 `modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
@@ -480,7 +480,8 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
-| Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) || Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
+| Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
+| Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
 | Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
 | Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |

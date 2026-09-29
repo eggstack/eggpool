@@ -1,200 +1,54 @@
 # Deep Dive: Runtime and Process Management
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §§2,10](overview.md), [Control](deep-dive-control.md), and [Background](deep-dive-background.md).
 
-## Purpose
+## Ownership
 
-The native runtime owns the EggPool process lifecycle, immutable runtime
-generations, live configuration publication, bounded background work, and
-graceful shutdown. The design keeps one process and one Tokio
-`current_thread` runtime, which is suitable for the supported Raspberry Pi and
-LAN deployments.
-
-## Current ownership graph
-
-```text
-CLI/runtime adapter -> operations services
-pre-bound listener + Axum router -> TowerToEggserve -> EggServe H1 -> request coordinator -> routing/provider transport
-                                       -> canonical wire codecs/stream
-runtime manager     -> generation factory -> supervised background tasks
-config parser       -> reload policy -> transactional reload/publication
-SQLite repositories <- accounting/catalog/health/maintenance
-```
-
-`rust/src/runtime.rs` adapts CLI commands to the existing operation services.
-`rust/src/operations/lifecycle.rs` composes safe detached start, stop, restart,
-identity-proof, and watchdog workflows over `process.rs`, `paths.rs`, and
-`control.rs`; the CLI keeps prompts, presentation, and exit-code mapping.
-`rust/src/server/mod.rs` gives its pre-bound listener to the exact-pinned
-EggServe H1 runtime (`eggserve-server =0.4.0`, `tower` feature) and adapts the
-existing Axum router through the server-owned `TowerToEggserve`. Concretely,
-`serve_listener` builds the Axum router, derives
-`eggserve_runtime_config`, chains
-`Server::builder().runtime(config).from_listener(listener).build()`, wraps
-the router with `TowerToEggserve::with_policy` using
-`RequestBodyPolicy::Stream { max_bytes: 1 GiB }`
-(`EGG_SERVE_REQUEST_BODY_LIMIT`), and drives it with
-`start_with_service`, splitting the handle into a shutdown control plus a
-passive typed completion (`into_parts` / `completion.wait()`). EggServe owns
-HTTP/1 parsing, connection admission and transport, and bounded connection
-drain: at most 1024 connections and 1024 in-flight requests, explicit
-header/parser ceilings, and a five-second graceful connection drain.
-EggPool's server module retains route assembly, shared state, auth, body
-admission, signals, process lifespan, and shutdown reporting. EggServe 0.4
-policy/admission defaults remain EggServe-owned. Request routing,
-provider transport, wire adaptation, persistence, and finalization remain in
-their respective modules.
+- `rust/src/runtime.rs` adapts CLI commands to `operations/*` services; it owns prompts, presentation, and exit-code mapping only.
+- `rust/src/operations/lifecycle.rs` composes start/stop/restart/ensure-running/watchdog workflows over `process.rs`, `paths.rs`, and `control.rs`.
+- `rust/src/server/mod.rs` owns the pre-bound listener, route assembly, shared `AppState`, auth, body admission, signals, and shutdown reporting. Downstream HTTP/1 transport is EggServe-owned (`eggserve-server =0.4.0`, `tower` feature).
+- `rust/src/runtime_lifecycle/` owns the generation state machine; `rust/src/task_supervisor.rs` owns supervised background tasks; `rust/src/reload.rs` plus `rust/src/config_reload_policy.rs` own live publication.
+- `rust/src/operations/status.rs` owns the compact proxy/provider health snapshot (shared readiness evaluation with `readyz`, no outbound probes).
 
 ## Process model
 
-`eggpool serve` runs the native executable. The process owns PID management,
-health probes, foreground/daemon startup, restart behavior, and the active and
-retiring runtime generations. `rust/src/operations/lifecycle.rs` owns the
-workflow composition while `process.rs` remains the authority for PID files,
-independent health/control evidence, and signaling. `paths.rs` is the shared
-authority for PID, log, state, and control-socket paths.
+`eggpool serve` runs one native process on Tokio's `current_thread` runtime (`rust/src/main.rs`). `[server].threads` remains a validated compatibility key in diagnostics but does not select Tokio workers; its reload disposition stays restart-required. The performance campaign keeps the single-thread runtime, streaming bridge, SQLite gate, and routing lock unless comparable loopback evidence justifies a narrow change.
 
-The executable is started with Tokio's `current_thread` runtime in
-`rust/src/main.rs`. `[server].threads` remains a validated compatibility key
-and is included in runtime diagnostics, but it does not select Tokio worker
-threads. Its existing reload classification remains restart-required. A future
-removal or multithread implementation requires a separate compatibility and
-performance decision.
+## Server transport boundary
 
-The 2026 performance qualification measured the current-thread runtime,
-streaming bridge, SQLite gate, and routing selection lock as evidence-gated
-boundaries. They remain intentionally simple unless a comparable loopback
-workload demonstrates material tail-latency or throughput benefit that
-outweighs lifecycle and ownership complexity.
+`serve_listener` builds the Axum router, derives `eggserve_runtime_config`, chains `Server::builder().runtime(config).from_listener(listener).build()`, wraps the router with `TowerToEggserve::with_policy` using `RequestBodyPolicy::Stream { max_bytes: 1 GiB }` (`EGG_SERVE_REQUEST_BODY_LIMIT`), and drives it with `start_with_service`. The handle splits into a shutdown control plus passive typed completion (`into_parts` / `completion.wait()`). EggServe owns HTTP/1 parsing, connection admission, and bounded drain: at most 1024 connections and 1024 in-flight requests, explicit header/parser ceilings, and a five-second graceful connection drain inside the ten-second foreground deadline (`GRACEFUL_SHUTDOWN_TIMEOUT`).
 
 ## Runtime generations
 
-The `rust/src/runtime_lifecycle/` package owns the generation state machine.
-Its modules follow state ownership rather than request flow:
+`rust/src/runtime_lifecycle/` splits by ownership, re-exported from `mod.rs` so callers never depend on file layout:
 
-- `process.rs` owns `ProcessRuntime` and process-lifetime shared resources.
-- `generation.rs` owns candidate construction, immutable generation resources,
-  and the generation close boundary.
-- `lease.rs` owns generation slots, request leases, and retained terminal
-  references.
-- `manager.rs` owns the `ArcSwap` active pointer, publication gate, staged
-  swaps, and the bounded retiring queue.
-- `recovery.rs` owns bounded startup crash reconciliation.
-- `diagnostics.rs` owns secret-free lifecycle projections and bounded helpers.
-- `mod.rs` contains the compatibility re-exports only.
+- `process.rs` — `ProcessRuntime`: database handle, affinity, wire resolver, task supervisor, metrics coalescer, update-checker state. Built via `new` / `new_with_config` / `with_config_path_and_config`.
+- `generation.rs` — `RuntimeGeneration` (immutable snapshot: config, digest, inference state, provider pool, finalization), `RuntimeGenerationFactory::prepare` / `prepare_with_durable_accounts` (single construction path), `PreparedGeneration` (`transfer` exactly once, `abort` with wire-preference rollback), `CandidateOwnership` (`Prepared`/`Transferred`/`Aborting`/`Aborted`).
+- `lease.rs` — `GenerationSlot` (`GenerationSlotState`: `Active`/`Retiring`/`DrainingFinalization`/`Closing`/`Closed`/`FailedClose`), `GenerationLease` (pins one generation across awaits), `GenerationFinalizationGuard` (retained terminal reference, rejected once drain begins), `GenerationAcquireError`, `GenerationStageError`, `GenerationSwapError`.
+- `manager.rs` — `RuntimeManager` (`ArcSwap` active pointer, publication epoch, retiring queue, retirement tasks): `acquire` (gated lease), `stage` (closes admission, transfers candidate), `StagedGenerationSwap` (`commit_pointer` → `accept` / `rollback`, plus `accept_during_shutdown` and fail-closed `fail_closed`), `schedule_retirement`, `close_for_shutdown`, `drain_retirements_with_deadline`.
+- `recovery.rs` — `reconcile` plus `StartupRecoveryReport` / `StartupRecoveryError`.
+- `diagnostics.rs` — secret-free projections (`RuntimeDiagnosticsSnapshot`, `ActiveGenerationDiagnostics`, `PublicationDiagnostics`, `RetiringGenerationDiagnostics`, `ReloadDiagnostics`, `TaskDiagnostics`, `ShutdownDiagnostics`, `RuntimeDiagnosticCounters`).
 
-The state machine exposed by those modules is:
-
-```text
-candidate built -> staged -> active pointer committed -> accepted
-                         \-> rolled back
-old active -> retiring -> lease/finalization drain -> close -> retired
-```
-
-The public lifecycle types remain re-exported from `runtime_lifecycle` so
-server, reload, operations, and integration-test callers do not depend on
-the internal file layout. Bounded constants live in `mod.rs`:
-`MAX_RETIRING_GENERATIONS` (4), `DEFAULT_GENERATION_CLOSE_TIMEOUT` (1s),
-and `MAX_STARTUP_RECONCILIATION_PASSES` (1024).
-
-The core ownership types are:
-
-- `RuntimeManager` owns the active and retiring generation slots.
-- `RuntimeGeneration` is the immutable snapshot used by request handling.
-- `GenerationLease` keeps a generation alive for an in-flight request.
-- `ProcessRuntime` owns state that survives generation swaps, including the
-  database and bounded learned routing state.
-- `RuntimeGenerationFactory` prepares a complete candidate before publication.
-
-A generation contains the provider client pool, catalog, account registry,
-router, coordinator, health state, statistics, and generation-scoped
-background tasks. Requests acquire a lease through the server/runtime
-boundary. Publishing a replacement does not interrupt requests already using
-the retiring generation.
-
-The semantic model-router registry is generation-owned and compiled through
-the shared `eggpool-model-routing` crate. The process-owned sticky affinity
-cache survives safe swaps only when the new registry has the same semantic
-fingerprint. Wire-surface learning is likewise bounded, process-owned, and
-credential-free; changed surface definitions cannot reuse incompatible
-observations.
+State machine: `candidate built -> staged -> pointer committed -> accepted` (or `rolled back`); `old active -> retiring -> lease/finalization drain -> close -> retired`. Publishing a replacement never interrupts leases held on the retiring generation. Bounded constants in `mod.rs`: `MAX_RETIRING_GENERATIONS` (4), `DEFAULT_GENERATION_CLOSE_TIMEOUT` (1s), `MAX_STARTUP_RECONCILIATION_PASSES` (1024).
 
 ## Reload and publication
 
-`rust/src/config.rs` owns TOML shape, defaults, and validation.
-`rust/src/config_reload_policy.rs` is the single typed transition authority;
-its pure `classify_transition` result is redacted and safe to carry through
-operator apply paths. `rust/src/reload.rs` revalidates and reclassifies the
-candidate, then builds the candidate generation, reconciles durable state,
-publishes it atomically, and retires the old generation.
-
-`eggpool rehash` is serialized. Invalid candidates do not replace the active
-generation. A restart-required change is reported before publication, and a
-failed candidate leaves the current generation and its process-owned state
-unchanged. Reload diagnostics are owned by the reload operation rather than a
-caller that may finish early.
-
-Configuration mutations keep text editing separate from application. The
-bounded editor validates and classifies the pre-edit to post-edit transition
-before atomic replacement. Restart-after-mutation is composed by
-`operations/lifecycle.rs`; the runtime adapter only presents the outcome.
+`rust/src/config.rs` owns TOML shape and validation. `config_reload_policy.rs::classify_transition` is the only reload-vs-restart authority: pure, deterministic, redacted; mixed changes are wholly restart-required; `[integrations].advertise_base_url` is `Live` profile output only and never changes the listen socket. `ReloadService` (`reload` / `reload_path` / `reload_bytes`) revalidates, reclassifies, builds the complete candidate, reconciles durable provider/account rows in a caller-owned transaction, stages task/wire deltas, commits pointer plus transaction, and retires the old generation. `ReloadResultCategory` (`Applied`/`Noop`/`RestartRequired`/`ValidationFailed`/`StaleDigest`/`Busy`/`RetirementBacklog`/`Aborted`/`CompensationFailed`) is the typed outcome; failure leaves the active generation and process-owned state unchanged.
 
 ## Background work and shutdown
 
-`rust/src/task_supervisor.rs` remains the sole owner of supervised task
-handles, callback registration, task-spec diffs, and bounded task shutdown.
-It registers bounded tasks for startup and generation construction.
-The canonical task names (`RUNTIME_TASK_NAMES`) are `catalog_refresh`,
-`retention_cleanup`, `checkpoint`, `metrics_flush`, `update_checker`, and
-`automatic_backup`, split by `TaskOwnership`: process-owned tasks
-(checkpoint, metrics flush, update check, auto backup) versus
-generation-leased tasks (catalog refresh, retention/cleanup) whose
-callbacks receive a fresh lease per tick. `operations/metrics.rs`
-coalescing and `operations/update.rs` freshness probes plug in here.
-Process-scoped containers such as the metrics coalescer and wire resolver
-are flushed or stopped through their existing shutdown contracts.
+`task_supervisor.rs` supervises fixed-delay `RuntimeTaskSpec` tasks with `TaskOwnership::{Process, ActiveGenerationLeased}`: process-owned (checkpoint, metrics flush, update check, auto backup) versus generation-leased (catalog refresh, retention/cleanup). Details in [Background](deep-dive-background.md).
 
-Shutdown first quiesces EggPool (`request_shutdown`, phase
-`Running -> Quiescing`), then requests EggServe shutdown via its control
-and joins the passive typed completion (`completion.wait()`) within the
-single ten-second foreground deadline (`GRACEFUL_SHUTDOWN_TIMEOUT`);
-EggServe's explicit five-second connection drain fits inside it. The
-control listener is closed next, then `close_runtime_resources_until`
-runs in ownership order: supervised-task shutdown with the remaining
-deadline, metrics flush, body-task drain (aborted only when already
-forced or timed out), generation-manager `close_for_shutdown`, and
-finally the process-owned database close. Phase transitions
-(`Quiescing -> Draining -> Closing`/`ForcedClosing -> Stopped`) and the
-`ShutdownReport` (forced flag, leases/terminal references/body tasks at
-deadline, task counts, database outcome) are the bounded shutdown
-evidence. PID cleanup and child-process joins remain bounded;
-systemd or the watchdog may restart a worker that exits after an indeterminate
-database state.
+Shutdown order in `close_runtime_resources_until`: EggServe control shutdown plus `completion.wait()`, control-socket `close`, supervised-task `shutdown_with_timeout` with the remaining deadline, bounded metrics flush, body-task drain (aborted only when forced/timed out), generation-manager `close_for_shutdown`, finally the process-owned database `close`. `ShutdownPhase` (`Running` → `Quiescing` → `Draining` → `Closing`/`ForcedClosing` → `Stopped`) and `ShutdownReport` (forced flag, leases/terminal references/body tasks at deadline, task counts, database outcome) are the bounded evidence.
 
-Crash reconciliation is a one-shot durable repair at startup. It repairs
-unfinished request, attempt, and reservation rows without resurrecting
-process-local routing, quota, health, wire, or supervisor state.
+## Recovery and diagnostics
 
-## Diagnostics
+Startup reconciliation is a one-shot bounded repair (max 1024 passes) of unfinished request, attempt, and reservation rows; it never resurrects routing, quota, health, wire, or supervisor state. `eggpool status` / `GET /api/status` expose the compact health snapshot; `eggpool runtime-status --json` and `GET /api/stats/runtime` expose the bounded redacted topology above. Diagnostics observe; they are never a second runtime authority.
 
-`eggpool status` / `GET /api/status` expose the compact proxy/provider health
-snapshot (one row per provider, shared readiness evaluation with `readyz`),
-while `eggpool runtime-status --json` and `/api/stats/runtime` expose bounded,
-redacted process topology, generation, task, database, routing, and
-finalization information. These diagnostics are observations, not a second
-runtime authority. Use host process/socket tools for operating-system details
-such as file descriptors and outbound sockets.
+## Invariants
 
-## Key invariants
-
-- The native process is the lifecycle authority; server mirrors are not
-  independent owners.
-- A complete, validated generation is built before atomic publication.
-- Generation swaps never interrupt in-flight requests or accepted retained
-  terminal work.
-- Process-owned state is bounded, in memory, and never stores credentials or
-  raw request/provider bodies.
-- Runtime and database transitions fail closed on validation, commit, or
-  ownership ambiguity.
-- Shutdown closes supervisors and database users in ownership order, with
-  bounded joins and startup repair as the process-death safety net.
+- One process, one `current_thread` runtime, one `ArcSwap` active generation.
+- Complete validated candidates publish atomically; in-flight leases drain on the retiring generation.
+- At most 4 retiring generations; failed closes stay resident for diagnosis (process exit may force them).
+- Process-owned state is bounded, in memory, and secret-free (no credentials, prompts, raw bodies, cache keys).
+- All transitions fail closed; startup repair is the process-death safety net.

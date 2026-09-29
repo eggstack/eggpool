@@ -1,176 +1,42 @@
 # Deep Dive: SQLite and Repositories
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §9](overview.md), [Runtime](deep-dive-runtime.md), and [Background](deep-dive-background.md).
 
-`rust/src/db/` owns the SQLite connection, migration runner, repositories,
-and the consistent-snapshot `backup_to` primitive. Backup orchestration lives
-in `rust/src/operations/backup.rs` and crash-repair hooks live in
-`runtime_lifecycle/recovery.rs` plus coordinator reconciliation; the database
-contributes the shared transaction/recovery contract. Migrations and their checksums are
-embedded from `rust/assets/db/migrations/`; the runtime preserves the
-historical schema ledger and schema 54 contract.
+## Ownership
 
-The asynchronous bundled engine is `tokio-rusqlite 0.8.0` over
-`rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`, bundling SQLite 3.53.2.
-The database compatibility suite guards that the runtime engine remains at
-least SQLite 3.51.3 and proves `PRAGMA wal_checkpoint(NOOP)` leaves WAL
-checkpoint progress unchanged before an explicit PASSIVE checkpoint. EggPool
-continues to own one connection, one serialized gate, and one worker with
-WAL/NORMAL and the 1000-page automatic-checkpoint fallback; schema 54 and
-backup/recovery ownership are unchanged. Persistence M006 records the
-dependency and compatibility evidence.
+`rust/src/db/` is the only persistence boundary: `connection.rs` (serialized `Database` gate, caller-owned transactions), `migrations.rs` (checksum-validated runner), `repositories.rs` (typed account/catalog/model/request/ping/dashboard/usage access), `mod.rs` (facade), and feature-gated `qualification.rs` (tooling-only in-memory collector, compiled only with `qualification-db-diagnostics`). `db/` owns only the `backup_to` snapshot primitive; orchestration lives in `operations/backup.rs`, and crash repair lives in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation. `Database::open` is pinned to `tokio-rusqlite 0.8.0` (`bundled`, `backup` features) over `rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`.
 
-The database uses WAL and one serialized primary connection. Durable request,
-attempt, reservation, usage, catalog, health, backup, and finalization writes
-run inside explicit caller-owned transactions. Commit/rollback ambiguity fails
-closed and startup reconciliation repairs only states covered by the recovery
-contract.
+## Connection and gate
 
-Repositories are the only persistence boundary for runtime modules. They do
-not open independent writer pools or accept raw unbounded diagnostic content.
-Compatibility fixtures under `tests/fixtures/` are test-only and are never
-loaded by the production executable.
+One `Database` holds one async connection behind one semaphore permit (`gate`) plus one worker. `DatabaseConfig::default` is WAL with `synchronous = "NORMAL"`; `configure` enforces `foreign_keys = ON`, the busy timeout, WAL mode (verified on file databases), synchronous level, and the optional journal-size limit. `call` runs one fenced closure; `with_transaction` runs `BEGIN IMMEDIATE` / body / `COMMIT`-or-`ROLLBACK` as one unit; `begin_transaction` returns a caller-owned `DatabaseTransaction` (`call`, `commit`, `rollback`) whose gate permit is held until finished — the primitive behind the reload acceptance window. Ordinary repository writes use `with_transaction`, never the long-lived handle.
 
-Durable publication prepares its deterministic routing-decision row before
-acquiring the database gate (persistence M002):
-`PreparedRoutingDecisionRow` in `rust/src/coordinator/publication.rs` is
-built from the borrowed selection snapshot — exclusion/selected-score JSON
-serialization, score scalars, counts, and the reservation-expiry modifier —
-and only those minimal owned facts travel into the worker transaction. The
-full `SelectionSnapshot` is never cloned for the transaction closure, and
-SQLite-dependent validation (request/duplicate/prior-attempt/account checks,
-inserts, fault-injection stages) stays inside the transaction in its existing
-order. Precomputation failure maps to the existing
-`PublicationError::Database` category without starting a transaction.
+## Failure and integrity contract
 
-See `rust/src/db/connection.rs`, `migrations.rs`, `repositories.rs`, `mod.rs`,
-and feature-gated `qualification.rs` (only compiled with
-`qualification-db-diagnostics`).
+Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqlite`, rollback failure to `RollbackFailed` (marks closed, closes the connection), commit failure to `CommitFailed` (closes only when the safety rollback also failed). `MigrationChecksumMismatch`, `UnknownMigration`, `MigrationNameMismatch`, and `ReadOnlyMigration` refuse startup before use. `quick_check` (`PRAGMA quick_check = ok`), `vacuum`, `checkpoint` (passive), `checkpoint_maintenance` (opportunistic, below), and `cleanup_retention` (bounded per-tick batches under `RetentionCleanupPolicy`, never selecting pending requests or active reservations) complete the surface. Repositories never store credentials, prompts, raw bodies, or cache keys, and accept no unbounded diagnostic content. Compatibility fixtures under `tests/fixtures/` are test-only.
 
-## Publication/storage qualification diagnostic
+## Migrations
 
-The tooling-only Plan 238 mode in `scripts/qualification_sbc.py` is not a
-database runtime authority. On a physical Linux/aarch64 SBC it waits for the
-fixed checkpoint, metrics-flush, catalog-refresh, retention-cleanup, and
-automatic-backup task names to be quiescent, captures baseline/final tick
-counts, and runs bounded sequential native finite requests. It reads file
-sizes and at most the first 32 bytes of the WAL file after each request; the
-report retains only scalar page-size/checkpoint-sequence facts and no database
-path or raw header.
+Migrations are embedded from `rust/assets/db/migrations/` with `checksums.json`: v1–v54, 54 files, validated by `MigrationRunner::validate_embedded_checksums` before any database use (`canonical_inventory_is_complete_and_immutable` guards first = 1, last = 54, len = 54). `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. History is never rewritten or renumbered; restore validation additionally checks the staged ledger against this inventory.
 
-An optional diagnostic database directory puts only `usage.sqlite3` and its
-WAL/SHM siblings on that filesystem while config, logs, runtime files, and
-backup/recovery roots remain in the qualification root. This is a diagnostic
-comparison, not a production placement recommendation or a durability
-change. The mode uses the benchmark fixture directly and does not run the
-ordinary benchmark corpus.
+## Publication and finalization transactions
 
-## Publication commit/checkpoint phase diagnostic
+Durable publication prepares its deterministic routing-decision row before acquiring the gate (persistence M002): `PreparedRoutingDecisionRow` in `coordinator/publication.rs` serializes exclusion/selected-score facts from the borrowed selection snapshot, and only those minimal owned facts enter the worker transaction. Publication and durable finalization use named `TransactionKind::{Publication, Finalization, Other}` entry points; the public `with_transaction` API and the single gate are unchanged.
 
-Plan 239's `qualification-db-diagnostics` Cargo feature is a non-default,
-dependency-free qualification boundary. It adds a single bounded in-memory
-collector to the existing `DatabaseInner`; records are limited to 256 fixed
-scalar entries with monotonic sequence numbers and the fixed transaction kinds
-`publication`, `finalization`, and `other`. The public
-`Database::with_transaction` API and the single semaphore/connection remain
-unchanged. Publication and durable finalization use named internal entry
-points solely to label their records.
+## Passive checkpoint maintenance (M001)
 
-In a feature build, `Database::configure` queries effective `journal_mode`,
-`synchronous`, `page_size`, and `wal_autocheckpoint` on that same connection.
-The feature-only `EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES` startup
-override accepts `0..=100000`; it is applied once during configuration and is
-never part of `Config`, reload policy, CLI help, or production defaults. The
-authenticated `/api/stats/runtime` projection exposes the bounded snapshot
-only in this qualification build. Ordinary builds neither collect records nor
-consult the environment variable.
+`Database::checkpoint_maintenance` runs on the same gate/worker with a crate-private `CheckpointMaintenancePolicy` (soft WAL-frame threshold, default 256) and returns `CheckpointMaintenanceOutcome` (`not_due` / `gate_busy` / `below_threshold` / `checkpointed` plus scalar frame counts): idle ticks perform no SQLite work (in-memory durable-transaction watermark), busy-gate ticks defer via `try_acquire`, and `PRAGMA wal_checkpoint(PASSIVE)` runs only when the soft threshold is due (`NOOP` observation otherwise). The 1000-page `wal_autocheckpoint` ceiling stays the hard fallback; no checkpoint work runs inside publication/finalization code, and no public config/CLI/HTTP surface is added. The task polls every 60s (`CHECKPOINT_POLL_INTERVAL_S`); feature-only overrides follow Plan 239 rules (validated at startup, absent from ordinary builds).
 
-`scripts/qualification_sbc.py --diagnose-publication-phases` waits for fixed
-database-task quiescence, captures a record-sequence baseline, runs exactly 60
-sequential native finite requests, and requires one successful publication and
-finalization record per request. It retains phase summaries and correlated
-scalars for only the five slowest requests; it rejects missing/duplicate
-foreground records, failed requests, background task ticks, and ownership
-non-convergence. H0 uses the effective default, H1 uses `0`, and H2 uses `256`
-only when H0/H1 satisfy Plan 239's predicate. Neither override is a production
-recommendation, and no explicit checkpoint is run inside the measured batch.
+## Qualification diagnostics (Plans 238/239, tooling only)
 
-## Passive-checkpoint production follow-up (Plan 240, design only)
+Plan 238's `scripts/qualification_sbc.py --diagnose-publication-storage` waits for task quiescence, runs bounded sequential native finite requests, and retains only scalar page-size/checkpoint-sequence facts. Plan 239's `qualification-db-diagnostics` feature adds a bounded 256-entry in-memory collector (`RECORD_CAPACITY`, `sqlite-db-phase.v1`) keyed by transaction kind with monotonic sequence numbers; `EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES` (`0..=100000`) applies once at startup and never enters `Config`, reload policy, or production defaults. The authenticated `/api/stats/runtime` projection exposes the snapshot only in feature builds. Plan 240 authorizes no runtime change: single connection/gate, WAL/NORMAL, existing ownership, and the passive maintenance boundary stay as-is pending a reviewed design.
 
-Plan 239 classified the Pi MMC tail as I1 (foreground SQLite automatic-
-checkpoint work). Plan 240 is the separate production-design handoff and
-authorizes no runtime change: the single connection/gate and DB worker, WAL
-mode with `synchronous = "NORMAL"`, existing publication/finalization
-ownership, and the pre-existing maintenance-task
-`PRAGMA wal_checkpoint(PASSIVE)` boundary remain the production policy. Any
-future scheduling proposal must preserve durability, stay on the existing DB
-worker unless separately evidenced, bound WAL growth across
-restart/reload/backup/restore/recovery, keep qualification diagnostics out of
-ordinary release builds, and arrive with the focused loopback evidence required
-by Plan 240 before a default change is considered.
+## M004 checkpoint context
 
-## Bounded passive checkpoint scheduling (persistence M001)
+Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC artifacts and rejected the periodic 60s/256 strategy on the target class: three 60-request phase runs showed maxima of 1709 ms, 561 ms, and 10 943 ms with foreground publication `COMMIT` owning 522 ms–10.9 s of automatic-checkpoint work, and ordinary 30-sample benchmarks cannot complete against the runner's 5 s per-request timeout. The M001 mechanism is retained as additive-safe with no retune; persistence M003's event-assisted wake was separately rejected and reverted after transferring 1.88–3.30 s stalls into finalization gate wait.
 
-The landed M001 candidate is conditionally closed: it keeps every Plan 240
-invariant and makes the
-existing process-owned `checkpoint` task opportunistic instead of periodic-
-unconditional. M004 (`plans/closure/persistence/004-status.md`, closed against
-HEAD `8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts at
-`artifacts/qualification/m004/` (11 phase-diagnostic runs plus 3 ordinary
-benchmark runs) and **rejected the periodic strategy** on the target class.
-Three 60s/256 phase runs had maxima of 1709 ms, 561 ms, and 10 943 ms with
-foreground publication `COMMIT` 522 ms – 10.9 s on the slowest request in every
-run; bounded matrix candidates (60s/128, 60s/64, 30s/64) and the minimum-cadence
-1s/64 stress run all left the foreground tail; ordinary
-`--benchmark-samples 10` runs converged with backup / recovery / restart /
-shutdown / rehash / bounded-maintenance / graceful-shutdown all green but
-`--benchmark-samples 30` cannot complete because the residual auto-checkpoint
-tail exceeds the runner's 5 s per-request HTTP timeout. The M001 mechanism is
-**retained as additive-safe** per Plan 240 §9 and M004 §6.2 — no constant
-retune is authorized — but its performance claim is unfulfilled.
-`Database::checkpoint_maintenance` (in `rust/src/db/connection.rs`) runs on
-the same gate/worker with a crate-private `CheckpointMaintenancePolicy` (soft
-WAL-frame threshold, default 256) and returns a bounded
-`CheckpointMaintenanceOutcome` (`not_due`/`gate_busy`/`below_threshold`/
-`checkpointed` plus scalar frame counts):
+## Invariants
 
-- the tick first compares the in-memory durable-transaction counter against
-  its last observed watermark, so an idle process performs no SQLite work;
-- optional work uses `try_acquire` on the existing gate and defers when the
-  gate is already owned instead of queueing behind foreground work;
-- once the gate is owned, WAL frames are observed through SQLite itself
-  (`PRAGMA wal_checkpoint(NOOP)`, no checkpoint work) and
-  `PRAGMA wal_checkpoint(PASSIVE)` runs only when the soft threshold is due;
-- the production `wal_autocheckpoint` safety ceiling (1000 pages) is
-  unchanged and remains the hard fallback under bursts or repeated deferrals;
-- no checkpoint work runs inside coordinator publication/finalization code,
-  and no public config/CLI/HTTP/Rust surface is added.
-
-The task polls every 60 seconds (`CHECKPOINT_POLL_INTERVAL_S` in
-`rust/src/task_supervisor.rs`; wakeups are atomic-counter checks when idle).
-Feature-only qualification overrides
-(`EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S` in 1..=3600 seconds,
-`EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES` in 1..=1000 frames) follow the
-Plan 239 rules: validated at database startup, absent from ordinary builds,
-and recorded in the sanitized artifact. Maintenance counters and the
-effective soft threshold ride the existing authenticated
-`database_qualification.checkpoint_maintenance` projection; ordinary runtime
-JSON is unchanged. `scripts/qualification_sbc.py
---diagnose-checkpoint-maintenance` (requires `--diagnose-publication-phases`)
-records baseline/final projections with bounded tick deltas and exempts
-checkpoint ticks from the Plan 239 contamination rule, since the maintenance
-tick is the measured subject and per-record gate-wait phases already capture
-any foreground wait behind PASSIVE work.
-
-Physical qualification disposition (persistence M004, closed; evidence
-narration corrected by persistence M005, `plans/closure/persistence/005-status.md`):
-the periodic 60s/256 candidate was rejected on the Pi 5 / ext4 / MMC target class
-because the long-cadence maintenance ticks do not run inside these finite bursts
-at all, and the foreground publication `COMMIT` therefore owns the 1000-page
-automatic-checkpoint safety ceiling. Read measured-window activity from the
-artifact `deltas` fields, not from the cumulative `baseline`/`final` snapshots:
-every 30 s and 60 s phase run recorded a checkpoint task tick delta of 0 and zero
-maintenance actions in the batch, so the single cumulative `below_threshold` in
-the baseline is pre-batch history; the 1s/64 stress run recorded 3 in-batch
-checkpoint ticks and all three deferred with `gate_busy` (0 `checkpointed`,
-0 `below_threshold`). The landed M001 mechanism stays as the conservative production owner (60-second poll, 256-frame soft threshold, unchanged 1000-page automatic fallback) with no retune. Persistence M003 then tested a successful-COMMIT-derived coalescing wake on the same serialized database gate/worker. Physical Pi/MMC qualification showed the event path removed the publication-COMMIT checkpoint tail but transferred 1.88–3.30 second stalls into foreground finalization gate wait. The candidate was rejected and reverted in `29bcbb4e`; the retained runtime contains no M003 commit signal or event wake. See `plans/closure/persistence/003-status.md`. Any future checkpoint redesign must be separately planned against this tail-transfer evidence.
+- One connection, one serialized gate, one worker; WAL/NORMAL; caller-owned transactions.
+- Migrations immutable and checksum-pinned; unknown or mismatched ledgers fail closed.
+- `backup_to` is a primitive; orchestration, validation, and restore stay in `operations/backup.rs`.
+- Startup reconciliation repairs only covered states; ambiguity never resolves silently.

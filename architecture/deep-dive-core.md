@@ -53,10 +53,14 @@ with checksums; there is no second Rust-local copy to synchronize.
 `onboard`, `croncheck`, `ensure-running`, `migrate`, `stop`, `restart`,
 `init-config`, `help`, `recover`, `uninstall`, `update`,
 `install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`,
-`version`). `rust/src/runtime.rs` owns command dispatch, stable exit-code
+`version` — 34 top-level `Command` variants; `configsetup`, `accounts`,
+`dashboard`, `db`, `models`, `modelinfo`, `stats`, `deploy`, and `connect`
+take subcommands). `rust/src/runtime.rs` owns command dispatch, stable exit-code
 adaptation, human output, and JSON output. CLI-only prompts remain in the
 runtime adapter.
-The reusable local process workflow is `rust/src/operations/lifecycle.rs`;
+The reusable local process workflow is `rust/src/operations/lifecycle.rs`
+(`ensure_start_safe`, `spawn_detached`, `stop`, `restart`,
+`restart_for_mutation`, `ensure_running`);
 `rust/src/operations/status.rs` owns compact proxy/provider health
 aggregation shared with `readyz` (see [Control](deep-dive-control.md));
 `rust/src/server/*` stays thin with no coordinator retries/finalization.

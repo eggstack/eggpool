@@ -1,58 +1,45 @@
 # Deep Dive: Background Tasks
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §10](overview.md) and [Runtime](deep-dive-runtime.md).
 
-`rust/src/task_supervisor.rs` manages startup and periodic work.
-`RuntimeTaskSpec { interval_s, initial_delay_s, run_immediately, timeout_s,
-ownership, enabled, ... }` is the immutable, secret-free task description;
-`TaskOwnership::{Process, ActiveGenerationLeased}` decides whether a tick
-runs with a process marker or leases the active generation. Tasks are
-either process-owned, surviving safe generation swaps, or
-generation-leased,
-retiring with the generation that created them. The frozen
-`RUNTIME_TASK_NAMES` inventory has six rows; `runtime_task_inventory()` sets
-defaults and `runtime_task_specs_for_config()` applies config gates.
+## Ownership
 
-## Task classes
+`rust/src/task_supervisor.rs` is the sole owner of supervised task handles, callback registration, task-spec diffs, and bounded task shutdown. `ProcessRuntime::task_supervisor` holds the single process-owned `RuntimeTaskSupervisor`; `ReloadService` stages `PreparedTaskDiff` values against it, and `close_runtime_resources_until` shuts it down inside the foreground deadline. Business logic lives in callbacks (`TaskCallbackRegistry`); the supervisor owns only scheduling and lifecycle state.
 
-Process-owned tasks cover opportunistic SQLite WAL checkpointing
-(`checkpoint`, every 60 seconds; the tick skips cheaply when no durable
-transaction completed since the previous tick and defers rather than
-queueing when the single database gate is busy, per persistence M001 —
-M004 (`plans/closure/persistence/004-status.md`, closed against HEAD
-`8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts and
-**rejected the periodic strategy** on the target class, so the 60s/256-frame
-default is now conservative and unproven-on-target rather than target-
-accepted; the landed mechanism is retained as additive-safe per Plan 240 §9
-and M004 §6.2. Persistence M003 subsequently tested an event-assisted wake in this same process-owned task, but paired Pi/MMC qualification showed 1.88–3.30 second foreground finalization gate waits; the implementation was rejected and reverted, so the shipped checkpoint task remains timer-only),
-metrics flushing (`metrics_flush` via `operations/metrics.rs::
-MetricsWriteCoalescer`, skipped when `metrics.write_mode = "immediate"`),optional update checking (`update_checker` via
-`operations/update.rs::UpdateCheckerState` + `register_update_checker`),
-and optional automatic backups (`automatic_backup`, gated by
-`[backup].enabled`/`interval_s`/`startup_delay_s`). Generation-leased tasks cover catalog
-refresh (`catalog_refresh`, also the opportunity
-for bounded model-info enrichment; there is no separate model-info scheduler)
-and retention/reconciliation (`retention_cleanup`).
+## Task description and ownership
 
-The supervisor uses fixed-delay scheduling: the next interval starts after the
-previous tick completes. Task inventory and operational profiles are bounded
-diagnostics, not a performance benchmark or a runtime authority.
+`RuntimeTaskSpec { name, interval_s, initial_delay_s, run_immediately, timeout_s, ownership, enabled, description, reloadable_fields, generation_dependencies, process_dependencies, callback_kind }` is the immutable, secret-free task description. `TaskOwnership::{Process, ActiveGenerationLeased}` (plus reserved `Unsupported`, rejected before commit) decides what one tick receives: `TaskTickContext::Process` runs with a process marker and survives generation swaps, while `TaskTickContext::Generation(lease)` acquires a fresh active-generation lease per tick and drops it before the next sleep. No long-lived loop ever captures a generation.
 
-## Recovery and shutdown
+## Six-row inventory
 
-Startup reconciliation repairs interrupted requests and expired reservations
-under the database transaction contract. Backup and metrics tasks preserve
-bounded queues and report failures without losing the active generation.
-Shutdown joins request, finalization, and generation-owned work before closing
-the process-owned database.
+`RUNTIME_TASK_NAMES` is frozen at six rows; `runtime_task_inventory()` sets defaults and `runtime_task_specs_for_config()` applies config gates (disabled rows stay visible for deterministic diffs but own no loop):
 
-## Update authority
+| Name | Ownership | Default cadence | Gate |
+|---|---|---|---|
+| `catalog_refresh` | generation-leased | 300s | `models.refresh_interval_s` (0 disables) |
+| `retention_cleanup` | generation-leased | 86400s | `metrics.cleanup_interval_s` |
+| `checkpoint` | process | 60s (`CHECKPOINT_POLL_INTERVAL_S`) | always on |
+| `metrics_flush` | process | 30s, 5s delay | skipped when `metrics.write_mode = "immediate"` |
+| `update_checker` | process | 86400s, immediate | `update_checker.enabled` |
+| `automatic_backup` | process | 86400s, 300s delay | `[backup].enabled`/`interval_s`/`startup_delay_s` |
 
-`rust/src/operations/update.rs` (separate Hyper/Rustls owner: public release
-metadata over its own client, never provider routing, proxy, or credentials;
-SHA-256 verified artifacts, staged executable self-check, atomic rename with
-rollback) separates conservative background freshness
-probes from explicit exact-version resolution against
-`operations/catalog.rs::ReleaseCatalog`. Latest/default resolution is
-Rust-only; a historical Python release is considered only when an operator
-requests an exact catalogued compatible target.
+`catalog_refresh` is also the bounded model-info enrichment opportunity; there is no separate model-info scheduler.
+
+## Scheduling and supervision
+
+Scheduling is fixed-delay: the next interval starts after the previous tick completes (`run_task` records `TaskOutcome`: `Success`/`Error`/`TimedOut`/`Panicked`/`GenerationUnavailable`/`Cancelled`, then waits). Generation-leased ticks acquire the manager per tick and exit quietly on `ShuttingDown`; admission closure during a staged swap surfaces as `GenerationUnavailable`, never as fabricated success. `prepare_diff` validates specs (names, intervals, callback capabilities, ownership) and pre-allocates callback/channel state; `commit` applies only added/removed/rescheduled rows; `rollback` discards a staged diff synchronously, while `rollback_committed` restores the pre-commit set after a late SQLite compensation. `TaskTransition` and `TaskShutdownReport` are the bounded, secret-free evidence.
+
+## Callbacks
+
+`TaskCallbackRegistry::with_checkpoint` registers the opportunistic WAL-maintenance tick (idle ticks skip via one in-memory transaction counter; busy-gate ticks defer via `try_acquire` rather than queueing). `with_generation_maintenance` adds catalog refresh and retention cleanup. `register_metrics_flush` (via `operations/metrics.rs::MetricsWriteCoalescer`), `register_update_checker` (via `operations/update.rs::UpdateCheckerState`, check-only probes), and `register_automatic_backup` (re-resolves config per tick so reloads change directory/retention without capturing a retiring generation) complete the set. `capability_inventory` keeps deferred rows explicit instead of silently installing no-ops.
+
+## Checkpoint qualification context
+
+Persistence M004 (`plans/closure/persistence/004-status.md`, closed against HEAD `8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts and rejected the periodic 60s/256-frame checkpoint strategy on the target class: maintenance ticks do not fire inside short finite bursts, so the foreground publication `COMMIT` still owns the 1000-page automatic-checkpoint ceiling. The landed mechanism is retained as additive-safe per Plan 240 §9 with no constant retune authorized.
+
+## Invariants
+
+- One supervisor, fixed-delay loops, per-tick leases; generations are never captured.
+- Task inventory and operational profiles are bounded diagnostics, not a performance benchmark or runtime authority.
+- Backup and metrics tasks use bounded queues and report failures without losing the active generation.
+- Shutdown joins supervised work before generation close and database close.

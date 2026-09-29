@@ -10,6 +10,11 @@ Production deployment, systemd integration, operational scripts, and the tools n
 
 ### `deploy/`
 
+The checked-in `deploy/` directory is the deployed-artifact reference (it
+exists: `eggpool.service`, `eggpool-logrotate.conf`, `env.example`). Do not
+copy a unit from memory; read `deploy/eggpool.service` or regenerate via
+the CLI.
+
 | File | Purpose |
 |------|---------|
 | `eggpool.service` | Systemd unit file |
@@ -27,11 +32,13 @@ rendering and process commands are implemented in `rust/src/operations/`.
 
 ### `rust/src/operations/lifecycle.rs`
 
-Detached startup, safe stop/restart, independent EggPool identity proof, and
-the watchdog start workflow are composed here from `process.rs`, `paths.rs`,
+Detached startup (`spawn_detached`), safe stop/restart
+(`stop`/`restart`/`restart_for_mutation`), independent EggPool identity proof, and
+the watchdog start workflow (`ensure_running`, `ensure_start_safe`) are composed here from `process.rs`, `paths.rs`,
 and `control.rs`. Restart-after-mutation is also owned here, so operations do
 not depend on the CLI runtime adapter. The CLI adapter in
 `rust/src/runtime.rs` retains prompts, human output, and exit-code mapping.
+`eggpool serve` runs detached by default; `--verbose` selects foreground mode.
 
 ## Installation
 
@@ -95,9 +102,10 @@ are owned by `rust/src/operations/deploy.rs` (`render_production_systemd` and
 related renderers for personal/production layouts, logrotate, and cron). The
 checked-in unit and the renderer output are related but not byte-identical
 artifacts: the deployed file carries the production hardening set
-(`Environment=HOME/PATH/PIPX_HOME/PIPX_BIN_DIR/EGGPOOL_LOG_FILE`,
-`ProtectHome`, extended `ReadWritePaths`, `StartLimitInterval`/`StartLimitBurst`,
-and the SIGHUP/reload comment), while renderers cover personal and production
+(`EnvironmentFile` plus `HOME`/`PATH`/`PIPX_HOME`/`PIPX_BIN_DIR`/
+`EGGPOOL_LOG_FILE`, `ProtectHome`, `ReadWritePaths`,
+`StartLimitIntervalSec`/`StartLimitBurst`, and the SIGHUP-is-not-reload
+comment), while renderers cover personal and production
 variants with their own `ExecStart`/`ReadWritePaths` shapes. Do not copy a unit
 from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 
@@ -108,7 +116,7 @@ from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 Runtime configuration. Selected sections (see `config.example.toml` and
 `rust/src/config.rs` for the full contract):
 - `[server]` — host (canonical default `0.0.0.0` for LAN access; the SBC
-  profile deliberately overrides to loopback-only), port, and
+  profile deliberately overrides to loopback-only), port (`11300`), and
   compatibility/diagnostic settings
 - `[upstream]` — default upstream settings
 - `[database]` — SQLite path, WAL mode
@@ -145,9 +153,19 @@ API key storage. Never committed.
 
 Self-updating HTML dashboard with 50 named theme files plus a built-in default (51 choices in `THEME_NAMES`):
 - `/` — Overview
-- `/models` — Model catalog
-- `/runtime` — Live metrics
-- `/cache` — Request shaping
+- `/accounts` — Account health
+- `/models` — Model catalog (plus `/models/{*model_id}` detail)
+- `/latency` — TTFT/latency breakdown
+- `/events` — Operational events
+- `/timeseries` — Usage timeseries
+- `/bandwidth` — Transfer totals
+- `/pings` — Catalog probe history
+- `/reliability` — Attempts and retry distribution
+- `/routing` — Routing decisions and selection distribution
+- `/traces` — Recent requests
+- `/runtime` — Runtime snapshot
+- `/cache` — Cache observations
+- `GET /api/stats/summary` — JSON summary for the selected period
 
 ### JSON API
 
