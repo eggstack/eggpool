@@ -522,7 +522,8 @@ impl SemanticSelector {
         let initial = self.execute_selector(router, &prompt.payload).await;
         let (status, body) = match initial {
             Ok((status, body)) => (status, body),
-            Err(_) => {
+            Err(error) => {
+                tracing::debug!(error = ?error, "selector dispatch failed");
                 return self.fallback(
                     router,
                     started,
@@ -577,7 +578,8 @@ impl SemanticSelector {
             let repaired = self.execute_selector(router, &repair).await;
             let (status, body) = match repaired {
                 Ok(value) => value,
-                Err(_) => {
+                Err(error) => {
+                    tracing::debug!(error = ?error, "selector repair dispatch failed");
                     return self.fallback(
                         router,
                         started,
@@ -680,7 +682,7 @@ impl SemanticSelector {
             body_payload.insert("model".into(), Value::String(dispatch_model.clone()));
         }
         let body = serde_json::to_vec(&Value::Object(body_payload))
-            .map_err(|_| SelectorDispatchError::Encode)?;
+            .map_err(|error| SelectorDispatchError::Encode(error.to_string()))?;
         let mut request = FiniteRequest::new(
             next_selector_request_id(&router.virtual_model),
             Bytes::from(body),
@@ -695,13 +697,13 @@ impl SemanticSelector {
                 now: 0,
             },
         )
-        .map_err(|_| SelectorDispatchError::Admission)?;
+        .map_err(|error| SelectorDispatchError::Admission(error.to_string()))?;
         request.routing_facts.provider_id = provider_pin;
         let execution = self
             .coordinator
             .execute(request)
             .await
-            .map_err(|_| SelectorDispatchError::Dispatch)?;
+            .map_err(|error| SelectorDispatchError::Dispatch(error.to_string()))?;
         let status = execution.response.status.as_u16();
         let body = execution.response.body.clone();
         // Converge retained C006 ownership before reading the route ID so a
@@ -749,12 +751,28 @@ impl SemanticSelector {
         repair_attempted: bool,
         repair_succeeded: bool,
     ) -> ModelSelection {
-        let default = default_route(router);
+        // Fail closed on a corrupt registry (default model without a route)
+        // by synthesizing from the default model string instead of panicking.
+        let (route_id, route_label, concrete_model) = default_route(router)
+            .map(|default| {
+                (
+                    default.route_id.clone(),
+                    default.label.clone(),
+                    default.model.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    router.default_model.clone(),
+                    router.default_model.clone(),
+                    router.default_model.clone(),
+                )
+            });
         ModelSelection {
             virtual_model: router.virtual_model.clone(),
-            route_id: default.route_id.clone(),
-            route_label: default.label.clone(),
-            concrete_model: default.model.clone(),
+            route_id,
+            route_label,
+            concrete_model,
             source: SelectionSource::Default,
             selector_attempts: attempts,
             selector_latency_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
@@ -782,21 +800,20 @@ impl SemanticSelector {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SelectorDispatchError {
     ModelMismatch,
     Recursive,
-    Encode,
-    Admission,
-    Dispatch,
+    Encode(String),
+    Admission(String),
+    Dispatch(String),
 }
 
-fn default_route(router: &CompiledModelRouter) -> &crate::model_router::CompiledModelRoute {
+fn default_route(router: &CompiledModelRouter) -> Option<&crate::model_router::CompiledModelRoute> {
     router
         .routes
         .iter()
         .find(|route| route.model == router.default_model)
-        .expect("compiled router default_model has a route")
 }
 
 #[cfg(test)]

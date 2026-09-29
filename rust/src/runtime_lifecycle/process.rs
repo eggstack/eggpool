@@ -212,7 +212,7 @@ impl ProcessRuntime {
     pub fn startup_recovery_report(&self) -> Option<StartupRecoveryReport> {
         self.startup_recovery_report
             .lock()
-            .expect("startup recovery report lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -220,7 +220,7 @@ impl ProcessRuntime {
         *self
             .startup_recovery_report
             .lock()
-            .expect("startup recovery report lock") = Some(report);
+            .unwrap_or_else(|e| e.into_inner()) = Some(report);
     }
 
     /// Run C010 to convergence before candidate construction or request
@@ -263,7 +263,7 @@ impl ProcessRuntime {
         &self,
         manager: &RuntimeManager,
     ) -> ReloadDiagnosticGuard {
-        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        let mut diagnostics = self.diagnostics.lock().unwrap_or_else(|e| e.into_inner());
         let owner = self.next_reload_owner.fetch_add(1, Ordering::Relaxed);
         diagnostics.reload_in_progress = true;
         diagnostics.reload_phase = "running".to_owned();
@@ -280,7 +280,7 @@ impl ProcessRuntime {
     }
 
     fn record_reload_diagnostics(&self, owner: u64, result: &crate::reload::ReloadResult) {
-        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        let mut diagnostics = self.diagnostics.lock().unwrap_or_else(|e| e.into_inner());
         if diagnostics.reload_owner != Some(owner) {
             return;
         }
@@ -319,7 +319,7 @@ impl ProcessRuntime {
     }
 
     pub(crate) fn set_shutdown_diagnostics(&self, phase: &str, forced: bool) {
-        let mut diagnostics = self.diagnostics.lock().expect("runtime diagnostics lock");
+        let mut diagnostics = self.diagnostics.lock().unwrap_or_else(|e| e.into_inner());
         if diagnostics.shutdown.phase != phase && phase == "quiescing" {
             diagnostics.counters.shutdowns = diagnostics.counters.shutdowns.saturating_add(1);
         }
@@ -347,7 +347,7 @@ impl ProcessRuntime {
         let mut diagnostics = self
             .diagnostics
             .lock()
-            .expect("runtime diagnostics lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         diagnostics.counters.task_transitions = task_count;
         diagnostics.counters.retirement_completed = manager_snapshot.retirement_completed;

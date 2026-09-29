@@ -465,9 +465,14 @@ pub fn entry_from_row(
     row: &crate::health::repository::ModelQuarantineRecord,
 ) -> Result<QuarantineEntry, String> {
     let state = QuarantineState::try_from(row.state.as_str())
-        .map_err(|_| "invalid quarantine state".to_owned())?;
-    let provenance = EvidenceProvenance::try_from(row.evidence_provenance.as_str())
-        .map_err(|_| "invalid quarantine evidence provenance".to_owned())?;
+        .map_err(|_| format!("invalid quarantine state {:?}", row.state))?;
+    let provenance =
+        EvidenceProvenance::try_from(row.evidence_provenance.as_str()).map_err(|_| {
+            format!(
+                "invalid quarantine evidence provenance {:?}",
+                row.evidence_provenance
+            )
+        })?;
     for (name, value) in [
         ("provider_id", &row.provider_id),
         ("account_id", &row.account_id),

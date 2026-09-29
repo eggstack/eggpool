@@ -309,7 +309,7 @@ impl MetricsWriteCoalescer {
         // Strings, so the already-owned event is never deep-cloned.
         let mut delta = Aggregate::default();
         delta.add(&event);
-        let mut state = self.inner.lock().expect("metrics state lock");
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if state.pending_events >= self.max_pending_events {
             state.total_dropped = state.total_dropped.saturating_add(1);
             return false;
@@ -360,7 +360,7 @@ impl MetricsWriteCoalescer {
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {
-        let state = self.inner.lock().expect("metrics state lock");
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         MetricsSnapshot {
             buffered_events: state.pending_events,
             buffered_rows: state.buffer.len(),
@@ -375,7 +375,7 @@ impl MetricsWriteCoalescer {
     pub async fn flush(&self) -> Result<usize, MetricsFlushError> {
         let _guard = self.flush_lock.lock().await;
         let batch = {
-            let mut state = self.inner.lock().expect("metrics state lock");
+            let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let batch = std::mem::take(&mut state.buffer);
             state.pending_events = 0;
             batch
@@ -459,14 +459,14 @@ impl MetricsWriteCoalescer {
             .await;
         match result {
             Ok(()) => {
-                let mut state = self.inner.lock().expect("metrics state lock");
+                let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 let count = row_count;
                 state.total_flushed = state.total_flushed.saturating_add(flushed_events);
                 state.last_flush_rows = count;
                 Ok(count)
             }
             Err(error) => {
-                let mut state = self.inner.lock().expect("metrics state lock");
+                let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 state.flush_failures = state.flush_failures.saturating_add(1);
                 for row in rows.iter() {
                     let event_count = row.aggregate.request_count.max(0) as usize;

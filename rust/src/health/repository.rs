@@ -349,7 +349,7 @@ fn parse_backoff(raw: RawBackoff) -> Result<AccountBackoffRecord, AccountBackoff
         ));
     }
     let reason = BackoffReason::try_from(raw.reason.as_str())
-        .map_err(|_| AccountBackoffRepositoryError::Invalid("reason".to_owned()))?;
+        .map_err(|_| AccountBackoffRepositoryError::Invalid(format!("reason {:?}", raw.reason)))?;
     if reason == BackoffReason::ModelUnavailable && raw.model_id.is_none() {
         return Err(AccountBackoffRepositoryError::Invalid(
             "model-scoped reason has no model".to_owned(),
@@ -364,8 +364,9 @@ fn parse_backoff(raw: RawBackoff) -> Result<AccountBackoffRecord, AccountBackoff
         }
         None => None,
     };
-    let consecutive_failures = u32::try_from(raw.consecutive_failures)
-        .map_err(|_| AccountBackoffRepositoryError::Invalid("consecutive_failures".to_owned()))?;
+    let consecutive_failures = u32::try_from(raw.consecutive_failures).map_err(|error| {
+        AccountBackoffRepositoryError::Invalid(format!("consecutive_failures: {error}"))
+    })?;
     let last_failure_epoch = required_timestamp(&raw.last_failure_at, "last_failure_at")
         .map_err(AccountBackoffRepositoryError::Invalid)?;
     let updated_epoch = required_timestamp(&raw.updated_at, "updated_at")

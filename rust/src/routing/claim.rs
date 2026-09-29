@@ -278,7 +278,12 @@ impl SelectionClaim {
         )?;
         decrement_active(&mut book, &self.account_name)?;
         release_probe(&self.health, &self.account_name, self.owns_probe);
-        book.claims.get_mut(&self.id).expect("claim exists").state = ClaimState::RolledBack;
+        let Some(claim) = book.claims.get_mut(&self.id) else {
+            return Err(ClaimError::UnknownAccount {
+                account_name: self.account_name.clone(),
+            });
+        };
+        claim.state = ClaimState::RolledBack;
         prune_terminal_claims(&mut book);
         Ok(ClaimTransition::RolledBack)
     }
@@ -302,7 +307,12 @@ impl SelectionClaim {
             self.projected_tokens,
             self.projected_cost_microdollars,
         )?;
-        book.claims.get_mut(&self.id).expect("claim exists").state = ClaimState::Converted;
+        let Some(claim) = book.claims.get_mut(&self.id) else {
+            return Err(ClaimError::UnknownAccount {
+                account_name: self.account_name.clone(),
+            });
+        };
+        claim.state = ClaimState::Converted;
         Ok(ClaimTransition::Converted)
     }
 
@@ -326,7 +336,12 @@ impl SelectionClaim {
         }
         decrement_active(&mut book, &self.account_name)?;
         release_probe(&self.health, &self.account_name, self.owns_probe);
-        book.claims.get_mut(&self.id).expect("claim exists").state = ClaimState::Released;
+        let Some(claim) = book.claims.get_mut(&self.id) else {
+            return Err(ClaimError::UnknownAccount {
+                account_name: self.account_name.clone(),
+            });
+        };
+        claim.state = ClaimState::Released;
         prune_terminal_claims(&mut book);
         Ok(ClaimTransition::Released)
     }
@@ -353,10 +368,12 @@ impl SelectionClaim {
             self.projected_tokens,
             self.projected_cost_microdollars,
         )?;
-        book.claims
-            .get_mut(&self.id)
-            .expect("claim exists")
-            .quota_released = true;
+        let Some(claim) = book.claims.get_mut(&self.id) else {
+            return Err(ClaimError::UnknownAccount {
+                account_name: self.account_name.clone(),
+            });
+        };
+        claim.quota_released = true;
         Ok(ClaimTransition::Released)
     }
 }

@@ -403,7 +403,7 @@ impl ControlServerHandle {
             .inner
             .accept_task
             .lock()
-            .expect("control accept task lock")
+            .unwrap_or_else(|e| e.into_inner())
             .take();
         if let Some(task) = task {
             task.await.map_err(|_| ControlError::Join)?;
@@ -510,7 +510,14 @@ async fn handle_connection(mut stream: tokio::net::UnixStream, handler: ControlH
         Err(_) => return,
     };
     output.push(b'\n');
-    let _ = timeout(CONTROL_TIMEOUT, stream.write_all(&output)).await;
+    // Best-effort: the response was already computed; a failed control write
+    // only means the CLI caller went away. Log at debug for diagnostics.
+    if timeout(CONTROL_TIMEOUT, stream.write_all(&output))
+        .await
+        .is_err()
+    {
+        tracing::debug!("control response write failed");
+    }
 }
 
 #[cfg(unix)]

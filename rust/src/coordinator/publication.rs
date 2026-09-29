@@ -149,26 +149,26 @@ impl PublicationFaultInjector {
     }
 
     pub fn fired_stage(&self) -> Option<PublicationStage> {
-        *self.fired.lock().expect("publication fault lock")
+        *self.fired.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn take(&self, stage: PublicationStage) -> bool {
-        let mut requested = self.requested.lock().expect("publication fault lock");
+        let mut requested = self.requested.lock().unwrap_or_else(|e| e.into_inner());
         if requested.as_ref() != Some(&stage) {
             return false;
         }
         *requested = None;
-        *self.fired.lock().expect("publication fault lock") = Some(stage);
+        *self.fired.lock().unwrap_or_else(|e| e.into_inner()) = Some(stage);
         true
     }
 
     fn pause(&self, stage: PublicationStage) {
-        let pause = self.pause.lock().expect("publication pause lock").take();
+        let pause = self.pause.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(pause) = pause.as_ref().filter(|pause| pause.stage == stage) {
             pause.entered.store(true, Ordering::Release);
             pause.barrier.wait();
         } else if let Some(pause) = pause {
-            *self.pause.lock().expect("publication pause lock") = Some(pause);
+            *self.pause.lock().unwrap_or_else(|e| e.into_inner()) = Some(pause);
         }
     }
 }
@@ -502,10 +502,12 @@ impl PublicationService {
                             || existing_provider_id != provider_id
                             || existing_model_id != model_id
                             || existing_protocol != upstream_protocol
-                            || reservation_id.is_none()
                         {
                             return Ok(TransactionOutcome::Conflict);
                         }
+                        let Some(reservation_id) = reservation_id else {
+                            return Ok(TransactionOutcome::Conflict);
+                        };
                         let existing_account_name = connection.query_row(
                             "SELECT name FROM accounts WHERE id = ?1",
                             [existing_account_id],
@@ -515,7 +517,7 @@ impl PublicationService {
                             proxy_request_id: input.proxy_request_id,
                             db_request_id: request_id,
                             attempt_id,
-                            reservation_id: reservation_id.expect("checked above"),
+                            reservation_id,
                             account_id: existing_account_id,
                             account_name: existing_account_name,
                             provider_id: existing_provider_id,

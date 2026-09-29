@@ -137,7 +137,7 @@ impl RuntimeManager {
             .inner
             .close_timeout
             .lock()
-            .expect("runtime close timeout lock") = timeout;
+            .unwrap_or_else(|e| e.into_inner()) = timeout;
         self
     }
 
@@ -154,7 +154,7 @@ impl RuntimeManager {
     }
 
     pub(crate) fn publication_diagnostics(&self) -> PublicationManagerDiagnostics {
-        let state = self.inner.state.lock().expect("runtime manager state lock");
+        let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         PublicationManagerDiagnostics {
             active: self.active_slot(),
             retiring: self.retiring_slots(),
@@ -170,7 +170,7 @@ impl RuntimeManager {
         self.inner
             .state
             .lock()
-            .expect("runtime manager state lock")
+            .unwrap_or_else(|e| e.into_inner())
             .admission_closed
     }
 
@@ -178,7 +178,7 @@ impl RuntimeManager {
         self.inner
             .state
             .lock()
-            .expect("runtime manager state lock")
+            .unwrap_or_else(|e| e.into_inner())
             .shutdown
     }
 
@@ -187,7 +187,7 @@ impl RuntimeManager {
         self.inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .len()
     }
 
@@ -196,7 +196,7 @@ impl RuntimeManager {
         self.inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -205,7 +205,7 @@ impl RuntimeManager {
         self.inner
             .retirement_tasks
             .lock()
-            .expect("retirement tasks lock")
+            .unwrap_or_else(|e| e.into_inner())
             .len()
     }
 
@@ -213,7 +213,7 @@ impl RuntimeManager {
         self.inner
             .retirement_diagnostics
             .lock()
-            .expect("retirement diagnostics lock")
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .cloned()
             .collect()
@@ -223,13 +223,17 @@ impl RuntimeManager {
     /// resident so accepted work and the failed close can be diagnosed rather
     /// than being forgotten or force-closed.
     pub fn reap_retirements(&self) {
-        let mut retiring = self.inner.retiring.lock().expect("retiring slots lock");
+        let mut retiring = self
+            .inner
+            .retiring
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         retiring.retain(|slot| slot.state() != GenerationSlotState::Closed);
         drop(retiring);
         self.inner
             .retirement_tasks
             .lock()
-            .expect("retirement tasks lock")
+            .unwrap_or_else(|e| e.into_inner())
             .retain(|_, task| !task.is_finished());
     }
 
@@ -332,7 +336,7 @@ impl RuntimeManager {
                 .inner
                 .retirement_tasks
                 .lock()
-                .expect("retirement tasks lock"),
+                .unwrap_or_else(|e| e.into_inner()),
         );
         for (_, task) in tasks {
             task.abort();
@@ -348,7 +352,7 @@ impl RuntimeManager {
         loop {
             let notified = self.inner.gate_notify.notified();
             let maybe_lease = {
-                let state = self.inner.state.lock().expect("runtime manager state lock");
+                let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
                 if state.shutdown {
                     return Err(GenerationAcquireError::ShuttingDown);
                 }
@@ -380,7 +384,7 @@ impl RuntimeManager {
         candidate: &PreparedGeneration,
     ) -> Result<StagedGenerationSwap, GenerationStageError> {
         self.reap_retirements();
-        let mut state = self.inner.state.lock().expect("runtime manager state lock");
+        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.shutdown {
             return Err(GenerationStageError::ShuttingDown);
         }
@@ -424,7 +428,7 @@ impl RuntimeManager {
 
     /// Permanently close new admission. Existing leases remain valid.
     pub fn shutdown(&self) {
-        let mut state = self.inner.state.lock().expect("runtime manager state lock");
+        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         state.shutdown = true;
         state.admission_closed = true;
         self.inner.active.load_full().set_accepting(false);
@@ -432,7 +436,7 @@ impl RuntimeManager {
     }
 
     fn finish_gate(&self) {
-        let mut state = self.inner.state.lock().expect("runtime manager state lock");
+        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         state.pending_swap = false;
         if !state.shutdown {
             state.admission_closed = false;
@@ -452,7 +456,7 @@ impl RuntimeManager {
             .inner
             .retirement_tasks
             .lock()
-            .expect("retirement tasks lock")
+            .unwrap_or_else(|e| e.into_inner())
             .contains_key(&generation_id)
         {
             slot.retirement_scheduled.store(false, Ordering::Release);
@@ -462,14 +466,14 @@ impl RuntimeManager {
             .inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .any(|existing| Arc::ptr_eq(existing, &slot))
         {
             self.inner
                 .retiring
                 .lock()
-                .expect("retiring slots lock")
+                .unwrap_or_else(|e| e.into_inner())
                 .push(Arc::clone(&slot));
         }
         let manager = self.clone();
@@ -477,14 +481,14 @@ impl RuntimeManager {
             .inner
             .close_timeout
             .lock()
-            .expect("runtime close timeout lock");
+            .unwrap_or_else(|e| e.into_inner());
         let task = tokio::spawn(async move {
             manager.retire_slot(slot, timeout).await;
         });
         self.inner
             .retirement_tasks
             .lock()
-            .expect("retirement tasks lock")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(generation_id, task);
         true
     }
@@ -530,7 +534,7 @@ impl RuntimeManager {
             .inner
             .retirement_diagnostics
             .lock()
-            .expect("retirement diagnostics lock");
+            .unwrap_or_else(|e| e.into_inner());
         diagnostics.push_back(RetirementDiagnostic {
             generation_id: slot.generation_id(),
             digest_prefix: slot.digest_prefix().to_owned(),
@@ -616,7 +620,7 @@ impl StagedGenerationSwap {
             .inner
             .state
             .lock()
-            .expect("runtime manager state lock");
+            .unwrap_or_else(|e| e.into_inner());
         if !self.manager.active_matches(&self.old) {
             return Err(GenerationSwapError::ActivePointerChanged);
         }
@@ -640,7 +644,7 @@ impl StagedGenerationSwap {
             .inner
             .state
             .lock()
-            .expect("runtime manager state lock");
+            .unwrap_or_else(|e| e.into_inner());
         if !self.manager.active_matches(&self.new) {
             return Err(GenerationSwapError::ActivePointerChanged);
         }
@@ -664,7 +668,7 @@ impl StagedGenerationSwap {
             .inner
             .state
             .lock()
-            .expect("runtime manager state lock");
+            .unwrap_or_else(|e| e.into_inner());
         if state.shutdown {
             return Err(GenerationSwapError::ShuttingDown);
         }
@@ -685,7 +689,7 @@ impl StagedGenerationSwap {
             .inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .push(Arc::clone(&self.old));
         self.manager.inner.gate_notify.notify_waiters();
         self.phase = SwapPhase::Accepted;
@@ -714,7 +718,7 @@ impl StagedGenerationSwap {
             .inner
             .state
             .lock()
-            .expect("runtime manager state lock");
+            .unwrap_or_else(|e| e.into_inner());
         if !state.shutdown || !self.manager.active_matches(&self.new) {
             return Err(GenerationSwapError::ActivePointerChanged);
         }
@@ -732,7 +736,7 @@ impl StagedGenerationSwap {
             .inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .push(Arc::clone(&self.old));
         self.inner_notify();
         self.phase = SwapPhase::Accepted;
@@ -756,14 +760,14 @@ impl StagedGenerationSwap {
             .inner
             .state
             .lock()
-            .expect("runtime manager state lock");
+            .unwrap_or_else(|e| e.into_inner());
         state.pending_swap = false;
         state.admission_closed = true;
         self.manager
             .inner
             .retiring
             .lock()
-            .expect("retiring slots lock")
+            .unwrap_or_else(|e| e.into_inner())
             .push(Arc::clone(&self.old));
         self.phase = SwapPhase::Accepted;
         self.manager.inner.gate_notify.notify_waiters();

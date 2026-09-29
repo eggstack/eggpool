@@ -508,10 +508,17 @@ fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupErr
         return Ok(());
     }
     let eocd_absolute = size - window + relative as u64;
-    let central_size =
-        u32::from_le_bytes(tail[relative + 12..relative + 16].try_into().unwrap()) as u64;
-    let central_offset =
-        u32::from_le_bytes(tail[relative + 16..relative + 20].try_into().unwrap()) as u64;
+    let Ok(central_size_bytes): Result<[u8; 4], _> = tail[relative + 12..relative + 16].try_into()
+    else {
+        return Ok(());
+    };
+    let Ok(central_offset_bytes): Result<[u8; 4], _> =
+        tail[relative + 16..relative + 20].try_into()
+    else {
+        return Ok(());
+    };
+    let central_size = u32::from_le_bytes(central_size_bytes) as u64;
+    let central_offset = u32::from_le_bytes(central_offset_bytes) as u64;
     if central_size == u64::from(u32::MAX) || central_offset == u64::from(u32::MAX) {
         return Ok(());
     }
@@ -537,12 +544,22 @@ fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupErr
         if cursor + 46 > central_len || &central[cursor..cursor + 4] != b"PK\x01\x02" {
             return Ok(());
         }
-        let name_len =
-            u16::from_le_bytes(central[cursor + 28..cursor + 30].try_into().unwrap()) as usize;
-        let extra_len =
-            u16::from_le_bytes(central[cursor + 30..cursor + 32].try_into().unwrap()) as usize;
-        let comment_len =
-            u16::from_le_bytes(central[cursor + 32..cursor + 34].try_into().unwrap()) as usize;
+        let Ok(name_len_bytes): Result<[u8; 2], _> = central[cursor + 28..cursor + 30].try_into()
+        else {
+            return Ok(());
+        };
+        let Ok(extra_len_bytes): Result<[u8; 2], _> = central[cursor + 30..cursor + 32].try_into()
+        else {
+            return Ok(());
+        };
+        let Ok(comment_len_bytes): Result<[u8; 2], _> =
+            central[cursor + 32..cursor + 34].try_into()
+        else {
+            return Ok(());
+        };
+        let name_len = u16::from_le_bytes(name_len_bytes) as usize;
+        let extra_len = u16::from_le_bytes(extra_len_bytes) as usize;
+        let comment_len = u16::from_le_bytes(comment_len_bytes) as usize;
         let name_start = cursor + 46;
         let record_len = 46usize
             .checked_add(name_len)

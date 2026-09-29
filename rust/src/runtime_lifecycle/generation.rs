@@ -245,7 +245,7 @@ impl GenerationResources {
                 if let Some(report) = self
                     .close_report
                     .lock()
-                    .expect("generation close report lock")
+                    .unwrap_or_else(|e| e.into_inner())
                     .clone()
                 {
                     return report;
@@ -275,10 +275,7 @@ impl GenerationResources {
                 .close_order
                 .push(GenerationCloseStep::ProviderClientsClosed);
         }
-        *self
-            .close_report
-            .lock()
-            .expect("generation close report lock") = Some(forced.clone());
+        *self.close_report.lock().unwrap_or_else(|e| e.into_inner()) = Some(forced.clone());
         self.close_notify.notify_waiters();
         forced
     }
@@ -301,10 +298,7 @@ impl GenerationResources {
             close_order,
             failure,
         };
-        *self
-            .close_report
-            .lock()
-            .expect("generation close report lock") = Some(report.clone());
+        *self.close_report.lock().unwrap_or_else(|e| e.into_inner()) = Some(report.clone());
         self.close_notify.notify_waiters();
         report
     }
@@ -360,7 +354,7 @@ pub struct PreparedGeneration {
 
 impl std::fmt::Debug for PreparedGeneration {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner = self.inner.lock().expect("candidate ownership lock");
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         formatter
             .debug_struct("PreparedGeneration")
             .field("state", &inner.state)
@@ -388,13 +382,13 @@ impl PreparedGeneration {
     }
 
     pub fn ownership(&self) -> CandidateOwnership {
-        self.inner.lock().expect("candidate ownership lock").state
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).state
     }
 
     pub fn generation_id(&self) -> Option<u64> {
         self.inner
             .lock()
-            .expect("candidate ownership lock")
+            .unwrap_or_else(|e| e.into_inner())
             .generation
             .as_ref()
             .map(|generation| generation.generation_id())
@@ -403,14 +397,14 @@ impl PreparedGeneration {
     pub fn generation(&self) -> Option<Arc<RuntimeGeneration>> {
         self.inner
             .lock()
-            .expect("candidate ownership lock")
+            .unwrap_or_else(|e| e.into_inner())
             .generation
             .clone()
     }
 
     /// Transfer cleanup ownership to the future manager exactly once.
     pub fn transfer(&self) -> Result<Arc<RuntimeGeneration>, CandidateTransferError> {
-        let mut inner = self.inner.lock().expect("candidate ownership lock");
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.state != CandidateOwnership::Prepared {
             return Err(CandidateTransferError { state: inner.state });
         }
@@ -427,7 +421,7 @@ impl PreparedGeneration {
         loop {
             let notified = self.abort_notify.notified();
             let generation = {
-                let mut inner = self.inner.lock().expect("candidate ownership lock");
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 match inner.state {
                     CandidateOwnership::Prepared => {
                         inner.state = CandidateOwnership::Aborting;
@@ -453,7 +447,7 @@ impl PreparedGeneration {
 
             if let Some(generation) = generation {
                 let report = generation.close().await;
-                let mut inner = self.inner.lock().expect("candidate ownership lock");
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
                 inner.state = CandidateOwnership::Aborted;
                 inner.close_report = Some(report.clone());
                 self.abort_notify.notify_waiters();
@@ -471,7 +465,7 @@ impl PreparedGeneration {
 
 impl Drop for PreparedGeneration {
     fn drop(&mut self) {
-        let state = self.inner.lock().expect("candidate ownership lock").state;
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner()).state;
         if matches!(
             state,
             CandidateOwnership::Prepared | CandidateOwnership::Aborting

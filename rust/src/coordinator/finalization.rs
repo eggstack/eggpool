@@ -884,7 +884,7 @@ impl FinalizationSupervisor {
             .inner
             .terminal_owner
             .lock()
-            .expect("terminal owner lock") = Some(owner);
+            .unwrap_or_else(|e| e.into_inner()) = Some(owner);
     }
 
     pub fn register(
@@ -905,7 +905,7 @@ impl FinalizationSupervisor {
         let compatibility = command.compatibility();
         let (sender, receiver) = watch::channel(None);
         {
-            let mut jobs = self.inner.jobs.lock().expect("finalization jobs lock");
+            let mut jobs = self.inner.jobs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(existing) = jobs.get(&key) {
                 if existing.compatibility != compatibility {
                     return Err(FinalizationError::IncompatibleCommand);
@@ -921,7 +921,7 @@ impl FinalizationSupervisor {
                 .inner
                 .terminal_owner
                 .lock()
-                .expect("terminal owner lock")
+                .unwrap_or_else(|e| e.into_inner())
                 .as_ref()
                 .and_then(|owner| owner.retain_terminal_reference());
             jobs.insert(
@@ -939,7 +939,7 @@ impl FinalizationSupervisor {
             self.inner
                 .jobs
                 .lock()
-                .expect("finalization jobs lock")
+                .unwrap_or_else(|e| e.into_inner())
                 .remove(&key);
             return Err(FinalizationError::Injected {
                 point: CrashFaultPoint::TerminalJobRegistrationAfter,
@@ -953,10 +953,7 @@ impl FinalizationSupervisor {
             if let Some(injector) = inner.fault_injector.as_ref() {
                 injector.pause_at(CrashFaultPoint::TerminalJobCompletionBefore);
                 if injector.should_fail(CrashFaultPoint::TerminalJobCompletionBefore) {
-                    *inner
-                        .last_failure
-                        .lock()
-                        .expect("finalization failure lock") = Some(format!(
+                    *inner.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
                         "injected crash fault at {:?}",
                         CrashFaultPoint::TerminalJobCompletionBefore
                     ));
@@ -972,10 +969,7 @@ impl FinalizationSupervisor {
             if let Some(injector) = inner.fault_injector.as_ref() {
                 injector.pause_at(CrashFaultPoint::TerminalJobCompletionAfter);
                 if injector.should_fail(CrashFaultPoint::TerminalJobCompletionAfter) {
-                    *inner
-                        .last_failure
-                        .lock()
-                        .expect("finalization failure lock") = Some(format!(
+                    *inner.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
                         "injected crash fault at {:?}",
                         CrashFaultPoint::TerminalJobCompletionAfter
                     ));
@@ -991,10 +985,8 @@ impl FinalizationSupervisor {
                 Ok(value) => Ok(value),
                 Err(error) => {
                     let detail = sanitize_detail(&error.to_string());
-                    *inner
-                        .last_failure
-                        .lock()
-                        .expect("finalization failure lock") = Some(detail.clone());
+                    *inner.last_failure.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(detail.clone());
                     Err(detail)
                 }
             };
@@ -1010,14 +1002,14 @@ impl FinalizationSupervisor {
                 .inner
                 .jobs
                 .lock()
-                .expect("finalization jobs lock")
+                .unwrap_or_else(|e| e.into_inner())
                 .len(),
             capacity: self.inner.capacity,
             last_failure: self
                 .inner
                 .last_failure
                 .lock()
-                .expect("finalization failure lock")
+                .unwrap_or_else(|e| e.into_inner())
                 .clone(),
         }
     }
@@ -1074,7 +1066,7 @@ fn remove_job(inner: &SupervisorInner, key: (i64, i64)) {
     let Some(entry) = inner
         .jobs
         .lock()
-        .expect("finalization jobs lock")
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&key)
     else {
         return;

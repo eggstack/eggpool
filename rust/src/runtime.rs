@@ -1712,10 +1712,10 @@ async fn restart_after_integration_mutation(
     old_config: &config::Config,
 ) -> Result<(), BootstrapError> {
     let new_config = config::Config::from_toml(path)?;
-    let transition = classify_transition(old_config, &new_config).map_err(|_| {
+    let transition = classify_transition(old_config, &new_config).map_err(|error| {
         command_error(
             EXIT_VALIDATION,
-            "configuration transition could not be classified",
+            format!("configuration transition could not be classified: {error}"),
         )
     })?;
     match config_mutation::apply_after_mutation(path, ApplyMode::RestartIfRunning, &transition)
@@ -2262,7 +2262,7 @@ async fn rehash(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
         let value = json!({"ok": response.ok, "stage": response.stage, "exit_code": code, "generation": response.generation, "changed_sections": response.changed_sections, "warnings": response.warnings, "restart_required": response.restart_required, "retirement_pending": response.retirement_pending, "message": response.message});
         println!(
             "{}",
-            serde_json::to_string_pretty(&value).expect("JSON rendering")
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_owned())
         );
     } else if response.ok {
         println!("\n{}", response.message);
@@ -2314,7 +2314,7 @@ fn render_control_error(
         } else {
             "error"
         };
-        println!("{}", serde_json::to_string_pretty(&json!({"ok": false, "stage": stage, "exit_code": EXIT_CONTROL_UNAVAILABLE, "generation": null, "changed_sections": [], "warnings": [], "restart_required": [], "retirement_pending": false, "message": detail})).expect("JSON rendering"));
+        println!("{}", serde_json::to_string_pretty(&json!({"ok": false, "stage": stage, "exit_code": EXIT_CONTROL_UNAVAILABLE, "generation": null, "changed_sections": [], "warnings": [], "restart_required": [], "retirement_pending": false, "message": detail})).unwrap_or_else(|_| "{}".to_owned()));
     } else {
         eprintln!("\nControl socket unavailable: {detail}");
         eprintln!("Use `eggpool restart` for a disruptive configuration reload.");
@@ -2730,7 +2730,7 @@ async fn runtime_status(path: &Path, json_output: bool) -> Result<(), BootstrapE
     if json_output {
         println!(
             "{}",
-            serde_json::to_string_pretty(&value).expect("JSON rendering")
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_owned())
         );
     } else {
         print_runtime_status(&value);
@@ -2820,7 +2820,7 @@ async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
             if json_output {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&snapshot).expect("JSON rendering")
+                    serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| "{}".to_owned())
                 );
             } else {
                 print_status_human(&snapshot, &config);
@@ -2849,7 +2849,7 @@ async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
             if json_output {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&snapshot).expect("JSON rendering")
+                    serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| "{}".to_owned())
                 );
             } else {
                 print_offline_status_human(&snapshot, &config);

@@ -87,6 +87,8 @@ pub(super) async fn handle_finite_compact(
                 outgoing.insert(name.clone(), value.clone());
             }
             let body = execution.response.body.clone();
+            // Best-effort: usage metrics must not fail the already-admitted
+            // response; failures are coalesced and retried by the metrics task.
             if let Some(metrics) = state
                 .process
                 .as_ref()
@@ -163,6 +165,7 @@ async fn finish_finite_execution(
         outgoing.append(name.clone(), value.clone());
     }
     let body = execution.response.body.clone();
+    // Best-effort: usage metrics must not fail the already-admitted response.
     if let Some(metrics) = state
         .process
         .as_ref()
@@ -195,6 +198,7 @@ async fn finish_stream_execution(
             outgoing.append(name.clone(), value.clone());
         }
         execution.mark_started();
+        // Best-effort: usage metrics must not fail the pre-built error response.
         if let Some(metrics) = state
             .process
             .as_ref()
@@ -203,6 +207,8 @@ async fn finish_stream_execution(
         {
             let _ = metrics.record_usage_async(event).await;
         }
+        // Best-effort: terminal convergence for the already-returned error
+        // envelope; the client response is fixed above.
         let _ = execution
             .complete(crate::coordinator::DownstreamResult::Delivered)
             .await;
@@ -231,6 +237,8 @@ async fn finish_stream_execution(
                     }
                 }
                 None | Some(Err(_)) => {
+                    // Best-effort: terminal usage/finalization after the stream
+                    // ends; the downstream body is already fixed.
                     if let Some(metrics) = &metrics
                         && let Some(event) = execution.usage_metric_event()
                     {

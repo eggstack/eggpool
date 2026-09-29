@@ -37,7 +37,7 @@ struct MutationGuard {
 impl Drop for MutationGuard {
     fn drop(&mut self) {
         if let Some(paths) = MUTATION_PATHS.get() {
-            let mut paths = paths.lock().expect("mutation path lock");
+            let mut paths = paths.lock().unwrap_or_else(|e| e.into_inner());
             paths.remove(&self.path);
         }
     }
@@ -147,7 +147,7 @@ fn mutation_path(path: &Path) -> PathBuf {
 fn lock_mutation(path: &Path) -> Result<MutationGuard, MutationError> {
     let path = mutation_path(path);
     let paths = MUTATION_PATHS.get_or_init(|| Mutex::new(BTreeSet::new()));
-    let mut active = paths.lock().expect("mutation path lock");
+    let mut active = paths.lock().unwrap_or_else(|e| e.into_inner());
     if !active.insert(path.clone()) {
         return Err(MutationError::Busy);
     }
@@ -180,8 +180,10 @@ fn no_op_result<T>(path: &Path, value: T) -> Result<MutationResult<T>, MutationE
         Vec::new()
     };
     let config = Config::from_toml_bytes(path, &bytes)?;
-    let transition = classify_transition(&config, &config).map_err(|_| {
-        MutationError::Invalid("configuration transition could not be classified".into())
+    let transition = classify_transition(&config, &config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
     })?;
     Ok(MutationResult { value, transition })
 }
@@ -263,8 +265,10 @@ where
     } else {
         old_config.clone()
     };
-    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
-        MutationError::Invalid("configuration transition could not be classified".into())
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
     })?;
     if !changed {
         return Ok(MutationResult {
@@ -463,8 +467,10 @@ pub fn init_config_with_transition(
     let old_config = Config::from_toml_bytes(path, &original)?;
     let bytes = DEFAULT_CONFIG.as_bytes();
     let candidate_config = validate_config_bytes(path, bytes)?;
-    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
-        MutationError::Invalid("configuration transition could not be classified".into())
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
     })?;
     atomic_replace(path, bytes, existing_mode(path)?)?;
     Ok(MutationResult {
@@ -587,7 +593,10 @@ pub fn generate_key() -> Result<String, MutationError> {
     let mut output = String::with_capacity(64);
     for byte in bytes {
         use std::fmt::Write as _;
-        write!(output, "{byte:02x}").expect("String formatting");
+        // `String` formatting is infallible; map the theoretical error to a
+        // typed failure instead of panicking.
+        write!(output, "{byte:02x}")
+            .map_err(|_| MutationError::Read(io::Error::other("key encoding failed")))?;
     }
     Ok(output)
 }
@@ -1055,8 +1064,10 @@ pub fn connect_with_transition(
     };
     let old_config = Config::from_toml_bytes(path, original_text.as_bytes())?;
     let candidate_config = validate_config_bytes(path, updated.as_bytes())?;
-    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
-        MutationError::Invalid("configuration transition could not be classified".into())
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
     })?;
     atomic_replace(path, updated.as_bytes(), existing_mode(path)?)?;
     drop(guard);
@@ -1259,8 +1270,10 @@ pub fn logout_with_transition(
     let updated = remove_account_block(&text, &account)?;
     let old_config = Config::from_toml_bytes(path, text.as_bytes())?;
     let candidate_config = validate_config_bytes(path, updated.as_bytes())?;
-    let transition = classify_transition(&old_config, &candidate_config).map_err(|_| {
-        MutationError::Invalid("configuration transition could not be classified".into())
+    let transition = classify_transition(&old_config, &candidate_config).map_err(|error| {
+        MutationError::Invalid(format!(
+            "configuration transition could not be classified: {error}"
+        ))
     })?;
     atomic_replace(path, updated.as_bytes(), existing_mode(path)?)?;
     drop(guard);

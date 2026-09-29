@@ -140,7 +140,7 @@ impl GenerationSlot {
         let published_elapsed_ms = self
             .published_at
             .lock()
-            .expect("generation publication timestamp lock")
+            .unwrap_or_else(|e| e.into_inner())
             .map(|published| published.elapsed().as_millis());
         GenerationSlotSnapshot {
             generation_id: self.generation_id,
@@ -162,10 +162,7 @@ impl GenerationSlot {
     }
 
     pub(crate) fn mark_published(&self) {
-        *self
-            .published_at
-            .lock()
-            .expect("generation publication timestamp lock") = Some(Instant::now());
+        *self.published_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
 
     pub(crate) fn claim_arc(slot: &Arc<Self>) -> GenerationLease {

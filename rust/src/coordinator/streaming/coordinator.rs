@@ -143,7 +143,7 @@ impl StreamingCoordinator {
 
     /// Snapshot the bounded outcome counters.
     pub fn diagnostics_snapshot(&self) -> StreamDiagnosticsSnapshot {
-        let guard = self.diagnostics.lock().expect("stream diagnostics lock");
+        let guard = self.diagnostics.lock().unwrap_or_else(|e| e.into_inner());
         StreamDiagnosticsSnapshot {
             outcomes: guard
                 .counts
@@ -157,7 +157,7 @@ impl StreamingCoordinator {
     pub fn diagnostic_count(&self, outcome: &str) -> u64 {
         self.diagnostics
             .lock()
-            .expect("stream diagnostics lock")
+            .unwrap_or_else(|e| e.into_inner())
             .count(outcome)
     }
 
@@ -275,8 +275,10 @@ impl StreamingCoordinator {
                         // so the terminal command converges instead of
                         // conflicting; the client still sees the synthetic
                         // exhaustion envelope above.
-                        let (effects, status, upstream_protocol) =
-                            last_failure.clone().expect("failure facts recorded");
+                        let Some((effects, status, upstream_protocol)) = last_failure.clone()
+                        else {
+                            return Err(StreamingCoordinatorError::NoEligibleRoute);
+                        };
                         let mut data = self.failure_data(
                             &identity,
                             &upstream_protocol,
@@ -1257,7 +1259,7 @@ impl StreamingCoordinator {
     ) -> Result<(FailureEffects, bool), StreamingCoordinatorError> {
         self.failure_engine
             .lock()
-            .expect("streaming failure engine lock")
+            .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
             .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))
     }

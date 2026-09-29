@@ -403,7 +403,7 @@ impl ServerRuntime {
             .inner
             .signal_failure
             .lock()
-            .expect("signal failure lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
         {
             return Err(ServerError::Signal(error));
@@ -426,7 +426,7 @@ fn eggserve_runtime_config()
     // Header, keep-alive, write-progress, and parser ceilings remain explicit
     // transport defenses; application admission enforces the live body limit.
     eggserve_server::RuntimeConfig::builder()
-        .bind("127.0.0.1:0".parse().expect("static socket address"))
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .max_connections(1024)
         .max_in_flight_requests(1024)
         .max_request_body_bytes(EGG_SERVE_REQUEST_BODY_LIMIT)
@@ -544,7 +544,7 @@ async fn close_runtime_resources_until(
         reason: *inner
             .reason
             .lock()
-            .expect("shutdown reason lock")
+            .unwrap_or_else(|e| e.into_inner())
             .get_or_insert(ShutdownReason::Requested),
         forced,
         active_leases_at_deadline: manager_report.active_leases_at_deadline,
@@ -579,7 +579,7 @@ impl ServerRuntimeHandle {
         {
             return false;
         }
-        *self.inner.reason.lock().expect("shutdown reason lock") = Some(reason);
+        *self.inner.reason.lock().unwrap_or_else(|e| e.into_inner()) = Some(reason);
         self.inner.manager.shutdown();
         self.inner.process.task_supervisor().begin_shutdown();
         self.inner
@@ -599,7 +599,7 @@ impl ServerRuntimeHandle {
             .inner
             .signal_failure
             .lock()
-            .expect("signal failure lock") = Some(error);
+            .unwrap_or_else(|e| e.into_inner()) = Some(error);
         self.request_shutdown(ShutdownReason::SignalFailure);
     }
 

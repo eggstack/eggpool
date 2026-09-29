@@ -242,7 +242,9 @@ pub fn parse_provider_qualified_model(
     if !normalized.contains('/') {
         return (normalized, None);
     }
-    let (base, candidate) = normalized.rsplit_once('/').expect("split checked");
+    let Some((base, candidate)) = normalized.rsplit_once('/') else {
+        return (normalized, None);
+    };
     if base.is_empty() || candidate.is_empty() {
         return (normalized, None);
     }

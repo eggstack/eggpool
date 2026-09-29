@@ -494,7 +494,7 @@ fn decide(
 ) -> Result<(FailureEffects, bool), StreamingCoordinatorError> {
     engine
         .lock()
-        .expect("streaming failure engine lock")
+        .unwrap_or_else(|e| e.into_inner())
         .decide(observation)
         .map_err(|error| StreamingCoordinatorError::Effects(error.to_string()))
 }

@@ -187,29 +187,29 @@ impl CoordinatorFaultInjector {
 
     /// The point that fired, if any.
     pub fn fired_point(&self) -> Option<CrashFaultPoint> {
-        *self.fired.lock().expect("crash fault lock")
+        *self.fired.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Consume the armed failure if this is the armed point. Returns true
     /// exactly once per [`Self::fail_once_at`].
     pub fn should_fail(&self, point: CrashFaultPoint) -> bool {
-        let mut requested = self.requested.lock().expect("crash fault lock");
+        let mut requested = self.requested.lock().unwrap_or_else(|e| e.into_inner());
         if requested.as_ref() != Some(&point) {
             return false;
         }
         *requested = None;
-        *self.fired.lock().expect("crash fault lock") = Some(point);
+        *self.fired.lock().unwrap_or_else(|e| e.into_inner()) = Some(point);
         true
     }
 
     /// Park at `point` if a barrier was armed there.
     pub fn pause_at(&self, point: CrashFaultPoint) {
-        let pause = self.pause.lock().expect("crash pause lock").take();
+        let pause = self.pause.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(pause) = pause.as_ref().filter(|pause| pause.point == point) {
             pause.entered.store(true, Ordering::Release);
             pause.barrier.wait();
         } else if let Some(pause) = pause {
-            *self.pause.lock().expect("crash pause lock") = Some(pause);
+            *self.pause.lock().unwrap_or_else(|e| e.into_inner()) = Some(pause);
         }
     }
 }

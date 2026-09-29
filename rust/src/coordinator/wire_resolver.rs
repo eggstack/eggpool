@@ -204,7 +204,13 @@ impl NegotiationLease {
             return NegotiationResult::Rejected;
         }
         loop {
-            if let Some(result) = self.flight.result.lock().expect("flight lock").clone() {
+            if let Some(result) = self
+                .flight
+                .result
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+            {
                 return result;
             }
             self.flight.notify.notified().await;
@@ -350,7 +356,7 @@ impl WireResolver {
     pub fn config(&self) -> WireResolverConfig {
         self.config
             .lock()
-            .expect("wire resolver config lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
@@ -383,7 +389,7 @@ impl WireResolver {
             .collect::<Vec<_>>()
             .join("|");
         let preference = {
-            let state = self.state.lock().expect("wire resolver lock");
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state
                     .operator_preferences
@@ -408,7 +414,7 @@ impl WireResolver {
             fingerprint: fingerprint.clone(),
         };
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let entry = state.entries.entry(key.clone()).or_default();
         entry.rejected_at.retain(|_, rejected_at| {
             now.saturating_duration_since(*rejected_at) < config.rejection_ttl
@@ -476,7 +482,7 @@ impl WireResolver {
         let flight_key = (provider_id.to_owned(), model_id.to_owned());
         let throttled_by_interval = {
             let config = self.config();
-            let state = self.state.lock().expect("wire resolver lock");
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if !config.enabled {
                 true
             } else {
@@ -506,7 +512,7 @@ impl WireResolver {
             };
         }
         let (flight, role) = {
-            let mut state = self.state.lock().expect("wire resolver lock");
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(flight) = state.flights.get(&flight_key) {
                 (Arc::clone(flight), NegotiationRole::Follower)
             } else {
@@ -533,7 +539,10 @@ impl WireResolver {
         }
         let config = self.config();
         let gate = {
-            let mut gates = self.provider_gates.lock().expect("wire gates lock");
+            let mut gates = self
+                .provider_gates
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             gates
                 .entry(provider_id.to_owned())
                 .or_insert_with(|| Arc::new(ProviderGate::new(config.max_concurrent_per_provider)))
@@ -558,7 +567,7 @@ impl WireResolver {
             };
         }
         {
-            let mut state = self.state.lock().expect("wire resolver lock");
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.last_negotiation.insert(provider_id.to_owned(), now);
             trim_provider_state(&mut state, config.max_provider_state);
         }
@@ -601,7 +610,7 @@ impl WireResolver {
         if !config.enabled {
             return;
         }
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .entries
             .entry(key.clone())
@@ -620,7 +629,7 @@ impl WireResolver {
         fixed: bool,
     ) {
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.operator_preferences.insert(
             (provider_id.to_owned(), model_id.to_owned()),
             (surface, fixed),
@@ -637,7 +646,7 @@ impl WireResolver {
         preferences: impl IntoIterator<Item = (String, String, WireSurface, bool)>,
     ) {
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.configured_preferences.clear();
         for (provider_id, model_id, surface, fixed) in preferences {
             state
@@ -649,7 +658,7 @@ impl WireResolver {
 
     pub fn set_metadata_hint(&self, provider_id: &str, model_id: &str, surface: WireSurface) {
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .metadata_hints
             .insert((provider_id.to_owned(), model_id.to_owned()), surface);
@@ -661,7 +670,7 @@ impl WireResolver {
     pub fn delay_provider_negotiation(&self, provider_id: &str, delay: Duration, now: Instant) {
         let bounded = delay.min(Duration::from_secs(1_800));
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .negotiation_delay_until
             .insert(provider_id.to_owned(), now + bounded);
@@ -669,7 +678,11 @@ impl WireResolver {
     }
 
     pub fn snapshot_size(&self) -> usize {
-        self.state.lock().expect("wire resolver lock").entries.len()
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .len()
     }
 
     /// Return whether two handles observe the same process-owned resolver
@@ -680,11 +693,15 @@ impl WireResolver {
     }
 
     pub fn snapshot(&self) -> WireResolverSnapshot {
-        let state = self.state.lock().expect("wire resolver lock");
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         WireResolverSnapshot {
             entries: state.entries.len(),
             flights: state.flights.len(),
-            provider_gates: self.provider_gates.lock().expect("wire gates lock").len(),
+            provider_gates: self
+                .provider_gates
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
             last_negotiation: state.last_negotiation.len(),
             delayed_providers: state.negotiation_delay_until.len(),
             metric_labels: state.metrics.len(),
@@ -707,7 +724,7 @@ impl WireResolver {
             model_id: model_id.to_owned(),
             fingerprint: fingerprint.to_owned(),
         };
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let config = self.config();
         state.entries.entry(key.clone()).or_default().learned = Some(Learned {
             surface,
@@ -723,9 +740,9 @@ impl WireResolver {
         result: NegotiationResult,
         now: Instant,
     ) {
-        *flight.result.lock().expect("flight lock") = Some(result.clone());
+        *flight.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
         flight.notify.notify_waiters();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let flight_key = (key.provider_id.clone(), key.model_id.clone());
         state.flights.remove(&flight_key);
         if self.config().enabled
@@ -740,11 +757,12 @@ impl WireResolver {
     }
 
     fn cancel_leader(&self, key: &FlightKey, flight: &Arc<Flight>) {
-        *flight.result.lock().expect("flight lock") = Some(NegotiationResult::Rejected);
+        *flight.result.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(NegotiationResult::Rejected);
         flight.notify.notify_waiters();
         self.state
             .lock()
-            .expect("wire resolver lock")
+            .unwrap_or_else(|e| e.into_inner())
             .flights
             .remove(key);
     }
@@ -753,12 +771,15 @@ impl WireResolver {
         let has_flight = self
             .state
             .lock()
-            .expect("wire resolver lock")
+            .unwrap_or_else(|e| e.into_inner())
             .flights
             .keys()
             .any(|key| key.0 == provider_id);
         if !has_flight {
-            let mut gates = self.provider_gates.lock().expect("wire gates lock");
+            let mut gates = self
+                .provider_gates
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if gates.get(provider_id).is_some_and(|gate| gate.is_idle()) {
                 gates.remove(provider_id);
             }
@@ -766,8 +787,11 @@ impl WireResolver {
     }
 
     fn apply_config(&self, config: WireResolverConfig) {
-        *self.config.lock().expect("wire resolver config lock") = config.clone();
-        let gates = self.provider_gates.lock().expect("wire gates lock");
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = config.clone();
+        let gates = self
+            .provider_gates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for gate in gates.values() {
             gate.set_limit(config.max_concurrent_per_provider);
         }
@@ -775,13 +799,16 @@ impl WireResolver {
 
     fn enforce_bounds(&self) {
         let config = self.config();
-        let mut state = self.state.lock().expect("wire resolver lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         trim_cache(&mut state, config.cache_capacity);
         trim_provider_state(&mut state, config.max_provider_state);
         trim_metrics(&mut state, config.max_metric_labels);
         drop(state);
 
-        let mut gates = self.provider_gates.lock().expect("wire gates lock");
+        let mut gates = self
+            .provider_gates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let capacity = config.max_provider_state.max(1);
         while gates.len() > capacity {
             let Some(idle_provider) = gates

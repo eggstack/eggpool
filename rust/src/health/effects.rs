@@ -126,7 +126,9 @@ impl<'a> HealthEffectApplier<'a> {
                 outcome.probe_released = true;
             }
             BackoffReason::ModelUnavailable if model_scoped => {
-                let model_id = effect.model_id.as_deref().expect("model scope checked");
+                let Some(model_id) = effect.model_id.as_deref() else {
+                    return Err("model-scoped effect has no model".to_owned());
+                };
                 let key = self.quarantine.key(
                     &effect.provider_id,
                     &effect.account_name,

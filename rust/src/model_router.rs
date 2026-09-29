@@ -221,7 +221,7 @@ impl ModelRouterAffinity {
     }
 
     pub fn stats(&self) -> AffinityStats {
-        let mut state = self.state.lock().expect("affinity state lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.stats.entry_count = state.entries.len();
         state.stats.inflight_key_count = state.flights.len();
         state.stats
@@ -247,7 +247,7 @@ impl ModelRouterAffinity {
     }
 
     fn lookup(&self, key: &AffinityKey, router: &CompiledModelRouter) -> Option<AffinityDecision> {
-        let mut state = self.state.lock().expect("affinity state lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = (self.clock)();
         let Some(decision) = state.entries.get(key).cloned() else {
             state.stats.misses += 1;
@@ -294,7 +294,7 @@ impl ModelRouterAffinity {
     }
 
     fn store(&self, key: AffinityKey, decision: AffinityDecision) {
-        let mut state = self.state.lock().expect("affinity state lock");
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.cleanup_expired(&mut state, 16);
         state.entries.remove(&key);
         state.lru.retain(|item| item != &key);
@@ -374,7 +374,7 @@ impl ModelRouterAffinity {
             }
 
             let (flight, leader) = {
-                let mut state = self.state.lock().expect("affinity state lock");
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(flight) = state.flights.get(&key).cloned() {
                     state.stats.single_flight_joins += 1;
                     (Some(flight), false)
@@ -412,7 +412,12 @@ impl ModelRouterAffinity {
                     }
                     continue;
                 }
-                let selection = selector.take().expect("selector closure")().await?;
+                // Fail closed if the selector was already consumed; a future
+                // `continue` after `take()` must not panic the request.
+                let Some(selector) = selector.take() else {
+                    return Err(AffinityError::SelectorFailed);
+                };
+                let selection = selector().await?;
                 let decision = Self::decision_from_selection(
                     router,
                     identity,
@@ -427,14 +432,19 @@ impl ModelRouterAffinity {
                 });
             }
 
-            let flight = flight.expect("leader flight");
+            let Some(flight) = flight else {
+                return Err(AffinityError::SelectorFailed);
+            };
             let mut guard = FlightGuard {
                 owner: self.state.clone(),
                 key: key.clone(),
                 flight: flight.clone(),
                 armed: true,
             };
-            let selection = selector.take().expect("selector closure")().await;
+            let Some(selector) = selector.take() else {
+                return Err(AffinityError::SelectorFailed);
+            };
+            let selection = selector().await;
             let decision = match selection {
                 Ok(selection) => Self::decision_from_selection(
                     router,
@@ -448,7 +458,7 @@ impl ModelRouterAffinity {
                 Ok(decision) => {
                     self.store(key.clone(), decision.clone());
                     {
-                        let mut state = self.state.lock().expect("affinity state lock");
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                         state.flights.remove(&key);
                     }
                     flight
@@ -463,7 +473,7 @@ impl ModelRouterAffinity {
                 }
                 Err(error) => {
                     {
-                        let mut state = self.state.lock().expect("affinity state lock");
+                        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                         state.flights.remove(&key);
                     }
                     flight

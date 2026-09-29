@@ -390,6 +390,8 @@ where
 pub enum TaskCallbackError {
     #[error("task callback failed")]
     Failed,
+    #[error("task callback failed: {0}")]
+    FailedWithDetail(String),
 }
 
 /// Callback capabilities are prepared before publication.  Missing entries
@@ -488,7 +490,7 @@ impl TaskCallbackRegistry {
                     .refresh()
                     .await
                     .map(|_| ())
-                    .map_err(|_| TaskCallbackError::Failed)
+                    .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))
             }),
         );
         registry.register(
@@ -519,7 +521,7 @@ impl TaskCallbackRegistry {
                         .cleanup_retention(policy)
                         .await
                         .map(|_| ())
-                        .map_err(|_| TaskCallbackError::Failed)
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))
                 }
             }),
         );
@@ -566,7 +568,7 @@ impl TaskCallbackRegistry {
                         return Err(TaskCallbackError::Failed);
                     }
                     let config = crate::Config::from_toml(&config_path)
-                        .map_err(|_| TaskCallbackError::Failed)?;
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))?;
                     let retain_count = config.backup.retain_count;
                     let service = crate::operations::backup::BackupService::from_config(
                         &config_path,
@@ -575,7 +577,7 @@ impl TaskCallbackRegistry {
                     service
                         .create(&database)
                         .await
-                        .map_err(|_| TaskCallbackError::Failed)?;
+                        .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))?;
                     let _ = service.prune(retain_count);
                     Ok(())
                 }
@@ -821,13 +823,16 @@ impl TaskState {
         self.running.store(true, Ordering::Release);
         let state = Arc::clone(self);
         let join = tokio::spawn(async move { run_task(state, supervisor).await });
-        *self.join.lock().expect("task join lock") = Some(join);
+        *self.join.lock().unwrap_or_else(|e| e.into_inner()) = Some(join);
     }
 
     fn record(&self, outcome: TaskOutcome, elapsed: Duration) {
         self.tick_count.fetch_add(1, Ordering::Relaxed);
-        *self.last_outcome.lock().expect("task outcome lock") = Some(outcome);
-        *self.last_elapsed_ms.lock().expect("task elapsed lock") =
+        *self.last_outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(outcome);
+        *self
+            .last_elapsed_ms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
             Some(elapsed.as_millis().min(u64::MAX as u128) as u64);
     }
 
@@ -848,8 +853,11 @@ impl TaskState {
             initial_delay_s: self.spec.initial_delay_s,
             initial_delay_class,
             tick_count: self.tick_count.load(Ordering::Relaxed),
-            last_outcome: *self.last_outcome.lock().expect("task outcome lock"),
-            last_elapsed_ms: *self.last_elapsed_ms.lock().expect("task elapsed lock"),
+            last_outcome: *self.last_outcome.lock().unwrap_or_else(|e| e.into_inner()),
+            last_elapsed_ms: *self
+                .last_elapsed_ms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
             in_tick: self.in_tick.load(Ordering::Acquire),
             reschedule_count: self.reschedule_count.load(Ordering::Relaxed),
         }
@@ -906,7 +914,7 @@ impl RuntimeTaskSupervisor {
             .inner
             .callbacks
             .lock()
-            .expect("task callback registry lock") = callbacks;
+            .unwrap_or_else(|e| e.into_inner()) = callbacks;
         supervisor
     }
 
@@ -917,14 +925,14 @@ impl RuntimeTaskSupervisor {
             .inner
             .generation_manager
             .lock()
-            .expect("generation manager lock") = Some(manager);
+            .unwrap_or_else(|e| e.into_inner()) = Some(manager);
     }
 
     pub fn register_callback(&self, callback_kind: impl Into<String>, callback: TaskCallback) {
         self.inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .register(callback_kind, callback);
     }
 
@@ -934,7 +942,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .register_automatic_backup(database, config_path);
     }
 
@@ -945,7 +953,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .register(
                 "metrics_flush",
                 task_callback(move |context| {
@@ -958,7 +966,7 @@ impl RuntimeTaskSupervisor {
                             .flush()
                             .await
                             .map(|_| ())
-                            .map_err(|_| TaskCallbackError::Failed)
+                            .map_err(|error| TaskCallbackError::FailedWithDetail(error.to_string()))
                     }
                 }),
             );
@@ -971,7 +979,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .available_kinds()
     }
 
@@ -979,19 +987,23 @@ impl RuntimeTaskSupervisor {
         self.inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .capability_inventory()
     }
 
     pub fn task_count(&self) -> usize {
-        self.inner.tasks.lock().expect("task map lock").len()
+        self.inner
+            .tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     pub fn running_count(&self) -> usize {
         self.inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .filter(|task| task.running.load(Ordering::Acquire))
             .count()
@@ -1001,9 +1013,14 @@ impl RuntimeTaskSupervisor {
         self.inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
-            .filter(|task| task.join.lock().expect("task join lock").is_some())
+            .filter(|task| {
+                task.join
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_some()
+            })
             .count()
     }
 
@@ -1024,7 +1041,7 @@ impl RuntimeTaskSupervisor {
             .inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -1037,7 +1054,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
             .map(|task| task.snapshot())
     }
@@ -1046,7 +1063,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .map(|task| task.snapshot())
             .collect()
@@ -1056,7 +1073,7 @@ impl RuntimeTaskSupervisor {
         self.inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .map(|task| task.spec.clone())
             .collect()
@@ -1089,7 +1106,7 @@ impl RuntimeTaskSupervisor {
             .inner
             .callbacks
             .lock()
-            .expect("task callback registry lock")
+            .unwrap_or_else(|e| e.into_inner())
             .clone();
         self.prepare_diff_with_callbacks(current_specs, candidate_specs, &callbacks)
     }
@@ -1126,20 +1143,21 @@ impl RuntimeTaskSupervisor {
 
         // Allocate callback/channel state during preflight.  Commit only
         // inserts these prepared states and starts their loops.
-        let prepared = diff
+        let mut prepared = Vec::new();
+        for spec in diff
             .rescheduled
             .iter()
             .map(|(_, next)| next)
             .chain(diff.added.iter())
-            .map(|spec| {
-                TaskState::new(
-                    spec.clone(),
-                    callbacks
-                        .get(&spec.callback_kind)
-                        .expect("callback validated during preflight"),
-                )
-            })
-            .collect();
+        {
+            let Some(callback) = callbacks.get(&spec.callback_kind) else {
+                return Err(TaskSpecError::MissingCallbackCapability {
+                    name: spec.name.clone(),
+                    callback_kind: spec.callback_kind.clone(),
+                });
+            };
+            prepared.push(TaskState::new(spec.clone(), callback));
+        }
         Ok(PreparedTaskDiff {
             supervisor: self.clone(),
             diff,
@@ -1156,7 +1174,7 @@ impl RuntimeTaskSupervisor {
     pub async fn shutdown_with_timeout(&self, timeout: Duration) -> TaskShutdownReport {
         self.begin_shutdown();
         let tasks = {
-            let mut map = self.inner.tasks.lock().expect("task map lock");
+            let mut map = self.inner.tasks.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut *map).into_values().collect::<Vec<_>>()
         };
         let started = tasks.len();
@@ -1165,7 +1183,7 @@ impl RuntimeTaskSupervisor {
         let mut timed_out = false;
         for task in tasks {
             cancel_task(&task);
-            let join = task.join.lock().expect("task join lock").take();
+            let join = task.join.lock().unwrap_or_else(|e| e.into_inner()).take();
             let Some(mut join) = join else { continue };
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if tokio::time::timeout(remaining, &mut join).await.is_err() {
@@ -1297,7 +1315,7 @@ impl PreparedTaskDiff {
             .inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(name)
     }
 
@@ -1306,7 +1324,7 @@ impl PreparedTaskDiff {
             .inner
             .tasks
             .lock()
-            .expect("task map lock")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(task.spec.name.clone(), Arc::clone(&task));
         task.start(Arc::clone(&self.supervisor.inner));
     }
@@ -1343,7 +1361,7 @@ pub struct TaskShutdownReport {
 
 async fn stop_task(task: Arc<TaskState>) {
     cancel_task(&task);
-    let join = task.join.lock().expect("task join lock").take();
+    let join = task.join.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Some(mut join) = join
         && tokio::time::timeout(DEFAULT_SHUTDOWN_TIMEOUT, &mut join)
             .await
@@ -1374,7 +1392,7 @@ async fn run_task(state: Arc<TaskState>, supervisor: Arc<SupervisorInner>) {
                 let manager = supervisor
                     .generation_manager
                     .lock()
-                    .expect("generation manager lock")
+                    .unwrap_or_else(|e| e.into_inner())
                     .clone();
                 match manager.as_ref() {
                     None => TaskOutcome::GenerationUnavailable,

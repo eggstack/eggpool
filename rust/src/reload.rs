@@ -292,12 +292,12 @@ impl ReloadService {
     /// Arm one deterministic, one-shot reload failure for R013 qualification.
     #[cfg(feature = "test-support")]
     pub fn inject_test_fault(&self, fault: ReloadTestFault) {
-        *self.test_fault.lock().expect("reload test fault lock") = Some(fault);
+        *self.test_fault.lock().unwrap_or_else(|e| e.into_inner()) = Some(fault);
     }
 
     #[cfg(feature = "test-support")]
     fn take_test_fault(&self, fault: ReloadTestFault) -> bool {
-        let mut armed = self.test_fault.lock().expect("reload test fault lock");
+        let mut armed = self.test_fault.lock().unwrap_or_else(|e| e.into_inner());
         if *armed == Some(fault) {
             *armed = None;
             true

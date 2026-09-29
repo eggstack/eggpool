@@ -183,11 +183,11 @@ impl QuotaEstimator {
     }
 
     pub fn set_persisted_snapshot(&self, account_name: &str, snapshot: PersistedWindowSnapshot) {
-        self.ensure_account(account_name);
-        self.lock()
+        let mut state = self.lock();
+        state
             .accounts
-            .get_mut(account_name)
-            .expect("account inserted")
+            .entry(account_name.to_owned())
+            .or_insert_with(|| AccountQuota::new(account_name))
             .persisted_snapshot = Some(snapshot);
     }
 
@@ -230,12 +230,11 @@ impl QuotaEstimator {
         if !weight.is_finite() || weight <= 0.0 {
             return Err(QuotaInvariantError::InvalidWeight);
         }
-        self.ensure_account(account_name);
         let mut state = self.lock();
         let quota = state
             .accounts
-            .get_mut(account_name)
-            .expect("account inserted");
+            .entry(account_name.to_owned())
+            .or_insert_with(|| AccountQuota::new(account_name));
         quota.weight = weight;
         quota.policy = policy;
         Ok(())
@@ -249,12 +248,11 @@ impl QuotaEstimator {
         model_id: Option<&str>,
         _now: f64,
     ) {
-        self.ensure_account(account_name);
         let mut state = self.lock();
         let quota = state
             .accounts
-            .get_mut(account_name)
-            .expect("account inserted");
+            .entry(account_name.to_owned())
+            .or_insert_with(|| AccountQuota::new(account_name));
         quota
             .hourly_window
             .add_observation(_now, tokens, cost_microdollars);

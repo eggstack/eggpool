@@ -406,10 +406,9 @@ async fn build_status_snapshot(state: &AppState) -> status_service::ProxyStatusS
         }
         grouped
             .into_iter()
-            .map(|(provider, mut rows)| {
+            .filter_map(|(provider, mut rows)| {
                 rows.sort_by(|left, right| left.probed_at.cmp(&right.probed_at));
-                let latest = rows.pop().expect("grouped ping has one row");
-                (provider, latest)
+                rows.pop().map(|latest| (provider, latest))
             })
             .collect()
     };

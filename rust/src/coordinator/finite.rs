@@ -1580,7 +1580,7 @@ impl FiniteCoordinator {
     ) -> Result<(FailureEffects, bool), FiniteCoordinatorError> {
         self.failure_engine
             .lock()
-            .expect("finite failure engine lock")
+            .unwrap_or_else(|e| e.into_inner())
             .decide(observation)
             .map_err(|error| FiniteCoordinatorError::Effects(error.to_string()))
     }

@@ -1433,9 +1433,15 @@ impl UpdateService {
     }
 
     pub async fn check_info(&self, previous: &UpdateInfo) -> UpdateInfo {
-        let current = self
-            .current_version()
-            .expect("Cargo package version is valid");
+        let Ok(current) = self.current_version() else {
+            return UpdateInfo {
+                current_version: PACKAGE_VERSION.to_owned(),
+                update_available: false,
+                last_check_at: unix_timestamp(),
+                last_check_error: "current_version".to_owned(),
+                ..previous.clone()
+            };
+        };
         match self.check_latest().await {
             Ok(metadata) => UpdateInfo {
                 current_version: current.as_str().to_owned(),
@@ -1520,12 +1526,12 @@ impl UpdateCheckerState {
     pub async fn check_once(&self) -> UpdateInfo {
         let previous = self.snapshot();
         let next = self.service.check_info(&previous).await;
-        *self.info.lock().expect("update checker info lock") = next.clone();
+        *self.info.lock().unwrap_or_else(|e| e.into_inner()) = next.clone();
         next
     }
 
     pub fn snapshot(&self) -> UpdateInfo {
-        self.info.lock().expect("update checker info lock").clone()
+        self.info.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

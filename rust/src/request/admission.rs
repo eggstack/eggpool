@@ -233,17 +233,18 @@ pub(crate) fn admit_parsed_request(
     let reservation_tokens = estimate_reservation_tokens(&raw_body);
     let context_tokens =
         estimate_context_input_tokens(&raw_body, &value, options.extra_context_tokens);
-    let native_summary = (options.client_surface == ClientSurface::Responses)
-        .then(|| native_feature_summary(object));
-    let native_preservation = if options.client_surface == ClientSurface::Responses {
-        Some(NativeRequestPreservation {
-            source_surface: options.client_surface,
-            parsed: value,
-            summary: native_summary.expect("Responses summary was just computed"),
-        })
+    // Compute the Responses summary before moving `value`; the borrow of
+    // `object` ends here so no `expect()` on a guarded `Option` is needed.
+    let native_summary = if options.client_surface == ClientSurface::Responses {
+        Some(native_feature_summary(object))
     } else {
         None
     };
+    let native_preservation = native_summary.map(|summary| NativeRequestPreservation {
+        source_surface: options.client_surface,
+        parsed: value,
+        summary,
+    });
     Ok(AdmittedRequest {
         canonical,
         native_preservation,

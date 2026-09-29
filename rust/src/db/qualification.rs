@@ -98,7 +98,7 @@ impl QualificationCollector {
     pub(crate) fn set_effective(&self, effective: QualificationEffectivePragmas) {
         self.state
             .lock()
-            .expect("qualification collector lock")
+            .unwrap_or_else(|e| e.into_inner())
             .effective = Some(effective);
     }
 
