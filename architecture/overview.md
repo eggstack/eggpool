@@ -198,12 +198,26 @@ Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 ### 6. Wire codecs and transcoding
 
 `rust/src/wire/` is the closed, provider-independent codec boundary.
+The neutral sans-I/O kernel is the single source of truth in
+`rust/crates/eggpool-wire/` (IR, decoder, adaptation, codecs, registry as
+`profile.rs`, streaming machines, fidelity/provenance/conformance; no
+credentials/env/fs/net/clock/rng/async/DB/log side effects). Root
+`rust/src/wire/` modules are narrow facades (`pub use eggpool_wire::...`)
+preserving the canonical `wire::ir` path; `wire::adapters.rs` is the
+EggPool-owned extraction seam (maps catalog/request/routing/config facts
+into neutral kernel types — explicitly not kernel) and `wire::runtime.rs`
+is the EggPool-owned selection-time join (`WireRuntime`,
+`WireStream`, `PreparedRequest`, `FiniteResponse`). Guarded by
+`wire_extraction_contract` + `wire_kernel_boundary`.
 `ir.rs` captures canonical request/reasoning/usage/tool/response/stream-event
 semantics before adaptation. `codec.rs`/`codecs.rs`/`additional_codecs.rs`
 implement per-surface codecs (OpenAI Chat, Anthropic Messages, OpenAI
-Responses, Gemini variants); `registry.rs` accepts only compiled codec IDs;
+Responses, Gemini variants); `registry.rs` (neutral `profile.rs`) accepts
+only compiled codec IDs;
 `runtime.rs`/`stream.rs` own `WireRuntime`/`WireStream`, `PreparedRequest`,
-`FiniteResponse`, SSE decode/encode, and terminal summaries; `adaptation.rs`
+`FiniteResponse`, the `WireStream` join over the kernel SSE decoder/encoder
+(`SseDecoder` framing, `StreamEventDecoder::observe_native_push`,
+stateful `ClientStreamEncoder`), and terminal summaries; `adaptation.rs`
 owns reasoning/tool/capability and loss policy; `decode.rs` owns the pure
 structural decoder with `DecodeLimits`, `fidelity.rs`/`provenance.rs`/
 `conformance.rs` own source-native residue and conformance facts, and
@@ -246,8 +260,9 @@ Route failures arrive as typed
 `OutboundConnectError` kind/stage facts mapped into the stable proxy
 `TransportError` categories without message-string inspection. The native
 profile deliberately excludes
-Eggfetch's `http1` high-level alias, URL/retry/redirect/Basic-auth policy, and
-built-in proxy support. `rust/Cargo.toml` plus `cargo tree -e features` is the
+Eggfetch's `http1` high-level alias, URL/retry/redirect/Basic-auth policy,
+built-in proxy support, HTTP/2/3, compression, native roots, JSON, cookies,
+and multipart, plus `Timeout.total`. `rust/Cargo.toml` plus `cargo tree -e features` is the
 dependency authority; `deny.toml` + `cargo deny check` gates
 licenses/advisories/sources/duplicates. `unsafe_code = "forbid"` is a repo
 invariant.
@@ -481,7 +496,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `finalization.rs`, `failure.rs`, `attempt.rs`, `wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
-| Wire/transcoding | `rust/src/wire/` | [Transcoder](deep-dive-transcoder.md) |
+| Wire/transcoding | `rust/src/wire/` (facades + `adapters.rs` seam + `runtime.rs` join), `rust/crates/eggpool-wire/` (neutral kernel) | [Transcoder](deep-dive-transcoder.md) |
 | Providers/transport | `rust/src/providers/` | [Providers](deep-dive-providers.md) |
 | Routing/quota/health/accounts | `rust/src/routing/`, `quota/`, `health/`, `accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |

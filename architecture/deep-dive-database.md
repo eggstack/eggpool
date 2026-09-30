@@ -40,3 +40,12 @@ Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accept
 - Migrations immutable and checksum-pinned; unknown or mismatched ledgers fail closed.
 - `backup_to` is a primitive; orchestration, validation, and restore stay in `operations/backup.rs`.
 - Startup reconciliation repairs only covered states; ambiguity never resolves silently.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test database_compatibility -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_finalization -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o002 -- --test-threads=1
+```

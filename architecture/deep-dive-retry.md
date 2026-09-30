@@ -142,3 +142,12 @@ via the private single-owner `execute_compact_admitted`, without rebuilding the 
 - Local-only failures carry no synthetic upstream status and never retry; cancellation cannot release capacity it did not own.
 - Every failed attempt converges durably (`FailedAttempt`) before the next publication; terminal ownership is retained, never inferred.
 - Post-handoff stream failures are terminal for the client request and classify from `StreamTerminalSummary` without reparsing wire events.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c009 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c011 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_finalization -- --test-threads=1
+```

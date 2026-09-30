@@ -122,3 +122,10 @@ coalesced and flushed on the deadline-bounded shutdown path, while
 correctness-critical request/accounting lifecycle rows stay durable.
 Shutdown performs one deadline-bounded metrics flush before the database
 closes.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+```

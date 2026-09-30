@@ -88,3 +88,11 @@ snapshots only: no outbound provider probes and no writes.
 - Non-terminal suppression is bounded by `MAX_NONTERMINAL_BACKOFF_SECONDS`.
 - Only authoritative provenance creates terminal withdrawal; only exact keys clear.
 - Persistence holds restart hints only, validated on read, with secret-free diagnostics.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test health -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test quota -- --test-threads=1
+```

@@ -52,3 +52,11 @@ Startup reconciliation is a one-shot bounded repair (max 1024 passes) of unfinis
 - At most 4 retiring generations; failed closes stay resident for diagnosis (process exit may force them).
 - Process-owned state is bounded, in memory, and secret-free (no credentials, prompts, raw bodies, cache keys).
 - All transitions fail closed; startup repair is the process-death safety net.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r002 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
+```

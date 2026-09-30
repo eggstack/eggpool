@@ -35,3 +35,10 @@ Back to [Architecture](README.md). See also [overview.md §11](overview.md), [Da
 - Partial archives are never presented as complete.
 - Restore targets must equal the live configuration paths.
 - Failures report an actionable recovery path without exposing secrets.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test operations_o002 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test database_compatibility -- --test-threads=1
+```

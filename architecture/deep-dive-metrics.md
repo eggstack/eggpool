@@ -73,3 +73,10 @@ The process exposes operational and runtime snapshots through the native CLI
 and dashboard APIs. Generation and finalization ownership counters distinguish
 active work from retiring work, and shutdown performs one deadline-bounded
 flush before the database closes.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o002 -- --test-threads=1
+```

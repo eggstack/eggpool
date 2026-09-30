@@ -83,3 +83,11 @@ carry only bounded numeric/diagnostic facts into selection traces.
 - Affinity stores digests and decisions only, never raw requests or secrets.
 - Public finite/compact request shapes remain compatibility surfaces; private execution
   inputs avoid duplicating preserved trees.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test model_router -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test canonical_request -- --test-threads=1
+```

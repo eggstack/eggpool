@@ -69,3 +69,10 @@ registration and static asset delivery. Changes to
 dashboard assets or API contracts must update the Rust asset manifest and the
 corresponding Rust integration tests. Dashboard handlers remain observational
 and do not become a second runtime authority.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+```

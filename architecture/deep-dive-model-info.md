@@ -61,3 +61,10 @@ raw bodies, or cache keys enter these rows or diagnostics.
 - External failures never fail discovery or routing.
 - Operator reads are bounded and secret-free; unknown capability stays distinct from
   unsupported.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test catalog_refresh -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o002 -- --test-threads=1
+```

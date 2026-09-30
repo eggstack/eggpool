@@ -145,3 +145,13 @@ server/Axum
   exactly once and only when the EggPool-owned `model` field changes.
 - Compact production input is private and single-owner; public
   `FiniteRequest` shapes stay compatibility surfaces.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_boundaries -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test coordinator_publication -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test codex_responses_compat -- --test-threads=1
+```

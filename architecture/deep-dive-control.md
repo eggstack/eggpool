@@ -50,3 +50,11 @@ The control plane carries reload only. `runtime-status` is not a control command
 - Restart-required input is reported before publication, never partially applied.
 - A failed candidate leaves the active generation and process-owned state unchanged.
 - Reload diagnostics are owned by the reload operation, never by a caller that may finish early.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r005 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+```

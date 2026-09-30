@@ -67,3 +67,10 @@ explicitly resolved EggPool targets. Secrets resolve from
 `api_key`/`api_key_env` indirection or `$EGGPOOL_ENV`-adjacent `.env`
 files, stay `[REDACTED]` in `Debug` impls, and never reach
 metrics/status/diagnostics payloads.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test cli_contract -- --test-threads=1
+```

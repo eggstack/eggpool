@@ -150,3 +150,14 @@ raw bodies, or cache keys.
 - Compact stays native, finite, and single-owner: v1 preserves the source envelope with model-only rewrite, v2 triggers stay native-only signals, and the preserved tree is never duplicated or canonicalized into a completion.
 - Streams require native terminal evidence (`response.completed` for translated Responses output); EOF and malformed frames are typed failures, and unknown valid native events forward unchanged.
 - The kernel stays sans-I/O and EggPool-free (boundary test enforced); all routing, catalog, config, transport, retry, and persistence joins live outside it.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test wire_codecs -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_runtime -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_extraction_contract -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_kernel_boundary -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test canonical_request -- --test-threads=1
+```

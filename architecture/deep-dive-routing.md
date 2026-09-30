@@ -112,3 +112,12 @@ circuit.
 - Read-only plan/readiness paths never advance the fairness rotor or acquire probes.
 - Failures fail closed (poisoned locks, unknown accounts, underflow) without silently
   clamping ownership counters.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test routing_claims -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test quota -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test model_router -- --test-threads=1
+```

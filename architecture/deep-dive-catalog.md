@@ -87,3 +87,10 @@ owned_by: eggpool, name}]}` with no refresh, probe, or health mutation.
 - Stale and withdrawn rows are bounded, explicit, and evented.
 - Pricing is observability only and never steers routing.
 - External sources cannot override deliberate operator capability overrides.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test catalog_refresh -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test routing_domain -- --test-threads=1
+```

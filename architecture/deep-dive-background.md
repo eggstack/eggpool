@@ -43,3 +43,11 @@ Persistence M004 (`plans/closure/persistence/004-status.md`, closed against HEAD
 - Task inventory and operational profiles are bounded diagnostics, not a performance benchmark or runtime authority.
 - Backup and metrics tasks use bounded queues and report failures without losing the active generation.
 - Shutdown joins supervised work before generation close and database close.
+
+## Verification
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --test runtime_lifecycle_r005 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test catalog_refresh -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test operations_o002 -- --test-threads=1
+```
