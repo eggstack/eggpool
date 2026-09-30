@@ -5,7 +5,7 @@ runtime validates all profiles before startup or rehash.
 
 ## Lean default
 
-Use `config.sbc.example.toml` as the complete low-wear example. It keeps
+Use `rust/config.sbc.example.toml` as the complete low-wear example. It keeps
 diagnostics, external metadata work, and automatic backups opt-in while
 retaining durable request/accounting writes and SQLite WAL.
 

@@ -44,7 +44,7 @@ for the full flow.
 ## Pi-Specific Config
 
 For a complete copyable low-wear configuration, use
-[`config.sbc.example.toml`](../config.sbc.example.toml). It intentionally uses
+[`config.sbc.example.toml`](../rust/config.sbc.example.toml). It intentionally uses
 a loopback bind, one database worker, disables optional diagnostics, and keeps
 correctness-critical request state durable while allowing buffered analytics to
 lag. Startup and `check-config` require a server API key before accepting a

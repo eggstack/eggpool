@@ -115,7 +115,7 @@ Full command list: [CLI reference](docs/cli-reference.md).
 
 ## Configuration
 
-One TOML file (`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`); API keys come from environment variables or `.env`, never the file. Prefer `eggpool connect` over hand-editing; the commented [config.example.toml](config.example.toml) (plus [config.sbc.example.toml](config.sbc.example.toml) for SBCs) documents every section. Config changes are validated before apply and classified as live-reloadable (`rehash`) or restart-required — see [Live Configuration Rehash](docs/live-config-rehash.md) and [Providers](docs/providers.md).
+One TOML file (`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`); API keys come from environment variables or `.env`, never the file. Prefer `eggpool connect` over hand-editing; the commented [config.example.toml](rust/config.example.toml) (plus [config.sbc.example.toml](rust/config.sbc.example.toml) for SBCs) documents every section. Config changes are validated before apply and classified as live-reloadable (`rehash`) or restart-required — see [Live Configuration Rehash](docs/live-config-rehash.md) and [Providers](docs/providers.md).
 
 ## Documentation
 

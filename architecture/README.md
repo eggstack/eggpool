@@ -147,7 +147,7 @@ logic, while `rust/src/reload.rs` revalidates and reclassifies on the server
 before generation construction. Unsupported or disruptive changes fail closed
 and require restart.
 
-The repository-root `config.example.toml` and `config.sbc.example.toml` are
+The `rust/config.example.toml` and `rust/config.sbc.example.toml` are
 the canonical human-edited examples. `rust/build.rs` tracks them as inputs and
 embeds the default example used by `eggpool init-config`; there is no second
 Rust-local copy to keep synchronized. The `[server].threads` key remains a

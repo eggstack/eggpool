@@ -118,7 +118,7 @@ fn init_config_uses_the_repository_canonical_example() {
 
     assert!(config_mutation::init_config(&path, false).expect("initialize config"));
     let generated = fs::read_to_string(&path).expect("generated config");
-    assert_eq!(generated, include_str!("../../config.example.toml"));
+    assert_eq!(generated, include_str!("../config.example.toml"));
     Config::from_toml_bytes(&path, generated.as_bytes()).expect("canonical config parses");
 }
 

@@ -78,7 +78,7 @@ def _check_config_and_health(
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     config = root / "config.toml"
-    config_text = (ROOT / "config.sbc.example.toml").read_text(encoding="utf-8")
+    config_text = (ROOT / "rust" / "config.sbc.example.toml").read_text(encoding="utf-8")
     config.write_text(
         config_text.replace("port = 11300", f"port = {_free_port()}"), encoding="utf-8"
     )

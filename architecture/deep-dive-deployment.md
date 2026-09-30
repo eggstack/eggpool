@@ -113,7 +113,7 @@ from this document; read `deploy/eggpool.service` or regenerate via the CLI.
 
 ### `config.toml`
 
-Runtime configuration. Selected sections (see `config.example.toml` and
+Runtime configuration. Selected sections (see `rust/config.example.toml` and
 `rust/src/config.rs` for the full contract):
 - `[server]` — host (canonical default `0.0.0.0` for LAN access; the SBC
   profile deliberately overrides to loopback-only), port (`11300`), and

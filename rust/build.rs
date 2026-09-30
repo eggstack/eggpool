@@ -4,12 +4,9 @@ mod build_support;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let repository_dir = manifest_dir
-        .parent()
-        .unwrap_or_else(|| panic!("Cargo manifest is not inside the repository"));
     let config_paths = ["config.example.toml", "config.sbc.example.toml"];
     for relative_path in config_paths {
-        let path = repository_dir.join(relative_path);
+        let path = manifest_dir.join(relative_path);
         println!("cargo:rerun-if-changed={}", path.display());
         fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
@@ -76,7 +73,7 @@ fn main() {
         process::exit(1);
     });
 
-    let default_config_path = repository_dir.join("config.example.toml");
+    let default_config_path = manifest_dir.join("config.example.toml");
     let config_generated = format!(
         "pub(crate) const DEFAULT_CONFIG: &str = include_str!({:?});\n",
         default_config_path.to_string_lossy()

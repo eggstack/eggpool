@@ -30,8 +30,8 @@ resolution, and `operations/lifecycle.rs` owns start/stop/restart/ensure-running
 composition. Start at `architecture/deep-dive-deployment.md` and
 `architecture/deep-dive-lifecycle.md` for design; use `docs/deployment.md`,
 `docs/backup-restore.md`, `docs/upgrading.md`, and `docs/raspberry-pi.md` for
-operator procedures. Config examples are `config.example.toml` (full) and
-`config.sbc.example.toml` (low-wear SBC profile).
+operator procedures. Config examples are `rust/config.example.toml` (full) and
+`rust/config.sbc.example.toml` (low-wear SBC profile).
 
 The reviewed Maturin 1.14.1 release build passes `--strip false` and the
 packaging manifest sets `strip = false`. Stripping or ThinLTO may be adopted

@@ -105,7 +105,7 @@ explicit `--config` > `$EGGPOOL_CONFIG` > `$XDG_CONFIG_HOME`-aware
 `~/.config/eggpool/config.toml` >
 `./config.toml`; API keys come from the environment or the adjacent `.env`
 (`$EGGPOOL_ENV` override supported), never committed. Canonical examples are
-the repository-root `config.example.toml` and `config.sbc.example.toml`;
+the `rust/config.example.toml` and `rust/config.sbc.example.toml`;
 `rust/build.rs` (via `rust/build_support.rs`) embeds the default example for
 `eggpool init-config` and embeds the `rust/assets/db/migrations/` chain with
 checksums.
@@ -432,9 +432,9 @@ Deep dives: [Observability](deep-dive-observability.md),
   bootstraps (`packaging/connect/`, SHA-256 against the release SHA256SUMS);
   helper release assets (`connect_artifacts`, Windows x86_64 included) are
   typed separately from the proxy triple and never imply Windows proxy support.
-- Config profiles: full `config.example.toml` (LAN bind, public read-only
+- Config profiles: full `rust/config.example.toml` (LAN bind, public read-only
   dashboard) plus low-wear
-  `config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
+  `rust/config.sbc.example.toml` (WAL cap, trace off, `low_wear` metrics,
   model-info/backup disabled, deliberate loopback-only bind;
   request/accounting durability preserved).
 - Codex contract: `[model_providers.eggpool]` Responses shape with

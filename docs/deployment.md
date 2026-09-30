@@ -365,7 +365,7 @@ standard install uses one SQLite worker, low-wear analytics, a LAN bind
 enabled by default. The SBC
 profile keeps optional enrichment/diagnostics disabled to bound resource
 use on Raspberry Pi class hardware, and deliberately stays on a loopback bind
-(see `config.sbc.example.toml`). All profiles use the supported
+(see `rust/config.sbc.example.toml`). All profiles use the supported
 single-event-loop default (`threads = 1`).
 
 `eggpool onboard` keeps any explicit operator bind address and never rewrites

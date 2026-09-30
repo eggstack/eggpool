@@ -37,7 +37,7 @@ result into apply logic; `rust/src/reload.rs` independently revalidates and
 reclassifies the on-disk candidate before it builds and publishes a complete
 generation atomically. A mixed transition is wholly restart-required.
 The repository-root configuration examples are the canonical build inputs:
-`config.example.toml` and `config.sbc.example.toml`. `rust/build.rs` (via
+`rust/config.example.toml` and `rust/config.sbc.example.toml`. `rust/build.rs` (via
 `rust/build_support.rs`) tracks both as inputs, embeds the default example
 for `eggpool init-config`, and embeds the `rust/assets/db/migrations/` chain
 with checksums; there is no second Rust-local copy to synchronize.
