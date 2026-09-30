@@ -16,6 +16,10 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-t
 cargo build --manifest-path rust/Cargo.toml --locked
 cargo build --manifest-path rust/Cargo.toml --locked --release
 
+# No-default boundary (CI parity for check/clippy; keep the full shape for local tests)
+cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
+
 # Shared reusable crates (`eggpool-model-routing` + `eggpool-client-config` are
 # Rust 1.81-compatible; `eggpool-wire` + `eggpool-connect` + root require 1.89)
 cargo check --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
@@ -282,7 +286,7 @@ database.
 Python is retained for release/validation scripts and their tests only:
 
 ```bash
-uv sync --dev
+uv sync --frozen # CI parity (`--dev` for local tooling work)
 uv run ruff format --check scripts/ tests/tooling/
 uv run ruff check scripts/ tests/tooling/
 uv run pyright scripts/

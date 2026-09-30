@@ -14,6 +14,13 @@ For runtime behavior changes, start at `architecture/README.md` + the
 `architecture/overview.md` review index + the relevant deep dive. Do not copy
 deep-dive detail into `AGENTS.md`.
 
+Change-area index (all under `architecture/`; full module map is the
+`overview.md` review index): routing/selection → `deep-dive-routing.md`;
+providers/transport → `deep-dive-providers.md`; reload/restart →
+`deep-dive-control.md` + `deep-dive-runtime.md`; deploy/backup/update →
+`deep-dive-deployment.md` + `deep-dive-lifecycle.md`; wire/transcoding →
+`deep-dive-transcoder.md`; integrations/connect → `deep-dive-integrations.md`.
+
 ## Layout
 
 - Runtime (authority): `rust/src/` (`main.rs`/`cli.rs`/`lib.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` + `coordinator/streaming/` request lifecycle, `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` + `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity, `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` + `task_supervisor.rs`, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/` v1–v54 immutable).
@@ -53,7 +60,10 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
-Notes: Rust tests must run serial (`--test-threads=1`). `uv sync --dev` for local
+Notes: Rust tests must run serial (`--test-threads=1`). CI runs no-default
+only for `check`/`clippy`, never `test` — keep the full
+`--workspace --all-targets -- --test-threads=1` shape when running no-default
+tests locally. `uv sync --dev` for local
 tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
 changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`, `AGENTS.md`).
@@ -108,9 +118,9 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
 - Provider transport is exact-pinned to `eggfetch-core =0.2.0` with
-  `native-http1,tls-rustls` (not the `http1` alias or `standard-http1`), with
-  high-level URL/retry/redirect/Basic-auth, built-in proxy, and HTTP/2/3
-  disabled; provider proxy dialing is exact-pinned Eggress `1.0.10`
+  `native-http1,tls-rustls` (not the `http1` alias or `standard-http1`),
+  excluding high-level URL/retry/redirect/Basic-auth, built-in proxy, and
+  HTTP/2/3; provider proxy dialing is exact-pinned Eggress `1.0.10`
   `eggress-outbound` via `connect_tcp_detailed` with a typed kind/stage
   adapter (no message-string classifier). `operations/update.rs` is a separate
   Hyper/Rustls owner. Downstream HTTP/1 is exact-pinned `eggserve-server =0.4.0`

@@ -498,7 +498,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `finalization.rs`, `failure.rs`, `attempt.rs`, `wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Wire/transcoding | `rust/src/wire/` (facades + `adapters.rs` seam + `runtime.rs` join), `rust/crates/eggpool-wire/` (neutral kernel) | [Transcoder](deep-dive-transcoder.md) |
 | Providers/transport | `rust/src/providers/` | [Providers](deep-dive-providers.md) |
-| Routing/quota/health/accounts | `rust/src/routing/`, `quota/`, `health/`, `accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
+| Routing/quota/health/accounts | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/`, `rust/src/accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |

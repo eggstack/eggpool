@@ -475,8 +475,8 @@ a healthy server — the operator must intervene:
 
 ## See also
 
-- `architecture/README.md` § Live Configuration Rehash — validation
-  contract, diff shape, wire types, and runtime generations
+- `architecture/deep-dive-control.md` (§§ Reload policy, Reload service) —
+  validation contract, diff shape, wire types, and runtime generations
 - `rust/src/config.rs` — reusable validation contract
 - `rust/src/config_reload_policy.rs` — typed diff and reload policy
 - `rust/src/runtime.rs` — CLI adapter, rehash JSON shaping, and `EXIT_*` constants (`cli.rs` owns argument parsing only)

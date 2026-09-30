@@ -11,8 +11,9 @@ Canonical direction is exactly `plans/000-long-term-specification.md`,
 `plans/003-planning-process.md` — do not confuse these with same-numbered
 legacy files (e.g. legacy `plans/001-reload-…`, `plans/002-phase-01-…`).
 All other flat `plans/NNN-*` files through `250-*` are the pre-251 legacy
-archive: append-only, immutable, left in place. Post-251 work follows the
-hierarchy in `plans/README.md`. Do not rewrite or delete closed records to
+archive: append-only, immutable, left in place. (Sole flat exception:
+`plans/251-*`, the bootstrap authorizing the post-251 hierarchy — see the
+registry.) Post-251 work follows the hierarchy in `plans/README.md`. Do not rewrite or delete closed records to
 reflect later work — add a new corrective/closure pass.
 
 ## Document hierarchy

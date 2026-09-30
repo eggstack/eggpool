@@ -172,7 +172,7 @@ cargo build --manifest-path rust/Cargo.toml --locked
 # Reduced feature-boundary qualification
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --no-default-features
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- --test-threads=1
 ```
 
 Native dependency and feature changes are reviewed from Cargo's resolved

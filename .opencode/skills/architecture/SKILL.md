@@ -80,7 +80,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   and must never inherit a dashboard-public exemption.
 - Keep the desktop helper transactional and narrow: `rust/crates/eggpool-connect/`
   links `eggpool-client-config` plus Clap/Serde/SerdeJson/Sha2/Thiserror/TOML and
-  narrow Hyper/HyperUtil/HyperRustls/Http/WebpkiRoots/Tokio for profile verification
+  narrow Hyper/HyperUtil/HyperRustls/Http/HttpBodyUtil/WebpkiRoots/Tokio for profile verification
   (no Axum/SQLite/Eggress, no proxy/agent/daemon). It owns the explicit
   `Decoded -> … -> Committed` state machine, byte-exact backups before the
   first write, atomic same-directory replacement with symlink/special-file
