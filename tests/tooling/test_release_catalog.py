@@ -112,14 +112,13 @@ def test_rust_release_requires_wheels_after_artifact_stage_activation() -> None:
         validate_catalog(value)
 
 
-def test_candidate_native_release_has_pending_source_and_no_public_artifact() -> None:
+def test_published_native_release_has_immutable_source_and_public_artifact() -> None:
     value = catalog()
     authority = value["version_authority"]
-    assert authority["publication_status"] == "candidate"
-    assert authority["native_release_source_commit"] is None
+    assert authority["publication_status"] == "published"
+    assert authority["native_release_source_commit"]
     assert authority["rust_cargo_version"] == authority["native_release_version"]
     versions = {release["version"] for release in releases(value)}
     assert authority["native_release_version"] in versions
     assert releases(value)[-1]["implementation_era"] == "rust"
-    assert releases(value)[-1].get("pypi_files") is None
-    assert releases(value)[-1]["public_release_status"] == "unavailable"
+    assert len(releases(value)[-1]["pypi_files"]) == 3

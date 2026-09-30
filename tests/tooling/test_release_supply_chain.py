@@ -32,12 +32,13 @@ def _manifest() -> dict[str, object]:
 
 def _public_metadata() -> tuple[dict[str, object], dict[str, object]]:
     manifest = _manifest()
+    version = str(manifest["release_version"])
     records = manifest["artifacts"]
     assert isinstance(records, list)
     pypi_urls = []
     github_assets = [
         {"name": "SHA256SUMS"},
-        {"name": "eggpool-0.8.0-release-manifest.json"},
+        {"name": f"eggpool-{version}-release-manifest.json"},
     ]
     for record in records:
         assert isinstance(record, dict)
@@ -51,9 +52,16 @@ def _public_metadata() -> tuple[dict[str, object], dict[str, object]]:
         github_assets.append(
             {"name": raw["filename"], "digest": f"sha256:{raw['sha256']}"}
         )
-    pypi = {"info": {"version": "0.8.0"}, "urls": pypi_urls}
+    connect_records = manifest.get("connect_artifacts", [])
+    assert isinstance(connect_records, list)
+    for entry in connect_records:
+        assert isinstance(entry, dict)
+        github_assets.append(
+            {"name": entry["filename"], "digest": f"sha256:{entry['sha256']}"}
+        )
+    pypi = {"info": {"version": version}, "urls": pypi_urls}
     github = {
-        "tag_name": "v0.8.0",
+        "tag_name": f"v{version}",
         "draft": False,
         "prerelease": False,
         "assets": github_assets,
@@ -138,10 +146,10 @@ def test_publication_verifier_accepts_exact_manifest_bytes() -> None:
     result = verify_publication(_manifest(), pypi, github)
     assert result == {
         "status": "pass",
-        "version": "0.8.0",
+        "version": "0.8.1",
         "wheels": 3,
         "raw_assets": 3,
-        "connect_assets": 0,
+        "connect_assets": 6,
     }
 
 
@@ -158,7 +166,7 @@ def test_publication_verifier_rejects_missing_github_digest() -> None:
 def test_publication_verifier_rejects_source_archives() -> None:
     pypi, github = _public_metadata()
     pypi["urls"].append(
-        {"filename": "eggpool-0.8.0.tar.gz", "digests": {"sha256": "0" * 64}}
+        {"filename": "eggpool-0.8.1.tar.gz", "digests": {"sha256": "0" * 64}}
     )
     with pytest.raises(PublicationVerificationError, match="source archive"):
         verify_publication(_manifest(), pypi, github)
