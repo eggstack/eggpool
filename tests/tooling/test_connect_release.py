@@ -26,7 +26,7 @@ WORKFLOW = ROOT / ".github/workflows/release.yml"
 POSIX_BOOTSTRAP = ROOT / "packaging/connect/eggpool-connect.sh"
 POWERSHELL_BOOTSTRAP = ROOT / "packaging/connect/eggpool-connect.ps1"
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 NATIVE_PAYLOADS = {
     "elf-62": (b"\x7fELF" + b"\0" * 14 + (62).to_bytes(2, "little") + b"helper"),

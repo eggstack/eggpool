@@ -130,7 +130,7 @@ def test_workflow_rejects_supply_chain_contract_mutations(
 def test_release_identity_matches_cargo_and_packaging_contract() -> None:
     result = validate_release_identity()
     assert result["status"] == "pass"
-    assert result["version"] == "0.8.0"
+    assert result["version"] == "0.8.1"
 
 
 def test_publication_verifier_accepts_exact_manifest_bytes() -> None:

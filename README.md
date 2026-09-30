@@ -43,6 +43,7 @@ To update the owning installation or make an exact historical-version switch:
 
 ```bash
 eggpool update
+eggpool update 0.8.1
 eggpool update 0.8.0
 eggpool update 0.7.4
 ```
@@ -51,7 +52,7 @@ eggpool update 0.7.4
 
 ## First Request
 
-`serve` runs as a daemon (`--verbose` stays in the foreground). The example below was verified live against 0.8.0: list your models, then call one.
+`serve` runs as a daemon (`--verbose` stays in the foreground). The example below was verified live against 0.8.1: list your models, then call one.
 
 ```bash
 eggpool serve

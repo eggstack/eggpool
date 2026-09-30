@@ -47,7 +47,7 @@ not depend on the CLI runtime adapter. The CLI adapter in
 One-shot installer for the native Rust wheel. It recognizes existing package
 manager and standalone installations, refuses ambiguous ownership, checks the
 supported OS/architecture before mutation, and preserves configuration.
-Native releases start at `NATIVE_RELEASE_VERSION = "0.8.0"`; historical
+Native releases start at `NATIVE_RELEASE_VERSION = "0.8.1"`; historical
 Python versions are catalogued exact-only targets and never the default.
 
 ## Operational tooling

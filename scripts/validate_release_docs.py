@@ -111,7 +111,16 @@ def validate_release_docs() -> dict[str, object]:
         raise ReleaseDocsError("Rust wheel classifier is missing")
 
     manifest = _read_json(MANIFEST)
-    if manifest.get("release_version") != version:
+    publication_status = str(authority.get("publication_status"))
+    if publication_status == "published":
+        expected_manifest_version = version
+    else:
+        # A candidate tag still stages the previous published release's
+        # manifest; the new release bytes are recorded post-publication.
+        # The staged record must therefore match the latest stable release.
+        inventory = cast("dict[str, Any]", catalog.get("official_inventory", {}))
+        expected_manifest_version = str(inventory.get("latest_stable_version"))
+    if manifest.get("release_version") != expected_manifest_version:
         raise ReleaseDocsError(
             "staged release manifest version disagrees with release catalog"
         )
@@ -137,7 +146,6 @@ def validate_release_docs() -> dict[str, object]:
     installer = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    publication_status = authority.get("publication_status")
 
     target_labels = {
         "linux-x86_64": ("linux x86_64", "linux-x86_64"),

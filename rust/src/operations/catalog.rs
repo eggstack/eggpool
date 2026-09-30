@@ -117,7 +117,18 @@ impl ReleaseCatalog {
                 python_requirement: Some(python_requirement.clone()),
                 yanked: defaults.yanked,
                 unavailable: defaults.unavailable || !defaults.pypi_presence,
-                supported_target_classes: Vec::new(),
+                // Rust entries carry their own target classes so exact-install
+                // keeps working for previously published native releases, not
+                // just the current native entry patched below. Python entries
+                // never reach the platform check.
+                supported_target_classes: if era == ReleaseEra::Rust {
+                    entry
+                        .supported_target_classes
+                        .clone()
+                        .unwrap_or_else(|| defaults.supported_target_classes.clone())
+                } else {
+                    Vec::new()
+                },
                 rollback_compatible: entry
                     .rollback_suitability
                     .as_deref()
@@ -211,6 +222,7 @@ struct CatalogEntry {
     version: String,
     implementation_era: Option<String>,
     rollback_suitability: Option<String>,
+    supported_target_classes: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -230,7 +242,7 @@ mod tests {
             )
             .expect("latest release");
 
-        assert_eq!(release.version.as_str(), "0.8.0");
+        assert_eq!(release.version.as_str(), "0.8.1");
         assert_eq!(release.era, ReleaseEra::Rust);
     }
 }

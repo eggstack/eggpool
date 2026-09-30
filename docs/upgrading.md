@@ -53,7 +53,7 @@ catalogued target. The same command intentionally supports exact upgrades and
 downgrades:
 
 ```bash
-eggpool update 0.8.0
+eggpool update 0.8.1
 eggpool update 0.7.4
 ```
 
@@ -71,7 +71,7 @@ manual command when recovery also fails. Follow that emitted command, for
 example:
 
 ```bash
-eggpool update 0.8.0
+eggpool update 0.8.1
 ```
 
 After a successful rollback, return to the current Rust release with either
@@ -79,7 +79,7 @@ the latest compatible release or an exact version:
 
 ```bash
 eggpool update
-eggpool update 0.8.0
+eggpool update 0.8.1
 ```
 
 ## Install-aware update authority

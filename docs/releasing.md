@@ -18,7 +18,7 @@ uv run python scripts/validate_runtime_package_boundary.py
 git diff --check
 ~~~
 
-The checks must agree on the release catalog's native version (0.8.0 for the current public
+The checks must agree on the release catalog's native version (0.8.1 for the current public
 release), Cargo version, package metadata, supported targets, changelog
 heading, and source commit. The root `pyproject.toml` is tooling-only and
 cannot be built or uploaded as an EggPool release. `Requires-Python >=3.11` on
@@ -87,6 +87,13 @@ The rehearsal is not a production publication and cannot make a missing
 target artifact acceptable.
 
 ## Production workflow
+
+Candidate releases after the first native release carry their catalog entry in
+the tag commit: era `rust`, `public_release_status: unavailable`,
+`pypi_presence: false`, deterministic wheel filenames, and an all-zero
+`source_commit` placeholder. The post-publication follow-up flips the catalog
+to `published`, records the real tag source commit and wheel hashes, and runs
+the verifier below. Never invent hashes or a source commit pre-publication.
 
 The workflow uses a clean, immutable vX.Y.Z tag, maintainer approval, the
 protected PyPI Trusted Publisher environment, and the exact downloaded

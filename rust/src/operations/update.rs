@@ -42,7 +42,7 @@ use crate::version::PACKAGE_VERSION;
 
 pub const DEFAULT_RELEASE_API: &str = "https://api.github.com/repos/eggstack/eggpool/releases";
 const DEFAULT_USER_AGENT: &str = "eggpool-rust-update";
-const NATIVE_RELEASE_VERSION: &str = "0.8.0";
+const NATIVE_RELEASE_VERSION: &str = "0.8.1";
 const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;

@@ -19,12 +19,12 @@
     ]
   },
   "version_authority": {
-    "publication_status": "published",
-    "native_release_version": "0.8.0",
-    "native_release_tag": "v0.8.0",
-    "native_release_source_commit": "431cad4f46a2d4bbcbc8839c18b71f392c0616ca",
+    "publication_status": "candidate",
+    "native_release_version": "0.8.1",
+    "native_release_tag": "v0.8.1",
+    "native_release_source_commit": null,
     "historical_python_project_version": "0.7.4",
-    "rust_cargo_version": "0.8.0",
+    "rust_cargo_version": "0.8.1",
     "source_of_truth": "Cargo.toml owns the current Rust release version; the root pyproject.toml is repository tooling only.",
     "current_release_era": "rust",
     "historical_release_era": "python",
@@ -189,8 +189,8 @@
     "historical_file_mutation_policy": "Never backfill, delete, yank, replace, or re-upload files in an existing release; PyPI's current file-addition window is 14 days."
   },
   "official_inventory": {
-    "github_stable_release_count": 57,
-    "pypi_stable_release_count": 57,
+    "github_stable_release_count": 58,
+    "pypi_stable_release_count": 58,
     "latest_stable_version": "0.8.0",
     "missing_pypi_versions": [],
     "github_releases_have_no_unexpected_native_assets": false
@@ -252,6 +252,7 @@
     {"version":"0.7.2","source_tag":"v0.7.2","source_commit":"98ee1176f3bbdcde8f97e21aea4255bd1d7a2ee8","pypi_files":[{"filename":"eggpool-0.7.2-py3-none-any.whl","sha256":"e99dfd5a17b38bd179d80b55554523fd25129c1f9e90ddc0ec1b76a48edecea8"},{"filename":"eggpool-0.7.2.tar.gz","sha256":"82376aa056c640f2b26644d275d3c49d601761a9aef26fb27830b952946821d6"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
     {"version":"0.7.3","source_tag":"v0.7.3","source_commit":"0bc0e02bbea5eebae70b247542d084e6fa6b122f","pypi_files":[{"filename":"eggpool-0.7.3-py3-none-any.whl","sha256":"244fde4a0338ed115760d1d34cb90cf85febfe4a0863dd70aeca75bba46e2c27"},{"filename":"eggpool-0.7.3.tar.gz","sha256":"8fd6e5807071a96c4fa741b47f7727dedededb5e5109d4c7df71524b33cc9741"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
     {"version":"0.7.4","source_tag":"v0.7.4","source_commit":"b7ab884347180afea6d935653119277eddbaab02","pypi_files":[{"filename":"eggpool-0.7.4-py3-none-any.whl","sha256":"47b61c1c9db3ee9fa8945bebed89c7294cb867240b2204b1bfc39e443d1a9581"},{"filename":"eggpool-0.7.4.tar.gz","sha256":"85a0a719cf966077d43d71564fa7371ec4570fc4a5f2adbee349c5918e9b7cf3"}],"rollback_suitability":"compatible-with-schema54","db_config_compatibility":"schema54"},
-    {"version":"0.8.0","source_tag":"v0.8.0","source_commit":"431cad4f46a2d4bbcbc8839c18b71f392c0616ca","implementation_era":"rust","pypi_files":[{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","sha256":"cce9b86347664484078a858cd9676984a02bb86e9485fea5207e98b60a3d40df"},{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","sha256":"534a7cd62a8dc7110ba5d64a0eb2a9c11f543d8d871e8a965200fbe4329f7df6"},{"filename":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl","sha256":"375c4ccac9299536adc4e27a16578a649993597ba20d11c915bc0dd6c2de9835"}],"supported_target_classes":["linux-x86_64","linux-aarch64","macos-arm64"],"supported_wheels":{"linux-x86_64":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","linux-aarch64":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","macos-arm64":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl"},"rollback_suitability":"current-native-release","db_config_compatibility":"schema54"}
+    {"version":"0.8.0","source_tag":"v0.8.0","source_commit":"431cad4f46a2d4bbcbc8839c18b71f392c0616ca","implementation_era":"rust","pypi_files":[{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","sha256":"cce9b86347664484078a858cd9676984a02bb86e9485fea5207e98b60a3d40df"},{"filename":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","sha256":"534a7cd62a8dc7110ba5d64a0eb2a9c11f543d8d871e8a965200fbe4329f7df6"},{"filename":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl","sha256":"375c4ccac9299536adc4e27a16578a649993597ba20d11c915bc0dd6c2de9835"}],"supported_target_classes":["linux-x86_64","linux-aarch64","macos-arm64"],"supported_wheels":{"linux-x86_64":"eggpool-0.8.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","linux-aarch64":"eggpool-0.8.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","macos-arm64":"eggpool-0.8.0-py3-none-macosx_11_0_arm64.whl"},"rollback_suitability":"current-native-release","db_config_compatibility":"schema54"},
+    {"version":"0.8.1","source_tag":"v0.8.1","source_commit":"0000000000000000000000000000000000000000","implementation_era":"rust","public_release_status":"unavailable","pypi_presence":false,"yanked":false,"unavailable":true,"supported_target_classes":["linux-x86_64","linux-aarch64","macos-arm64"],"supported_wheels":{"linux-x86_64":"eggpool-0.8.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl","linux-aarch64":"eggpool-0.8.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl","macos-arm64":"eggpool-0.8.1-py3-none-macosx_11_0_arm64.whl"},"rollback_suitability":"current-native-release","db_config_compatibility":"schema54"}
   ]
 }

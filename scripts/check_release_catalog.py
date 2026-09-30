@@ -235,14 +235,28 @@ def validate_catalog(catalog: Mapping[str, Any]) -> dict[str, int | str]:
         if version in seen:
             raise CatalogError(f"duplicate release version: {version}")
         seen.add(version)
-        if _version_key(version) > _version_key(native_release) or (
+        if _version_key(version) > _version_key(native_release):
+            raise CatalogError(f"native release is older than release {version}")
+        if (
             _version_key(version) == _version_key(native_release)
             and phase != "published"
+            and release.get("public_release_status") == "published"
         ):
-            raise CatalogError(f"native release is not newer than release {version}")
+            raise CatalogError(
+                f"native release candidate claims published entry {version}"
+            )
         if release.get("implementation_era") not in {"python", "rust"}:
             raise CatalogError(f"invalid implementation era for {version}")
-        expected_era = "rust" if version == native_release else "python"
+        # Entries at or below the last historical Python release are
+        # Python-era; anything newer is a native Rust release (the current
+        # candidate plus previously published native releases, which keep
+        # their era so exact-install and rollback paths stay correct).
+        if _version_key(version) <= _version_key(
+            authority["historical_python_project_version"]
+        ):
+            expected_era = "python"
+        else:
+            expected_era = "rust"
         if release["implementation_era"] != expected_era:
             raise CatalogError(
                 f"release {version} has era {release['implementation_era']!r}; "
