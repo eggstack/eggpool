@@ -307,19 +307,12 @@ fn is_codex_revision_only_update(
         && eggpool_client_config::text::table_value(&lines, table, "env_key").as_deref()
             == Some("EGGPOOL_API_KEY")
         && eggpool_client_config::text::table_value(&lines, table, "name").as_deref()
-            == Some("EggPool")
-        && eggpool_client_config::text::table_value(&lines, table, "model_provider").as_deref()
-            == Some("eggpool");
+            == Some("EggPool");
     if !shape_ok {
         return false;
     }
     // Same provider shape and base URL: only the catalog/models changed.
-    // Require the catalog to match the plan so a user-selected catalog is
-    // never auto-converged away.
     let _ = planned;
-    // Compare planned catalog bytes against the existing catalog reference if
-    // the plan carries one; otherwise require explicit model_provider match
-    // above (already checked) and fall through.
     true
 }
 
