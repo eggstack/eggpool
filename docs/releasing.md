@@ -36,6 +36,29 @@ There is no Rust sdist, universal wheel, Windows proxy asset, or
 source-build fallback. (Windows appears only as an `eggpool-connect` helper
 asset below.)
 
+## crates.io publication
+
+The same version is published to crates.io for `cargo install eggpool`
+(users need Rust 1.89 or newer; the installer script and PyPI wheels are
+unchanged). Published crates, in dependency order:
+
+- `eggpool-wire 0.1.0`, `eggpool-model-routing 0.1.0`,
+  `eggpool-client-config 0.1.0` (neutral library crates);
+- `eggpool 0.8.1` (the proxy binary; depends on the three libraries above).
+
+```bash
+cargo publish --manifest-path rust/crates/eggpool-wire/Cargo.toml
+cargo publish --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
+cargo publish --manifest-path rust/crates/eggpool-client-config/Cargo.toml
+cargo publish --manifest-path rust/Cargo.toml
+```
+
+The wire crate owns its data file (`rust/crates/eggpool-wire/assets/`)
+so the published package is self-contained; `eggpool-connect` stays
+unpublished (GitHub helper asset only). Crate versions are independent of
+the proxy release version. Verify with `cargo search eggpool` (or
+`cargo install eggpool --version <X.Y.Z> --dry-run`) after publishing.
+
 ## Desktop helper release assets (`eggpool-connect`)
 
 The same release workflow additionally publishes the `eggpool-connect`

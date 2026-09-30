@@ -71,9 +71,13 @@ def validate_release_identity(
         raise ReleaseValidationError(
             "Cargo version disagrees with the release catalog native release version"
         )
-    if cargo_package.get("publish") is not False:
+    if cargo_package.get("publish") is False:
         raise ReleaseValidationError(
-            "the application Cargo package must not be published directly"
+            "the application Cargo package must be publishable to crates.io"
+        )
+    if cargo_package.get("license") != "MIT":
+        raise ReleaseValidationError(
+            "publication license metadata is not the repository MIT license"
         )
 
     packaging = _read(PACKAGING)

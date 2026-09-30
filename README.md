@@ -1,8 +1,10 @@
 [![PyPI version](https://badge.fury.io/py/eggpool.svg)](https://pypi.org/project/eggpool/)
+[![Crates.io version](https://img.shields.io/crates/v/eggpool.svg)](https://crates.io/crates/eggpool)
 [![Rust runtime](https://img.shields.io/badge/runtime-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/eggstack/eggpool/actions/workflows/ci.yml/badge.svg)](https://github.com/eggstack/eggpool/actions/workflows/ci.yml)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/eggpool?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/eggpool)
+[![Crates.io Downloads](https://img.shields.io/crates/d/eggpool.svg)](https://crates.io/crates/eggpool)
 
 # EggPool
 
@@ -29,6 +31,9 @@ curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/insta
 # Or install the native wheel directly
 uv tool install eggpool
 # or: pipx install eggpool
+
+# Or build from source via crates.io (requires Rust 1.89 or newer)
+cargo install eggpool
 
 # Interactive onboarding — connect providers, validate, start
 eggpool onboard

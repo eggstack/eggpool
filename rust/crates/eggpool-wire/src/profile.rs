@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::codec::WireCodecId;
 
-const BUILTIN_WIRE_PROFILES: &str = include_str!("../../../assets/providers/_wire_profiles.toml");
+const BUILTIN_WIRE_PROFILES: &str = include_str!("../assets/_wire_profiles.toml");
 
 /// Stable upstream wire-surface identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

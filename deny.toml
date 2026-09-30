@@ -44,9 +44,10 @@ allow = [
 unused-allowed-license = "warn"
 unused-license-exception = "warn"
 
-# The workspace packages are unpublished native application crates. Their
-# distribution license is the repository MIT LICENSE, while this gate is
-# concerned with third-party dependency obligations.
+# The workspace's published crates (`eggpool`, `eggpool-wire`,
+# `eggpool-model-routing`, `eggpool-client-config`) carry the repository MIT
+# LICENSE, while this gate is concerned with third-party dependency
+# obligations.
 [licenses.private]
 ignore = true
 

@@ -41,7 +41,7 @@ owns selection-time joining (`WireRuntime`, `WireRuntimeContext`, `WireRuntimeId
 
 ## Workspace split (M003)
 
-The kernel is the single source of truth in `rust/crates/eggpool-wire` (`publish = false`; dependencies
+The kernel is the single source of truth in `rust/crates/eggpool-wire` (published as `eggpool-wire 0.1.0` on crates.io; dependencies
 only on `serde`/`serde_json`/`thiserror`/`sha2`/`toml`; MSRV 1.89; `unsafe_code = forbid`; no credential,
 environment, filesystem, network, clock, random, async, database, or logging effects). Neutral `registry`
 moved to `profile.rs`; every other module kept its file name. Root `rust/src/wire/` modules are narrow

@@ -3,9 +3,9 @@ name = "eggpool-client-config"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.81"
-publish = false
 description = "Portable client-configuration policy for EggPool connection profiles and Codex/OpenCode renderers"
 license = "MIT"
+repository = "https://github.com/eggstack/eggpool"
 
 [dependencies]
 base64 = "0.22"

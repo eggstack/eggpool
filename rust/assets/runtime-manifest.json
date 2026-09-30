@@ -18,7 +18,7 @@
     {
       "path": "providers/_wire_profiles.toml",
       "category": "wire-profiles",
-      "source": "rust/assets/providers/_wire_profiles.toml",
+      "source": "rust/crates/eggpool-wire/assets/_wire_profiles.toml",
       "sha256": "c733956c712420a0a73ff183eade852ed432afa292a8a35ea126b1ef26725b6d",
       "identity": "exact"
     },

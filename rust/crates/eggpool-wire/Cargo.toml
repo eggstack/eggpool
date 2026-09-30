@@ -3,8 +3,9 @@ name = "eggpool-wire"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-publish = false
 description = "Neutral sans-I/O wire kernel: canonical request/response/event types, protocol decoders, finite codecs, and streaming state machines"
+license = "MIT"
+repository = "https://github.com/eggstack/eggpool"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
