@@ -23,7 +23,7 @@ The default backup directory depends on the installation type:
 - **Production** (`/var/lib/eggpool` exists): `/var/lib/eggpool/backups`
 - **Personal**: `~/backups/eggpool/` (or `$XDG_BACKUP_HOME/eggpool`)
 
-The automatic task uses `sqlite3.Connection.backup()` for consistent
+The automatic task uses the tokio-rusqlite `backup_to` API for consistent
 snapshots and writes archives atomically (write-to-temp + rename). Snapshot,
 archive-copy, and staging cleanup work uses bounded native task scheduling.
 No external `sqlite3` binary is required.
@@ -71,57 +71,35 @@ eggpool-backup-20260624-120000.zip
 └── .env           (if present)
 ```
 
-### Manual backup
+### Manual backup without the CLI
+
+Prefer `eggpool backup --output-dir <dir>` — it stages a consistent
+database snapshot plus `config.toml`/`.env` into one atomic ZIP. Only if
+the CLI is unavailable, copy the config files directly and snapshot the
+database to a cold copy first (never copy a live `-wal`/`-shm` pair):
 
 ```bash
-# Create backup directory
 BACKUP_DIR="/var/backups/eggpool/$(date +%Y%m%d-%H%M%S)"
 sudo mkdir -p "$BACKUP_DIR"
-
-# Backup configuration
 sudo cp /etc/eggpool/config.toml "$BACKUP_DIR/"
 sudo cp /etc/eggpool/env "$BACKUP_DIR/"
-
-# Backup database (using SQLite backup for consistency)
-sudo -u eggpool sqlite3 /var/lib/eggpool/usage.sqlite3 ".backup '$BACKUP_DIR/usage.sqlite3'"
-
-# Create archive
-sudo tar czf "$BACKUP_DIR.tar.gz" -C /var/backups/eggpool "$(date +%Y%m%d-%H%M%S)"
-sudo rm -rf "$BACKUP_DIR"
-
-echo "Backup saved to $BACKUP_DIR.tar.gz"
+sudo systemctl stop eggpool
+sudo cp /var/lib/eggpool/usage.sqlite3 "$BACKUP_DIR/usage.sqlite3"
+sudo systemctl start eggpool
 ```
 
 ### Automated backup (cron)
 
-Create `/etc/cron.d/eggpool-backup`:
-
-```
-# Backup eggpool database daily at 2 AM
-0 2 * * * root /usr/local/bin/eggpool-backup
-```
-
-Create `/usr/local/bin/eggpool-backup`:
+Use the supported installer instead of hand-writing scripts:
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-
-BACKUP_DIR="/var/backups/eggpool"
-KEEP_DAYS=30
-
-mkdir -p "$BACKUP_DIR"
-
-/usr/local/bin/eggpool backup --output-dir "$BACKUP_DIR"
-
-find "$BACKUP_DIR" -name "eggpool-backup-*.zip" -mtime +$KEEP_DAYS -delete
+sudo env "PATH=$PATH" "$(command -v eggpool)" deploy backup-cron --install
 ```
 
-Make it executable:
-
-```bash
-sudo chmod +x /usr/local/bin/eggpool-backup
-```
+It writes `/usr/local/bin/eggpool-backup` (a wrapper that execs
+`eggpool backup`) and a daily `0 2 * * *` entry, keeping 30 days of
+archives. See [Deployment](deployment.md) for the personal vs
+production paths.
 
 ## Restore
 
@@ -222,15 +200,11 @@ The command interactively confirms each removal step:
    `scripts/install.sh` and any `uv tool update-shell` lines.
 4. Leaves existing backups under `~/backups/eggpool/` in place.
 
-After uninstall completes, the CLI prints the commands needed to
-remove systemd, logrotate, and cron artifacts (these are **not**
-removed automatically):
+Pass `--deploy-artifacts` to also remove systemd, logrotate, and cron
+artifacts (otherwise they are left in place):
 
 ```bash
-sudo systemctl disable --now eggpool
-sudo rm -f /etc/systemd/system/eggpool.service
-sudo rm -f /etc/logrotate.d/eggpool
-crontab -l 2>/dev/null | grep -v 'eggpool' | crontab -
+eggpool uninstall --yes --deploy-artifacts
 ```
 
 Flags:
@@ -241,6 +215,7 @@ Flags:
 | `--keep-config` | Leave `config.toml` and `.env` in place |
 | `--keep-data` | Leave the SQLite database in place |
 | `--keep-path` | Skip the shell-rc cleanup step |
+| `--deploy-artifacts` | Also remove systemd, logrotate, and cron artifacts |
 
 Examples:
 

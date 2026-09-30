@@ -12,7 +12,7 @@ pipx install eggpool
 eggpool onboard
 
 # Start on boot (writes systemd unit, enables, starts)
-sudo eggpool deploy systemd --install
+sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 
 # Verify
 sudo systemctl status eggpool

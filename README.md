@@ -200,28 +200,28 @@ See [Firewall](docs/firewall.md) for restricting access to your LAN.
 | `eggpool modelinfo refresh` | Trigger model-info source refresh |
 | `eggpool modelinfo aliases` | Show model aliases |
 | `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
-| `eggpool dashboard public` | Print dashboard public URL |
+| `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 | `eggpool status` | Concise proxy/provider health summary (one row per provider; `--json` for structured output) |
-| `eggpool runtime-status` | Detailed process/runtime diagnostics |
-| `eggpool backup` | Create a timestamped backup |
-| `eggpool recover` | Restore from a backup archive |
+| `eggpool runtime-status` | Detailed process/runtime diagnostics (`--json` for the full snapshot) |
+| `eggpool backup` | Create a timestamped backup (`--output-dir` override) |
+| `eggpool recover [source]` | Restore from a backup archive (interactive picker when omitted) |
 | `eggpool db vacuum` | Vacuum the SQLite database |
 | `eggpool set` | Set a config value |
 | `eggpool edit` | Edit config in $EDITOR |
 | `eggpool getkey` | Print the server API key |
-| `eggpool newkey` | Generate and write a new server API key |
+| `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool version` | Show installed version |
-| `eggpool croncheck` | Fast-path cron watchdog check (stdlib-only) |
-| `eggpool ensure-running` | Ensure server is running (stdlib-only) |
+| `eggpool croncheck` | Fast-path cron watchdog check (no server connection) |
+| `eggpool ensure-running` | Ensure server is running (no full runtime snapshot) |
 | `eggpool deploy systemd` | Print/install systemd unit |
 | `eggpool deploy cron` | Install watchdog cron (non-systemd) |
 | `eggpool deploy backup-cron` | Install daily backup cron job |
 | `eggpool deploy logrotate` | Print/install logrotate config |
 | `eggpool deploy all` | Print every deployment snippet in sequence |
-| `eggpool configsetup` | Generate config snippets for coding agents (see [Agent Configuration](docs/agent-configuration.md)) |
+| `eggpool configsetup` | Generate config snippets for coding agents: `opencode`, `codex`, `claude-code`, `aider`, `qwen-code`, `kilo`, `continue`, `cline`, `roo-code`, `goose`, `openhands` (see [Agent Configuration](docs/agent-configuration.md)) |
 | `eggpool configremote <target>` | Export a secret-free `epc1` remote profile for Codex/OpenCode on other machines (`--format command\|token\|json`, `--base-url` override) |
-| `eggpool update [VERSION]` | Install the latest or one exact catalogued release (`v` prefix accepted) |
+| `eggpool update [VERSION]` | Install the latest or one exact catalogued release (`v` prefix accepted; `--check` for dry-run, `--from-source` for local build) |
 | `eggpool install-provenance` | Show the package manager or standalone update authority |
 | `eggpool uninstall` | Uninstall EggPool from this machine |
 
@@ -265,11 +265,16 @@ revalidates and classifies again on the server before building a new generation.
 | `[server]` | Bind address, port (default 11300), API key, logging, threads |
 | `[upstream]` | Upstream API base URL, timeouts, connection pool |
 | `[database]` | SQLite path, WAL mode, WAL size limit |
+| `[readiness_probe]` | Startup readiness gating (interval, freshness, timeout) |
 | `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
 | `[model_routers.<id>]` | Optional virtual-model selector policy and concrete route targets |
 | `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness, bounded wire negotiation |
 | `[dashboard]` | Dashboard toggle, theme, refresh interval |
 | `[providers.*]` | Provider configs with accounts and routing priority |
+| `[accounts]` | Top-level account entries (provider binding, proxy, priority) |
+| `[proxies]` | Named outbound proxy definitions referenced by accounts |
+| `[model_overrides]` | Per-model limit/capability overrides |
+| `[model_capabilities]` | Provider-specific model capability evidence |
 | `[network]` | Outbound transport and proxy settings |
 | `[transcoder]` | Protocol transcoding between OpenAI and Anthropic |
 | `[metrics]` | Observability write buffering (`immediate` / `balanced` / `low_wear`) |
@@ -278,6 +283,8 @@ revalidates and classifies again on the server before building a new generation.
 | `[limits]` | Spend ceilings per account (5h / weekly / monthly microdollars) |
 | `[pricing]` | Pricing catalog sources and missing-rate fallback |
 | `[model_info]` | Multi-source model metadata enrichment |
+| `[update_checker]` | Release update-check cadence and channel |
+| `[integrations]` | Client-facing advertised base URL for remote profiles (live-reloadable; never the listen socket) |
 | `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
 
 `[server].threads` is retained for configuration compatibility and runtime
@@ -436,6 +443,8 @@ See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload 
 | Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
 | Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
 | Release procedure | [docs/releasing.md](docs/releasing.md) |
+| Standalone binaries & disposable hosts | [docs/rust-release-deployment.md](docs/rust-release-deployment.md) |
+| Dashboard test qualification | [docs/rust-dashboard-qualification.md](docs/rust-dashboard-qualification.md) |
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
 | Model context limits | [docs/model-limits.md](docs/model-limits.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
@@ -588,7 +597,7 @@ to `main`; documentation-only changes under `plans/`, `docs/`, `architecture/`,
 `.opencode/skills/`, `AGENTS.md`, and `CHANGELOG.md` are intentionally ignored.
 The separate dependency workflow has the triggers described below:
 
-| Job | Python | What it does |
+| Job | Scope | What it does |
 |-----|--------|-------------|
 | `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests, no-default compile/Clippy guard, plus ruff, pyright, and `pytest tests/tooling/` |
 | `Dependency audit` | Rust dependency policy | cargo-deny advisories, bans, licenses, and sources on dependency/policy changes, weekly, or manual dispatch |

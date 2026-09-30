@@ -61,70 +61,30 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | `GET` | `/api/status` | Authenticated compact proxy/provider health snapshot (`schema_version: 1`; no outbound provider probes) |
 | `GET` | `/api/integrations/v1/profile` | Authenticated versioned sanitized integration profile (`schema_version: 1`, deterministic `revision`/ETag, bounded, no credentials) |
 
-## Upstream Diagnostics
+## Stats & Diagnostics
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/backoffs` | Active upstream-derived account backoffs (`?now=<epoch>` for reproducible snapshots) |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/stats/summary` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Aggregate request stats (counts, tokens, cost, latency) |
+| `GET` | `/api/stats/runtime` | Always key | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
+| `GET` | `/api/stats/update` | Always key | Release update-check status |
 
-## Model Info
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/model-info` | Enriched model metadata summaries |
-| `GET` | `/api/model-info/{model_id}` | Enriched metadata detail for one model |
-| `GET` | `/api/model-info/{model_id}/aliases` | Source-keyed alias rows for one model |
-| `GET` | `/api/model-info/{model_id}/matches` | Match evidence diagnostics for one model |
-| `GET` | `/api/model-info/sources` | Model-info source health and diagnostics per source |
-| `POST` | `/api/model-info/refresh` | Trigger model-info refresh (auth-gated; supports `?model_id=&source=&force=1`) |
-
-## Stats & Observability
-
-Most `/api/stats/*` endpoints are public when the dashboard is public;
-per-request traces stay auth-gated regardless.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/stats/summary` | Aggregate request stats (counts, tokens, cost, latency) |
-| `GET` | `/api/stats/accounts` | Per-account usage roll-up |
-| `GET` | `/api/stats/models` | Per-model usage roll-up |
-| `GET` | `/api/stats/timeseries` | Time-bucketed usage series (`?period=`) |
-| `GET` | `/api/stats/bandwidth` | Request/response byte totals |
-| `GET` | `/api/stats/errors` | Error-class distribution |
-| `GET` | `/api/stats/latency` | Latency percentiles |
-| `GET` | `/api/stats/pings` | Provider ping history |
-| `GET` | `/api/stats/ips` | Client IP aggregates |
-| `GET` | `/api/stats/attempts` | Per-attempt outcome aggregates |
-| `GET` | `/api/stats/retries` | Retry distribution |
-| `GET` | `/api/stats/routing` | Routing decision distribution |
-| `GET` | `/api/stats/routing-selections` | Selection breakdown by model/account |
-| `GET` | `/api/stats/routing-exclusions` | Exclusion reasons breakdown |
-| `GET` | `/api/stats/routing-skew` | Selection skew summary |
-| `GET` | `/api/stats/routing/eligibility` | Per-account routing eligibility diagnostics |
-| `GET` | `/api/stats/operational` | Operational health roll-up |
-| `GET` | `/api/stats/pending-health` | Pending-health probe state |
-| `GET` | `/api/stats/pricing-provenance` | Pricing data provenance |
-| `GET` | `/api/stats/thinking` | Thinking/reasoning decision counter snapshot |
-| `GET` | `/api/stats/cache-observability` | Cache counter status coverage |
-| `GET` | `/api/stats/canonical-request-segmentation` | Segmentation status, counts, and token estimates |
-| `GET` | `/api/stats/cache-stability` | Transcoder cache boundary tracker counters |
-| `GET` | `/api/stats/request-shaping` | Operator-facing request-shaping summary |
-| `GET` | `/api/stats/transcoding` | Protocol transcoding statistics (JSON) |
-| `GET` | `/api/stats/runtime` | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
-| `GET` | `/api/stats/update` | PyPI update check status |
-| `GET` | `/api/stats/recent-requests` | Bounded recent-requests list (auth-gated) |
-| `GET` | `/api/stats/recent/{request_id}` | Per-request trace detail (auth-gated) |
-| `GET` | `/api/network/diagnostics` | Network and outbound-client diagnostics |
+There are no other JSON stats/backoff/model-info/network/event endpoints:
+account backoffs, model-info detail, per-model/account roll-ups, latency and
+bandwidth breakdowns, and event views are rendered server-side into the
+dashboard HTML pages below, not served as JSON. `eggpool accounts status`,
+`eggpool status`, and `eggpool runtime-status` expose the same facts on the
+CLI without HTTP.
 
 ## Dashboard
 
-When `[dashboard].enabled = true`, a multi-page dashboard is served at `/` with request stats, latency metrics, provider health, model-info detail pages, and more. Stats API available under `/api/stats/*`. The dashboard is public and read-only by default (`[dashboard].public = true`): browsers render pages and ordinary stats data without an API key. Set `public = false` (or `eggpool dashboard public --off`) to require the key there too.
-
-## Events
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/events` | Operational event log |
+When `[dashboard].enabled = true`, a multi-page dashboard is served at `/`
+(overview, accounts, models, latency, events, timeseries, bandwidth, pings,
+reliability, routing, traces, runtime, cache). Pages render server-side HTML;
+the only JSON stats endpoint is `/api/stats/summary`. The dashboard is public
+and read-only by default (`[dashboard].public = true`): browsers render pages
+without an API key. Set `public = false` (or `eggpool dashboard public --off`)
+to require the key there too.
 
 ## Request Body Limits
 

@@ -79,7 +79,8 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   versioned, bounded, deterministic, sanitized projection with revision/ETag
   and must never inherit a dashboard-public exemption.
 - Keep the desktop helper transactional and narrow: `rust/crates/eggpool-connect/`
-  links only `eggpool-client-config` plus Clap/Serde/Hyper-Rustls/Tokio/TOML
+  links `eggpool-client-config` plus Clap/Serde/SerdeJson/Sha2/Thiserror/TOML and
+  narrow Hyper/HyperUtil/HyperRustls/Http/WebpkiRoots/Tokio for profile verification
   (no Axum/SQLite/Eggress, no proxy/agent/daemon). It owns the explicit
   `Decoded -> … -> Committed` state machine, byte-exact backups before the
   first write, atomic same-directory replacement with symlink/special-file
@@ -98,7 +99,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
 ## Verification pointers
 
 - CLI/config/errors: `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/config.rs`, `rust/src/error.rs`, `rust/src/lib.rs` (module map), `rust/src/version.rs`
-- Request path: `rust/src/request/` (`admission.rs`, `body.rs`, `limits.rs`), `rust/src/coordinator/` (`finite.rs`, `attempt.rs`, `publication.rs`, `finalization.rs`, `failure.rs`, `wire_resolver.rs`, `endpoints.rs`, `semantic.rs`, `reconciliation.rs`); streaming internals
+- Request path: `rust/src/request/` (`admission.rs`, `body.rs`, `limits.rs`, `resource_budget.rs`), `rust/src/coordinator/` (`finite.rs`, `attempt.rs`, `publication.rs`, `finalization.rs`, `failure.rs`, `wire_resolver.rs`, `endpoints.rs`, `semantic.rs`, `reconciliation.rs`); streaming internals
   are decomposed under `rust/src/coordinator/streaming/` as `coordinator.rs` (pre-handoff),
   `execution.rs` (post-handoff), `terminal.rs` (terminal classification), `timeout.rs` (policy),
   `types.rs` (contracts), `diagnostics.rs` (bounded observation) behind the `mod.rs` facade.
@@ -112,11 +113,12 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   `rust/src/operations/integrations.rs`
   (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop
   helper: plan/install/verify/backups/restore/remove)
-- Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`)
+- Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`, `decode.rs`, `fidelity.rs`, `provenance.rs`, `conformance.rs`, `adapters.rs` — EggPool-owned seam, explicitly not extractable kernel)
+- Wire kernel: `rust/crates/eggpool-wire/` (neutral sans-I/O kernel: IR, decoder, adaptation, codecs, registry, streaming machines; no credentials/env/fs/net/clock/rng/async/DB/log side effects). `rust/src/wire/adapters.rs` maps EggPool catalog/request/routing/config facts into neutral kernel types so kernel modules never import runtime state; the `wire_extraction_contract` + `wire_kernel_boundary` test targets guard the seam
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard.rs`
-- Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs`)
-- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`), `rust/assets/db/migrations/` (v1–v54, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
+- Operations: `rust/src/operations/` (`lifecycle.rs`, `process.rs`, `paths.rs`, `control.rs`, `config_mutation.rs`, `deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs`, `operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs`, `terminal.rs`)
+- Database/assets: `rust/src/db/` (`connection.rs`, `migrations.rs`, `repositories.rs`, `qualification.rs` — feature-gated diagnostics), `rust/assets/db/migrations/` (v1–v54, immutable), `rust/crates/eggpool-model-routing/src/` (`policy.rs`, `identity.rs`, `lib.rs`)
 
 Start routing changes at `architecture/deep-dive-routing.md`, provider/transport
 changes at `architecture/deep-dive-providers.md`, and reload changes at

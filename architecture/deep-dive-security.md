@@ -50,8 +50,9 @@ secret-bearing files) and fail closed when ownership is ambiguous.
 The downstream EggServe HTTP/1 parser applies explicit header, target, and
 transport body ceilings before the Axum application (`max_headers` 256,
 `max_header_bytes` 128 KiB, `max_request_target_bytes` 16 KiB, 1024
-connections / in-flight requests, 5 s body-read and 15 s header-read
-timeouts). The fixed 1 GiB transport body ceiling is defense in depth:
+connections / in-flight requests, 5-minute body-read and 15 s header-read
+timeouts, a 24-hour handler timeout, and a 5 s graceful-shutdown timeout
+inside the 10 s foreground deadline). The fixed 1 GiB transport body ceiling is defense in depth:
 EggPool's authenticated inference middleware enforces the lower live
 generation limit (`[server].max_request_body_bytes`, default 10 MiB) while
 streaming the body — oversize declarations fail with 413, exhausted body

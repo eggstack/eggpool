@@ -66,9 +66,9 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
 - Never document Python-era runtime details as current: no ASGI server, no
   `yield`/`json.dumps`/`_execute_streaming`/`_build_stream_generator` internals,
   no `self._`-style Python fields, no `tests/unit/*.py` paths. The streaming
-  path is Rust/Hyper SSE under `rust/src/coordinator/streaming/` + `rust/src/wire/`,
-  periodic tasks are `TaskSpec { interval_s, initial_delay_s }` in
-  `rust/src/task_supervisor.rs`, and native tests live in `rust/tests/`.
+   path is Rust/Hyper SSE under `rust/src/coordinator/streaming/` + `rust/src/wire/`,
+   periodic tasks are `RuntimeTaskSpec { interval_s: f64, initial_delay_s: Option<f64>, .. }` in
+   `rust/src/task_supervisor.rs`, and native tests live in `rust/tests/`.
 - Document Responses as two bounded paths: canonical semantic adaptation and
   source-native same-surface preservation. State the stateless policy from
   admission (`store` omitted/false is accepted; stateful continuation and

@@ -1,5 +1,8 @@
 # Model-router configuration reference
 
+> Field reference only. For selector/affinity fallback behavior, stickiness,
+> and troubleshooting, see [Model routing](model-routing.md).
+
 Model routers are disabled unless at least one `[model_routers.<id>]` table is
 configured. The mapping is validated structurally and compiled into each
 runtime generation; it does not add a database migration, background task, or

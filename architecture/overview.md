@@ -158,7 +158,8 @@ bounds JSON parsing (depth/collection caps) and emits `AdmittedRequest`
 (canonical `CanonicalRequest` + native Responses preservation envelope +
 token estimates + routing facts). `body.rs` owns deterministic compact JSON
 encoding; `limits.rs` owns overflow-safe media/token/reservation estimators
-and surface-aware output-token resolution.
+and surface-aware output-token resolution; `resource_budget.rs` owns the
+effective body ceiling (`max(64 MiB, live limit)`, capped at 256 MiB).
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Transcoding](deep-dive-transcoder.md).
@@ -203,7 +204,12 @@ implement per-surface codecs (OpenAI Chat, Anthropic Messages, OpenAI
 Responses, Gemini variants); `registry.rs` accepts only compiled codec IDs;
 `runtime.rs`/`stream.rs` own `WireRuntime`/`WireStream`, `PreparedRequest`,
 `FiniteResponse`, SSE decode/encode, and terminal summaries; `adaptation.rs`
-owns reasoning/tool/capability and loss policy. Two bounded Responses paths:
+owns reasoning/tool/capability and loss policy; `decode.rs` owns the pure
+structural decoder with `DecodeLimits`, `fidelity.rs`/`provenance.rs`/
+`conformance.rs` own source-native residue and conformance facts, and
+`adapters.rs` is the EggPool-owned extraction seam (maps catalog/request/
+routing/config facts into neutral kernel types — explicitly not kernel).
+The neutral kernel itself lives in `rust/crates/eggpool-wire/`. Two bounded Responses paths:
 canonical semantic adaptation and source-native same-surface preservation
 (ordered items, encrypted reasoning, native tools preserved; alias targets
 rewrite only EggPool-owned `model`). `custom` tools map to
@@ -454,12 +460,14 @@ pytest suite, `packaging/` release manifests. No Python runtime fallback; never
  import the retired application. Native tests live in `rust/tests/` (serial
  `--test-threads=1`): `cli_contract`, `coordinator_c007`–`c011`, `c013`–`c014`
  (there is no `c012`) +
- `coordinator_boundaries`/`finalization`/`publication`, `wire_*`
+  `coordinator_boundaries`/`finalization`/`publication`, `wire_*`
 (`codecs`, `stream`, `runtime`, `qualification`, `adaptation`, `profiles`,
-`multimodal`), `operations_o002`–`o010`, `runtime_lifecycle_r002`–`r013`,
+`multimodal`, plus the kernel-seam guards `wire_extraction_contract` and
+`wire_kernel_boundary`), `operations_o002`–`o010`, `runtime_lifecycle_r002`–`r013`,
 `routing_*`, `quota`, `health`, `catalog_refresh`, `model_router`,
-`database_compatibility`, `provider_transport`, `canonical_request`,
-`codex_responses_compat`, `codex_compaction_compat`.
+`database_compatibility`, `provider_transport`, `server_transport`,
+`status_command`, `canonical_request`, `codex_responses_compat`,
+`codex_compaction_compat`.
 
 Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 
@@ -471,8 +479,8 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Config, reload policy, reload | `rust/src/config.rs`, `config_reload_policy.rs`, `reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
 | HTTP adapters | `rust/src/server/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md) |
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
-| Coordinator finite/streaming | `rust/src/coordinator/`, `streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
-| Publication/finalization/failure | `coordinator/publication.rs`, `finalization.rs`, `failure.rs`, `attempt.rs`, `wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
+| Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
+| Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `finalization.rs`, `failure.rs`, `attempt.rs`, `wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Wire/transcoding | `rust/src/wire/` | [Transcoder](deep-dive-transcoder.md) |
 | Providers/transport | `rust/src/providers/` | [Providers](deep-dive-providers.md) |
 | Routing/quota/health/accounts | `rust/src/routing/`, `quota/`, `health/`, `accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
@@ -505,8 +513,10 @@ must keep direct/non-SSH proxy while rejecting SSH proxy config pre-dial:
 ```bash
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --no-default-features
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- --test-threads=1
 ```
+
+(CI runs no-default only for `check`/`clippy`, never `test`.)
 
 Dependency/feature changes add:
 

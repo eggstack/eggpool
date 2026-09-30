@@ -16,10 +16,12 @@ cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-t
 cargo build --manifest-path rust/Cargo.toml --locked
 cargo build --manifest-path rust/Cargo.toml --locked --release
 
-# Shared reusable crates (Rust 1.81-compatible boundaries)
+# Shared reusable crates (`eggpool-model-routing` + `eggpool-client-config` are
+# Rust 1.81-compatible; `eggpool-wire` + `eggpool-connect` + root require 1.89)
 cargo check --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
 cargo test --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
 cargo test --manifest-path rust/crates/eggpool-client-config/Cargo.toml
+cargo test --manifest-path rust/crates/eggpool-wire/Cargo.toml
 ```
 
 Strict Clippy is a repository invariant across all Rust targets. Do not add a
@@ -46,9 +48,14 @@ coordinator suite is `coordinator_c007`–`c011`, `c013`–`c014` (there is no
 `routing_domain`, `routing_domain_d008`, `routing_claims`, `quota`; lifecycle is
 `runtime_lifecycle_r002`–`r013`; wire is `wire_codecs`, `wire_stream`,
 `wire_runtime`, `wire_qualification`, `wire_adaptation`, `wire_profiles`,
-`wire_multimodal`; operations is `operations_o002`–`o010` plus
-`status_command` (Plan 202 provider/proxy health aggregation, `/api/status`,
-CLI offline behavior).
+`wire_multimodal` plus the kernel-seam guards `wire_extraction_contract` and
+`wire_kernel_boundary` (run both for any `rust/src/wire/` change); operations
+is `operations_o002`–`o010` plus `status_command` (Plan 202 provider/proxy
+health aggregation, `/api/status`, CLI offline behavior). Also present:
+`build_manifest`, `model_router`, `routing_selection_efficiency`,
+`catalog_refresh`, `canonical_request`, `database_compatibility`,
+`server_transport`, `provider_transport`, `codex_responses_compat`,
+`codex_compaction_compat`.
 
 For `configsetup`/`configremote`/integration-profile/`eggpool-connect`
 changes, run the portable crate and helper plus the focused O005 contract
@@ -237,8 +244,12 @@ provider transport must also qualify the reduced surface:
 ```bash
 cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --no-default-features
+cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- --test-threads=1
 ```
+
+CI runs no-default only for `check`/`clippy`, never `test`; keep the
+`--workspace --all-targets -- --test-threads=1` shape when running no-default
+tests locally.
 
 No-default builds must preserve direct and non-SSH proxy construction while
 returning `TransportError::ProxyConfiguration` for SSH proxy configuration.

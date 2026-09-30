@@ -94,16 +94,19 @@ D2 LIVE families:
 
 - **Retention durations**: ``dashboard.retain_request_stats_days``,
   ``dashboard.retain_event_days``, ``models.ping_retain_days``.
-- **Upstream timeout**: ``upstream.read_timeout_s`` and provider-bound
-  ``providers.<id>.stream_timeouts`` are restart-required transport idle
-  bounds. They never define a maximum stream lifetime or drive stale cleanup.
 - **Metrics flush cadence**: ``metrics.flush_interval_s``.
 - **Backup scheduling**: ``backup.enabled``, ``backup.interval_s``,
   ``backup.retain_count``, ``backup.startup_delay_s``.  Toggling
   ``enabled`` adds/removes the task.
 
+Not live: ``upstream.read_timeout_s`` and provider-bound
+``providers.<id>.stream_timeouts`` stay restart-required transport idle
+bounds (see ``FIELD_DISPOSITIONS`` in ``rust/src/config_reload_policy.rs``).
+They never define a maximum stream lifetime or drive stale cleanup.
+
 The periodic task loop in ``rust/src/task_supervisor.rs``
-re-reads the task ``TaskSpec`` fields (``interval_s`` and ``initial_delay_s``) each
+re-reads the task ``RuntimeTaskSpec`` fields (``interval_s: f64`` and
+``initial_delay_s: Option<f64>``) each
 iteration so live interval changes take effect at the next tick
 boundary — not from the last completion time.  For tasks changed via
 ``apply_spec_diff``, the old task is stopped and a new one is started
@@ -257,7 +260,7 @@ deployment tooling can rely on:
 | `5` | Candidate preparation or publication failure |
 | `6` | Digest mismatch between CLI preflight and server read |
 
-The constants are pinned in `rust/src/cli.rs`. Every
+The constants are pinned in `rust/src/runtime.rs` (`EXIT_*`). Every
 `--json` response always includes the `exit_code` key so programmatic
 consumers do not need to map stages themselves.
 
@@ -289,7 +292,7 @@ Every outcome (success, failure, busy, no-op) always includes these
 | `retirement_pending` | `bool` | `True` when the old generation is still draining |
 | `message` | `str` | Human-readable summary |
 
-The rehash JSON formatter in `rust/src/cli.rs` is the single source of truth;
+The rehash JSON formatter in `rust/src/runtime.rs` is the single source of truth;
 the Rust operation suites pin the contract.
 
 ### Error messages
@@ -331,7 +334,7 @@ of `[models]` (`expose_mode`, `collapse_models`, `refresh_interval_s`,
 `security.persist_redacted_error_detail`. The D2 expansion adds
 background-task cadences and retention durations:
 `dashboard.retain_request_stats_days`, `dashboard.retain_event_days`,
-`models.ping_retain_days`, `upstream.read_timeout_s`,
+`models.ping_retain_days`,
 `metrics.flush_interval_s`, `backup.interval_s`, `backup.retain_count`,
 and `backup.startup_delay_s`. Model-info service construction and its
 per-source/row policy remain restart-required, except for the existing
@@ -476,7 +479,7 @@ a healthy server — the operator must intervene:
   contract, diff shape, wire types, and runtime generations
 - `rust/src/config.rs` — reusable validation contract
 - `rust/src/config_reload_policy.rs` — typed diff and reload policy
-- `rust/src/cli.rs` — standardized JSON, human output, and exit code constants
+- `rust/src/runtime.rs` — CLI adapter, rehash JSON shaping, and `EXIT_*` constants (`cli.rs` owns argument parsing only)
 - `rust/src/operations/control.rs` — control socket server/client
 - `rust/src/reload.rs` — transactional reload manager
 - `rust/src/operations/config_mutation.rs` — safe connect/logout fallback policy

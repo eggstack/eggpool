@@ -5,11 +5,15 @@ description: EggPool planning process — canonical docs, ADRs, subsystem roadma
 
 # Plan Maintenance
 
-`plans/` separates durable direction from interim execution planning. Flat
-files `plans/001-*`…`plans/250-*` are the pre-251 legacy archive:
-append-only, immutable, left in place. Post-251 work follows the hierarchy
-in `plans/README.md`. Do not rewrite or delete closed records to reflect
-later work — add a new corrective/closure pass.
+`plans/` separates durable direction from interim execution planning.
+Canonical direction is exactly `plans/000-long-term-specification.md`,
+`plans/001-terminology-and-domain-model.md`, `plans/002-long-term-roadmap.md`,
+`plans/003-planning-process.md` — do not confuse these with same-numbered
+legacy files (e.g. legacy `plans/001-reload-…`, `plans/002-phase-01-…`).
+All other flat `plans/NNN-*` files through `250-*` are the pre-251 legacy
+archive: append-only, immutable, left in place. Post-251 work follows the
+hierarchy in `plans/README.md`. Do not rewrite or delete closed records to
+reflect later work — add a new corrective/closure pass.
 
 ## Document hierarchy
 
@@ -135,15 +139,21 @@ Path: `plans/adrs/ADR-NNNN-short-title.md`. Template + threshold:
 `plans/adrs/README.md`. Required for reload/restart boundary changes,
 durable dependency selection, auth semantics, generation/lease/fencing
 semantics, new protocols, public compat contracts. Accepted ADRs are
-immutable — supersede, don’t rewrite.
+immutable — supersede, don’t rewrite. No ADRs have been written yet
+(`plans/adrs/` holds only its README) — writing the first one also means
+establishing the lived convention, so keep it minimal and follow the
+template exactly.
 
 ## Archive workflow
 
-Post-251 completions move under `plans/archive/` preserving relative
+Post-251 completions live under `plans/closure/<subsystem>/` until an
+explicit archival pass moves them under `plans/archive/` preserving relative
 structure (`archive/subsystems/…`, `archive/implementation/<subsystem>/…`,
-`archive/closure/<subsystem>/…`); update inbound links; add an archival
-note; prefer `git mv`. Pre-251 flat files are never moved. Canonical docs +
-accepted ADRs are never archived merely because implementation completed.
+`archive/closure/<subsystem>/…`); on archival, update inbound links, add an
+archival note, prefer `git mv`. (`plans/archive/` currently holds only its
+README — absence of archived content is normal, not a gap.) Pre-251 flat
+files are never moved. Canonical docs + accepted ADRs are never archived
+merely because implementation completed.
 
 ## Before writing a plan
 

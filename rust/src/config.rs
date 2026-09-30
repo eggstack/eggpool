@@ -1422,7 +1422,7 @@ impl Config {
             .map_err(|error| ConfigError::validation(error.to_string()))
     }
 
-    /// Resolve an account's explicit outbound proxy using the Python
+    /// Resolve an account's explicit outbound proxy using the established
     /// precedence contract.  Environment values are trimmed at the boundary;
     /// inline values are retained exactly and are validated by the transport
     /// constructor.  Secret values never appear in the returned errors.
@@ -1755,8 +1755,8 @@ impl Config {
         expand_path(path)
     }
 
-    /// Resolve the server key using the same inline-before-environment rule as
-    /// the Python server. The value is used only by inbound authentication.
+    /// Resolve the server key using the inline-before-environment rule.
+    /// The value is used only by inbound authentication.
     pub fn resolved_server_api_key(&self) -> Option<String> {
         self.server
             .api_key

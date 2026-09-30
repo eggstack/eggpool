@@ -8,7 +8,8 @@ request.
 
 The feature is optional and disabled by default. With no
 `[model_routers.*]` tables, requests, catalog output, database work, background
-tasks, and concrete-model behavior are unchanged.
+tasks, and concrete-model behavior are unchanged. The copyable field table
+lives in [Model-router configuration reference](configuration.md).
 
 The policy compiler and hashed identity primitives live in the neutral
 `eggpool-model-routing` crate. EggPool adapts its TOML structures into that

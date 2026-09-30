@@ -123,7 +123,7 @@ vacuum when you need to reclaim space after large data deletions.
 Automatic in-process backups are opt-in. Set `[backup].enabled = true` to
 run the `automatic_backup` task, which produces restore-compatible `.zip`
 archives every 24 hours with count-based retention (default 14). Backups use
-`sqlite3.Connection.backup()` for consistent snapshots and atomic archive
+the tokio-rusqlite `backup_to` API for consistent snapshots and atomic archive
 publication.
 
 The default backup directory depends on the installation type:
@@ -205,8 +205,9 @@ server is not running), install the backup cron separately:
 eggpool deploy backup-cron --install
 ```
 
-This writes `/usr/local/bin/eggpool-backup` (a sqlite3-based snapshot
-script) and a `0 2 * * *` crontab entry. Backups land in
+This writes `/usr/local/bin/eggpool-backup` (a thin wrapper that execs
+`eggpool backup`, which produces the same staged atomic ZIP archives as the
+in-process task) and a `0 2 * * *` crontab entry. Backups land in
 `~/backups/eggpool/` and retain 30 days of archives.
 
 ### 7. Verify
@@ -711,9 +712,7 @@ message.  It does not start the server.
 
 The output covers:
 
-- **Server** — PID, PPID, uptime, native runtime version, platform, configured threads.
-- **Load** — OS load average (1m, 5m, 15m) and CPU-normalized 1m when available. Returns `N/A` on platforms without `os.getloadavg`.
-- **Dispatch overhead** — avg / p95 / p99 / max latency (ms) over the last 100 upstream attempts, plus sample count. Empty until the first attempt completes. Measures EggPool-local pre-dispatch work only (validation, routing, persistence, reservations) — upstream connect/TTFT/streaming/finalization are excluded.
+- **Server** — PID, uptime, configured server threads, Rust version.
 - **Processes** — observed EggPool process count vs expected; a warning
   is printed when the observed count exceeds expected by more than one.
 - **Memory** — RSS, VMS, open FD count, thread count.
@@ -740,13 +739,12 @@ The output covers:
   establish the next authoritative boundary. Process shutdown may abandon
   references because startup crash repair follows process death.
 
-For a focused view of active upstream-derived suppression, call
-`GET /api/backoffs`. The endpoint returns persisted `account_backoffs`
-rows joined with account names and accepts `?now=<epoch seconds>` for
-reproducible snapshots during tests or incident review. Local quota
-estimates never appear in this response; only upstream-observed
-failures such as 429, 402, auth failures, model unavailability, and
-bounded transient errors create these rows.
+For a focused view of active upstream-derived suppression, use
+`eggpool accounts status` (per-account routing eligibility) or the
+`health`/`backoff` sections of `runtime-status --json`. There is no
+`/api/backoffs` HTTP endpoint. Only upstream-observed failures such as
+429, 402, auth failures, model unavailability, and bounded transient
+errors create suppression rows; local quota estimates never appear there.
 
 All probes are best-effort; failed probes return `null` rather than
 causing the command to fail. Probe diagnostics are exposed in the JSON
@@ -762,8 +760,9 @@ endpoints to inspect the effective runtime and background-task state.
 ### Checking from cron
 
 The watchdog cron uses `eggpool ensure-running`, which is a separate
-fast-path command.  Do not use `eggpool runtime-status` in cron
-entries — it imports more of the stack and is not designed for
+fast-path command. Do not use `eggpool runtime-status` in cron
+entries — it opens an authenticated local TCP connection and parses a
+full runtime snapshot per invocation, so it is not designed for
 high-frequency polling.
 
 Backup cron is a separate command (`eggpool deploy backup-cron`) —
@@ -889,20 +888,15 @@ high-water mark).
 
 The following in-memory growth axes are bounded by design:
 
-- `QuotaEstimator.account_model_ewma` and `global_model_ewma` are
-  LRU-capped at `EWMA_HARD_CAP = 4096` and `GLOBAL_EWMA_HARD_CAP = 1024`
-  entries respectively (hardcoded, not configurable).
-- `ModelCatalogCache` deduplicates `_models` and `_provider_models`,
-  and `_account_support` is a `frozenset[str]` (no per-call `.copy()`).
-- `CatalogResolverPipeline.TTLCache` is bounded per catalog by
-  `max_entries` (default `4096`, configurable per `[pricing.catalogs.<name>]`).
-- `OutboundClientManager._per_host_requests` / `_per_host_errors`
-  are capped at `MAX_TRACKED_HOSTS = 256` (coldest-total eviction;
-  `evictions_total` is exposed in the manager snapshot).
-- `AccountRuntimeState.model_availability` and
-  `HealthManager.AccountHealth.disabled_models` are pruned during account
-  synchronization and successful catalog-refresh reconciliation against the
-  currently advertised model set.
+- `QuotaEstimator` EWMA maps are LRU-capped at `EWMA_HARD_CAP = 4096`
+  and `GLOBAL_EWMA_HARD_CAP = 1024` entries respectively (hardcoded, not
+  configurable).
+- `ModelCatalogCache` keys `models`, `provider_models`, and account-support
+  maps by provider/model identity; all are bounded by the advertised
+  provider set, not by request volume.
+- `HealthManager.AccountHealth.disabled_models` entries are pruned during
+  account synchronization and successful catalog-refresh reconciliation
+  against the currently advertised model set.
 
 If RSS still grows continuously after the above:
 
