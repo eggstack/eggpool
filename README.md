@@ -12,34 +12,13 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 
 - Client endpoints for OpenAI Chat Completions (`/v1/chat/completions`), stateless OpenAI Responses (`/v1/responses`), and Anthropic Messages (`/v1/messages`), plus a bounded native-only remote-compaction operation (`/v1/responses/compact`)
 - Transparent bidirectional protocol transcoding between OpenAI and Anthropic, plus native Gemini wire codecs
-- Canonical request/reasoning/response-event boundary for safe cross-surface translation and stream termination, with bounded native Responses request and stream preservation
-- Dynamic model discovery with load-based routing across multiple providers and accounts
-- Optional sticky model-router aliases with bounded selector affinity and live-reload continuity
-- Provider/model wire-surface contracts with per-surface paths and auth shapes
-- Request, token, latency, error, and cost tracking in SQLite
-- Multi-page dashboard with 50 themes
-- Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face
-- Thinking/reasoning capability metadata with compositional toggle/effort/budget
-  controls and explicit translation-policy budget mapping
-- Per-account outbound proxy support in the native runtime
-- Default builds enable Eggress 1.0.10 SSH support through the listener-free
-  `eggress-outbound` `OutboundConnector`; deliberately reduced `--no-default-features` builds
-  reject configured SSH proxies while retaining non-SSH proxy support
+- Load-based routing across multiple providers and accounts with dynamic model discovery, quota awareness, and health gating
+- Optional sticky model-router aliases for virtual-model selection
+- Request, token, latency, error, and cost tracking in SQLite, with a multi-page dashboard
+- Model metadata enrichment from provider catalogs, OpenRouter, Artificial Analysis, and Hugging Face, including thinking/reasoning capability metadata
+- Per-account outbound proxy support, including SSH proxies
+- Live config reload (`eggpool rehash`) for provider/routing changes; host, port, and database changes need `eggpool restart`
 - Designed for lightweight deployments (Raspberry Pi, SBCs)
-
-Downstream HTTP/1 connections are accepted and served by EggServe 0.4.0 through
-its direct Tower adapter into EggPool's existing Axum router. EggPool keeps
-ownership of authentication, generation-bound request limits, inference
-coordination, provider transport, persistence, and process shutdown.
-
-For full details on features, architecture, and design decisions, see [architecture/README.md](architecture/README.md).
-
-The native hot path is deliberately allocation-aware for lightweight hosts:
-compact routing facts borrow only canonical scalars, production compaction keeps
-one preserved request tree, and native Responses streams fold terminal/usage
-observation while forwarding the original SSE bytes. The single SQLite gate,
-Tokio `current_thread` runtime, routing selection lock, and post-handoff stream
-owner remain evidence-gated boundaries rather than tunable concurrency knobs.
 
 ## Quick Start
 
@@ -58,436 +37,100 @@ eggpool onboard
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-The Rust wheel currently supports Linux x86_64, Linux aarch64, and macOS
-arm64. Windows and other unqualified targets are unsupported. See
-[Upgrade and rollback](docs/upgrading.md) for exact-version switching and
-[Deployment](docs/deployment.md) for systemd, cron, and production setup.
+Supported targets are Linux x86_64, Linux aarch64, and macOS arm64. Windows and other unqualified targets are unsupported. See [Deployment](docs/deployment.md) for systemd, cron, and production setup.
 
 To update the owning installation or make an exact historical-version switch:
 
-~~~bash
+```bash
 eggpool update
 eggpool update 0.8.0
 eggpool update 0.7.4
-~~~
+```
 
-## First-Time Setup
+`eggpool install-provenance` shows the package manager or standalone update authority. See [Upgrade and rollback](docs/upgrading.md) for exact-version switching, rollback targets, and ownership failures.
 
-After installation, `eggpool onboard` walks you through:
+## First Request
 
-1. **Connecting providers** — add API keys for your AI providers (OpenAI, Anthropic, OpenRouter, etc.)
-2. **Configuration validation** — `check-config` verifies your setup
-3. **Starting the server** — launch in daemon mode or as a systemd service
+`serve` runs as a daemon (`--verbose` stays in the foreground). The example below was verified live against 0.8.0: list your models, then call one.
 
 ```bash
-# Connect a specific provider
-eggpool connect groq
-
-# List available providers
-eggpool connect list
-
-# Validate configuration
-eggpool check-config
-
-# Start the server (daemon mode)
 eggpool serve
+eggpool status
 
-# Start in foreground for debugging
-eggpool serve --verbose
+export EGGPOOL_API_KEY="$(eggpool getkey)"
+
+# Liveness / readiness (no key needed)
+curl http://127.0.0.1:11300/v1/healthz
+# {"status":"ok"}
+
+# Model ids available to your accounts
+curl -H "Authorization: Bearer $EGGPOOL_API_KEY" \
+  http://127.0.0.1:11300/v1/models
+
+# Chat completion (use any model id from /v1/models)
+curl -H "Authorization: Bearer $EGGPOOL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}' \
+  http://127.0.0.1:11300/v1/chat/completions
 ```
 
-### Printing an Agent Config
+Inference (`/v1/*`), integration (`/api/integrations/*`), and runtime/status endpoints require the server key as `Authorization: Bearer <key>` (OpenAI-style) or `x-api-key: <key>` (Anthropic-style); without it they return `401`. To pin a provider, qualify the model as `model/provider` (e.g. `"gpt-4o/openai"`); `eggpool accounts explain --model <id>` shows per-account eligibility. Full endpoint list: [API reference](docs/api-reference.md).
 
-Generate configuration for your coding agent:
+## Coding Agents
 
 ```bash
-# OpenCode
-eggpool configsetup opencode
-
-# OpenCode — managed install with drift detection
-eggpool configsetup opencode --apply
-
-# Headless host — secret-free remote profile for desktops
-eggpool configremote codex
-eggpool configremote opencode --format token
-
-# Desktop — verified one-shot bootstrap (downloads pinned helper + SHA256SUMS,
-# verifies SHA-256, then runs eggpool-connect install from a temp dir)
-# macOS/Linux: paste the block from `eggpool configremote codex --shell posix`
-# Windows PowerShell: paste the block from `eggpool configremote codex --shell powershell`
-
-# Desktop — transactional install from a profile token (what the bootstrap runs)
-eggpool-connect plan --profile 'epc1.…'
-eggpool-connect install --profile 'epc1.…'
-
-# Claude Code
-eggpool configsetup claude-code
-
-# Aider (writes .env.eggpool)
-eggpool configsetup aider --model openai/gpt-4 --write
-
-# Codex (Responses wire API)
+eggpool configsetup opencode --apply  # managed OpenCode install with drift detection
 eggpool configsetup codex --model <eggpool-model-or-alias>
-
-# Codex — managed install with generated model catalog
-eggpool configsetup codex --apply
+eggpool configsetup claude-code
+eggpool configremote codex            # secret-free remote profile for other machines
 ```
 
-The generated Codex TOML uses the HTTP/SSE Responses API and references
-`EGGPOOL_API_KEY` without embedding the server key. Set it with
-`export EGGPOOL_API_KEY="$(eggpool getkey)"` in the environment that launches
-Codex. OpenCode references the same variable: V1 configs use
-`{env:EGGPOOL_API_KEY}` through the Responses-capable `@ai-sdk/openai`
-runtime, while V2 configs use an `env: ["EGGPOOL_API_KEY"]` list with the
-Responses-capable `@opencode/ai/providers/openai-compatible/responses`
-package. Managed OpenCode edits preserve JSONC comments and unrelated
-settings in both variants.
+Generated configs reference `EGGPOOL_API_KEY` without embedding the key (`export EGGPOOL_API_KEY="$(eggpool getkey)"`). See [Agent Configuration](docs/agent-configuration.md) for all targets, the managed `--apply`/`--sync`/`--check`/`--remove` lifecycle, remote profiles, and the transactional `eggpool-connect` desktop helper.
 
-See [Agent Configuration](docs/agent-configuration.md) for all supported targets, the managed `--apply`/`--sync`/`--check`/`--remove`/`--dry-run` lifecycle, remote `configremote` profiles, and the transactional `eggpool-connect` desktop helper (`plan`/`install`/`verify`/`backups`/`restore`/`remove` with byte-exact backups and automatic rollback).
+## Dashboard & LAN Access
 
-For Codex, the deterministic Responses conformance target and the opt-in
-two-phase text/tool-loop check are documented in
-[Codex compatibility smoke](docs/codex-compatibility-smoke.md). Live results
-qualify the tested Codex CLI and upstream path only; the managed
-`model_catalog_json` enables picker discovery while an explicit model or alias
-remains supported, and `/v1/models` keeps the standard OpenAI-compatible schema.
+By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool restart`, then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](docs/firewall.md).
 
-### LAN Access
-
-By default, EggPool binds to `0.0.0.0` (all interfaces) and serves a public
-read-only dashboard: a browser on your LAN can open `http://<lan-ip>:11300/`
-without an API key. Inference (`/v1/*`), integration
-(`/api/integrations/*`), and runtime/update/status endpoints always require
-the server API key, which `eggpool onboard` generates for you.
-
-1. Set a server API key first: `eggpool onboard` (or set `[server].api_key` in config)
-2. The default bind is already LAN-ready: `[server].host = "0.0.0.0"` in `~/.config/eggpool/config.toml`
-3. Advertise the desktop URL: `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`
-4. Restart: `eggpool restart`
-5. Export remote profiles: `eggpool configremote codex` (secret-free `epc1` token plus version-pinned verified bootstrap commands)
-6. On each desktop: paste the `configremote` bootstrap block (verifies SHA-256, then `eggpool-connect install --profile 'epc1.…'` confirms plan, backs up byte-exact, verifies, rolls back on failure)
-
-To restrict the proxy to the same machine instead, set `[server].host = "127.0.0.1"`.
-To require the API key on the dashboard too, run `eggpool dashboard public --off`
-(`--on` restores the public default).
-
-See [Firewall](docs/firewall.md) for restricting access to your LAN.
-
-## CLI Commands
+## CLI Essentials
 
 | Command | Description |
 |---------|-------------|
-| `eggpool serve` | Start the proxy server (daemon mode; `--verbose` for foreground) |
-| `eggpool stop` | Stop the running server |
-| `eggpool restart` | Fully restart the server (stop then start) |
-| `eggpool rehash` | Apply supported config changes live without restart (`--json` for structured output) |
 | `eggpool onboard` | Interactive onboarding wizard |
-| `eggpool connect` | Add a provider account interactively |
-| `eggpool connect list` | List supported providers |
-| `eggpool logout` | Remove a configured provider account |
+| `eggpool connect` / `eggpool connect list` | Add a provider account / list supported providers |
 | `eggpool check-config` | Validate configuration |
-| `eggpool migrate` | Run database migrations |
+| `eggpool serve` / `stop` / `restart` / `rehash` | Run, stop, restart, or live-reload the server |
+| `eggpool status` | Concise proxy/provider health summary (`--json` supported) |
 | `eggpool models refresh` | Refresh the model catalog |
-| `eggpool accounts list` | List configured provider accounts |
 | `eggpool accounts status` | Show account status (provider, priority, weight, enabled) |
-| `eggpool accounts explain` | Show per-account routing eligibility for a model |
-| `eggpool stats transcoding` | Show protocol transcoding statistics |
-| `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
-| `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |
-| `eggpool stats explain-dashboard` | Show EXPLAIN QUERY PLAN for dashboard queries |
-| `eggpool modelinfo show` | Show enriched model metadata |
-| `eggpool modelinfo list` | List model-info entries |
-| `eggpool modelinfo refresh` | Trigger model-info source refresh |
-| `eggpool modelinfo aliases` | Show model aliases |
-| `eggpool modelinfo repair` | Repair legacy canonical model-info detail blocks |
-| `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
-| `eggpool status` | Concise proxy/provider health summary (one row per provider; `--json` for structured output) |
-| `eggpool runtime-status` | Detailed process/runtime diagnostics (`--json` for the full snapshot) |
-| `eggpool backup` | Create a timestamped backup (`--output-dir` override) |
-| `eggpool recover [source]` | Restore from a backup archive (interactive picker when omitted) |
-| `eggpool db vacuum` | Vacuum the SQLite database |
-| `eggpool set` | Set a config value |
-| `eggpool edit` | Edit config in $EDITOR |
-| `eggpool getkey` | Print the server API key |
-| `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
-| `eggpool init-config` | Initialize config from template |
-| `eggpool version` | Show installed version |
-| `eggpool croncheck` | Fast-path cron watchdog check (no server connection) |
-| `eggpool ensure-running` | Ensure server is running (no full runtime snapshot) |
-| `eggpool deploy systemd` | Print/install systemd unit |
-| `eggpool deploy cron` | Install watchdog cron (non-systemd) |
-| `eggpool deploy backup-cron` | Install daily backup cron job |
-| `eggpool deploy logrotate` | Print/install logrotate config |
-| `eggpool deploy all` | Print every deployment snippet in sequence |
-| `eggpool configsetup` | Generate config snippets for coding agents: `opencode`, `codex`, `claude-code`, `aider`, `qwen-code`, `kilo`, `continue`, `cline`, `roo-code`, `goose`, `openhands` (see [Agent Configuration](docs/agent-configuration.md)) |
-| `eggpool configremote <target>` | Export a secret-free `epc1` remote profile for Codex/OpenCode on other machines (`--format command\|token\|json`, `--base-url` override) |
-| `eggpool update [VERSION]` | Install the latest or one exact catalogued release (`v` prefix accepted; `--check` for dry-run, `--from-source` for local build) |
-| `eggpool install-provenance` | Show the package manager or standalone update authority |
-| `eggpool uninstall` | Uninstall EggPool from this machine |
+| `eggpool backup` / `recover` | Create / restore timestamped backups |
+| `eggpool update [VERSION]` | Install the latest or one exact catalogued release |
 
-All commands accept `--config /path/to/config.toml`. Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.
-
-Full deploy commands reference: [docs/deployment.md](docs/deployment.md#deploy-commands-reference)
-
-For exact upgrades, supported rollback targets, standalone binaries, and
-ownership failures, see [docs/upgrading.md](docs/upgrading.md).
+Full command list: [CLI reference](docs/cli-reference.md).
 
 ## Configuration
 
-Configuration lives in a single TOML file. API keys are loaded from environment variables or `.env`.
-
-```toml
-# Example provider configuration
-[providers.opencode-go]
-id = "opencode-go"
-base_url = "https://opencode.ai/zen/go/v1"
-protocols = ["openai", "anthropic"]
-
-[[providers.opencode-go.accounts]]
-name = "personal"
-api_key = "sk-your-opencode-go-key"
-```
-
-Use `eggpool connect` for interactive provider setup. See [docs/providers.md](docs/providers.md) for the full provider catalog, configuration details, and troubleshooting.
-
-Configuration changes are parsed and semantically validated before the file is
-replaced. The native transition policy in
-`rust/src/config_reload_policy.rs` classifies each candidate as unchanged,
-live-reloadable, or restart-required. `set`, `connect`, `logout`, `newkey`,
-dashboard changes, and integration setup carry that classification into their
-apply step; mixed live/restart changes never partially publish. `eggpool rehash`
-revalidates and classifies again on the server before building a new generation.
-
-### Key Config Sections
-
-| Section | Purpose |
-|---------|---------|
-| `[server]` | Bind address, port (default 11300), API key, logging, threads |
-| `[upstream]` | Upstream API base URL, timeouts, connection pool |
-| `[database]` | SQLite path, WAL mode, WAL size limit |
-| `[readiness_probe]` | Startup readiness gating (interval, freshness, timeout) |
-| `[models]` | Catalog refresh, exposure mode, model collapse, withdrawal policy |
-| `[model_routers.<id>]` | Optional virtual-model selector policy and concrete route targets |
-| `[routing]` | Routing strategy, retry limits, quota mode, same-tier fairness, bounded wire negotiation |
-| `[dashboard]` | Dashboard toggle, theme, refresh interval |
-| `[providers.*]` | Provider configs with accounts and routing priority |
-| `[accounts]` | Top-level account entries (provider binding, proxy, priority) |
-| `[proxies]` | Named outbound proxy definitions referenced by accounts |
-| `[model_overrides]` | Per-model limit/capability overrides |
-| `[model_capabilities]` | Provider-specific model capability evidence |
-| `[network]` | Outbound transport and proxy settings |
-| `[transcoder]` | Protocol transcoding between OpenAI and Anthropic |
-| `[metrics]` | Observability write buffering (`immediate` / `balanced` / `low_wear`) |
-| `[security]` | Redacted error-detail persistence |
-| `[backup]` | Opt-in automatic daily backups |
-| `[limits]` | Spend ceilings per account (5h / weekly / monthly microdollars) |
-| `[pricing]` | Pricing catalog sources and missing-rate fallback |
-| `[model_info]` | Multi-source model metadata enrichment |
-| `[update_checker]` | Release update-check cadence and channel |
-| `[integrations]` | Client-facing advertised base URL for remote profiles (live-reloadable; never the listen socket) |
-| `[maintenance]` | Bounded maintenance budget, SQLite hygiene, contention guard |
-
-`[server].threads` is retained for configuration compatibility and runtime
-diagnostics. EggPool currently uses Tokio's `current_thread` runtime, so the
-key does not select a Tokio worker pool; changing it remains restart-required.
-
-Provider surfaces can be declared under `[providers.<id>.wire_surfaces.<surface>]`
-when one provider exposes different endpoint paths or auth headers. A declared
-surface may differ from the public client endpoint; EggPool adapts through its
-canonical wire boundary. Existing
-`protocols`, `openai_path`, `responses_path`, and `anthropic_path` settings remain
-valid and are synthesized into equivalent candidates.
-
-Responses admission keeps a redacted canonical projection for routing and a
-bounded source-native envelope for same-surface forwarding. Native
-Responses-to-Responses requests preserve ordered Codex history, encrypted
-reasoning items, native tool definitions, and extension fields; an alias
-rewrite changes only the top-level `model`. Cross-surface adaptation rejects
-native-only items or tools before provider dispatch instead of silently
-dropping them. Responses remains stateless: `store` may be omitted or false,
-while `store: true`, continuation references, and background execution are
-rejected locally.
-
-The native inference hot path performs one bounded JSON parse/depth check at
-the coordinator boundary. Finite and streaming execution are selected from
-that parsed request; unchanged native bodies retain the incoming `Bytes`
-allocation, while model rewrites and cross-surface adaptation allocate only
-when the wire representation changes. Provider/account clients are built as
-an immutable generation topology and looked up without a per-request map
-lock; the borrowed preparation phase ends before provider I/O begins.
-
-Responses streaming has two bounded paths. Responses-to-Responses streams are
-observed for terminal evidence and usage while the original SSE event payloads
-— including forward-compatible unknown events — are forwarded unchanged.
-Streams translated from Chat, Messages, or Gemini use a per-stream encoder
-that emits indexed, completed message/reasoning/function-call items before one
-`response.completed` terminal. A translated function call keeps its canonical
-`call_id` separate from its generated Responses output-item ID; translated
-argument and reasoning buffers are bounded. `response.completed` remains the
-only successful Responses terminal, and EOF without terminal evidence fails.
-
-Responses `custom` tools are portable to function-style upstreams through a
-deterministic single-string `input` wrapper; client-executed `tool_search`
-is portable through its exact bounded `query`/`limit` wrapper. EggPool uses
-the declared tool kind to unwrap provider calls and emits authoritative
-`custom_tool_call`/`tool_search_call` items; malformed wrappers fail closed.
-Hosted/server search and other native/server tools remain native-only unless
-a general semantic equivalent exists. Eggpool never executes the search;
-Codex remains the tool executor. Codex may use an explicit model or alias,
-or install the managed `model_catalog_json` for picker discovery:
-`/v1/models` remains the standard OpenAI model-list contract.
-
-EggPool keeps a bounded, in-memory preference for the last successful declared
-wire surface per provider/model. The preference is refreshed by ordinary
-successful requests and discarded naturally on restart or candidate-definition
-changes; it never stores credentials or upstream response bodies. Negotiation is
-reactive and only a separately classified, deterministic pre-handoff
-auth/surface/schema failure, or weak endpoint-local model rejection for a model
-known by the selected provider, may authorize an alternate-surface attempt on
-the same account. Strong model absence remains model-scoped failure behavior.
-Bounded endpoint-qualified `model ... is not available` wording is treated as
-weak only with the same known-model context. Generic `Unsupported*` error
-classes alone never authorize wire fallback.
-Concurrent requests share one provider/model discovery flight;
-the provider-wide negotiation gate bounds only those abnormal alternate-surface
-submissions, not ordinary known-good inference. Rate pressure ends discovery
-without trying another surface. Bare or unknown 401 responses do not disable
-credentials or trigger failover; explicit credential failures affect only the
-selected account. Alternate-wire and account retries share the same
-upstream-submission budget.
-
-Full config reference: [`config.example.toml`](config.example.toml) | [docs/providers.md](docs/providers.md)
-
-Model routers are optional and disabled by default. A `[model_routers.<id>]`
-block defines a virtual model alias, selector model, default concrete model,
-and labelled concrete targets. Definitions are structurally validated and
-compiled into each runtime generation. A virtual request builds a bounded
-deterministic selector prompt, accepts only an exact compact route ID, and
-permits one repair request only after a successful response contains invalid
-route text. The repair reuses the same bounded semantic request context and
-falls back to `default_model` when selection is unavailable or remains invalid.
-Selector calls are ordinary concrete EggPool requests, so their usage remains
-visible in request, quota, and cost accounting.
-
-With `sticky = true` (the default), EggPool keeps a process-local bounded
-TTL/LRU affinity from a conversation to the selected concrete model. Clients
-should send `X-EggPool-Route-Session: <opaque-id>` when they have a stable
-conversation ID; the value is hashed immediately, never logged, persisted, or
-forwarded upstream. Chat/Messages requests without that header may use a
-conservative bounded hash of the system/developer instructions and first user
-turn; a reserved portion of the existing prefix budget always includes bytes
-from that first user turn when one exists.
-Responses is stateless and should use the explicit header for stickiness across
-independent requests. `sticky = false` invokes the selector for every request.
-Affinity never pins an account/provider, bypasses health/quota routing, or
-reselects after a concrete target failure. The cache survives live rehash only
-when the router's semantic fingerprint is unchanged; policy changes naturally
-invalidate old decisions. Virtual aliases are exact and cannot contain `/`,
-and router targets remain concrete model references.
-
-The deterministic semantic policy compiler and hashed identity primitives are
-also available as the small Rust crate at
-`rust/crates/eggpool-model-routing/`. EggPool's TOML adapter feeds that crate;
-selector execution, provider/account routing, and the process-local async
-affinity cache remain EggPool-owned.
-
-The portable Codex/OpenCode projection, connection profiles, `epc1` tokens,
-V1/V2 renderers, and trivia-preserving TOML/JSONC mutation are available as
-the small Rust crate at `rust/crates/eggpool-client-config/`. EggPool's
-`configsetup`/`configremote` adapter feeds that crate;
-`Config`/catalog/database loading, server key resolution, endpoint choice,
-CLI delivery, and local lifecycle paths remain EggPool-owned. The
-transactional desktop helper at `rust/crates/eggpool-connect/` links the same
-crate to `plan`/`install`/`verify`/`backups`/`restore`/`remove` Codex/OpenCode
-clients with byte-exact backups and automatic rollback; it contains no proxy
-server, agent loop, daemon, or tool execution.
-
-See the copyable [Model routing guide](docs/model-routing.md) for the complete
-schema, fallback behavior, and troubleshooting guidance.
-
-When `[model_info].enabled = true`, startup performs one bounded external
-enrichment pass when `model_info.startup_refresh = true`. Later enrichment uses
-the existing `[models].refresh_interval_s` catalog event; model-info
-`next_refresh_at`, status TTLs, source TTLs, and cooldowns select the due rows.
-There is no separate model-info scheduler. With `models.refresh_interval_s = 0`,
-only the bounded startup pass is automatic; use the authenticated manual
-refresh endpoint or restart for later enrichment. The legacy
-`model_info.refresh_interval_s` field remains accepted for compatibility but is
-deprecated and does not control scheduling.
-
-Reasoning support and caller controls are discovered per provider/model from
-explicit upstream or verified model-info metadata. EggPool does not infer
-effort levels from model-family names; use a model capability override only
-for intentional provider-specific evidence.
-Routing and provider adaptation validate toggle, exact effort, and numeric
-budget controls independently; a reasoning-capable model is not assumed to
-accept every control shape.
-
-### Live Config Changes
-
-`eggpool rehash` applies provider/account/routing/model-override/model-router changes without a restart. Disruptive changes (host, port, database path) require `eggpool restart`.
-
-See [Live Configuration Rehash](docs/live-config-rehash.md) for the full reload flow and supported fields.
+One TOML file (`--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`); API keys come from environment variables or `.env`, never the file. Prefer `eggpool connect` over hand-editing; the commented [config.example.toml](config.example.toml) (plus [config.sbc.example.toml](config.sbc.example.toml) for SBCs) documents every section. Config changes are validated before apply and classified as live-reloadable (`rehash`) or restart-required — see [Live Configuration Rehash](docs/live-config-rehash.md) and [Providers](docs/providers.md).
 
 ## Documentation
 
-| Topic | Link |
+| Guide | Link |
 |-------|------|
-| Deployment (install, systemd, production) | [docs/deployment.md](docs/deployment.md) |
+| Deployment (systemd, cron, production) | [docs/deployment.md](docs/deployment.md) |
 | Provider catalog & configuration | [docs/providers.md](docs/providers.md) |
-| Semantic model routing | [docs/model-routing.md](docs/model-routing.md) |
-| Model-router configuration reference | [docs/configuration.md](docs/configuration.md) |
+| Agent configuration | [docs/agent-configuration.md](docs/agent-configuration.md) |
 | API endpoints | [docs/api-reference.md](docs/api-reference.md) |
-| Agent configuration (OpenCode, Claude Code, Aider, etc.) | [docs/agent-configuration.md](docs/agent-configuration.md) |
-| Stateless Responses support | [docs/stateless-responses.md](docs/stateless-responses.md) |
+| Stateless Responses | [docs/stateless-responses.md](docs/stateless-responses.md) |
 | Protocol transcoding | [docs/transcoding.md](docs/transcoding.md) |
+| Semantic model routing | [docs/model-routing.md](docs/model-routing.md) |
 | Backup & restore | [docs/backup-restore.md](docs/backup-restore.md) |
-| Release procedure | [docs/releasing.md](docs/releasing.md) |
-| Standalone binaries & disposable hosts | [docs/rust-release-deployment.md](docs/rust-release-deployment.md) |
-| Dashboard test qualification | [docs/rust-dashboard-qualification.md](docs/rust-dashboard-qualification.md) |
+| Upgrading & rollback | [docs/upgrading.md](docs/upgrading.md) |
 | Per-account outbound proxy | [docs/proxy.md](docs/proxy.md) |
-| Model context limits | [docs/model-limits.md](docs/model-limits.md) |
 | Thinking & reasoning | [docs/thinking.md](docs/thinking.md) |
-| Live wire-surface verification | [docs/live-wire-e2e.md](docs/live-wire-e2e.md) |
 | Raspberry Pi setup | [docs/raspberry-pi.md](docs/raspberry-pi.md) |
-| Copyable SBC configuration | [config.sbc.example.toml](config.sbc.example.toml) |
-| Configuration profiles | [docs/config-profiles.md](docs/config-profiles.md) |
-| Firewall configuration | [docs/firewall.md](docs/firewall.md) |
-| Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
-| Network & DNS diagnostics | [docs/network-diagnostics.md](docs/network-diagnostics.md) |
-| OpenCode stream stability | [docs/opencode-stream-stability.md](docs/opencode-stream-stability.md) |
-| Model-info OpenRouter debugging | [docs/model-info-openrouter-debug.md](docs/model-info-openrouter-debug.md) |
 | Live Configuration Rehash | [docs/live-config-rehash.md](docs/live-config-rehash.md) |
-| Dispatch stability runbook | [docs/operations/dispatch-stability.md](docs/operations/dispatch-stability.md) |
-| Database recovery runbook | [docs/runbooks/database-recovery.md](docs/runbooks/database-recovery.md) |
-| Architecture overview | [architecture/README.md](architecture/README.md) |
+| Filesystem layout | [docs/filesystem-layout.md](docs/filesystem-layout.md) |
 
-For contributors, the native CLI adapter is `rust/src/runtime.rs`, runtime
-generation ownership is split under `rust/src/runtime_lifecycle/` by process,
-generation, lease, publication, recovery, and diagnostics concerns, reusable
-local lifecycle workflows are in `rust/src/operations/lifecycle.rs`, and the
-HTTP adapter is split under `rust/src/server/` into startup/route assembly,
-middleware, health/status, inference, and dashboard modules. Streaming
-coordinator internals are split under `rust/src/coordinator/streaming/` by
-pre-handoff coordination, post-handoff execution, terminal classification,
-timeout policy, request types, and bounded diagnostics; its `mod.rs` preserves
-the public import facade. The coordinator and wire layers remain the
-authorities for inference execution and stream terminal semantics.
-
-The release footprint policy is qualification-driven. Maturin 1.14.1 is pinned
-with stripping disabled for the reviewed artifact contract; ThinLTO is not
-enabled by default. SBC measurements are descriptive and are recorded only for
-an actual Raspberry Pi-class target. The guarded tooling runner can add a
-small loopback characterization with `--benchmark-samples 30`; repeat it three
-times from fresh temporary roots on the same physical board and retain only
-the sanitized aggregate report. The diagnostic-only
-`--diagnose-finite-tail 60` flag (requires benchmark mode, sequential
-native-finite phase timing plus a direct-provider control) localized the
-remaining finite tail to the pre-provider durable publication / SQLite /
-storage path on Pi 5: the slowest request in all three 60-sample runs was
-pre-provider dominated with a stable direct control, and one tmpfs run
-removed the tail entirely. Hosted ARM VMs and cloud ARM instances are not
-SBC evidence.
+More guides: [configuration reference](docs/configuration.md), [model context limits](docs/model-limits.md), [firewall](docs/firewall.md), [config profiles](docs/config-profiles.md), [network diagnostics](docs/network-diagnostics.md), [OpenCode stream stability](docs/opencode-stream-stability.md), [model-info OpenRouter debugging](docs/model-info-openrouter-debug.md), [live wire-surface verification](docs/live-wire-e2e.md), [Codex compatibility smoke](docs/codex-compatibility-smoke.md), [standalone binaries](docs/rust-release-deployment.md), [release procedure](docs/releasing.md), [dashboard qualification](docs/rust-dashboard-qualification.md), [migration history](docs/migration-history.md), [dispatch stability](docs/operations/dispatch-stability.md), [database recovery](docs/runbooks/database-recovery.md), [architecture overview](architecture/README.md).
 
 ## Development
 
@@ -502,7 +145,7 @@ cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --no-defau
 cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- -D warnings
 cargo test --manifest-path rust/Cargo.toml --workspace --all-targets --no-default-features -- --test-threads=1
 
-# Install the Python tooling environment when working on scripts/tests
+# Python tooling environment (release/validation scripts only)
 uv sync --dev
 
 uv run ruff format --check scripts/ tests/tooling/
@@ -511,98 +154,7 @@ uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
-For the optional target-class evidence pass, build or copy a SHA-verified
-Linux/aarch64 release candidate to a physical SBC, run ordinary qualification
-(`runtime-q008.v1`), then repeat the benchmark three times with the
-benchmark-only fixture:
-
-```bash
-uv run python scripts/qualification_sbc.py \
-  --binary rust/target/release/eggpool \
-  --candidate-origin on-device-release-build \
-  --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
-  --benchmark-samples 30 \
-  --output artifacts/qualification/236-sbc-benchmark-run-1.json
-```
-
-The runner remains loopback-only and records bounded timing, process CPU,
-RSS/VmHWM, database/WAL, cadence facts, and ownership-state aggregates under
-the extended `runtime-q008.v2` contract. It is descriptive,
-not a CI gate or performance SLA; if no physical Linux/aarch64 SBC is
-available, record the dimension as `not measured` rather than substituting a
-hosted ARM environment. For finite-tail localization, append
-`--diagnose-finite-tail 60` (10–200, default off) to the benchmark command:
-it runs 60 sequential native finite requests with provider-boundary phase
-timing plus a 30-request direct-provider control. See
-[Plan 237](plans/237-raspberry-pi-finite-tail-diagnostic-pass.md) and the
-sanitized
-[237 artifact](artifacts/qualification/237-sbc-finite-tail-diagnostic.json).
-Plan 238 adds a separate diagnostic-only mode that runs before the standard
-benchmark corpus: `--diagnose-publication-storage 60` uses the benchmark
-fixture, waits for fixed database-task quiescence, samples only bounded WAL
-header/file-size scalars, and can place only the database/WAL/SHM in a
-temporary filesystem with `--diagnostic-database-dir DIR`. It does not change
-runtime behavior or claim physical-SBC evidence when the hardware gate is not
-available; record unavailable dimensions as `not measured`.
-
-Plan 239 adds a separate qualification-feature build for transaction-phase
-localization. Build it with
-`--features qualification-db-diagnostics`, then run
-`--diagnose-publication-phases` with the benchmark fixture for the 60-request
-H0 baseline. The optional
-`--qualification-wal-autocheckpoint-pages 0` or `256` flags set the
-feature-only startup experiment on the existing SQLite connection. The mode
-reports bounded in-memory gate/worker/BEGIN/body/COMMIT/return scalars and
-effective pragma facts through the authenticated runtime projection; it is
-not included in release artifacts, normal runtime JSON, or CI benchmarks.
-
-Cancellation-path tests should wait for an observable fixture transition or
-invariant under a bounded timeout, not guess with fixed sleeps or yield-count
-loops. See `AGENTS.md` for focused native test targets and stress guidance.
-
-When changing native dependencies or Cargo features, inspect the resolved
-authority and qualify the release graph as well:
-
-```bash
-cargo deny --manifest-path rust/Cargo.toml check
-cargo tree --manifest-path rust/Cargo.toml -e features
-cargo tree --manifest-path rust/Cargo.toml --duplicates
-cargo build --manifest-path rust/Cargo.toml --locked --release
-cargo test --manifest-path rust/Cargo.toml --workspace --all-targets -- --test-threads=1
-```
-
-Provider transport is pinned to `eggfetch-core =0.2.0` with
-`native-http1,tls-rustls`: this keeps direct standard routing and custom
-Eggress routing while excluding Eggfetch's high-level URL, retry, redirect,
-Basic-auth, built-in proxy, and HTTP/2/3 policies. Provider proxy routing
-uses exact-pinned `eggress-outbound =1.0.10` directly (no full-service facade):
-the dialer calls `connect_tcp_detailed` and maps typed `OutboundConnectError`
-kind/stage facts into the stable `TransportError` proxy categories without
-inspecting error strings. See the [provider
-architecture deep dive](architecture/deep-dive-providers.md) for the resolved
-graph and release-size evidence.
-
-`cargo deny` uses the repository-root `deny.toml` to check RustSec advisories,
-the reviewed third-party license allowlist, registry/git sources, and
-duplicate-version warnings. It covers the declared feature and
-contributor/build graph; it complements rather than replaces Clippy, tests,
-and transport-owner qualification. The separate dependency audit workflow
-runs on dependency-policy changes, weekly, and by manual dispatch, so ordinary
-source-only CI does not add a network advisory lookup.
-
-### CI
-
-The ordinary CI workflow has one job on code-changing pull requests and pushes
-to `main`; documentation-only changes under `plans/`, `docs/`, `architecture/`,
-`.opencode/skills/`, `AGENTS.md`, and `CHANGELOG.md` are intentionally ignored.
-The separate dependency workflow has the triggers described below:
-
-| Job | Scope | What it does |
-|-----|--------|-------------|
-| `check` | Rust + Python tooling | Cargo format/strict Clippy/serial tests, no-default compile/Clippy guard, plus ruff, pyright, and `pytest tests/tooling/` |
-| `Dependency audit` | Rust dependency policy | cargo-deny advisories, bans, licenses, and sources on dependency/policy changes, weekly, or manual dispatch |
-
-See `AGENTS.md` for focused test subset commands.
+See `AGENTS.md` for focused test targets, subsystem guidance, and the optional physical-SBC qualification pass.
 
 ## License
 
