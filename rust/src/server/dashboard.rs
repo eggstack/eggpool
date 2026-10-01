@@ -770,24 +770,31 @@ pub(super) fn render_dashboard_page_body(
 
 pub(super) fn render_accounts_page(data: &db::DashboardData) -> String {
     if data.accounts.is_empty() {
-        return dashboard_empty("Accounts", "No accounts configured.");
+        return "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><p class=\"empty\">No accounts configured.</p></section>".to_owned();
     }
     let rows = data
         .accounts
         .iter()
         .map(|row| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">unknown</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\"><span class=\"exactness-badge empty\">—</span></td>{}",
                 html_escape(&row.name),
                 html_escape(&row.provider_id),
                 if row.enabled { "yes" } else { "no" },
+                if row.enabled { "yes" } else { "no" },
                 row.requests,
                 format_microdollars(row.cost_microdollars),
+                row.errors,
+                format_tokens(row.input_tokens),
+                format_tokens(row.output_tokens),
+                format_tokens(row.input_tokens + row.output_tokens),
+                "<td data-priority=\"3\">—</td>".repeat(19),
             )
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h3>Account health</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th><th>Requests</th><th>Cost</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<th data-priority=\"3\">Reserved</th>".repeat(19)
     )
 }
 
@@ -798,32 +805,38 @@ pub(super) fn render_models_page(data: &db::DashboardData) -> String {
         .filter(|row| row.model_id != "__deprecated__")
         .collect::<Vec<_>>();
     if models.is_empty() {
-        return dashboard_empty("Models", "No models discovered from configured providers.");
+        return "<h2>Models</h2><section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>".to_owned();
     }
     let rows = models
         .iter()
         .map(|row| {
-            let availability = if row.requests > 0
-                || row.resolution_status == "available"
-                || row.resolution_status == "resolved"
-            {
-                "available"
-            } else {
-                "configured"
+            let availability = match row.resolution_status.as_str() {
+                "available" | "resolved" => "available",
+                "unavailable" | "withdrawn" => "unavailable",
+                _ => "configured",
             };
             format!(
-                "<tr><td><a href=\"/models/{}\">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\"><span class=\"pill pill-unknown\" data-tooltip=\"No model info available\" aria-label=\"No model info available\">—</span></td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"exactness-badge empty\">—</span></td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
                 query_component(&row.model_id),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
                 availability,
+                availability,
                 row.requests,
                 format_microdollars(row.cost_microdollars),
+                row.errors,
+                format_tokens(row.input_tokens),
+                format_tokens(row.output_tokens),
+                format_tokens(row.input_tokens + row.output_tokens),
+                row.avg_latency_ms,
+                row.avg_ttft_ms,
+                "<td data-priority=\"3\">—</td>".repeat(7),
             )
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h3>Catalog models</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Avail.</th><th>Requests</th><th>Cost</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<h2>Models</h2><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<th data-priority=\"3\">Priority</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th>"
     )
 }
 
