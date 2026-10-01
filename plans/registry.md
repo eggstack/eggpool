@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Persistence M003 (event-driven checkpoint coordination,
-rejected by paired Pi/MMC acceptance gates and reverted; `plans/closure/persistence/003-status.md`).
+Most recently closed: Provider transport M005 (Eggfetch 0.2.1 / Eggress 1.0.11
+refresh; `plans/closure/provider-transport/005-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closing — Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | M002 remains independently blocked on a published upstream typed classification interface. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 
@@ -47,7 +47,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider transport | M005 Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | closing | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | Local qualification complete; hosted CI/dependency audit evidence pending; M002 remains independently blocked. |
+No dependency-ready implementation plans are currently registered.
 
 ## Blocked work
 
@@ -59,6 +59,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider transport M005 — Eggfetch 0.2.1 / Eggress 1.0.11 refresh | closed — provider, consumer, workspace, dependency, tooling, hosted CI, and audit qualification passed | `plans/closure/provider-transport/005-status.md`, implementation `e08c0e25`, test portability correction `7715a448` |
 | Persistence M006 — SQLite NOOP and WAL-reset safety baseline | closed — bundled SQLite 3.53.2; NOOP regression and full default/no-default qualification passed | `plans/closure/persistence/006-status.md`, implementation `c3a72720` |
 | Persistence M003 — event-driven checkpoint coordination | closed — rejected by paired Pi/MMC gates; candidate moved multi-second tails into finalization gate wait and was reverted | `plans/closure/persistence/003-status.md`, attempted implementation `b5d145fb`, revert `29bcbb4e` |
 | Persistence M005 — M004 evidence and planning reconciliation corrective pass | closed — M004 evidence interpretation and M003 lifecycle corrected | `plans/closure/persistence/005-status.md`, guard `tests/tooling/test_persistence_m004_evidence.py` (17 tests; 14 accepted M004 artifacts machine-checked; zero production Rust diff) |
@@ -97,6 +98,12 @@ no-default tests green, no medium-or-higher finding); the
 request-admission-wire subsystem is closed with no ready successor. No
 provider-transport blocked work is promoted; Provider
 M002 remains blocked on upstream Eggfetch API work.
+
+Provider transport M005 is closed (`e08c0e25`, test-only error-source
+assertion correction `7715a448`; `plans/closure/provider-transport/005-status.md`).
+Eggfetch 0.2.1 preserves its API and does not supply the typed classification
+interface M002 requires. M002 remains blocked and no future plan became
+dependency-ready in this closure pass.
 
 
 Explicit user direction opens the persistence performance workstream at the current Rust baseline. Persistence M001 is dependency-ready against the completed Plan 239 diagnostic and Plan 240 design constraints; its physical SBC requirement is operational closure evidence, not a reason to invent a different storage architecture. Provider-transport M002 remains blocked and is unaffected.

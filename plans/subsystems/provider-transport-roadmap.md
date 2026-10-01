@@ -217,7 +217,7 @@ coordinator to Eggress/Eggfetch internal error types.
 - M005 hard dependencies: M001, M003, and M004 are closed; `eggfetch-core 0.2.1`, `eggfetch-http-connect 0.2.1`, and the Eggress 1.0.11 family are published.
 - M005 is independent of blocked M002: Eggfetch 0.2.1 intentionally does not add the missing general-purpose typed transport taxonomy, so M002 remains blocked after the patch refresh.
 - M005 interface dependency: the existing `eggfetch-core` native HTTP/1/custom-`Dialer` contract plus Eggress `OutboundConnector::connect_tcp_detailed` typed route surface must remain semantically compatible.
-- M005 operational dependency: hosted CI and dependency-audit evidence are required for closure after the targeted lockfile refresh.
+- M005 operational dependency: hosted CI and dependency-audit evidence passed; see `plans/closure/provider-transport/005-status.md`.
 - Deferred upstream simplification: an additive Eggress pproxy constructor accepting caller executor/TLS options could later eliminate the private test-root chain-executor seam. No EggPool-local replacement is authorized without that upstream contract.
 
 ## 7. Milestones
@@ -548,10 +548,10 @@ explicitly deferred/superseded. M001 closure must leave runtime behavior
 unchanged while making the response-frame/error boundary explicit. M002 may
 remain blocked on its upstream interface without preventing other milestones.
 M003 must leave the Eggress ownership/feature contract unchanged while moving
-to the then-current qualified upstream family. M004 is closed. M005 is now the
-registered sustaining milestone and must refresh the published Eggfetch/Eggress
-patch lines without changing transport ownership or policy. The roadmap remains
-active while M002 is blocked and M005 is open.
+to the then-current qualified upstream family. M004 and M005 are closed. M005
+refreshed the published Eggfetch/Eggress patch lines without changing transport
+ownership or policy. The roadmap remains active while M002 is blocked on its
+upstream typed classification interface.
 
 ## 12. Milestone status
 
@@ -561,4 +561,4 @@ active while M002 is blocked and M005 is open.
 | 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
-| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closing | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | — | hosted CI/dependency-audit evidence pending; M002 remains independently blocked |
+| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 remains independently blocked |
