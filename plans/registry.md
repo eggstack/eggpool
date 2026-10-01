@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Provider transport M005 (Eggfetch 0.2.1 / Eggress 1.0.11
-refresh; `plans/closure/provider-transport/005-status.md`).
+Most recently closed: Deployment and packaging M001 (binary-first quick
+installer and ownership cleanup; `plans/closure/deployment-packaging/001-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -42,13 +42,11 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 active — binary-first quick installer and ownership cleanup | No hard blockers; release raw/checksum and native provenance/update interfaces are available. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 closed — binary-first quick installer and ownership cleanup | No eligible successor; further hardening requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
 
-| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
-|---|---|---|---|---|
-| Deployment and packaging | M001 binary-first quick installer and ownership cleanup | active | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` accepted; existing raw/checksum and native ownership interfaces satisfy dependencies. |
+No dependency-ready implementation plans are currently registered.
 
 ## Blocked work
 
@@ -60,6 +58,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Deployment and packaging M001 — binary-first quick installer and ownership cleanup | closed — verified raw-binary fresh path, owner delegation, 42-case deterministic qualification, docs/validators green, zero Rust diff | `plans/closure/deployment-packaging/001-status.md`, implementation `05600504` |
 | Provider transport M005 — Eggfetch 0.2.1 / Eggress 1.0.11 refresh | closed — provider, consumer, workspace, dependency, tooling, hosted CI, and audit qualification passed | `plans/closure/provider-transport/005-status.md`, implementation `e08c0e25`, test portability correction `7715a448` |
 | Persistence M006 — SQLite NOOP and WAL-reset safety baseline | closed — bundled SQLite 3.53.2; NOOP regression and full default/no-default qualification passed | `plans/closure/persistence/006-status.md`, implementation `c3a72720` |
 | Persistence M003 — event-driven checkpoint coordination | closed — rejected by paired Pi/MMC gates; candidate moved multi-second tails into finalization gate wait and was reverted | `plans/closure/persistence/003-status.md`, attempted implementation `b5d145fb`, revert `29bcbb4e` |
@@ -174,3 +173,12 @@ Eggfetch 0.2.1 is documented as runtime/API-equivalent to 0.2.0; Eggress
 therefore requires full provider-transport requalification. EggServe needs no
 parallel plan: `eggserve-server 0.4.0` is already the latest published line.
 Provider M002 remains blocked and is not promoted by M005.
+
+Unblock audit (deployment-packaging M001 closed, implementation `05600504`,
+`plans/closure/deployment-packaging/001-status.md`): M001 had no hard
+dependencies and consumed only already-stable raw/checksum and provenance/update
+interfaces. Closure promotes no blocked work. Provider-transport M002 remains
+independently blocked on the upstream Eggfetch typed classification interface.
+Routing-selection M002 stays evidence-gated. No deployment-packaging successor
+is registered; future hardening (attestations, system/root distribution,
+additional targets) requires new bounded plans.
