@@ -2127,6 +2127,11 @@ pub(super) fn render_overview(
         html_escape(period),
         html_escape(period)
     );
+    let body = body.replacen(
+        "<section class=\"cards\">",
+        "<section class=\"cards system-health\">",
+        1,
+    );
     let body = body.replace(
         "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
         &format!(
