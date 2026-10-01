@@ -1,6 +1,6 @@
 # Dashboard Milestone 001 — Python Oracle Freeze and Strict Parity Substrate
 
-Status: closing
+Status: closed
 
 Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7
 

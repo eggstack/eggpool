@@ -1,8 +1,8 @@
 # Dashboard Milestone 002 — Shared Shell, Interaction, and Dashboard API Restoration
 
-Status: blocked
+Status: ready
 
-Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001 oracle contract
+Repository baseline: 286b70ab3aef6b3979a033f8ee5d8f72006ffa56 plus closed Dashboard M001 oracle contract
 
 Source roadmap:
 
@@ -29,9 +29,12 @@ The unchanged embedded CSS/JS must once again receive the element types, IDs, cl
 
 ## 2. Why this milestone is ready
 
-Blocked until Dashboard M001 closes and provides the immutable oracle/strict comparator.
+Dashboard M001 closed with the immutable Python oracle, complete DOM/API
+projections, and strict comparator in `plans/closure/dashboard/001-status.md`.
 
-After M001 closure there is no additional hard external dependency. The current EggServe/Axum server boundary, dashboard auth policy, SQLite read path, and embedded assets are already production-owned and stable.
+There is no additional hard external dependency. The current EggServe/Axum
+server boundary, dashboard auth policy, SQLite read path, and embedded assets
+are already production-owned and stable.
 
 ## 3. Current implementation evidence
 
