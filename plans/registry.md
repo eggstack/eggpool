@@ -43,14 +43,14 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 ready — Python oracle freeze and strict parity substrate | No hard blocker for M001; M002-M006 are dependency-sequenced behind the frozen oracle/common-shell work. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 active — Python oracle freeze and strict parity substrate | M002-M006 remain dependency-sequenced behind the frozen oracle/common-shell work. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
-| Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
+| Dashboard | M001 Python oracle freeze and strict parity substrate | active | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Fixed oracle `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; strict tooling and sanitized captures in progress. |
 
 ## Blocked work
 
