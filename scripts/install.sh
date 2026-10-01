@@ -455,12 +455,15 @@ INSTALL_DEST_DIR="${EGGPOOL_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_DEST="$INSTALL_DEST_DIR/eggpool"
 LOCK_HELD=0
 
-# Fresh-install transaction state (M002). The fresh transaction ends only
-# after executable publication, provenance/version revalidation, and
-# first-time config seeding. Rollback removes only the executable committed
-# by this invocation when its identity still matches, plus a newly-created
-# partial config only when safely attributable. It never deletes a raced
-# replacement, a pre-existing config, or a symlink/special-file boundary.
+# Fresh-install transaction state (M002, hardened by M003). The fresh
+# transaction ends only after executable publication, provenance/version
+# revalidation, and first-time config seeding. Rollback removes only the
+# executable committed by this invocation when its identity still matches,
+# plus transaction-owned config staging. It never deletes, overwrites, or
+# infers ownership of the final config path: the final path is never
+# rollback scratch space. It never deletes a raced replacement, a
+# pre-existing config, a concurrently created config, or a
+# symlink/special-file boundary.
 FRESH_TX_ACTIVE=0
 FRESH_TX_COMMITTED=0
 FRESH_TX_EXPECTED_HASH=""
@@ -468,12 +471,23 @@ FRESH_TX_EXPECTED_VERSION=""
 FRESH_TX_CONFIG=""
 FRESH_TX_CONFIG_EXISTED=0
 FRESH_TX_ROLLBACK_DONE=0
+# Transaction-owned config staging directory (M003). Set by
+# safe_seed_config_via_staging while staging is live so EXIT/signal traps
+# can remove only staging. Never the final config path.
+CONFIG_STAGING_DIR=""
 
 cleanup_install_temp() {
     if [[ -n "$INSTALL_TMPDIR" && -d "$INSTALL_TMPDIR" ]]; then
         rm -rf "$INSTALL_TMPDIR"
     fi
     # Never remove the installed command or user state here.
+}
+
+cleanup_config_staging() {
+    if [[ -n "${CONFIG_STAGING_DIR:-}" && -d "${CONFIG_STAGING_DIR:-}" ]]; then
+        rm -rf "${CONFIG_STAGING_DIR:-}" 2>/dev/null || true
+    fi
+    CONFIG_STAGING_DIR=""
 }
 
 release_install_lock() {
@@ -483,20 +497,21 @@ release_install_lock() {
     LOCK_HELD=0
 }
 
-# Guarded fresh-install rollback. Returns 0 when the executable committed by
-# this transaction was removed (or was already absent) and any partial config
-# was cleaned or was absent. Returns 1 when manual recovery is required
-# (destination identity changed, unsafe config boundary, or removal failed).
+# Guarded fresh-install rollback (M003). Returns 0 when the executable
+# committed by this transaction was removed (or was already absent) and any
+# transaction-owned staging was cleaned. Returns 1 when manual recovery is
+# required (destination identity changed or removal failed). The final config
+# path is never deleted here; only CONFIG_STAGING_DIR may be removed.
 # Idempotent via FRESH_TX_ROLLBACK_DONE; safe to call from traps.
 fresh_tx_rollback_guarded() {
     local dest="${INSTALL_DEST}"
     local expected_hash="${FRESH_TX_EXPECTED_HASH:-}"
     local expected_version="${FRESH_TX_EXPECTED_VERSION:-}"
-    local config_path="${FRESH_TX_CONFIG:-}"
-    local config_existed="${FRESH_TX_CONFIG_EXISTED:-0}"
     local need_manual=0
 
     if ((FRESH_TX_ROLLBACK_DONE)); then
+        # Still ensure staging is gone for trap re-entry.
+        cleanup_config_staging
         return 0
     fi
     FRESH_TX_ROLLBACK_DONE=1
@@ -528,16 +543,18 @@ fresh_tx_rollback_guarded() {
         fi
     fi
 
-    if [[ -n "$config_path" ]] && (( ! config_existed )); then
-        if [[ -e "$config_path" || -L "$config_path" ]]; then
-            if [[ -L "$config_path" ]]; then
-                need_manual=1
-            elif [[ -f "$config_path" ]]; then
-                rm -f "$config_path" 2>/dev/null || need_manual=1
-            else
+    # M003: clean only transaction-owned staging. The final config path
+    # (FRESH_TX_CONFIG) is never removed: absent-before does not imply
+    # ownership under concurrency. A staging-cleanup failure is bounded
+    # manual recovery, not a silent final-config delete.
+    if [[ -n "${CONFIG_STAGING_DIR:-}" ]]; then
+        if [[ -d "${CONFIG_STAGING_DIR:-}" ]]; then
+            rm -rf "${CONFIG_STAGING_DIR:-}" 2>/dev/null || need_manual=1
+            if [[ -d "${CONFIG_STAGING_DIR:-}" ]]; then
                 need_manual=1
             fi
         fi
+        CONFIG_STAGING_DIR=""
     fi
 
     if ((need_manual)); then
@@ -549,6 +566,10 @@ fresh_tx_rollback_guarded() {
 install_trap_cleanup() {
     if ((FRESH_TX_ACTIVE)) && ((FRESH_TX_COMMITTED)) && (( ! FRESH_TX_ROLLBACK_DONE )); then
         fresh_tx_rollback_guarded >/dev/null 2>&1 || true
+    else
+        # Non-fresh or pre-commit paths may still hold staging (existing-owner
+        # seed). Remove only the transaction-owned directory, never final.
+        cleanup_config_staging
     fi
     cleanup_install_temp
     release_install_lock
@@ -557,6 +578,8 @@ install_trap_cleanup() {
 fresh_tx_signal_handler() {
     if ((FRESH_TX_ACTIVE)) && ((FRESH_TX_COMMITTED)) && (( ! FRESH_TX_ROLLBACK_DONE )); then
         fresh_tx_rollback_guarded >/dev/null 2>&1 || true
+    else
+        cleanup_config_staging
     fi
     cleanup_install_temp
     release_install_lock
@@ -564,24 +587,147 @@ fresh_tx_signal_handler() {
 }
 
 # Fail after fresh commit with transactional rollback. Attempts guarded
-# removal of the executable committed by this invocation plus any partial
-# config, then exits via fail() with diagnostics distinguishing rollback
-# success from manual-recovery. Keeps the install lock held until rollback
-# completes.
+# removal of the executable committed by this invocation plus
+# transaction-owned staging (never the final config), then exits via fail()
+# with diagnostics distinguishing rollback success from manual-recovery.
+# Keeps the install lock held until rollback completes.
 fail_fresh_tx() {
     local reason="$1"
     local cfg="${FRESH_TX_CONFIG:-unknown config path}"
     if fresh_tx_rollback_guarded; then
         FRESH_TX_ACTIVE=0
+        cleanup_config_staging
         release_install_lock
         cleanup_install_temp
-        fail "$reason; fresh install was rolled back (executable and partial config removed)"
+        fail "$reason; fresh install was rolled back (executable and staged config removed; final config at $cfg was never deleted)"
     else
         FRESH_TX_ACTIVE=0
+        cleanup_config_staging
         release_install_lock
         cleanup_install_temp
-        fail "$reason; rollback could not be proven safe (destination may have changed) — manual recovery required: verify $INSTALL_DEST identity and remove any partial config at $cfg explicitly"
+        fail "$reason; rollback could not be proven safe (destination may have changed) — manual recovery required: verify $INSTALL_DEST identity and inspect final config at $cfg explicitly (installer never deletes the final config)"
     fi
+}
+
+# Shared safe first-config helper (M003). Generates canonical config into a
+# private transaction-owned staging directory on the same filesystem as the
+# final path, then publishes with true no-clobber semantics (hard-link).
+# Never writes init-config output directly to the final path, never
+# overwrites an existing final path, and never deletes the final path.
+# Returns 0 on preserved-existing / created / concurrent-existing-preserved;
+# non-zero on generation-failed (1), unsafe-final-boundary (2), or
+# publish-failed (3). Cleans staging on every path; sets CONFIG_STAGING_DIR
+# while live for trap cleanup.
+safe_seed_config_via_staging() {
+    local active="$1"
+    local final_path="$2"
+
+    if [[ -L "$final_path" ]]; then
+        echo "Error: config path $final_path is a symlink; refusing to overwrite or remove" >&2
+        return 2
+    fi
+    if [[ -e "$final_path" ]]; then
+        if [[ -f "$final_path" && ! -L "$final_path" ]]; then
+            echo "Preserved existing config: $final_path"
+            return 0
+        else
+            echo "Error: config path $final_path exists and is not a regular file; refusing to replace" >&2
+            return 2
+        fi
+    fi
+
+    local parent
+    parent="$(dirname "$final_path")"
+    if ! mkdir -p "$parent" 2>/dev/null; then
+        echo "Error: could not create config directory $parent" >&2
+        return 3
+    fi
+    if [[ -L "$final_path" ]]; then
+        echo "Error: config path $final_path is a symlink; refusing to overwrite or remove" >&2
+        return 2
+    fi
+    if [[ -e "$final_path" ]]; then
+        if [[ -f "$final_path" && ! -L "$final_path" ]]; then
+            echo "Preserved concurrently created config: $final_path"
+            return 0
+        else
+            echo "Error: config path $final_path exists and is not a regular file; refusing to replace" >&2
+            return 2
+        fi
+    fi
+
+    local staging_dir
+    staging_dir="$(mktemp -d "$parent/.eggpool-config-staging.XXXXXX" 2>/dev/null)" || {
+        echo "Error: could not create private config staging in $parent" >&2
+        return 3
+    }
+    chmod 700 "$staging_dir" 2>/dev/null || true
+    CONFIG_STAGING_DIR="$staging_dir"
+    local staging="$staging_dir/config.toml"
+
+    if ! "$active" init-config "$staging"; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Error: could not seed the missing config (init-config failed for staging); final config at $final_path was left untouched" >&2
+        return 1
+    fi
+    if [[ -L "$staging" ]]; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Error: staged config is a symlink; refusing to publish to $final_path" >&2
+        return 1
+    fi
+    if [[ ! -f "$staging" ]]; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Error: staged config generation produced no regular file for $final_path" >&2
+        return 1
+    fi
+    chmod 600 "$staging" 2>/dev/null || true
+
+    if [[ -L "$final_path" ]]; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Error: config path $final_path is a symlink; staged config discarded without mutation" >&2
+        return 2
+    fi
+    if [[ -e "$final_path" ]]; then
+        if [[ -f "$final_path" && ! -L "$final_path" ]]; then
+            rm -rf "$staging_dir" 2>/dev/null || true
+            CONFIG_STAGING_DIR=""
+            echo "Preserved concurrently created config: $final_path"
+            return 0
+        else
+            rm -rf "$staging_dir" 2>/dev/null || true
+            CONFIG_STAGING_DIR=""
+            echo "Error: config path $final_path exists and is not a regular file; staged config discarded" >&2
+            return 2
+        fi
+    fi
+
+    if ln "$staging" "$final_path" 2>/dev/null; then
+        rm -f "$staging" 2>/dev/null || true
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Created $final_path from the installed package's canonical template."
+        return 0
+    fi
+    if [[ -f "$final_path" && ! -L "$final_path" ]]; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Preserved concurrently created config: $final_path"
+        return 0
+    fi
+    if [[ -L "$final_path" || -e "$final_path" ]]; then
+        rm -rf "$staging_dir" 2>/dev/null || true
+        CONFIG_STAGING_DIR=""
+        echo "Error: config path $final_path became unsafe during publish; staged config discarded" >&2
+        return 2
+    fi
+    rm -rf "$staging_dir" 2>/dev/null || true
+    CONFIG_STAGING_DIR=""
+    echo "Error: could not publish staged config to $final_path without overwriting" >&2
+    return 3
 }
 
 trap install_trap_cleanup EXIT
@@ -817,6 +963,7 @@ install_fresh_raw_binary() {
     FRESH_TX_CONFIG=""
     FRESH_TX_CONFIG_EXISTED=0
     FRESH_TX_ROLLBACK_DONE=0
+    CONFIG_STAGING_DIR=""
     sidecar_file="$INSTALL_TMPDIR/SHA256SUMS"
     asset_file="$INSTALL_TMPDIR/eggpool-candidate"
     if [[ "$requested" == "latest" ]]; then
@@ -903,56 +1050,40 @@ install_fresh_raw_binary() {
     if [[ -z "$cli_version" ]]; then
         fail_fresh_tx "installed eggpool returned an empty version"
     fi
-    # Transactional first-time config seeding. Existing config means no write.
-    # Failure after commit rolls back the executable committed by this
-    # invocation plus any partial config it created; a raced replacement is
-    # never deleted.
-    if [[ -f "$fresh_config_path" ]]; then
-        echo "Preserved existing config: $fresh_config_path"
-    else
-        if "$active" init-config "$fresh_config_path"; then
-            echo "Created $fresh_config_path from the installed package's canonical template."
-        else
-            fail_fresh_tx "could not seed the missing config at $fresh_config_path (init-config failed)"
-        fi
+    # Transactional first-time config seeding (M003). Config is generated
+    # only into transaction-owned staging and published no-clobber; the final
+    # path is never written directly and never deleted by rollback. Failure
+    # after commit rolls back the executable committed by this invocation;
+    # a concurrently created config is preserved and staging is discarded.
+    if ! safe_seed_config_via_staging "$active" "$fresh_config_path"; then
+        fail_fresh_tx "could not seed the missing config at $fresh_config_path (init-config failed)"
     fi
     print_binary_next_steps "$cli_version" "$SELECTED_VERSION" "$active"
     # Disarm the transaction on success; the install is complete.
     FRESH_TX_ACTIVE=0
     FRESH_TX_COMMITTED=0
+    cleanup_config_staging
     release_install_lock
     cleanup_install_temp
 }
 
 seed_config_after_commit() {
-    # Explicit result/ownership contract (M002 §6.3):
+    # Explicit result/ownership contract (M003 §6.4, shared helper):
     # - preserved-existing when config existed before invocation;
-    # - created-successfully on first-time seed success;
-    # - failed-with-no-created-file vs failed-with-new-partial-file on error.
-    # A new partial file is removed only when this invocation can prove it
-    # created it (did not exist at preflight, still a regular file, never a
-    # symlink/special boundary). A pre-existing config is never removed.
+    # - created on first-time staged publish success;
+    # - concurrent-existing-preserved when another actor wins the final path;
+    # - generation-failed / unsafe-final-boundary / publish-failed otherwise.
+    # The final path is never written directly and never deleted; only
+    # transaction-owned staging is removed. A pre-existing or concurrently
+    # created config is never removed or overwritten.
     local active="$1"
     local config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
-    local existed=0
-    if [[ -f "$config_path" ]]; then
-        existed=1
-    fi
-    if ((existed)); then
-        echo "Preserved existing config: $config_path"
+    if safe_seed_config_via_staging "$active" "$config_path"; then
         return 0
     fi
-    if "$active" init-config "$config_path"; then
-        echo "Created $config_path from the installed package's canonical template."
-        return 0
-    fi
-    if [[ -L "$config_path" ]]; then
-        fail "could not seed the missing config at $config_path; partial config could not be proven safe (symlink boundary) — manual recovery required"
-    fi
-    if [[ -f "$config_path" ]]; then
-        rm -f "$config_path" 2>/dev/null || true
-    elif [[ -e "$config_path" ]]; then
-        fail "could not seed the missing config at $config_path; partial config could not be proven safe (special-file boundary) — manual recovery required"
+    local status=$?
+    if ((status == 2)); then
+        fail "could not seed the missing config at $config_path; unsafe final boundary (symlink/special) — manual recovery required (staged config discarded, final preserved)"
     fi
     fail "could not seed the missing config at $config_path"
 }
@@ -1380,15 +1511,14 @@ run_package_authority() {
     }
 
     local config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
-    if [[ ! -f "$config_path" ]]; then
-        "$active_bin" init-config "$config_path" || {
-            restore_standalone_fn
-            fail "could not seed the missing config at $config_path"
-        }
-        echo "Created $config_path from the installed package's canonical template."
-    else
-        echo "Preserved existing config: $config_path"
+    # M003: package-manager first-config also uses transaction-owned staging +
+    # no-clobber publish; the final path is never written directly.
+    if ! safe_seed_config_via_staging "$active_bin" "$config_path"; then
+        restore_standalone_fn
+        cleanup_config_staging
+        fail "could not seed the missing config at $config_path (staged config discarded, final preserved)"
     fi
+    cleanup_config_staging
 
     if ((was_running)); then
         PATH="$manager_bin_dir:$PATH" "$active_bin" restart >/dev/null 2>&1 || {

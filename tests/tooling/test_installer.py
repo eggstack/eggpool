@@ -17,12 +17,12 @@ def test_quick_installer_harness_passes() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=60,
+        timeout=180,
     )
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["status"] == "pass"
-    assert len(report["cases"]) == 46
+    assert len(report["cases"]) == 60
     # Regression guard: stale pipx must never block a fresh native install.
     cases = {item["case"] for item in report["cases"]}
     assert "fresh-linux-aarch64-stale-pipx-ignored" in cases
@@ -34,3 +34,19 @@ def test_quick_installer_harness_passes() -> None:
     assert "fresh-init-config-failure-rolls-back-binary" in cases
     assert "fresh-init-config-failure-preserves-preexisting-config" in cases
     assert "fresh-config-failure-destination-race-refusal" in cases
+    # M003 corrective regressions: transaction-owned staging + no-clobber
+    # publication; final config is never rollback scratch space.
+    assert "fresh-config-concurrent-writer-preserved" in cases
+    assert "fresh-config-publish-race-preserves-winner" in cases
+    assert "fresh-staged-first-config-created" in cases
+    assert "fresh-staged-generation-failure-leaves-final-absent" in cases
+    assert "fresh-staged-partial-cleaned-after-generation-failure" in cases
+    assert "fresh-config-symlink-refusal" in cases
+    assert "fresh-config-special-refusal" in cases
+    assert "fresh-config-noclobber-never-overwrites" in cases
+    assert "fresh-signal-cleanup-removes-staging" in cases
+    assert "fresh-executable-rollback-on-config-generation-failure" in cases
+    assert "fresh-executable-race-still-preserved" in cases
+    assert "existing-owner-first-config-uses-safe-staging" in cases
+    assert "existing-owner-concurrent-config-preserved" in cases
+    assert "existing-owner-package-standalone-unchanged" in cases

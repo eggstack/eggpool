@@ -36,7 +36,11 @@ installation; it never overwrites an unrelated file at the destination.
 A fresh install is transactional through first-time config seeding: if
 `init-config` fails after executable publication, the newly installed
 executable is removed again (unless the destination changed concurrently,
-in which case manual recovery is reported). It seeds
+in which case manual recovery is reported). First-time config is generated
+only into transaction-owned staging and published no-clobber (hard-link);
+the final config path is never written directly and never deleted by
+rollback. A concurrently created config wins byte-for-byte, symlink/special
+boundaries fail closed, and only staging is cleaned. It seeds
 `~/.config/eggpool/config.toml` from the example template only after the
 command is committed and verified, without overwriting an existing file, and
 prints the resolved config path.

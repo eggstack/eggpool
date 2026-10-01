@@ -10,6 +10,7 @@ remains owned by the release tests.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -171,6 +172,182 @@ elif sys.argv[1:2] == ["init-config"]:
     except OSError:
         pass
     raise SystemExit(3)
+elif sys.argv[1:2] == ["runtime-status"]:
+    raise SystemExit(1)
+elif sys.argv[1:2] in (["stop"], ["restart"]):
+    pass
+else:
+    raise SystemExit(2)
+""",
+    )
+
+
+def _final_config_for_env() -> str:
+    # Python snippet resolving the installer's final config path from env.
+    # Indented 4 spaces for insertion inside the init-config branch.
+    return (
+        "    eggpool_config = os.environ.get('EGGPOOL_CONFIG')\n"
+        "    if eggpool_config:\n"
+        "        final = pathlib.Path(eggpool_config)\n"
+        "    else:\n"
+        "        xdg = os.environ.get('XDG_CONFIG_HOME')\n"
+        "        if not xdg:\n"
+        "            home = os.environ.get('HOME', str(pathlib.Path.home()))\n"
+        "            xdg = str(pathlib.Path(home) / '.config')\n"
+        "        final = pathlib.Path(xdg) / 'eggpool/config.toml'\n"
+    )
+
+
+def _fake_raw_binary_config_concurrent_writer(path: Path, *, version: str) -> None:
+    # M003 race: concurrent operator creates FINAL while generation runs.
+    # New code calls init-config STAGING; this fake writes operator bytes to
+    # FINAL, writes a partial to STAGING, then fails. Old direct-final code
+    # calls init-config FINAL; the fake writes operator bytes to FINAL then
+    # fails, and old rollback deletes FINAL (the bug). New code must preserve
+    # FINAL, clean staging, and roll back DEST.
+    _exe(
+        path,
+        f"""#!{sys.executable}
+import os
+import pathlib
+import sys
+
+VERSION = "{version}"
+
+def _report():
+    print("kind\\tstandalone-rust")
+    print("version\\t" + VERSION)
+    print("native\\ttrue")
+
+if sys.argv[1:] == ["install-provenance", "--shell"]:
+    _report()
+elif sys.argv[1:] == ["version"]:
+    print(VERSION)
+elif sys.argv[1:2] == ["init-config"]:
+    target = pathlib.Path(sys.argv[2])
+{_final_config_for_env()}
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        final.write_bytes(b"operator-config-concurrent\\n")
+    except OSError:
+        pass
+    if target != final:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("[server\\npartial = true\\n", encoding="utf-8")
+        except OSError:
+            pass
+    raise SystemExit(3)
+elif sys.argv[1:2] == ["runtime-status"]:
+    raise SystemExit(1)
+elif sys.argv[1:2] in (["stop"], ["restart"]):
+    pass
+else:
+    raise SystemExit(2)
+""",
+    )
+
+
+def _fake_raw_binary_config_publish_race(path: Path, *, version: str) -> None:
+    # M003 publish race: generation succeeds but another actor wins FINAL
+    # before no-clobber publish. New code (staging) writes staged bytes to
+    # STAGING and winner bytes to FINAL, exits 0; installer must preserve
+    # winner via failed ln. Old direct-final code is called with FINAL: the
+    # fake first records winner then overwrites with staged bytes, proving
+    # overwrite; the test expecting winner fails on baseline.
+    _exe(
+        path,
+        f"""#!{sys.executable}
+import os
+import pathlib
+import sys
+
+VERSION = "{version}"
+
+def _report():
+    print("kind\\tstandalone-rust")
+    print("version\\t" + VERSION)
+    print("native\\ttrue")
+
+if sys.argv[1:] == ["install-provenance", "--shell"]:
+    _report()
+elif sys.argv[1:] == ["version"]:
+    print(VERSION)
+elif sys.argv[1:2] == ["init-config"]:
+    target = pathlib.Path(sys.argv[2])
+{_final_config_for_env()}
+    try:
+        final.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    if target == final:
+        try:
+            final.write_bytes(b"concurrent-winner\\n")
+        except OSError:
+            pass
+        try:
+            final.write_text("[server]\\nport = 11300\\n", encoding="utf-8")
+        except OSError:
+            pass
+    else:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("[server]\\nport = 11300\\n", encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            final.write_bytes(b"concurrent-winner\\n")
+        except OSError:
+            pass
+elif sys.argv[1:2] == ["runtime-status"]:
+    raise SystemExit(1)
+elif sys.argv[1:2] in (["stop"], ["restart"]):
+    pass
+else:
+    raise SystemExit(2)
+""",
+    )
+
+
+def _fake_raw_binary_blocking_init(path: Path, *, version: str) -> None:
+    # M003 signal fixture: init-config signals start via marker then blocks
+    # so the harness can SIGTERM the installer mid-generation. Works for both
+    # staging (new) and direct-final (old) invocation shapes.
+    _exe(
+        path,
+        f"""#!{sys.executable}
+import os
+import pathlib
+import sys
+import time
+
+VERSION = "{version}"
+
+def _report():
+    print("kind\\tstandalone-rust")
+    print("version\\t" + VERSION)
+    print("native\\ttrue")
+
+if sys.argv[1:] == ["install-provenance", "--shell"]:
+    _report()
+elif sys.argv[1:] == ["version"]:
+    print(VERSION)
+elif sys.argv[1:2] == ["init-config"]:
+    target = pathlib.Path(sys.argv[2])
+    try:
+        home = pathlib.Path(os.environ.get("HOME", str(pathlib.Path.home())))
+        (home / "init-started").write_text("started", encoding="utf-8")
+    except OSError:
+        pass
+    time.sleep(30)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("[server]\\nport = 11300\\n", encoding="utf-8")
+    except OSError:
+        pass
 elif sys.argv[1:2] == ["runtime-status"]:
     raise SystemExit(1)
 elif sys.argv[1:2] in (["stop"], ["restart"]):
@@ -903,6 +1080,12 @@ def _fresh_failing_release(root: Path, *, version: str, kind: str = "failing") -
     candidate = root / "candidate-bin"
     if kind == "race":
         _fake_raw_binary_race_on_config(candidate, version=version)
+    elif kind == "config-concurrent-writer":
+        _fake_raw_binary_config_concurrent_writer(candidate, version=version)
+    elif kind == "config-publish-race":
+        _fake_raw_binary_config_publish_race(candidate, version=version)
+    elif kind == "blocking-init":
+        _fake_raw_binary_blocking_init(candidate, version=version)
     else:
         _fake_raw_binary_failing_init(candidate, version=version)
     _make_release(
@@ -913,6 +1096,17 @@ def _fresh_failing_release(root: Path, *, version: str, kind: str = "failing") -
         binary_path=candidate,
     )
     return releases
+
+
+def _assert_no_staging_residue(root: Path) -> None:
+    config_dir = root / "config-home/eggpool"
+    if not config_dir.is_dir():
+        return
+    leftovers = list(config_dir.glob(".eggpool-config-staging.*"))
+    assert leftovers == [], f"staging residue: {leftovers}"
+    # No nested staging dirs either.
+    for child in config_dir.iterdir():
+        assert not child.name.startswith(".eggpool-config-staging"), child
 
 
 def _case_fresh_init_config_failure_rollback() -> dict[str, str]:
@@ -974,6 +1168,324 @@ def _case_fresh_config_failure_race_refusal() -> dict[str, str]:
             "case": "fresh-config-failure-destination-race-refusal",
             "status": "pass",
         }
+
+
+def _case_fresh_config_concurrent_writer_preserved() -> dict[str, str]:
+    # M003 primary race: concurrent operator creates FINAL while staged
+    # generation fails. Installer must preserve FINAL byte-for-byte, clean
+    # staging, and roll back DEST. Baseline deletes FINAL (absent-before
+    # implies ownership) and fails this assertion.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(
+            root, version="0.8.1", kind="config-concurrent-writer"
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "init-config" in result.stderr or "config" in result.stderr
+        final = root / "config-home/eggpool/config.toml"
+        assert final.is_file()
+        assert final.read_bytes() == b"operator-config-concurrent\n"
+        assert not (root / "home/.local/bin/eggpool").exists()
+        _assert_no_staging_residue(root)
+        assert not (root / "state-home/eggpool/install.lock.d").exists()
+        return {"case": "fresh-config-concurrent-writer-preserved", "status": "pass"}
+
+
+def _case_fresh_config_publish_race_preserves_winner() -> dict[str, str]:
+    # M003 publish race: staged generation succeeds but another actor wins
+    # FINAL before no-clobber publish. Installer must preserve the winner
+    # and discard staging. Baseline overwrites FINAL with staged bytes.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(
+            root, version="0.8.1", kind="config-publish-race"
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        final = root / "config-home/eggpool/config.toml"
+        assert final.is_file()
+        assert final.read_bytes() == b"concurrent-winner\n"
+        assert (root / "home/.local/bin/eggpool").is_file()
+        assert (
+            "concurrent" in (result.stdout + result.stderr).lower()
+            or "preserved" in (result.stdout + result.stderr).lower()
+        )
+        _assert_no_staging_residue(root)
+        return {"case": "fresh-config-publish-race-preserves-winner", "status": "pass"}
+
+
+def _case_fresh_staged_first_config_created() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        final = root / "config-home/eggpool/config.toml"
+        assert final.is_file()
+        assert b"port = 11300" in final.read_bytes()
+        assert (root / "home/.local/bin/eggpool").is_file()
+        _assert_no_staging_residue(root)
+        return {"case": "fresh-staged-first-config-created", "status": "pass"}
+
+
+def _case_fresh_staged_generation_failure_leaves_final_absent() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="failing")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "init-config" in result.stderr or "config" in result.stderr
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        assert not (root / "home/.local/bin/eggpool").exists()
+        _assert_no_staging_residue(root)
+        return {
+            "case": "fresh-staged-generation-failure-leaves-final-absent",
+            "status": "pass",
+        }
+
+
+def _case_fresh_staged_partial_cleaned() -> dict[str, str]:
+    # Failing staged generation must not leave a partial staging file or
+    # directory behind, and must never create FINAL.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="failing")
+        _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        _assert_no_staging_residue(root)
+        config_dir = root / "config-home/eggpool"
+        if config_dir.is_dir():
+            names = [p.name for p in config_dir.iterdir()]
+            assert all("partial" not in n for n in names)
+        return {
+            "case": "fresh-staged-partial-cleaned-after-generation-failure",
+            "status": "pass",
+        }
+
+
+def _case_fresh_config_symlink_refusal() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        config = root / "config-home/eggpool/config.toml"
+        config.parent.mkdir(parents=True)
+        target = root / "config-home/operator-target.toml"
+        target.write_bytes(b"operator-target\n")
+        config.symlink_to(target)
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "symlink" in result.stderr.lower()
+        assert config.is_symlink()
+        assert target.read_bytes() == b"operator-target\n"
+        assert not (root / "home/.local/bin/eggpool").exists()
+        _assert_no_staging_residue(root)
+        return {"case": "fresh-config-symlink-refusal", "status": "pass"}
+
+
+def _case_fresh_config_special_refusal() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        config = root / "config-home/eggpool/config.toml"
+        config.parent.mkdir(parents=True)
+        try:
+            os.mkfifo(config)
+            is_fifo = True
+        except OSError:
+            config.mkdir()
+            is_fifo = False
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        combined = (result.stderr + result.stdout).lower()
+        assert (
+            "regular file" in combined
+            or "refusing" in combined
+            or "not a regular" in combined
+        )
+        if is_fifo:
+            import stat as _stat
+
+            mode = os.stat(config).st_mode
+            assert _stat.S_ISFIFO(mode)
+        assert not (root / "home/.local/bin/eggpool").exists()
+        _assert_no_staging_residue(root)
+        return {"case": "fresh-config-special-refusal", "status": "pass"}
+
+
+def _case_fresh_config_noclobber_never_overwrites() -> dict[str, str]:
+    # Distinct winner bytes from the publish-race case to prove byte-for-byte
+    # preservation is not keyed to a single constant.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(
+            root, version="0.8.1", kind="config-publish-race"
+        )
+        _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        final = root / "config-home/eggpool/config.toml"
+        content = final.read_bytes()
+        assert content == b"concurrent-winner\n"
+        assert b"port = 11300" not in content
+        _assert_no_staging_residue(root)
+        return {"case": "fresh-config-noclobber-never-overwrites", "status": "pass"}
+
+
+def _case_fresh_signal_cleanup_removes_staging() -> dict[str, str]:
+    # Signal during staged generation must remove transaction staging but
+    # never create or delete FINAL. Synchronized on the fake's init-started
+    # marker under a bounded timeout (no fixed sleeps for readiness).
+    import signal
+    import time
+
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="blocking-init")
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        environment = _env(root, fake_bin)
+        (root / "home").mkdir(parents=True, exist_ok=True)
+        environment["EGGPOOL_RELEASE_BASE_URL"] = f"file://{releases}"
+        environment["EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN"] = "1"
+        _exe(
+            fake_bin / "uname",
+            f"""#!{sys.executable}
+import sys
+args = sys.argv[1:]
+if args == ["-s"]:
+    print("Linux")
+elif args == ["-m"]:
+    print("x86_64")
+else:
+    print("Linux")
+""",
+        )
+        proc = subprocess.Popen(
+            ["bash", "-s", "--"],
+            cwd=root,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        assert proc.stdin is not None
+        try:
+            proc.stdin.write(INSTALLER.read_text(encoding="utf-8"))
+            proc.stdin.close()
+            marker = root / "home/init-started"
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if marker.exists():
+                    break
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            assert marker.exists(), "init-config did not start under timeout"
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=10)
+            assert proc.returncode is not None and proc.returncode != 0
+        finally:
+            if proc.poll() is None:
+                with contextlib.suppress(OSError):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=10)
+        final = root / "config-home/eggpool/config.toml"
+        assert not final.exists() or final.read_bytes() != b"[server]\nport = 11300\n"
+        _assert_no_staging_residue(root)
+        assert not (root / "state-home/eggpool/install.lock.d").exists()
+        return {"case": "fresh-signal-cleanup-removes-staging", "status": "pass"}
+
+
+def _case_fresh_executable_rollback_on_generation_failure() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="failing")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert (
+            "rolled back" in (result.stderr + result.stdout).lower()
+            or "config" in result.stderr.lower()
+        )
+        assert not (root / "home/.local/bin/eggpool").exists()
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        _assert_no_staging_residue(root)
+        return {
+            "case": "fresh-executable-rollback-on-config-generation-failure",
+            "status": "pass",
+        }
+
+
+def _case_fresh_executable_race_still_preserved() -> dict[str, str]:
+    # M002 executable-race guard must remain intact under M003 staging.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="race")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        dest = root / "home/.local/bin/eggpool"
+        assert dest.is_file()
+        assert dest.read_bytes() == b"racing\n"
+        combined = result.stderr + result.stdout
+        assert (
+            "manual recovery" in combined
+            or "could not be proven safe" in combined
+            or "changed" in combined
+        )
+        return {"case": "fresh-executable-race-still-preserved", "status": "pass"}
+
+
+def _case_existing_owner_first_config_uses_safe_staging() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        config = root / "config-home/eggpool/config.toml"
+        assert not config.exists()
+        _run(
+            root,
+            manager=None,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+        )
+        assert config.is_file()
+        assert b"port = 11300" in config.read_bytes()
+        _assert_no_staging_residue(root)
+        return {
+            "case": "existing-owner-first-config-uses-safe-staging",
+            "status": "pass",
+        }
+
+
+def _case_existing_owner_concurrent_preserved() -> dict[str, str]:
+    # Existing-owner seed must also use no-clobber staging: pre-existing
+    # config is preserved and never treated as staging scratch.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        config = root / "config-home/eggpool/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_bytes(b"operator-existing\n")
+        _run(
+            root,
+            manager=None,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+        )
+        assert config.read_bytes() == b"operator-existing\n"
+        _assert_no_staging_residue(root)
+        return {"case": "existing-owner-concurrent-config-preserved", "status": "pass"}
+
+
+def _case_existing_ownership_unchanged() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager=None,
+            args=["--version", "0.8.1"],
+            existing=("uv-tool", "0.8.0", True, "rust"),
+        )
+        assert _update_log(root) != []
+        _assert_no_staging_residue(root)
+        return {"case": "existing-owner-package-standalone-unchanged", "status": "pass"}
 
 
 def _case_lock_contention() -> dict[str, str]:
@@ -1365,6 +1877,20 @@ def main() -> int:
         _case_fresh_init_config_failure_rollback(),
         _case_fresh_init_failure_preserves_preexisting(),
         _case_fresh_config_failure_race_refusal(),
+        _case_fresh_config_concurrent_writer_preserved(),
+        _case_fresh_config_publish_race_preserves_winner(),
+        _case_fresh_staged_first_config_created(),
+        _case_fresh_staged_generation_failure_leaves_final_absent(),
+        _case_fresh_staged_partial_cleaned(),
+        _case_fresh_config_symlink_refusal(),
+        _case_fresh_config_special_refusal(),
+        _case_fresh_config_noclobber_never_overwrites(),
+        _case_fresh_signal_cleanup_removes_staging(),
+        _case_fresh_executable_rollback_on_generation_failure(),
+        _case_fresh_executable_race_still_preserved(),
+        _case_existing_owner_first_config_uses_safe_staging(),
+        _case_existing_owner_concurrent_preserved(),
+        _case_existing_ownership_unchanged(),
         _case_lock_contention(),
         _case_target_race(),
         _case_existing_standalone_delegates(),
