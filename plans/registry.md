@@ -50,7 +50,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
-| Dashboard | M002 shared shell, interaction, and dashboard API restoration | ready | `plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md` | M001 closed with fixed oracle, complete captures, strict DOM/API comparator, and current-gap report; no hard external dependency. |
+| Dashboard | M002 shared shell, interaction, and dashboard API restoration | active | `plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md` | M001 closed with fixed oracle, complete captures, strict DOM/API comparator, and current-gap report; no hard external dependency. |
 
 ## Blocked work
 
