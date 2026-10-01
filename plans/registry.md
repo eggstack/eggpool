@@ -40,7 +40,7 @@ pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M006 ready — external semantic-producer consumer contract | M002–M005 closed. M006 is dependency-ready and keeps the kernel sans-I/O while exposing the minimum semantic-producer API needed by CodeGG. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M006 active — external semantic-producer consumer contract | M002–M005 closed. M006 keeps the kernel sans-I/O while exposing the minimum semantic-producer API needed by CodeGG. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -50,8 +50,13 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Request admission and wire | M006 external semantic-producer consumer contract | ready | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | M002–M005 closed; additive kernel API only. Closure must record an immutable revision suitable for the downstream CodeGG pin. |
 | Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
+
+## Active implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Current work |
+|---|---|---|---|---|
+| Request admission and wire | M006 external semantic-producer consumer contract | active | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | Additive sans-I/O consumer API and regression qualification. |
 
 ## Blocked work
 
@@ -260,4 +265,4 @@ required unless implementation discovers a genuinely new ownership/protocol
 decision rather than a compatibility restoration.
 
 
-Explicit user direction reopens request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`. The new work is bounded to the extracted `eggpool-wire` API: canonical-origin semantics, a surface-oriented encode/options seam (including explicit OpenAI streaming-usage opt-in), bounded completed-tool-call accumulation, source-isolated consumer qualification, and documentation reconciliation. It does not reopen provider transport, routing, accounts, persistence, public HTTP behavior, or publication/versioning. M006 is dependency-ready; downstream CodeGG adoption is separately blocked until M006 closes and yields an immutable pin.
+Explicit user direction reopens request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`. The new work is bounded to the extracted `eggpool-wire` API: canonical-origin semantics, a surface-oriented encode/options seam (including explicit OpenAI streaming-usage opt-in), bounded completed-tool-call accumulation, source-isolated consumer qualification, and documentation reconciliation. It does not reopen provider transport, routing, accounts, persistence, or public HTTP behavior. `eggpool-wire 0.1.0` is already on crates.io; this milestone neither releases a new version nor changes its versioning policy. Downstream CodeGG adoption is separately blocked until M006 closes and yields an immutable pin.

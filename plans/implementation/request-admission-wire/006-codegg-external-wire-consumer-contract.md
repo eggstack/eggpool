@@ -1,6 +1,6 @@
 # Request Admission and Wire Milestone 006 — External Semantic-Producer Consumer Contract
 
-Status: ready
+Status: active
 
 Repository baseline: `8067ad3d1eef5a40ae6e300923d8be3b75437d26`
 

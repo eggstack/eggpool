@@ -245,7 +245,7 @@ M001 is closed on its recorded body-admission evidence. M002–M005 are closed o
 | 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
 | 005 — planning reconciliation and minor wire cleanup | closed | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | `plans/closure/request-admission-wire/005-status.md` | none |
-| 006 — external semantic-producer consumer contract | ready | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
+| 006 — external semantic-producer consumer contract | active | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
 
 
 ## 13. Wire-kernel extraction extension
@@ -475,6 +475,7 @@ Deliverable boundary:
 - a bounded provider-neutral completed-tool-call accumulator over `CanonicalEvent`;
 - package/source-isolated consumer tests and documentation that prove the crate remains sans-I/O and application-neutral;
 - documentation reconciliation for the crate's actual publication/consumption status;
+- `eggpool-wire 0.1.0` is already published on crates.io; this milestone does not publish a new version or change versioning policy;
 - no provider transport, routing, account, config, persistence, or HTTP behavior change.
 
 User/developer value: CodeGG and other semantic producers can share the exact protocol codecs and streaming state machines EggPool already qualifies instead of maintaining parallel OpenAI/Anthropic/Gemini serializers and SSE parsers.
