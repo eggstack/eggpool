@@ -90,6 +90,13 @@ pub(super) async fn overview(
         Ok(accounts) => accounts,
         Err(_) => return degraded("dashboard data unavailable"),
     };
+    let page_data = match db::DashboardRepository::new(&state.database)
+        .load(period)
+        .await
+    {
+        Ok(data) => data,
+        Err(_) => return degraded("dashboard data unavailable"),
+    };
     let theme_name = selected_theme(
         query
             .theme
@@ -99,6 +106,7 @@ pub(super) async fn overview(
     let html = render_overview(
         &summary,
         &accounts,
+        &page_data,
         period,
         theme_name,
         state.server.dashboard_refresh_interval_s,
@@ -1633,6 +1641,7 @@ pub(super) fn html_escape(value: impl std::fmt::Display) -> String {
 pub(super) fn render_overview(
     summary: &db::DashboardSummary,
     accounts: &[db::Account],
+    page_data: &db::DashboardData,
     period: &str,
     theme: &str,
     refresh_interval_s: u64,
@@ -1665,6 +1674,48 @@ pub(super) fn render_overview(
             "<div class=\"table-scroll\"><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
+    let model_rows = page_data
+        .models
+        .iter()
+        .take(8)
+        .map(|row| {
+            format!(
+                "<tr><td><a href=\"/models/{}\">{}</a></td><td>{}</td><td>{}</td></tr>",
+                query_component(&row.model_id),
+                html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                row.requests,
+            )
+        })
+        .collect::<String>();
+    let event_rows = page_data
+        .events
+        .iter()
+        .take(8)
+        .map(|row| {
+            format!(
+                "<li><time>{}</time> · {} · {}</li>",
+                html_escape(&row.created_at),
+                html_escape(&row.account_name),
+                html_escape(&row.event_type),
+            )
+        })
+        .collect::<String>();
+    let overview_glance = format!(
+        "<section class=\"overview-grid\"><div class=\"panel\"><h3>Top models</h3>{}</div><div class=\"panel\"><h3>Recent events</h3>{}</div></section>",
+        if model_rows.is_empty() {
+            "<p class=\"empty\">No model usage recorded.</p>".to_owned()
+        } else {
+            format!(
+                "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Requests</th></tr></thead><tbody>{model_rows}</tbody></table></div>"
+            )
+        },
+        if event_rows.is_empty() {
+            "<p class=\"empty\">No events recorded.</p>".to_owned()
+        } else {
+            format!("<ul class=\"event-list\">{event_rows}</ul>")
+        },
+    );
     let body = format!(
         "{}<section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>{}</section><section class=\"panel\"><h3>Timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
         dashboard_header("Overview", period, theme),
@@ -1684,6 +1735,10 @@ pub(super) fn render_overview(
         html_escape(period),
         html_escape(period),
         html_escape(period)
+    );
+    let body = body.replace(
+        "</section><section class=\"panel\"><h3>Timeseries",
+        &format!("</section>{overview_glance}<section class=\"panel\"><h3>Timeseries"),
     );
     render_dashboard_layout(
         "Overview",
@@ -1951,7 +2006,14 @@ mod tests {
             .dashboard_summary_basic("24h")
             .await
             .expect("empty summary reads");
-        let html = super::render_overview(&summary, &[], "24h", "Nord", 60);
+        let html = super::render_overview(
+            &summary,
+            &[],
+            &crate::db::DashboardData::default(),
+            "24h",
+            "Nord",
+            60,
+        );
         assert_eq!(html.matches("<!DOCTYPE html>").count(), 1);
         assert!(html.contains("class=\"topnav-menu\" id=\"topnav-menu\""));
         assert!(html.contains("/static/theme.css?theme=Nord"));
