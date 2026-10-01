@@ -811,7 +811,7 @@ pub(super) fn render_dashboard_page_body(
         dashboard_header(title, period, theme)
     };
     match active_nav {
-        "accounts" => body.push_str(&render_accounts_page(data, show_disabled)),
+        "accounts" => body.push_str(&render_accounts_page(data, period, theme, show_disabled)),
         "models" => body.push_str(&render_models_page(data, period, theme, model_info)),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
@@ -828,13 +828,45 @@ pub(super) fn render_dashboard_page_body(
     body
 }
 
-pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool) -> String {
+pub(super) fn render_accounts_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    show_disabled: bool,
+) -> String {
+    let disabled_count = data
+        .accounts
+        .iter()
+        .filter(|account| !account.enabled)
+        .count();
     if data
         .accounts
         .iter()
         .all(|account| !show_disabled && !account.enabled)
     {
-        return "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><p class=\"empty\">No accounts configured.</p></section>".to_owned();
+        let empty_message = if disabled_count > 0 {
+            format!(
+                "No enabled accounts. {disabled_count} disabled account{} hidden — <a href=\"?show_disabled=1\">show them</a>.",
+                if disabled_count == 1 { "" } else { "s" }
+            )
+        } else {
+            "No accounts configured.".to_owned()
+        };
+        return format!(
+            "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>",
+            period_options(period),
+            if show_disabled {
+                ""
+            } else {
+                " selected=\"selected\""
+            },
+            if show_disabled {
+                " selected=\"selected\""
+            } else {
+                ""
+            },
+            html_escape(theme)
+        );
     }
     let rows = data
         .accounts
@@ -867,7 +899,19 @@ pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool
         })
         .collect::<String>();
     format!(
-        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        period_options(period),
+        if show_disabled {
+            ""
+        } else {
+            " selected=\"selected\""
+        },
+        if show_disabled {
+            " selected=\"selected\""
+        } else {
+            ""
+        },
+        html_escape(theme),
         "<th data-priority=\"3\">Reserved</th>".repeat(19)
     )
 }
@@ -919,7 +963,7 @@ pub(super) fn render_models_page(
         .collect::<Vec<_>>();
     if models.is_empty() {
         return format!(
-            "<h2>Models</h2>{filters}<section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>"
+            "<h2>Models</h2><p class=\"empty\" role=\"status\">No canonical model information is available.</p>{filters}<section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>"
         );
     }
     let rows = models
