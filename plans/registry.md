@@ -43,18 +43,25 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 ready — Python oracle freeze and strict parity substrate | No hard blocker for M001; M002-M006 are dependency-sequenced behind the frozen oracle/common-shell work. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
+| Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
+| Dashboard | M002 shared shell, interaction, and dashboard API restoration | Hard-blocked on M001 oracle/strict comparator closure. |
+| Dashboard | M003 overview/account/model/model-detail parity | Hard-blocked on M002 shared shell/API closure. |
+| Dashboard | M004 telemetry/routing/reliability/trace parity | Hard-blocked on M002 shared shell/API closure; may run in parallel with M003 afterward. |
+| Dashboard | M005 runtime/cache observability parity | Hard-blocked on M002; M003/M004 interfaces must stabilize and both must close before M005 closure. |
+| Dashboard | M006 full parity qualification and closure | Hard-blocked on M003-M005. |
 
 ## Recently closed
 
@@ -222,3 +229,17 @@ remains independently blocked on the upstream Eggfetch typed classification
 interface. Routing-selection M002 stays evidence-gated (no affinity workload
 measured). Persistence has no eligible successor. No deployment-packaging
 successor is registered; future hardening requires new bounded plans.
+
+
+Dashboard parity planning audit (registered at research baseline
+`17e298f64fa21589f558c43592a24fa91b952ff7`): the final Python dashboard
+oracle is commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`. The current Rust
+static CSS/JS/Chart.js/favicon blobs remain byte-identical to that oracle, but
+the SSR DOM, dashboard-only JSON routes, and rich view-model surface were
+narrowed during migration. Historical Q012 intentionally compared a selected
+semantic subset and allowed richer Python diagnostics, so it is not sufficient
+as the restored parity gate. Dashboard M001 is therefore the sole ready
+handoff: freeze a complete sanitized oracle and strict comparator without
+production changes. M002-M006 remain blocked in dependency order; no ADR is
+required unless implementation discovers a genuinely new ownership/protocol
+decision rather than a compatibility restoration.
