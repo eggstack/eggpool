@@ -28,13 +28,20 @@ imports or spawns Python.
 
 The release set is exactly:
 
-- Linux x86_64 wheel/raw executable;
-- Linux aarch64 wheel/raw executable;
-- macOS arm64 wheel/raw executable.
+- Linux x86_64 wheel/raw executable (`eggpool-<version>-linux-x86_64`);
+- Linux aarch64 wheel/raw executable (`eggpool-<version>-linux-aarch64`);
+- macOS arm64 wheel/raw executable (`eggpool-<version>-macos-aarch64`).
 
 There is no Rust sdist, universal wheel, Windows proxy asset, or
 source-build fallback. (Windows appears only as an `eggpool-connect` helper
 asset below.)
+
+The stable `SHA256SUMS` release asset is the shell-friendly discovery surface
+for the binary-first quick installer. The installer selects exactly one raw
+EggPool entry matching the detected target, derives the version from the
+filename, and fetches the version-pinned asset after selection so a moving
+`latest` pointer cannot mix releases. Wheel and `eggpool-connect` entries in
+the sidecar are never accepted as proxy candidates.
 
 ## crates.io publication
 

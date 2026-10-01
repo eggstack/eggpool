@@ -25,10 +25,10 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 ## Quick Start
 
 ```bash
-# Install (one-shot)
+# Install (one-shot, verified standalone GitHub raw binary, no Python required)
 curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
 
-# Or install the native wheel directly
+# Or install the native wheel explicitly (requires Python >=3.11 for package management)
 uv tool install eggpool
 # or: pipx install eggpool
 
@@ -41,6 +41,16 @@ eggpool onboard
 # Install as a systemd service
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
+
+The one-shot curl install uses the qualified GitHub raw executable for the
+detected target (verified SHA-256 before execution) and creates a
+`standalone-rust` installation that uses native `eggpool update` thereafter.
+It never invokes uv, pipx, pip, Python, Cargo, or a source build. Direct
+`uv tool install eggpool`, `pipx install eggpool`, and `cargo install eggpool`
+remain supported explicit alternatives. Existing installations retain their
+owner across update or repair. Python `>=3.11` matters only to explicit
+package-manager and historical compatibility paths, not to a fresh
+current-native curl install.
 
 Supported targets are Linux x86_64, Linux aarch64, and macOS arm64. Windows and other unqualified targets are unsupported. See [Deployment](docs/deployment.md) for systemd, cron, and production setup.
 

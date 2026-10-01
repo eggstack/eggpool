@@ -12,16 +12,31 @@ execute the package-management interpreter.
 
 ## Fresh installs
 
-Use the public installer or choose a package manager directly:
+The public one-shot installer is binary-first for current-native releases.
+It resolves the matching versioned `eggpool-<version>-<os>-<arch>` GitHub raw
+asset from the stable `SHA256SUMS` sidecar, verifies SHA-256 before execution,
+performs a staged self-check, and commits it atomically to
+`~/.local/bin/eggpool` as `standalone-rust`. It never invokes uv, pipx, pip,
+Python, Cargo, or a source build:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+```
+
+Explicit package-manager alternatives remain supported (they require
+Python `>=3.11` for package management, unlike the raw-binary default):
+
+```bash
 uv tool install eggpool
 pipx install eggpool
+cargo install eggpool
 ```
 
 The installer preserves an existing `~/.config/eggpool/config.toml`, database,
-and `.env`. It never clones the repository for a normal install. Check the
+and `.env`. It never clones the repository for a normal install. Existing
+installations retain their owner: native installs delegate to
+`eggpool update`, legacy Python-era installs use their owning manager, and
+source-checkout or ambiguous ownership fails closed. Check the
 selected authority and current version with:
 
 ```bash
@@ -103,15 +118,18 @@ printed by the updater.
 Standalone Rust installs are distinct from package-managed PyPI installs. Their
 latest/exact Rust update uses the verified raw executable and SHA-256 digest
 from the GitHub release authority. They cannot downgrade directly to a
-Python-era package. To adopt one into canonical wheel management, use:
+Python-era package. Ordinary standalone updates remain standalone via native
+`eggpool update` and no longer require `--adopt-standalone`.
+
+To explicitly migrate a standalone install into wheel management, use:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash -- --adopt-standalone
 ```
 
-The installer requires explicit standalone adoption when it detects the
-existing binary, preserves a rollback copy, and restores it if package
-installation or self-check fails.
+Adoption is an advanced compatibility operation: it preserves a rollback copy
+and restores it if package installation or self-check fails. Without the flag,
+an existing standalone install is updated in place and stays standalone.
 
 ## Source checkouts and unsupported targets
 

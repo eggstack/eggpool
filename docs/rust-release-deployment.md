@@ -1,8 +1,9 @@
 # Rust release deployment
 
 This document covers standalone Rust binaries and disposable qualification
-hosts. Normal users should install the native Rust wheel from PyPI using
-`scripts/install.sh`, uv, or pipx; see [Upgrade and rollback](upgrading.md).
+hosts. Normal users should install the verified standalone GitHub raw binary
+via `scripts/install.sh` (no Python required); uv, pipx, and cargo remain
+explicit alternatives — see [Upgrade and rollback](upgrading.md).
 Standalone binaries use the verified GitHub raw-asset authority and are
 distinct from package-managed installations.
 

@@ -301,4 +301,4 @@ security findings.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 1 | ready | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | — | none |
+| 1 | active | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | — | none |

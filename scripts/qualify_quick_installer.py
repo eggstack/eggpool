@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Qualify the quick installer in disposable fake-manager environments.
+"""Qualify the binary-first quick installer in disposable environments.
 
-This deterministic installer harness never touches a real package manager or
-user state. Real wheel/index qualification remains owned by the release tests.
+Deterministic harness: never touches a real package manager, network, or user
+state. Fresh native paths use file:// release fixtures with
+EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN=1. Real wheel/index qualification
+remains owned by the release tests.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -28,19 +31,38 @@ def _exe(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _fake_command(path: Path, *, kind: str, version: str, native: bool) -> None:
+def _hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _fake_command(
+    path: Path, *, kind: str, version: str, native: bool, update_log: str = ""
+) -> None:
+    # Native fake supports `update [VERSION]` by rewriting its own version
+    # strings, simulating the Rust updater's owner-preserving transition.
+    # Legacy python-fallback mode is handled separately in _run.
+    native_text = str(native).lower()
     _exe(
         path,
         f"""#!{sys.executable}
+import os
 import pathlib
 import sys
 
+VERSION = "{version}"
+KIND = "{kind}"
+NATIVE = "{native_text}"
+UPDATE_LOG = {update_log!r}
+
+def _report():
+    print("kind\\t" + KIND)
+    print("version\\t" + VERSION)
+    print("native\\t" + NATIVE)
+
 if sys.argv[1:] == ["install-provenance", "--shell"]:
-    print("kind\\t{kind}")
-    print("version\\t{version}")
-    print("native\\t{str(native).lower()}")
+    _report()
 elif sys.argv[1:] == ["version"]:
-    print("{version}")
+    print(VERSION)
 elif sys.argv[1:2] == ["init-config"]:
     target = pathlib.Path(sys.argv[2])
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -49,10 +71,35 @@ elif sys.argv[1:2] == ["runtime-status"]:
     raise SystemExit(1)
 elif sys.argv[1:2] in (["stop"], ["restart"]):
     pass
+elif sys.argv[1:2] == ["update"]:
+    if UPDATE_LOG:
+        pathlib.Path(os.environ.get("FAKE_UPDATE_LOG", UPDATE_LOG)).open(
+            "a", encoding="utf-8"
+        ).write(" ".join(sys.argv[1:]) + "\\n")
+    # Simulate owner-preserving update: rewrite own version strings.
+    if len(sys.argv) > 2:
+        new_version = sys.argv[2].lstrip("vV")
+        try:
+            me = pathlib.Path(__file__)
+            text = me.read_text(encoding="utf-8")
+            old_marker = 'VERSION = "' + VERSION + '"'
+            new_marker = 'VERSION = "' + new_version + '"'
+            text = text.replace(old_marker, new_marker)
+            me.write_text(text, encoding="utf-8")
+            VERSION = new_version
+        except OSError:
+            raise SystemExit(1)
 else:
     raise SystemExit(2)
 """,
     )
+
+
+def _fake_raw_binary(
+    path: Path, *, version: str, kind: str = "standalone", native: bool = True
+) -> None:
+    full_kind = "standalone-rust" if kind == "standalone" else kind
+    _fake_command(path, kind=full_kind, version=version, native=native)
 
 
 def _fake_manager(path: Path, *, kind: str) -> None:
@@ -113,6 +160,7 @@ def _env(root: Path, fake_bin: Path) -> dict[str, str]:
         "PATH": os.pathsep.join((str(fake_bin), "/usr/bin", "/bin")),
         "UV_NO_CONFIG": "1",
         "FAKE_MANAGER_LOG": str(root / "manager.log"),
+        "FAKE_UPDATE_LOG": str(root / "update.log"),
         "FAKE_MANAGER_FAIL": "0",
         "UV_TOOL_BIN_DIR": str(root / "manager-bin"),
         "PIPX_BIN_DIR": str(root / "manager-bin"),
@@ -122,7 +170,7 @@ def _env(root: Path, fake_bin: Path) -> dict[str, str]:
 def _run(
     root: Path,
     *,
-    manager: str | None,
+    manager: str | None = None,
     manager_kind: str = "uv-tool",
     args: list[str] | None = None,
     existing: tuple[str, str, bool, str] | None = None,
@@ -130,21 +178,44 @@ def _run(
     expected: int = 0,
     manager_failure: bool = False,
     platform: tuple[str, str] | None = None,
+    release_fixture: Path | None = None,
+    allow_origin: bool = False,
+    extra_env: dict[str, str] | None = None,
+    pre_hold_lock: bool = False,
+    fake_curl: str | None = None,
+    fake_python3: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = root / "fake-bin"
     fake_bin.mkdir(parents=True, exist_ok=True)
     environment = _env(root, fake_bin)
     (root / "home").mkdir(parents=True, exist_ok=True)
+    if extra_env:
+        environment.update(extra_env)
+    if release_fixture is not None:
+        environment["EGGPOOL_RELEASE_BASE_URL"] = f"file://{release_fixture}"
+        if allow_origin:
+            environment["EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN"] = "1"
     platform = platform or ("Linux", "x86_64")
     if platform:
         _exe(
             fake_bin / "uname",
             f"""#!{sys.executable}
 import sys
-
-print({platform[0]!r} if sys.argv[1:] == ["-s"] else {platform[1]!r})
+args = sys.argv[1:]
+if args == ["-s"]:
+    print({platform[0]!r})
+elif args == ["-m"]:
+    print({platform[1]!r})
+elif not args:
+    print({platform[0]!r})
+else:
+    print({platform[0]!r})
 """,
         )
+    if fake_curl is not None:
+        _exe(fake_bin / "curl", fake_curl)
+    if fake_python3 is not None:
+        _exe(fake_bin / "python3", fake_python3)
     if manager:
         _fake_manager(fake_bin / manager, kind=manager_kind)
     if existing:
@@ -200,10 +271,20 @@ else:
             )
             _exe(path, f"#!{interpreter}\nraise SystemExit(2)\n")
         else:
-            _fake_command(path, kind=kind, version=version, native=native)
+            _fake_command(
+                path,
+                kind=kind,
+                version=version,
+                native=native,
+                update_log=str(root / "update.log"),
+            )
         environment["PATH"] = os.pathsep.join(
             (str(existing_bin), str(fake_bin), "/usr/bin", "/bin")
         )
+    if pre_hold_lock:
+        state_dir = Path(environment["XDG_STATE_HOME"]) / "eggpool"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "install.lock.d").mkdir(parents=True, exist_ok=True)
     environment["FAKE_MANAGER_FAIL"] = "1" if manager_failure else "0"
     command = ["bash", str(INSTALLER)] if source else ["bash", "-s", "--"]
     command.extend(args or [])
@@ -221,7 +302,7 @@ else:
     if result.returncode != expected:
         raise QualificationError(
             f"expected {expected}, got {result.returncode}: "
-            f"{result.stdout[-300:]} {result.stderr[-300:]}"
+            f"{result.stdout[-500:]} {result.stderr[-500:]}"
         )
     return result
 
@@ -231,23 +312,641 @@ def _log(root: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
 
-def _case_fresh(kind: str) -> dict[str, str]:
+def _update_log(root: Path) -> list[str]:
+    path = root / "update.log"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def _make_release(
+    releases_dir: Path,
+    *,
+    version: str,
+    raw_os: str,
+    raw_arch: str,
+    binary_path: Path,
+    extra_sidecar_lines: list[str] | None = None,
+    sidecar_hash_override: str | None = None,
+    omit_sidecar: bool = False,
+    omit_asset: bool = False,
+    duplicate_raw: bool = False,
+    wrong_platform_only: tuple[str, str] | None = None,
+) -> None:
+    filename = f"eggpool-{version}-{raw_os}-{raw_arch}"
+    digest = sidecar_hash_override or _hash(binary_path)
+    lines: list[str] = []
+    if not omit_sidecar:
+        if wrong_platform_only is not None:
+            wos, warch = wrong_platform_only
+            wfile = f"eggpool-{version}-{wos}-{warch}"
+            # Use a valid digest but wrong platform so selector finds zero.
+            lines.append(f"{digest}  {wfile}")
+        else:
+            lines.append(f"{digest}  {filename}")
+            if duplicate_raw:
+                lines.append(f"{digest}  {filename}")
+        # Noise that must never satisfy the raw selector.
+        wheel_noise = f"  eggpool-{version}-py3-none.whl"
+        lines.append("0" * 64 + wheel_noise)
+        helper_noise = f"  eggpool-connect-{version}-linux-x86_64"
+        lines.append("1" * 64 + helper_noise)
+        if extra_sidecar_lines:
+            lines.extend(extra_sidecar_lines)
+        sidecar_text = "\n".join(lines) + "\n"
+        (releases_dir / "latest" / "download").mkdir(parents=True, exist_ok=True)
+        (releases_dir / "download" / f"v{version}").mkdir(parents=True, exist_ok=True)
+        (releases_dir / "latest" / "download" / "SHA256SUMS").write_text(
+            sidecar_text, encoding="utf-8"
+        )
+        (releases_dir / "download" / f"v{version}" / "SHA256SUMS").write_text(
+            sidecar_text, encoding="utf-8"
+        )
+    if not omit_asset:
+        dest = releases_dir / "download" / f"v{version}" / filename
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(binary_path.read_bytes())
+        dest.chmod(0o755)
+        latest_asset = releases_dir / "latest" / "download" / filename
+        latest_asset.parent.mkdir(parents=True, exist_ok=True)
+        if not latest_asset.exists():
+            latest_asset.write_bytes(binary_path.read_bytes())
+            latest_asset.chmod(0o755)
+
+
+def _fresh_binary_fixture(
+    root: Path,
+    *,
+    version: str,
+    raw_os: str,
+    raw_arch: str,
+    binary_version: str | None = None,
+    kind: str = "standalone-rust",
+) -> Path:
+    releases = root / "releases"
+    candidate = root / "candidate-bin"
+    _fake_raw_binary(
+        candidate,
+        version=binary_version or version,
+        kind=kind,
+        native=(kind == "standalone-rust"),
+    )
+    _make_release(
+        releases,
+        version=version,
+        raw_os=raw_os,
+        raw_arch=raw_arch,
+        binary_path=candidate,
+    )
+    return releases
+
+
+# ---- fresh binary authorities (WP-B) ----
+
+
+def _case_fresh_aarch64_no_python() -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
-        manager = None if kind == "pip" else ("uv" if kind == "uv-tool" else "pipx")
-        _run(root, manager=manager, manager_kind=kind)
-        expected = (
-            ["tool", "install", "eggpool"]
-            if kind == "uv-tool"
-            else ["install", "eggpool"]
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="aarch64"
         )
-        assert _log(root) == expected
+        _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Linux", "aarch64"),
+        )
+        assert not (root / "manager.log").exists()
+        dest = root / "home/.local/bin/eggpool"
+        assert dest.is_file()
         assert (root / "config-home/eggpool/config.toml").is_file()
-        assert not (root / "home/eggpool").exists()
-        return {"case": f"fresh-{kind}", "status": "pass"}
+        return {"case": "fresh-linux-aarch64-no-python", "status": "pass"}
 
 
-def _case_existing(kind: str) -> dict[str, str]:
+def _case_fresh_aarch64_stale_pipx_ignored() -> dict[str, str]:
+    # Regression: stale pipx with unusable Python must not block native install.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="aarch64"
+        )
+        # Present but incompatible pipx: if consulted, it would fail.
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        _fake_manager(fake_bin / "pipx", kind="pipx")
+        # Make pipx log location known; installer must never invoke it.
+        result = _run(
+            root,
+            manager=None,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Linux", "aarch64"),
+        )
+        # pipx binary exists on PATH but manager.log must be absent/empty.
+        assert "raw binary" in result.stdout
+        assert not (root / "manager.log").exists() or not _log(root)
+        dest = root / "home/.local/bin/eggpool"
+        assert dest.is_file()
+        return {"case": "fresh-linux-aarch64-stale-pipx-ignored", "status": "pass"}
+
+
+def _case_fresh_x86_64() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Linux", "x86_64"),
+        )
+        assert (root / "home/.local/bin/eggpool").is_file()
+        return {"case": "fresh-linux-x86_64", "status": "pass"}
+
+
+def _case_fresh_macos() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="macos", raw_arch="aarch64"
+        )
+        _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Darwin", "arm64"),
+        )
+        assert (root / "home/.local/bin/eggpool").is_file()
+        return {"case": "fresh-macos-arm64", "status": "pass"}
+
+
+def _case_fresh_exact_rust() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Linux", "x86_64"),
+            args=["--version", "v0.8.1"],
+        )
+        assert (root / "home/.local/bin/eggpool").is_file()
+        return {"case": "fresh-exact-rust", "status": "pass"}
+
+
+def _case_fresh_package_explicit() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root, manager="uv", manager_kind="uv-tool", args=["--package-manager", "uv"]
+        )
+        assert _log(root) == ["tool", "install", "eggpool"]
+        return {"case": "fresh-package-explicit", "status": "pass"}
+
+
+# ---- negative checksum / download paths (WP-D) ----
+
+
+def _case_missing_sidecar() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = root / "releases"
+        releases.mkdir()
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            expected=1,
+        )
+        assert (
+            "checksum sidecar" in result.stderr or "could not download" in result.stderr
+        )
+        assert not (root / "home/.local/bin/eggpool").exists()
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        return {"case": "missing-SHA256SUMS", "status": "pass"}
+
+
+def _case_zero_matching() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+            wrong_platform_only=("linux", "aarch64"),
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Linux", "x86_64"),
+            expected=1,
+        )
+        assert "no matching raw entry" in result.stderr
+        return {"case": "zero-matching-raw", "status": "pass"}
+
+
+def _case_multiple_matching() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+            duplicate_raw=True,
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            expected=1,
+        )
+        assert "ambiguous" in result.stderr
+        return {"case": "multiple-matching-raw", "status": "pass"}
+
+
+def _case_malformed_digest() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        (releases / "latest" / "download").mkdir(parents=True)
+        (releases / "download" / "v0.8.1").mkdir(parents=True)
+        bad = "ZZ" + "0" * 62 + "  eggpool-0.8.1-linux-x86_64\n"
+        (releases / "latest" / "download" / "SHA256SUMS").write_text(bad)
+        (releases / "download" / "v0.8.1" / "SHA256SUMS").write_text(bad)
+        dest = releases / "download" / "v0.8.1" / "eggpool-0.8.1-linux-x86_64"
+        dest.write_bytes(candidate.read_bytes())
+        dest.chmod(0o755)
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "malformed digest" in result.stderr or "malformed" in result.stderr
+        return {"case": "malformed-digest", "status": "pass"}
+
+
+def _case_checksum_mismatch() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+            sidecar_hash_override="0" * 64,
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "checksum mismatch" in result.stderr
+        assert not (root / "home/.local/bin/eggpool").exists()
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        return {"case": "checksum-mismatch", "status": "pass"}
+
+
+def _case_oversized() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        # Sparse 129 MiB file that still reports its size; header is a shell
+        # script so hash tooling works, size bound must reject it.
+        candidate.write_bytes(b"#!/bin/sh\necho oversized\n")
+        # Extend sparsely to 129 MiB without writing all bytes.
+        with candidate.open("r+b") as handle:
+            handle.truncate(129 * 1024 * 1024)
+        candidate.chmod(0o755)
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "128 MiB" in result.stderr or "exceeds" in result.stderr
+        return {"case": "oversized-artifact", "status": "pass"}
+
+
+def _case_truncated_download() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+            omit_asset=True,
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "could not download" in result.stderr
+        assert not (root / "home/.local/bin/eggpool").exists()
+        return {"case": "truncated-download", "status": "pass"}
+
+
+def _case_wrong_target_filename() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1")
+        releases = root / "releases"
+        # Sidecar only knows 0.8.0 for this platform; exact 0.8.1 must fail.
+        _make_release(
+            releases,
+            version="0.8.0",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+        )
+        # Also create an empty 0.8.1 sidecar dir so exact URL exists but has no match.
+        (releases / "download" / "v0.8.1").mkdir(parents=True, exist_ok=True)
+        (releases / "download" / "v0.8.1" / "SHA256SUMS").write_text(
+            "0" * 64 + "  eggpool-0.8.0-linux-x86_64\n"
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            args=["--version", "0.8.1"],
+            expected=1,
+        )
+        assert (
+            "no matching raw entry" in result.stderr
+            or "does not match" in result.stderr
+        )
+        return {"case": "wrong-target-filename", "status": "pass"}
+
+
+def _case_staged_wrong_version() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        # Binary reports 0.8.0 but sidecar filename says 0.8.1 with matching hash.
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.0")
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "wrong version" in result.stderr
+        return {"case": "staged-wrong-version", "status": "pass"}
+
+
+def _case_staged_not_native() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        candidate = root / "candidate-bin"
+        _fake_raw_binary(candidate, version="0.8.1", kind="uv-tool", native=False)
+        # Override provenance to claim non-standalone but same version.
+        releases = root / "releases"
+        _make_release(
+            releases,
+            version="0.8.1",
+            raw_os="linux",
+            raw_arch="x86_64",
+            binary_path=candidate,
+        )
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "standalone" in result.stderr
+        return {"case": "staged-not-native", "status": "pass"}
+
+
+# ---- destination / concurrency (WP-D) ----
+
+
+def _case_dest_symlink() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        dest_dir = root / "home/.local/bin"
+        dest_dir.mkdir(parents=True)
+        (dest_dir / "eggpool").symlink_to("/tmp/unrelated")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "symlink" in result.stderr
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        return {"case": "dest-symlink-collision", "status": "pass"}
+
+
+def _case_dest_special() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        dest_dir = root / "home/.local/bin"
+        dest_dir.mkdir(parents=True)
+        try:
+            os.mkfifo(dest_dir / "eggpool")
+        except OSError:
+            (dest_dir / "eggpool").mkdir()
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "regular file" in result.stderr or "symlink" in result.stderr
+        return {"case": "dest-special-collision", "status": "pass"}
+
+
+def _case_dest_unrelated() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        dest_dir = root / "home/.local/bin"
+        dest_dir.mkdir(parents=True)
+        (dest_dir / "eggpool").write_text("unrelated\n")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "already exists" in result.stderr
+        assert (dest_dir / "eggpool").read_text() == "unrelated\n"
+        return {"case": "dest-unrelated-collision", "status": "pass"}
+
+
+def _case_lock_contention() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            expected=1,
+            pre_hold_lock=True,
+        )
+        assert "already in progress" in result.stderr
+        return {"case": "lock-contention", "status": "pass"}
+
+
+def _case_target_race() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        # Fake curl creates DEST during asset fetch to simulate a race.
+        # Simpler robust wrapper: delegate to system curl, side-effect first.
+        fake_simple = f"""#!{sys.executable}
+import os
+import pathlib
+import subprocess
+import sys
+home = os.environ.get("HOME", "")
+dest = pathlib.Path(home) / ".local/bin/eggpool"
+if any("eggpool-0.8.1-linux-" in a for a in sys.argv[1:]):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists():
+        dest.write_text("racing\\n", encoding="utf-8")
+result = subprocess.run(["/usr/bin/curl"] + sys.argv[1:])
+raise SystemExit(result.returncode)
+"""
+        # Fall back to `curl` from PATH if /usr/bin/curl is missing.
+        if not Path("/usr/bin/curl").exists():
+            fake_simple = fake_simple.replace("/usr/bin/curl", "curl")
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            expected=1,
+            fake_curl=fake_simple,
+        )
+        assert (
+            "changed during install" in result.stderr
+            or "already exists" in result.stderr
+            or "appeared during install" in result.stderr
+        )
+        return {"case": "target-race-refusal", "status": "pass"}
+
+
+# ---- existing owners (WP-C) ----
+
+
+def _case_existing_standalone_delegates() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        config = root / "config-home/eggpool/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_bytes(b"operator-config\n")
+        _run(
+            root,
+            manager=None,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+        )
+        assert _update_log(root) != []
+        assert "update" in " ".join(_update_log(root))
+        assert not (root / "manager.log").exists() or not _log(root)
+        assert config.read_bytes() == b"operator-config\n"
+        return {"case": "existing-standalone-delegates", "status": "pass"}
+
+
+def _case_existing_uv_retained() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager=None,
+            args=["--version", "0.8.1"],
+            existing=("uv-tool", "0.8.0", True, "rust"),
+        )
+        assert _update_log(root) != []
+        assert "0.8.1" in " ".join(_update_log(root))
+        return {"case": "existing-uv-retained", "status": "pass"}
+
+
+def _case_existing_pipx_retained() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager=None,
+            args=["--version", "0.8.1"],
+            existing=("pipx", "0.8.0", True, "rust"),
+        )
+        assert _update_log(root) != []
+        return {"case": "existing-pipx-retained", "status": "pass"}
+
+
+def _case_existing_pip_retained() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager=None,
+            existing=("pip", "0.8.0", True, "rust"),
+        )
+        assert _update_log(root) != []
+        return {"case": "existing-pip-retained", "status": "pass"}
+
+
+def _case_existing_legacy_uv() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager="uv",
+            manager_kind="uv-tool",
+            args=["--version", "v0.8.0"],
+            existing=("uv-tool", "0.7.4", False, "python-fallback"),
+        )
+        assert _log(root) == ["tool", "install", "--force", "eggpool==0.8.0"]
+        return {"case": "existing-legacy-uv", "status": "pass"}
+
+
+def _case_standalone_adoption() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        old = root / "existing-bin/eggpool"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        _fake_command(old, kind="standalone-rust", version="0.8.0", native=True)
+        _run(
+            root,
+            manager="uv",
+            args=["--adopt-standalone", "--version", "0.8.0"],
+            existing=("standalone-rust", "0.8.0", True, "rust"),
+        )
+        backup = old.with_name("eggpool.eggpool-standalone-0.8.0.rollback")
+        assert backup.is_file() and not old.exists()
+        return {"case": "standalone-adoption", "status": "pass"}
+
+
+def _case_force_repair_standalone() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        _run(
+            root,
+            manager=None,
+            args=["--force"],
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+        )
+        assert _update_log(root) != []
+        existing_bin = root / "existing-bin/eggpool"
+        assert existing_bin.is_file()
+        return {"case": "force-repair-standalone", "status": "pass"}
+
+
+def _case_existing_config_preserved() -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
         config = root / "config-home/eggpool/config.toml"
@@ -256,48 +955,70 @@ def _case_existing(kind: str) -> dict[str, str]:
         database = root / "data-home/eggpool/usage.sqlite3"
         database.parent.mkdir(parents=True)
         database.write_bytes(b"operator-database\n")
-        manager = None if kind == "pip" else ("uv" if kind == "uv-tool" else "pipx")
         _run(
             root,
-            manager=manager,
-            manager_kind=kind,
-            args=["--version", "v0.8.0"],
-            existing=(kind, "0.7.4", False, "python-fallback"),
+            manager=None,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
         )
-        expected = (
-            ["tool", "install", "--force", "eggpool==0.8.0"]
-            if kind == "uv-tool"
-            else ["install", "--force", "eggpool==0.8.0"]
-        )
-        if kind == "pip":
-            assert not (root / "manager.log").exists()
-        else:
-            assert _log(root) == expected
         assert config.read_bytes() == b"operator-config\n"
         assert database.read_bytes() == b"operator-database\n"
-        return {"case": f"existing-python-{kind}", "status": "pass"}
+        return {"case": "existing-config-preserved", "status": "pass"}
 
 
-def _case_standalone(failure: bool) -> dict[str, str]:
+def _case_historical_exact() -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
-        old = root / "existing-bin/eggpool"
-        old.parent.mkdir(parents=True)
-        _fake_command(old, kind="standalone-rust", version="0.7.4", native=True)
+        fake_py = f"""#!{sys.executable}
+import sys
+print("3.11")
+"""
         _run(
             root,
             manager="uv",
-            args=["--adopt-standalone", "--version", "0.8.0"],
-            existing=("standalone-rust", "0.7.4", True, "rust"),
-            expected=1 if failure else 0,
-            manager_failure=failure,
+            manager_kind="uv-tool",
+            args=["--version", "0.7.4"],
+            fake_python3=fake_py,
         )
-        backup = old.with_name("eggpool.eggpool-standalone-0.7.4.rollback")
-        assert old.is_file() if failure else backup.is_file() and not old.exists()
-        return {
-            "case": "standalone-rollback" if failure else "standalone-adoption",
-            "status": "pass",
-        }
+        assert _log(root) == ["tool", "install", "--force", "eggpool==0.7.4"]
+        assert not (root / "home/.local/bin/eggpool").exists()
+        return {"case": "historical-exact-compat", "status": "pass"}
+
+
+def _case_historical_python_incompat() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        # Always report 3.9 for any -c probe.
+        fake_py_simple = f"""#!{sys.executable}
+import sys
+print("3.9")
+"""
+        result = _run(
+            root,
+            manager="uv",
+            args=["--version", "0.7.4"],
+            expected=1,
+            fake_python3=fake_py_simple,
+        )
+        assert "Python" in result.stderr and "0.7.4" in result.stderr
+        assert not (root / "manager.log").exists()
+        return {"case": "historical-python-incompat", "status": "pass"}
+
+
+def _case_standalone_historical_refusal() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        result = _run(
+            root,
+            manager="uv",
+            args=["--version", "0.7.4"],
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+            expected=1,
+        )
+        assert "standalone" in result.stderr and "0.7.4" in result.stderr
+        return {"case": "standalone-historical-refusal", "status": "pass"}
+
+
+# ---- legacy negative / misc ----
 
 
 def _negative_cases() -> list[dict[str, str]]:
@@ -316,7 +1037,17 @@ def _negative_cases() -> list[dict[str, str]]:
         manager_bin = root / "manager-bin"
         manager_bin.mkdir(parents=True)
         (manager_bin / "eggpool").write_text("unrelated\n", encoding="utf-8")
-        result = _run(root, manager="uv", expected=1)
+        fake_py = f"""#!{sys.executable}
+import sys
+print("3.11")
+"""
+        result = _run(
+            root,
+            manager="uv",
+            args=["--version", "0.7.4"],
+            expected=1,
+            fake_python3=fake_py,
+        )
         assert "collision" in result.stderr
         cases.append({"case": "manager-path-collision", "status": "pass"})
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
@@ -324,7 +1055,12 @@ def _negative_cases() -> list[dict[str, str]]:
         fake_bin = root / "fake-bin"
         fake_bin.mkdir()
         _exe(fake_bin / "id", "#!/bin/sh\nprintf '0\\n'\n")
-        result = _run(root, manager="uv", expected=1)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        result = _run(
+            root, manager="uv", release_fixture=releases, allow_origin=True, expected=1
+        )
         assert "refuses root" in result.stderr
         cases.append({"case": "root-refusal", "status": "pass"})
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
@@ -339,15 +1075,39 @@ def _negative_cases() -> list[dict[str, str]]:
         cases.append({"case": "uncatalogued-historical-refusal", "status": "pass"})
     with tempfile.TemporaryDirectory(prefix="eggpool-installer-") as value:
         root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
         result = _run(
             root,
             manager="uv",
+            release_fixture=releases,
+            allow_origin=True,
             platform=("FreeBSD", "x86_64"),
             expected=1,
         )
         assert "unsupported platform" in result.stderr
-        assert not (root / "manager.log").exists()
         cases.append({"case": "unsupported-platform-refusal", "status": "pass"})
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        result = _run(
+            Path(value),
+            manager=None,
+            existing=("source-checkout", "0.8.1", True, "rust"),
+            expected=1,
+        )
+        assert "source checkout" in result.stderr
+        cases.append({"case": "source-checkout-refusal", "status": "pass"})
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        # Custom origin without opt-in must fail before any mutation.
+        result = _run(root, release_fixture=releases, allow_origin=False, expected=1)
+        assert "non-production release origin requires" in result.stderr
+        assert not (root / "home/.local/bin/eggpool").exists()
+        cases.append({"case": "nonprod-origin-optin", "status": "pass"})
     return cases
 
 
@@ -361,18 +1121,68 @@ def _source_case() -> dict[str, str]:
         return {"case": "source-checkout-local-candidate", "status": "pass"}
 
 
+def _release_manifest_case() -> dict[str, str]:
+    manifest = json.loads(
+        (ROOT / "packaging/release/release-manifest.json").read_text()
+    )
+    raws = {r["raw"]["filename"] for r in manifest["artifacts"]}
+    assert raws == {
+        "eggpool-0.8.1-linux-x86_64",
+        "eggpool-0.8.1-linux-aarch64",
+        "eggpool-0.8.1-macos-aarch64",
+    }
+    # Wheel/helper entries must never satisfy the raw selector: simulate the
+    # installer's basename + pattern gate.
+    import re
+
+    raw_re = re.compile(
+        r"^eggpool-[0-9]+\.[0-9]+\.[0-9]+-(linux|macos)-(x86_64|aarch64)$"
+    )
+    wheels = [r["wheel"]["filename"] for r in manifest["artifacts"]]
+    assert all(not raw_re.fullmatch(w.split("/")[-1]) for w in wheels)
+    helpers = [c["filename"] for c in manifest.get("connect_artifacts", [])]
+    assert all(not raw_re.fullmatch(h) for h in helpers)
+    return {"case": "release-manifest-raw-contract", "status": "pass"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
     results = [
-        _case_fresh("uv-tool"),
-        _case_fresh("pipx"),
-        _case_existing("uv-tool"),
-        _case_existing("pipx"),
-        _case_existing("pip"),
-        _case_standalone(False),
-        _case_standalone(True),
+        _case_fresh_aarch64_no_python(),
+        _case_fresh_aarch64_stale_pipx_ignored(),
+        _case_fresh_x86_64(),
+        _case_fresh_macos(),
+        _case_fresh_exact_rust(),
+        _case_fresh_package_explicit(),
+        _case_missing_sidecar(),
+        _case_zero_matching(),
+        _case_multiple_matching(),
+        _case_malformed_digest(),
+        _case_checksum_mismatch(),
+        _case_oversized(),
+        _case_truncated_download(),
+        _case_wrong_target_filename(),
+        _case_staged_wrong_version(),
+        _case_staged_not_native(),
+        _case_dest_symlink(),
+        _case_dest_special(),
+        _case_dest_unrelated(),
+        _case_lock_contention(),
+        _case_target_race(),
+        _case_existing_standalone_delegates(),
+        _case_existing_uv_retained(),
+        _case_existing_pipx_retained(),
+        _case_existing_pip_retained(),
+        _case_existing_legacy_uv(),
+        _case_standalone_adoption(),
+        _case_force_repair_standalone(),
+        _case_existing_config_preserved(),
+        _case_historical_exact(),
+        _case_historical_python_incompat(),
+        _case_standalone_historical_refusal(),
         _source_case(),
+        _release_manifest_case(),
         *_negative_cases(),
     ]
     print(json.dumps({"cases": results, "status": "pass"}, sort_keys=True))

@@ -177,6 +177,25 @@ def validate_release_docs() -> dict[str, object]:
         raise ReleaseDocsError("README quick start routes normal users to source")
     for command in ("eggpool update", "eggpool update 0.8.0", "install-provenance"):
         _require(readme, command, "README update/provenance guidance")
+    # Binary-first quick-install authority (ADR-0001 / M001).
+    for phrase in (
+        "GitHub raw",
+        "standalone-rust",
+        "never invokes uv",
+    ):
+        _require(readme, phrase, "README binary-first authority")
+    if "selects uv, pipx" in readme:
+        raise ReleaseDocsError("README still describes package-manager-first default")
+    for phrase in ("binary-first", "GitHub raw", "standalone-rust"):
+        _require(deployment, phrase, "deployment binary-first authority")
+        _require(upgrading, phrase, "upgrade binary-first authority")
+    if "selects uv, pipx, or the existing owning pip environment" in deployment:
+        raise ReleaseDocsError(
+            "deployment still describes package-manager-first default"
+        )
+    raspberry = (ROOT / "docs/raspberry-pi.md").read_text(encoding="utf-8")
+    for phrase in ("no Python", "standalone", "curl -fsSL"):
+        _require(raspberry, phrase, "SBC binary-first note")
 
     for phrase in (
         "0.6.7 through 0.7.4",
@@ -231,6 +250,27 @@ def validate_release_docs() -> dict[str, object]:
     )
     if "git clone" in installer:
         raise ReleaseDocsError("installer contains a hidden repository fallback")
+    # Binary-first installer contract: verified raw authority, checksum
+    # sidecar, standalone identity, and non-production origin guard.
+    for phrase in (
+        "SHA256SUMS",
+        "standalone-rust",
+        "EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN",
+        "latest/download/SHA256SUMS",
+        "MAX_ARTIFACT_BYTES",
+        "install-provenance --shell",
+    ):
+        _require(installer, phrase, "installer binary-first authority")
+    if "uv and pipx were not found; bootstrapping uv" in installer:
+        # Bootstrapping remains only for explicit package-manager and source
+        # flows; the fresh native path must never reach it. The presence of
+        # the string is allowed, but the fresh authority must explicitly
+        # ignore manager discovery.
+        _require(
+            installer,
+            "Do not let the mere presence of pipx or uv alter",
+            "installer fresh-native manager independence",
+        )
 
     _require(workflow, "build_release_artifacts.py", "Rust artifact workflow")
     _require(workflow, "build_connect_artifacts.py", "helper artifact workflow")

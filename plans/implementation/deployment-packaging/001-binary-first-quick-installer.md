@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone 001 — Binary-first quick installer
 
-Status: ready
+Status: active
 
 Repository baseline: `5dc8aeccf06c0f012d6fae81410a805586c9d9d3`
 

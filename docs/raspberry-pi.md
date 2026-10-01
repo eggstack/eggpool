@@ -5,8 +5,11 @@ Run EggPool on a Raspberry Pi for always-on LAN access.
 ## Quick Start
 
 ```bash
-# Install
-pipx install eggpool
+# Install (verified standalone raw binary, no Python >=3.11 required)
+curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+
+# Explicit wheel alternative (requires Python >=3.11 for package management)
+# pipx install eggpool
 
 # Set up providers interactively
 eggpool onboard
@@ -18,6 +21,10 @@ sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 sudo systemctl status eggpool
 curl http://localhost:11300/v1/healthz
 ```
+
+A current-native curl install on Linux/aarch64 does not consult pipx or uv
+and does not require Python `>=3.11`; that floor applies only to explicit
+package-manager and historical compatibility paths.
 
 See [deployment.md](deployment.md) for full details on both personal
 and production deployment paths.
@@ -34,8 +41,10 @@ and production deployment paths.
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo apt install -y curl
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+# No uv/pipx/Python setup is needed for the default raw-binary install.
+# Only install a package manager if you explicitly prefer a wheel install:
+# curl -LsSf https://astral.sh/uv/install.sh | sh
+# export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Then follow the Quick Start above, or [deployment.md](deployment.md)

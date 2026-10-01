@@ -22,12 +22,19 @@ eggpool onboard
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```
 
-The installer selects uv, pipx, or the existing owning pip environment and
-installs the native Rust wheel from PyPI. It detects an existing `eggpool`
-on PATH and refuses to silently replace an ambiguous owner — pass `--force`
-or `--upgrade` for an intentional manager-owned repair. It seeds
-`~/.config/eggpool/config.toml` from the example template without
-overwriting an existing file and prints the resolved config path.
+The installer is binary-first for fresh current-native installs: it verifies
+the GitHub raw executable for the detected target (SHA-256 before execution,
+staged self-check, atomic commit) and creates a `standalone-rust`
+installation. It never requires Python, uv, pipx, pip, Cargo, or a source
+checkout. Direct `uv tool install eggpool`, `pipx install eggpool`, and
+`cargo install eggpool` remain supported explicit alternatives. The installer
+detects an existing `eggpool` on PATH and preserves its owner — native
+installs delegate to `eggpool update`, legacy Python-era installs use their
+owning manager, and source-checkout or ambiguous ownership fails closed.
+Pass `--force` for an intentional same-owner repair. It seeds
+`~/.config/eggpool/config.toml` from the example template only after the
+command is committed and verified, without overwriting an existing file, and
+prints the resolved config path.
 
 After install, `eggpool onboard` walks the operator through provider
 connections, configuration validation, and an optional server start.

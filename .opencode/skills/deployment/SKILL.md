@@ -6,13 +6,28 @@ description: Deployment and operations for the native Rust EggPool runtime.
 # Deployment and Operations
 
 The supported production artifact is the native Rust wheel or verified raw
-Rust executable. Use `scripts/install.sh` for personal package-manager
+Rust executable. Use `scripts/install.sh` for personal verified raw-binary
 installation and `eggpool deploy systemd --install` for a managed service.
 
+The quick installer is binary-first for fresh current-native installs: it
+resolves the matching `eggpool-<version>-<os>-<arch>` GitHub raw asset from
+the stable `SHA256SUMS` sidecar, verifies SHA-256 before execution, performs
+a staged self-check, and commits atomically to `~/.local/bin/eggpool` as
+`standalone-rust`. It never invokes uv, pipx, pip, Python, Cargo, or a source
+build on that path. Direct `uv tool install eggpool`, `pipx install eggpool`,
+and `cargo install eggpool` remain supported explicit alternatives.
+
 The quick installer recognizes uv, pipx, pip/venv, standalone, and source
-ownership. It refuses ambiguous ownership, collisions, unsupported targets,
-and standalone replacement without `--adopt-standalone`. It preserves config,
-database, and `.env` files and never clones the repository for a normal install.
+ownership. Existing native installs delegate to `eggpool update` and retain
+their owner; legacy Python-era installs use their owning manager; source and
+ambiguous ownership fail closed. It refuses ambiguous ownership, collisions,
+unsupported targets, and unsafe symlinks/special files. Ordinary standalone
+updates remain standalone without `--adopt-standalone`, which is an explicit
+advanced migration to wheel ownership only. It preserves config,
+database, and `.env` files, seeds config only after the command is committed
+and verified, and never clones the repository for a normal install.
+Python `>=3.11` applies only to explicit package-manager and historical
+compatibility paths, never to a fresh current-native curl install.
 
 Supported release targets are Linux x86_64, Linux aarch64, and macOS arm64.
 The `eggpool-connect` desktop helper additionally ships for Windows x86_64;

@@ -42,13 +42,13 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 ready — binary-first quick installer and ownership cleanup | No hard blockers; release raw/checksum and native provenance/update interfaces are available. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 active — binary-first quick installer and ownership cleanup | No hard blockers; release raw/checksum and native provenance/update interfaces are available. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Deployment and packaging | M001 binary-first quick installer and ownership cleanup | ready | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` accepted; existing raw/checksum and native ownership interfaces satisfy dependencies. |
+| Deployment and packaging | M001 binary-first quick installer and ownership cleanup | active | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` accepted; existing raw/checksum and native ownership interfaces satisfy dependencies. |
 
 ## Blocked work
 

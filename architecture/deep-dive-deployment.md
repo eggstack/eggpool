@@ -44,11 +44,20 @@ not depend on the CLI runtime adapter. The CLI adapter in
 
 ### `scripts/install.sh`
 
-One-shot installer for the native Rust wheel. It recognizes existing package
-manager and standalone installations, refuses ambiguous ownership, checks the
-supported OS/architecture before mutation, and preserves configuration.
-Native releases start at `NATIVE_RELEASE_VERSION = "0.8.1"`; historical
-Python versions are catalogued exact-only targets and never the default.
+Binary-first one-shot installer for the verified GitHub raw executable. Fresh
+current-native installs resolve the matching raw asset from the stable
+`SHA256SUMS` sidecar, verify SHA-256 before execution, staged self-check, and
+commit atomically as `standalone-rust` without Python, uv, pipx, pip, Cargo,
+or a source checkout. Existing native installs delegate to `eggpool update`
+and retain their owner; legacy Python-era installs use their owning manager.
+It recognizes existing package manager and standalone installations, refuses
+ambiguous ownership, collisions, unsupported targets, and unsafe
+symlink/special-file destinations, and preserves configuration (seeding only
+after the command is committed and verified). Ordinary standalone updates
+remain standalone; `--adopt-standalone` is an explicit advanced migration to
+wheel ownership only. Native releases start at `NATIVE_RELEASE_VERSION =
+"0.8.0"`; historical Python versions are catalogued exact-only targets and
+never the default.
 
 ## Operational tooling
 
