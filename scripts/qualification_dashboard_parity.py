@@ -460,7 +460,22 @@ def build_oracle_manifest() -> dict[str, Any]:
                 "sha256": hashlib.sha256(asset_path.read_bytes()).hexdigest(),
             }
         )
-    themes = sorted(path.name for path in (RUST_ASSET_ROOT / "themes").glob("*.toml"))
+    theme_files: list[dict[str, str]] = []
+    for theme_path in sorted((RUST_ASSET_ROOT / "themes").glob("*.toml")):
+        theme_blob = subprocess.run(
+            ["git", "hash-object", str(theme_path)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        theme_files.append(
+            {
+                "filename": theme_path.name,
+                "git_blob": theme_blob,
+                "sha256": hashlib.sha256(theme_path.read_bytes()).hexdigest(),
+            }
+        )
     js = (static_root / "dashboard.js").read_text(encoding="utf-8")
     selectors = sorted(
         {
@@ -505,7 +520,7 @@ def build_oracle_manifest() -> dict[str, Any]:
             for route in API_ROUTES
         ],
         "assets": assets,
-        "themes": themes,
+        "themes": theme_files,
         "javascript_hooks": {
             "selectors": selectors,
             "selector_producers": _selector_producers(selectors),

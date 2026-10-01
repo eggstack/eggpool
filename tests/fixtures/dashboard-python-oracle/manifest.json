@@ -395,55 +395,255 @@
     "private-auth"
   ],
   "themes": [
-    "Booberry.toml",
-    "Catppuccin Latte.toml",
-    "Catppuccin Macchiato.toml",
-    "Catppuccin Mocha.toml",
-    "Cyber Red.toml",
-    "Cyberpunk.toml",
-    "Dark Green.toml",
-    "Discord (80_ Saturation).toml",
-    "Discord.toml",
-    "Dracula.toml",
-    "Ferra Light.toml",
-    "Flexor Dark.toml",
-    "Gruvbox.toml",
-    "Halcyon Dark.toml",
-    "IntelliJ Light.toml",
-    "Kanagawa.toml",
-    "Macaw Dark.toml",
-    "Macaw Light.toml",
-    "Matrix.toml",
-    "Noctis Lilac.toml",
-    "Nord.toml",
-    "Nostromo Terminal.toml",
-    "One Dark.toml",
-    "Oxocarbon.toml",
-    "Rose Pine Dawn.toml",
-    "Rose Pine Moon.toml",
-    "Rose Pine.toml",
-    "Solarized Dark.toml",
-    "Sonokai.toml",
-    "Tokyo Night Storm.toml",
-    "VESPER.toml",
-    "Zenburn.toml",
-    "acton.toml",
-    "bam.toml",
-    "base16-atelier-forest-light.toml",
-    "berlin.toml",
-    "black but with important highlights.toml",
-    "broc.toml",
-    "cork.toml",
-    "ferra.toml",
-    "forest.toml",
-    "lisbon.toml",
-    "midnight.toml",
-    "oslo.toml",
-    "plum.toml",
-    "portland.toml",
-    "sunset.toml",
-    "tofino.toml",
-    "vanimo.toml",
-    "vik.toml"
+    {
+      "filename": "Booberry.toml",
+      "git_blob": "a343fcc6be4aa01de219b7b88ee409e950b8a07e",
+      "sha256": "ca0588275bd2c59de561633c2dc7e2b7f95d183a7fd918a10d00dfff5ca96871"
+    },
+    {
+      "filename": "Catppuccin Latte.toml",
+      "git_blob": "6d94ec9226fb63c46c12cb9edd45fee32525df07",
+      "sha256": "fb76636c8da045d190fbd722890f4ecac38de081c98545eb75e8e53ae510cc20"
+    },
+    {
+      "filename": "Catppuccin Macchiato.toml",
+      "git_blob": "37b37797255efe738e91c69bbfdda2200867e0fb",
+      "sha256": "936cc7db301cd3a80a29a2728528f14d11f577f8245f2d202e53cb68c5e820ea"
+    },
+    {
+      "filename": "Catppuccin Mocha.toml",
+      "git_blob": "f98ba8be1ef3196c83f1344e8079840507c025e8",
+      "sha256": "8fd2fb82030dea210c560cda1a6d99926b1a62d91239ebb6f9874d51c0d5ed79"
+    },
+    {
+      "filename": "Cyber Red.toml",
+      "git_blob": "07df0590813fa5f8a0161f541528452955c224c3",
+      "sha256": "e7c2f20169d0f72b00bc3388c88297e3d8a51b7a50fb31d7ebe7f00ddb41cc65"
+    },
+    {
+      "filename": "Cyberpunk.toml",
+      "git_blob": "fecda189064af6498eb8b7484ea282b64d28df14",
+      "sha256": "96ec47a175fc16dd0e0acabe9be656f782b6346411145f12cb662ce28532154e"
+    },
+    {
+      "filename": "Dark Green.toml",
+      "git_blob": "89984b83cd32ada5b99b226233a7c044cdd4ccb6",
+      "sha256": "e33729af870a3e311e254e7e5689d841f14f5b10d3cf28d132044e18d9d216bc"
+    },
+    {
+      "filename": "Discord (80_ Saturation).toml",
+      "git_blob": "e2182f8b9c82ca9063408f8766b09c97fdb32339",
+      "sha256": "fc73e46602db1af70bcd7fed6d43b0a67da64ac2c25e822873921e59990adbc8"
+    },
+    {
+      "filename": "Discord.toml",
+      "git_blob": "7e43bf8e7bf2247f2a08678a85b787bc2b8e0aad",
+      "sha256": "8941f36da4c0cf5e3696a0994384072d15adc4b04fd8e33852c334228d4671dd"
+    },
+    {
+      "filename": "Dracula.toml",
+      "git_blob": "a7c2ccb07ab41e48740a9139affc24812673877c",
+      "sha256": "36f631a78c7a1b2ae907758e1e163f06bd1828cf7c3f1d19da5ea308eec22ee0"
+    },
+    {
+      "filename": "Ferra Light.toml",
+      "git_blob": "81755e26f34df26dd3cd7dad89395eba701cd7a2",
+      "sha256": "50be7de6d49346e88dc9b67380e863dbe14cadd81d9f047172233b11c8967d10"
+    },
+    {
+      "filename": "Flexor Dark.toml",
+      "git_blob": "bff75ffe48cb476ad58cd4f3b12b203a4e601a10",
+      "sha256": "76a052984f425b5ae9ad0ebea3a070bfcecfd3512b5f547fcc13a96b77fde94b"
+    },
+    {
+      "filename": "Gruvbox.toml",
+      "git_blob": "e69ff1e8f58f3e5d9d064680f8464b1d1ed1897f",
+      "sha256": "3c6ac08314942d3489b901af7d2def08f62ebd28ce8ed84734e055d45ee7b6ed"
+    },
+    {
+      "filename": "Halcyon Dark.toml",
+      "git_blob": "eec70ca520c4e8b81f7d29449ed3d88e039df0e2",
+      "sha256": "b1d62e45ab46af9940b81006ec3351d4a73173004cafaaf1d14c94d60444912a"
+    },
+    {
+      "filename": "IntelliJ Light.toml",
+      "git_blob": "cb8b54d8d700f14b31c3b476614accb9c2e8d5e7",
+      "sha256": "ee931369c5fa53322955e6258f376027044afd4088cec6352893adca964f9ba9"
+    },
+    {
+      "filename": "Kanagawa.toml",
+      "git_blob": "cdbb579a3f8aced4e98ebf116b5c8b4413338117",
+      "sha256": "5827d75d5ab297b8050dfdcf05a00c9f59795889cd94cb6eb13144ca5385bb89"
+    },
+    {
+      "filename": "Macaw Dark.toml",
+      "git_blob": "052e884f0cbc4dd4a6b3cdf917fbb9899e73fc29",
+      "sha256": "edb774ff7284ebd8a3eea82e316e5707ad46666cabb0baf04179201177a52034"
+    },
+    {
+      "filename": "Macaw Light.toml",
+      "git_blob": "cf5a5a2be2a330ab5986a0f0729425c967583253",
+      "sha256": "48754ea58b6333b3d479062e727035040a507ec6fa1d9a0e822ce93960523993"
+    },
+    {
+      "filename": "Matrix.toml",
+      "git_blob": "8463080c24a7035ce84cf36d934234b3d24936a6",
+      "sha256": "9d8d20e15c0ee0200957982f10a6924f95d203604be8872acd9639cb405f51cb"
+    },
+    {
+      "filename": "Noctis Lilac.toml",
+      "git_blob": "d69941288ed39c7240f9d1a32d0599377f66103d",
+      "sha256": "f7b56a7988218ea6cb47f359c22f232ae26680607651947c3aec2bb2d9d4a011"
+    },
+    {
+      "filename": "Nord.toml",
+      "git_blob": "6aaafe62f384a7043fe58ec2d3274504e2077a49",
+      "sha256": "a1b7ac6f1a672b583cd8ebceb8a7a36c80b7ebc599fc042dce501d2e1daf9297"
+    },
+    {
+      "filename": "Nostromo Terminal.toml",
+      "git_blob": "b3e04b5fd25ee829f9291ec66c2b6aa5b5188714",
+      "sha256": "3642efe2e3d8b94436e540bfd64d214275aea86caca0f29142358c097a2c6a7e"
+    },
+    {
+      "filename": "One Dark.toml",
+      "git_blob": "b01d067e6f88a461ce96249541d70a0584d82b9c",
+      "sha256": "33f7aed572ab432c660024a5ee755033d3c0562789c76bb5a2c3ab983e0f78a6"
+    },
+    {
+      "filename": "Oxocarbon.toml",
+      "git_blob": "9f684b3aae562992f9999e18009c4d68615ad86d",
+      "sha256": "c46c8f8fb8a4006207e412b167190888c9e976ec8e6d5a064fa34ac42735e8fc"
+    },
+    {
+      "filename": "Rose Pine Dawn.toml",
+      "git_blob": "29ddf6df256be0aabdfbb7084e3db07676d23290",
+      "sha256": "61596dee71b1b7ea9bc5059485bbcafb9911dcec034faea88b8184c90cebe588"
+    },
+    {
+      "filename": "Rose Pine Moon.toml",
+      "git_blob": "5f6aeb9218418f01839b1316586742f3f20c3201",
+      "sha256": "732cd97629c0abf46b5acc88ece372757edeb36ffb3c3d0e7ce1733b0f96b71e"
+    },
+    {
+      "filename": "Rose Pine.toml",
+      "git_blob": "c0617a7b776121f19a67cbc2fa2887ad82897cc4",
+      "sha256": "e9bf6f5acbb1b195ca64e4ca5b25649a4bd50c27ed3b08904a2e3fdab35e07e9"
+    },
+    {
+      "filename": "Solarized Dark.toml",
+      "git_blob": "bbdc733f6678e78e64308d2890f657a3125f1784",
+      "sha256": "ef1bc3884df79766c3c1ad8f08aeac4c1448b3871c9633cf3dd6ae6ae0459fe6"
+    },
+    {
+      "filename": "Sonokai.toml",
+      "git_blob": "4f86c8dbf7c8e08f9a9e2742817ecd3b994b2018",
+      "sha256": "03c54cbefe13d94b3c55d3d23615ce75f865dd539a16dc81d08332d9b9f8e878"
+    },
+    {
+      "filename": "Tokyo Night Storm.toml",
+      "git_blob": "121278eb43d3a972d4210d6d4292ebba13c2559a",
+      "sha256": "00c963e7573e5215d907b64c9983b2ae845a6914f03ffb1489ea16ce339f4fdd"
+    },
+    {
+      "filename": "VESPER.toml",
+      "git_blob": "17f613da2717a5bb00bf1f31c09204174d4ad96a",
+      "sha256": "5fa4c1818445a81a076fb40aec1c231614bfd64bbc966a816bf9fba6a6af64a9"
+    },
+    {
+      "filename": "Zenburn.toml",
+      "git_blob": "aba82741728bb8063d27a7a12c530e9d7f65ea95",
+      "sha256": "3a295d8a1d3e85ed45f89030e0852ead6fa9fbe130ba33caac2a2cfe6621af0c"
+    },
+    {
+      "filename": "acton.toml",
+      "git_blob": "fc7da2e1ed3593d6f41952327ea1bd3c6445a7d9",
+      "sha256": "12484c8091e1e87cf86ba3ead46b8e0e3cc7863cf5ebb0fcce527000a663d1bb"
+    },
+    {
+      "filename": "bam.toml",
+      "git_blob": "99242baadbbc8ef669aaad2e9cc38cf54092eaf8",
+      "sha256": "291cde9ddc80508b3999b78f74067f3b31883a5bbdc20b11f2ea1274d1f7bce3"
+    },
+    {
+      "filename": "base16-atelier-forest-light.toml",
+      "git_blob": "f585aca7e9dc8956d7e1cec6afefb20b243a8675",
+      "sha256": "81ce67b99e8ef4e7c7140d56635f460a8580a355918b474ec78c5406186f28a2"
+    },
+    {
+      "filename": "berlin.toml",
+      "git_blob": "9a15495ff74ef6699d828400bb81fdce2ae69e0b",
+      "sha256": "ea2f81b9ab3c878bce881939c2ef492776cbd76e5d6f68e6a9c5d0b470a64e9f"
+    },
+    {
+      "filename": "black but with important highlights.toml",
+      "git_blob": "61d2d7492784d4afba10d481a72c6555bc74ee17",
+      "sha256": "2b88f865e28d757b1bb063a404cbc553e62ba6f29efe92066810aeb834b980e1"
+    },
+    {
+      "filename": "broc.toml",
+      "git_blob": "fa210de3694afd3d730991eb5f12798dea4fded3",
+      "sha256": "292423f9c65327fd6b3f1e5feb7ba6380498ce8b263ae81e2508f5eef0779dfa"
+    },
+    {
+      "filename": "cork.toml",
+      "git_blob": "8c97dcccb98e491bd62f205ffec00d72fa49ef60",
+      "sha256": "3a2f3bbf4f28c29d3ee6c177de45b117680d909d43a5eca9cdfaf3eccdbe0052"
+    },
+    {
+      "filename": "ferra.toml",
+      "git_blob": "3cfed05c83d2b7392e1a011213f8e85089b44b4a",
+      "sha256": "21d8061c00a8670ff922e267265dd8bbb589cfb7e51249eb1b2b5f4d2dbd0e25"
+    },
+    {
+      "filename": "forest.toml",
+      "git_blob": "55ca3b91cbd41aaa9a40586f8045591acc34b8d0",
+      "sha256": "3a56ea84596755aef9d0ed20f7a9416243b26ac38409724fd628b6c9a1a942cb"
+    },
+    {
+      "filename": "lisbon.toml",
+      "git_blob": "a134f0dbb618a2cf2e4118a0efa91a2d30971e79",
+      "sha256": "a841d8d706ce9b6dd26f0de2d11aaacbc99dcd92ee11de42f6fcfde32e671e04"
+    },
+    {
+      "filename": "midnight.toml",
+      "git_blob": "85297f5df5dca9d2ddc9758aefb824ab2ce926bb",
+      "sha256": "38add8910f57080d0ff8142db6beb3b9a671848aaa7e0dd0bf931e82e3c0a8db"
+    },
+    {
+      "filename": "oslo.toml",
+      "git_blob": "fb40fb559c626221e56bddaaffd2b76ff32f245e",
+      "sha256": "9e703ef7b16954ee756cd5f0a26ab332b457134528123a46483c606fdb354dd9"
+    },
+    {
+      "filename": "plum.toml",
+      "git_blob": "d43c8826eef94d202ddb32c20fab5e53d32140ac",
+      "sha256": "140b4ea37981f431e0c9ae359f357569d13b55e3743761e155711b23d9ec6630"
+    },
+    {
+      "filename": "portland.toml",
+      "git_blob": "ff6c5c37315f73c20c9eaad198a30919513b43d2",
+      "sha256": "8d45ad3fe91384dc87d0dbad1b14d0107d3ba96a47a47102c618bc073a3dddbe"
+    },
+    {
+      "filename": "sunset.toml",
+      "git_blob": "4f04b84a447e1e425bf874125b305ac45711baac",
+      "sha256": "5e00528e0efcb2d95addec1870e36315538b91036363a79ce8091c0908513e1f"
+    },
+    {
+      "filename": "tofino.toml",
+      "git_blob": "59946f673ab67d691584fd80c1c3096605e04f4d",
+      "sha256": "f5078d9c5c36e22303b03f83a708031255d557bbd86462094627362bb9838be6"
+    },
+    {
+      "filename": "vanimo.toml",
+      "git_blob": "53cb6055472435e8fdbbcb8e39a8603e82dadca7",
+      "sha256": "20adc0babecce6f2bf59dd2eded173cda1626e96cb89ba397149e5556dae8ce8"
+    },
+    {
+      "filename": "vik.toml",
+      "git_blob": "92565ec98be49a1ad6fe2295dc5da46c7281e4d4",
+      "sha256": "49e82998629c7f9e3caa942fad282baba636fb9fa2fc9342a475b75ee036d802"
+    }
   ]
 }
