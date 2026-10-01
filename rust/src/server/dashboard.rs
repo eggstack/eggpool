@@ -1911,6 +1911,15 @@ pub(super) fn html_escape(value: impl std::fmt::Display) -> String {
         .replace('\'', "&#x27;")
 }
 
+fn overview_metric_card(label: &str, value: impl std::fmt::Display, subtext: &str) -> String {
+    format!(
+        "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{}</p></div>",
+        html_escape(label),
+        html_escape(value),
+        html_escape(subtext),
+    )
+}
+
 pub(super) fn render_overview(
     summary: &db::DashboardSummary,
     accounts: &[db::Account],
@@ -1989,6 +1998,115 @@ pub(super) fn render_overview(
             format!("<ul class=\"event-list\">{event_rows}</ul>")
         },
     );
+    let retry_attempts = page_data
+        .retries
+        .iter()
+        .map(|row| row.attempts)
+        .sum::<i64>();
+    let retry_outcomes = page_data
+        .retries
+        .iter()
+        .map(|row| row.retry_outcomes)
+        .sum::<i64>();
+    let exactness = exactness_badge(
+        summary.exact_count,
+        summary.derived_count,
+        summary.partial_count,
+        summary.estimated_count,
+        summary.unknown_count,
+        summary.provider_reported_count,
+    );
+    let cache_denominator = summary.total_input_tokens
+        + summary.total_cache_read_tokens
+        + summary.total_cache_write_tokens;
+    let cache_hit_rate = if cache_denominator > 0 {
+        format!(
+            "{:.1}%",
+            summary.total_cache_read_tokens as f64 / cache_denominator as f64 * 100.0
+        )
+    } else {
+        "—".to_owned()
+    };
+    let cards_second = format!(
+        "<section class=\"cards\">{}{}</section><section class=\"cards\">{}{}{}{}</section>",
+        overview_metric_card(
+            "Pending requests",
+            "—",
+            "Current pending snapshot unavailable"
+        ),
+        overview_metric_card("Active reservations", "—", "Reservation count unavailable"),
+        overview_metric_card("Finalizer (24h)", "—", "Finalizer observations unavailable"),
+        overview_metric_card(
+            "Retry rate",
+            if retry_attempts > 0 {
+                format!(
+                    "{:.1}%",
+                    retry_outcomes as f64 / retry_attempts as f64 * 100.0
+                )
+            } else {
+                "—".to_owned()
+            },
+            "from recorded retry categories",
+        ),
+        overview_metric_card(
+            "First-attempt success",
+            "—",
+            "first-attempt outcome unavailable"
+        ),
+        overview_metric_card("Utilization imbalance", "—", "No utilization projection"),
+    );
+    let cards_third = format!(
+        "<section class=\"cards\">{}{}{}{}</section>",
+        overview_metric_card("Request shaping", "—", "No request-shaping snapshot"),
+        overview_metric_card(
+            "Provider cache hit rate",
+            &cache_hit_rate,
+            "cache-read / input and cache tokens"
+        ),
+        overview_metric_card(
+            "Reasoning tokens",
+            format_tokens(summary.total_reasoning_tokens),
+            "recorded reasoning output"
+        ),
+        overview_metric_card(
+            "Throughput",
+            format!("{:.1} tokens/s", summary.tokens_per_second),
+            "recorded output / upstream latency"
+        ),
+    );
+    let cards_fourth = format!(
+        "<section class=\"cards\">{}{}{}{}{}{}</section>",
+        overview_metric_card(
+            "Streaming",
+            format!(
+                "{} / {}",
+                summary.streamed_requests, summary.non_streamed_requests
+            ),
+            "streamed / non-streamed"
+        ),
+        overview_metric_card("Exactness", &exactness, "recorded request cost exactness"),
+        overview_metric_card(
+            "Bandwidth received",
+            format_bytes(summary.total_bytes_received),
+            "recorded request bytes"
+        ),
+        overview_metric_card(
+            "Bandwidth emitted",
+            format_bytes(summary.total_bytes_emitted),
+            "recorded response bytes"
+        ),
+        overview_metric_card(
+            "Avg TTFT (streamed)",
+            format_latency(summary.avg_ttft_ms),
+            "recorded first-byte latency"
+        ),
+        overview_metric_card(
+            "Total cost",
+            format_microdollars(summary.total_cost_microdollars),
+            "selected period"
+        ),
+    );
+    let token_activity = "<section class=\"panel\"><h3>Token activity (last 180 days)</h3><p class=\"empty\">No activity data available.</p></section>";
     let body = format!(
         "{}<section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>{}</section><section class=\"panel\"><h3>Timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
         dashboard_header("Overview", period, theme),
@@ -2011,7 +2129,9 @@ pub(super) fn render_overview(
     );
     let body = body.replace(
         "</section><section class=\"panel\"><h3>Timeseries",
-        &format!("</section>{overview_glance}<section class=\"panel\"><h3>Timeseries"),
+        &format!(
+            "</section>{cards_second}{cards_third}{cards_fourth}{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
+        ),
     );
     render_dashboard_layout(
         "Overview",
@@ -2354,6 +2474,11 @@ mod tests {
         assert!(html.contains("name=\"theme\" value=\"Nord\""));
         assert!(html.contains("<p class=\"empty-state\">No accounts configured.</p>"));
         assert!(html.contains("<canvas id=\"timeseries-chart\""));
+        assert!(html.contains("Pending requests"));
+        assert!(html.contains("First-attempt success"));
+        assert!(html.contains("Top models"));
+        assert!(html.contains("Token activity (last 180 days)"));
+        assert!(html.contains("No activity data available."));
         assert_eq!(html.matches("id=\"dashboard-content\"").count(), 1);
         database.close().await.expect("database closes");
     }
