@@ -163,7 +163,11 @@ pub(super) async fn model_detail_page(
         .await
         .ok()
         .flatten();
-    let body = render_model_detail(&data, model_id, model_info.as_ref());
+    let observations =
+        crate::operations::operator::list_compact_model_observations(&state.database, model_id)
+            .await
+            .unwrap_or_default();
+    let body = render_model_detail(&data, model_id, model_info.as_ref(), &observations);
     dashboard_page_with_body(
         &state,
         &format!("Model: {model_id}"),
@@ -931,6 +935,7 @@ pub(super) fn render_model_detail(
     data: &db::DashboardData,
     model_id: &str,
     model_info: Option<&Value>,
+    observations: &[Value],
 ) -> String {
     let Some(model) = data
         .models
@@ -968,8 +973,23 @@ pub(super) fn render_model_detail(
     } else {
         "<section class=\"panel\"><h3>Model information</h3><p class=\"empty\">Model info not available.</p></section>".to_owned()
     };
+    let observation_panel = if observations.is_empty() {
+        String::new()
+    } else {
+        let rows = observations.iter().map(|row| format!(
+            "<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td><code>{}</code></td><td>{}</td></tr>",
+            html_escape(row["source"].as_str().unwrap_or("")),
+            html_escape(row["source_model_id"].as_str().unwrap_or("—")),
+            row["provider_id"].as_str().map(html_escape).unwrap_or_else(|| "—".to_owned()),
+            html_escape(row["observed_at"].as_str().unwrap_or("")),
+            row["confidence"].as_f64().map(|n| format!("{n:.2}")).unwrap_or_else(|| "—".to_owned()),
+        )).collect::<String>();
+        format!(
+            "<section class=\"panel\"><h3>Observations</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Source</th><th>Source model id</th><th>Provider</th><th>Observed</th><th>Confidence</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        )
+    };
     format!(
-        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section>{info_panel}",
+        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section>{info_panel}{observation_panel}",
         html_escape(model_id),
         html_escape(&model.provider_id),
         html_escape(&model.resolution_status),
@@ -1980,10 +2000,41 @@ mod tests {
             "summary": "<script>bad()</script>",
             "detail": {"limits": {"context": 32000}}
         });
-        let html = super::render_model_detail(&data, "model", Some(&info));
+        let html = super::render_model_detail(&data, "model", Some(&info), &[]);
         assert!(html.contains("&lt;script&gt;bad()&lt;/script&gt;"));
         assert!(!html.contains("<script>bad()</script>"));
         assert!(html.contains("32000"));
+    }
+
+    #[test]
+    fn model_detail_observations_render_only_compact_metadata() {
+        let mut data = crate::db::DashboardData::default();
+        data.models.push(crate::db::DashboardModelRow {
+            model_id: "model".into(),
+            provider_id: "provider".into(),
+            resolution_status: "resolved".into(),
+            requests: 0,
+            errors: 0,
+            cost_microdollars: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            avg_latency_ms: 0.0,
+            ttft_requests: 0,
+            avg_ttft_ms: 0.0,
+        });
+        let observations = vec![serde_json::json!({
+            "source": "<catalog>",
+            "source_model_id": "model",
+            "provider_id": "provider",
+            "observed_at": "2026-01-01",
+            "confidence": 0.8,
+            "raw_json": "DO_NOT_RENDER_SENTINEL",
+            "raw_hash": "DO_NOT_RENDER_HASH"
+        })];
+        let html = super::render_model_detail(&data, "model", None, &observations);
+        assert!(html.contains("&lt;catalog&gt;"));
+        assert!(!html.contains("DO_NOT_RENDER"));
+        assert!(html.contains("Observations"));
     }
 
     #[tokio::test]

@@ -370,6 +370,35 @@ pub async fn show_model_info(
     database.call(move |connection| connection.query_row("SELECT model_id,status,summary,detail_json,provenance_json,conflicts_json,sparse,first_seen_at,last_seen_at,last_refreshed_at,next_refresh_at FROM model_info_canonical WHERE lower(model_id)=lower(?1)", [model_id], model_info_value).optional()).await
 }
 
+/// Return the newest bounded, metadata-only model observations for dashboard
+/// and API presentation. Raw upstream payloads and hashes stay private.
+pub async fn list_compact_model_observations(
+    database: &Database,
+    model_id: &str,
+) -> Result<Vec<Value>, DatabaseError> {
+    let model_id = model_id.to_owned();
+    database.call(move |connection| {
+        let mut statement = connection.prepare(
+            "SELECT o.source, o.source_model_id, o.provider_id, o.observed_at, o.confidence, o.normalized_json +             FROM model_info_observations o +             INNER JOIN (SELECT source, MAX(observed_at) AS max_observed +                         FROM model_info_observations WHERE lower(model_id)=lower(?1) GROUP BY source) latest +               ON o.source=latest.source AND o.observed_at=latest.max_observed +             WHERE lower(o.model_id)=lower(?1) ORDER BY o.source, o.confidence DESC LIMIT 50"
+        )?;
+        statement.query_map([model_id], |row| {
+            let normalized: String = row.get(5)?;
+            let normalized = serde_json::from_str::<Value>(&normalized).unwrap_or_else(|_| json!({}));
+            Ok(json!({
+                "source": row.get::<_, String>(0)?,
+                "source_model_id": row.get::<_, String>(1)?,
+                "provider_id": row.get::<_, Option<String>>(2)?,
+                "observed_at": row.get::<_, String>(3)?,
+                "confidence": row.get::<_, f64>(4)?,
+                "display_name": normalized.get("display_name"),
+                "context_window": normalized.get("context_window"),
+                "max_output_tokens": normalized.get("max_output_tokens"),
+                "modalities": normalized.get("modalities"),
+            }))
+        })?.collect()
+    }).await
+}
+
 pub async fn list_aliases(
     database: &Database,
     model_id: &str,
