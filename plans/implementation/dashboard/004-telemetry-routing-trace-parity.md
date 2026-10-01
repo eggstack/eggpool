@@ -1,6 +1,6 @@
 # Dashboard Milestone 004 — Telemetry, Routing, Reliability, and Trace Parity
 
-Status: blocked
+Status: ready
 
 Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001-M002
 

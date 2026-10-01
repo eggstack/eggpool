@@ -27,7 +27,9 @@ Restore the final Python Runtime and Cache dashboard surfaces, including their h
 
 ## 2. Why this milestone is ready
 
-Blocked on Dashboard M002 for the shared shell. It may start after M002 only when M003/M004 view-model interfaces are stable enough to avoid duplicate DTO/API design, and it cannot close until M003 and M004 close.
+Dashboard M002 is closed and supplies the shared shell. M005 remains blocked
+until M003/M004 view-model interfaces stabilize enough to avoid duplicate
+DTO/API design; it cannot close until both M003 and M004 close.
 
 Current Rust already has runtime lifecycle diagnostics, task/provider/client/status/metrics owners and durable request cache counters. The work is primarily safe projection and rendering, not new runtime behavior.
 

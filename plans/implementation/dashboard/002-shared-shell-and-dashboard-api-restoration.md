@@ -1,6 +1,6 @@
 # Dashboard Milestone 002 — Shared Shell, Interaction, and Dashboard API Restoration
 
-Status: closing
+Status: closed
 
 Repository baseline: 286b70ab3aef6b3979a033f8ee5d8f72006ffa56 plus closed Dashboard M001 oracle contract
 
