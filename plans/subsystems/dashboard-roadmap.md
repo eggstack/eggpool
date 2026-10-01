@@ -277,7 +277,7 @@ This roadmap closes only when the native Rust dashboard preserves the final Pyth
 |---|---|---|---|---|
 | 001 | closed | plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md | plans/closure/dashboard/001-status.md | none |
 | 002 | closed | plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md | plans/closure/dashboard/002-status.md | none |
-| 003 | ready | plans/implementation/dashboard/003-overview-account-model-parity.md | — | none |
+| 003 | active | plans/implementation/dashboard/003-overview-account-model-parity.md | — | none |
 | 004 | ready | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | — | M003 is soft; shared shell/API contract stable |
 | 005 | blocked | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | — | M003/M004 view-model interfaces must stabilize before start and both close before M005 closure |
 | 006 | blocked | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | — | M003-M005 |

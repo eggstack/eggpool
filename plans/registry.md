@@ -43,14 +43,13 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M002 closed — shared shell, browser interactions, and chart API restoration; M003/M004 ready | M005 waits for M003/M004 view-model interfaces; M006 waits for M003-M005. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M003 active — Overview, Accounts, Models, and Model Detail parity | M004 remains ready (soft M003 dependency); M005 waits for M003/M004 interfaces; M006 waits for M003-M005. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
-| Dashboard | M003 overview/account/model/model-detail parity | ready | `plans/implementation/dashboard/003-overview-account-model-parity.md` | M002 closed; shared renderer and API contract available. |
 | Dashboard | M004 telemetry/routing/reliability/trace parity | ready | `plans/implementation/dashboard/004-telemetry-routing-trace-parity.md` | M002 closed; M003 is soft and renderer/view-model ownership remains disjoint. |
 
 ## Blocked work
