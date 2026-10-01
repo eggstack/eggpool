@@ -1912,8 +1912,26 @@ pub(super) fn html_escape(value: impl std::fmt::Display) -> String {
 }
 
 fn overview_metric_card(label: &str, value: impl std::fmt::Display, subtext: &str) -> String {
+    let tooltip = match label {
+        "Pending requests" => {
+            Some("Requests still in progress. Subtext shows the oldest pending age.")
+        }
+        "Active reservations" => Some("Active quota or spend reservations for in-flight work."),
+        "Finalizer (24h)" => Some(
+            "Reliability cleanup activity over the last 24 hours, including stale request cleanup, timeout cases, and crash recovery runs.",
+        ),
+        "Retry rate" => Some(
+            "Share of upstream attempts that required another try instead of succeeding or failing terminally on the first attempt.",
+        ),
+        "First-attempt success" => Some("Share of attempts that completed without any retry."),
+        _ => None,
+    };
+    let tooltip_attrs = tooltip.map_or_else(String::new, |text| {
+        let text = html_escape(text);
+        format!(" aria-label=\"{text}\" data-tooltip=\"{text}\" data-tooltip-pos=\"bottom\"")
+    });
     format!(
-        "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{}</p></div>",
+        "<div class=\"card\"{tooltip_attrs}><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{}</p></div>",
         html_escape(label),
         html_escape(value),
         html_escape(subtext),
