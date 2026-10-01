@@ -42,11 +42,13 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M002 closed — installer transaction and collision corrective | No eligible successor; further hardening requires a new bounded plan. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
 
 ## Dependency-ready implementation plans
 
-No dependency-ready implementation plans are currently registered.
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+|---|---|---|---|---|
+| Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
 
 ## Blocked work
 
@@ -81,6 +83,20 @@ No dependency-ready implementation plans are currently registered.
 | Request admission and wire M005 — planning reconciliation and minor wire cleanup | closed | `plans/closure/request-admission-wire/005-status.md`, implementation `4a1315a1` |
 
 ## Unblock audit
+
+Post-M002 review found one remaining deployment-packaging invariant gap:
+config rollback treats a final regular config as installer-owned when the path
+was merely absent at preflight. A concurrent process can create that path
+during `init-config`, allowing rollback to delete unrelated operator state.
+M002 remains immutable and closed as historical evidence. Deployment-packaging
+M003 is registered `ready` at baseline
+`ad38b85fa3945d22c9fac1a02b14bdc6f27e6c28` to replace direct-final config
+generation/heuristic cleanup with transaction-owned staging and true
+no-clobber publication, plus concurrent-config regression coverage. ADR-0001
+already supplies the ownership invariant; no new ADR or external dependency is
+required. Provider-transport M002 remains independently blocked and
+routing-selection M002 remains evidence-gated.
+
 
 Post-closure review of deployment-packaging M001 found two concrete invariant
 gaps not exercised by its 42-case qualification: fresh `--force` can replace
