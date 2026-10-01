@@ -180,7 +180,8 @@ impl AdaptationEffect {
 /// the underlying adaptation notices one-for-one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranslationPlan {
-    pub source: WireSurface,
+    /// `None` for a request built from canonical semantics rather than wire.
+    pub source: Option<WireSurface>,
     pub target: WireSurface,
     pub fidelity: Fidelity,
     pub effects: Vec<AdaptationEffect>,
@@ -302,7 +303,11 @@ fn reason_as_str(reason: CodecReasonCode) -> &'static str {
     }
 }
 
-fn blocked_plan(source: WireSurface, target: WireSurface, error: &CodecError) -> TranslationPlan {
+fn blocked_plan(
+    source: Option<WireSurface>,
+    target: WireSurface,
+    error: &CodecError,
+) -> TranslationPlan {
     TranslationPlan {
         source,
         target,
@@ -338,6 +343,31 @@ fn blocked_plan(source: WireSurface, target: WireSurface, error: &CodecError) ->
 pub fn plan_request_translation(
     request: &CanonicalRequest,
     source: WireSurface,
+    target: WireSurface,
+    native_summary: Option<&NativeSummaryFacts>,
+) -> Result<TranslationPlan, CodecError> {
+    plan_request_translation_with_source(request, Some(source), target, native_summary)
+}
+
+/// Plan a request translation using only the request's recorded provenance.
+/// Canonical semantic producers therefore receive `source: None` without
+/// having to invent a client wire surface.
+pub fn plan_canonical_request_translation(
+    request: &CanonicalRequest,
+    target: WireSurface,
+    native_summary: Option<&NativeSummaryFacts>,
+) -> Result<TranslationPlan, CodecError> {
+    plan_request_translation_with_source(
+        request,
+        request.origin.source_surface(),
+        target,
+        native_summary,
+    )
+}
+
+fn plan_request_translation_with_source(
+    request: &CanonicalRequest,
+    source: Option<WireSurface>,
     target: WireSurface,
     native_summary: Option<&NativeSummaryFacts>,
 ) -> Result<TranslationPlan, CodecError> {
@@ -596,7 +626,7 @@ mod tests {
         // Responses-target plan must be Unsupported while other targets
         // follow the shared engine.
         let mut request = metadata_request();
-        request.client_surface = ClientSurface::Responses;
+        request.origin = crate::ir::RequestOrigin::ClientWire(ClientSurface::Responses);
         request
     }
 
@@ -887,7 +917,7 @@ mod tests {
                     None,
                 )
                 .expect("planner is infallible");
-                assert_eq!(plan.source, WireSurface::OpenaiChatCompletions);
+                assert_eq!(plan.source, Some(WireSurface::OpenaiChatCompletions));
                 assert_eq!(plan.target, target);
                 match encoded {
                     Ok(output) => {

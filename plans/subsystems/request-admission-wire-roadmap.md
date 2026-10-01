@@ -245,7 +245,7 @@ M001 is closed on its recorded body-admission evidence. M002–M005 are closed o
 | 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
 | 005 — planning reconciliation and minor wire cleanup | closed | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | `plans/closure/request-admission-wire/005-status.md` | none |
-| 006 — external semantic-producer consumer contract | active | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
+| 006 — external semantic-producer consumer contract | closing | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
 
 
 ## 13. Wire-kernel extraction extension

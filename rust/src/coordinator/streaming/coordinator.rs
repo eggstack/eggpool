@@ -206,7 +206,7 @@ impl StreamingCoordinator {
         &self,
         request: StreamRequest,
     ) -> Result<StreamingExecution, StreamingCoordinatorError> {
-        if request.admitted.canonical.client_surface != request.client_surface
+        if request.admitted.canonical.origin.client_surface() != Some(request.client_surface)
             || request.routing_facts.canonical_model_id != request.admitted.canonical.model
             || !request.admitted.canonical.stream
         {

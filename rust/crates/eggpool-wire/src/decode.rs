@@ -313,7 +313,7 @@ pub fn structural_canonical_request_from_object(
     validate_tool_identity(&tools, &messages)?;
     Ok(CanonicalRequest {
         model,
-        client_surface: surface,
+        origin: crate::ir::RequestOrigin::ClientWire(surface),
         messages,
         stream,
         max_output_tokens,

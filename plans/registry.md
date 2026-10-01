@@ -40,7 +40,7 @@ pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
-| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M006 active — external semantic-producer consumer contract | M002–M005 closed. M006 keeps the kernel sans-I/O while exposing the minimum semantic-producer API needed by CodeGG. |
+| Request admission and wire | active | `plans/subsystems/request-admission-wire-roadmap.md` | M006 closing — external semantic-producer consumer contract | Implementation and verification complete; formal closure evidence is being recorded. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -56,7 +56,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Current work |
 |---|---|---|---|---|
-| Request admission and wire | M006 external semantic-producer consumer contract | active | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | Additive sans-I/O consumer API and regression qualification. |
+| Request admission and wire | M006 external semantic-producer consumer contract | closing | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | Implementation and required verification complete; closure record in progress. |
 
 ## Blocked work
 

@@ -81,7 +81,10 @@ fn compact_admits_ordinary_user_history_as_a_distinct_operation() {
     let admitted = admit_compact_request(&body, AdmissionOptions::default())
         .expect("compact history is admitted");
     assert_eq!(admitted.canonical.model, "eggpool-model");
-    assert_eq!(admitted.canonical.client_surface, ClientSurface::Responses);
+    assert_eq!(
+        admitted.canonical.origin.client_surface(),
+        Some(ClientSurface::Responses)
+    );
     assert!(!admitted.canonical.stream);
     assert_eq!(admitted.raw_body_bytes, body.len());
 

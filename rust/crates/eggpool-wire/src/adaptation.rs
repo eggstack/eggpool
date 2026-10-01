@@ -227,7 +227,7 @@ pub fn request_notices(
     validate_structured_output(request)?;
     validate_tools(request)?;
 
-    let source = Some(client_wire_surface(request.client_surface));
+    let source = request.origin.source_surface();
     let mut notices = Vec::new();
 
     reasoning_notices(request, target, source, &mut notices);
@@ -490,7 +490,7 @@ pub fn reasoning_capability_notices_neutral(
         NeutralCapabilityStatus::Unknown | NeutralCapabilityStatus::Conflicting => policy.unknown,
         NeutralCapabilityStatus::Mixed => policy.mixed,
     };
-    let source = Some(client_wire_surface(request.client_surface));
+    let source = request.origin.source_surface();
     let field = match intent.mode {
         ReasoningMode::Effort => "reasoning.effort",
         ReasoningMode::FixedBudget => "reasoning.budget_tokens",
@@ -749,7 +749,7 @@ fn source_error(field: &str, request: &CanonicalRequest) -> CodecError {
     CodecError {
         reason: CodecReasonCode::MalformedSourceRequest,
         field: Some(field.into()),
-        source_surface: Some(client_wire_surface(request.client_surface)),
+        source_surface: request.origin.source_surface(),
         target_surface: None,
     }
 }
