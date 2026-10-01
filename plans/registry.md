@@ -43,14 +43,14 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 closed — Python oracle and strict parity substrate; M002 ready | M003-M006 remain dependency-sequenced behind M002. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 closed — Python oracle and strict parity substrate; M002 closing | M003-M006 remain dependency-sequenced behind M002. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
-| Dashboard | M002 shared shell, interaction, and dashboard API restoration | active | `plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md` | M001 closed with fixed oracle, complete captures, strict DOM/API comparator, and current-gap report; no hard external dependency. |
+| Dashboard | M002 shared shell, interaction, and dashboard API restoration | closing | `plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md` | Shared shell and chart APIs restore; final interaction/browser and serial Rust matrix passed; closure evidence is being recorded. |
 
 ## Blocked work
 

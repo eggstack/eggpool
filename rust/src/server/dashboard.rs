@@ -17,8 +17,8 @@ const THEME_NAMES: &[&str] = &[
     "Cyber Red",
     "Cyberpunk",
     "Dark Green",
-    "Discord (80_ Saturation)",
     "Discord",
+    "Discord (80_ Saturation)",
     "Dracula",
     "Ferra Light",
     "Flexor Dark",
@@ -34,9 +34,9 @@ const THEME_NAMES: &[&str] = &[
     "Nostromo Terminal",
     "One Dark",
     "Oxocarbon",
+    "Rose Pine",
     "Rose Pine Dawn",
     "Rose Pine Moon",
-    "Rose Pine",
     "Solarized Dark",
     "Sonokai",
     "Tokyo Night Storm",
@@ -254,6 +254,313 @@ pub(super) async fn summary(
     json_response(StatusCode::OK, summary_json(&summary, period))
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct TimeseriesQuery {
+    period: Option<String>,
+    bucket: Option<String>,
+    account: Option<String>,
+    model: Option<String>,
+    group_by: Option<String>,
+    metric: Option<String>,
+    limit: Option<usize>,
+}
+
+pub(super) async fn timeseries_api(
+    State(state): State<AppState>,
+    Query(query): Query<TimeseriesQuery>,
+) -> Response {
+    let period = match normalize_period(query.period.as_deref()) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let bucket = normalized_bucket(query.bucket.as_deref(), period);
+    let rows = match db::DashboardRepository::new(&state.database)
+        .timeseries_json(
+            period.to_owned(),
+            bucket.to_owned(),
+            query.account,
+            query.model,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return degraded("dashboard data unavailable"),
+    };
+    json_response(StatusCode::OK, json!(rows))
+}
+
+fn normalized_bucket(value: Option<&str>, period: &str) -> &'static str {
+    match value.unwrap_or("auto") {
+        "day" => "day",
+        "hour" => "hour",
+        "auto" | "" if period == "30d" => "day",
+        _ => "hour",
+    }
+}
+
+pub(super) async fn grouped_timeseries_api(
+    State(state): State<AppState>,
+    Query(query): Query<TimeseriesQuery>,
+) -> Response {
+    let period = match normalize_period(query.period.as_deref()) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let bucket = normalized_bucket(query.bucket.as_deref(), period);
+    let group_by = query.group_by.as_deref().unwrap_or("provider_model");
+    let metric = query.metric.as_deref().unwrap_or("requests");
+    if !matches!(
+        group_by,
+        "provider" | "model" | "account" | "provider_model"
+    ) || !matches!(
+        metric,
+        "requests" | "errors" | "tokens" | "cost" | "bytes" | "latency" | "ttft"
+    ) {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({"detail":"Invalid timeseries query"}),
+        );
+    }
+    let limit = query.limit.unwrap_or(12).clamp(1, 25);
+    let (rows, from_rollups) = match db::DashboardRepository::new(&state.database)
+        .grouped_timeseries_json(
+            period.to_owned(),
+            bucket.to_owned(),
+            group_by.to_owned(),
+            query.account,
+            query.model,
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return degraded("dashboard data unavailable"),
+    };
+    if rows.is_empty() {
+        return json_response(
+            StatusCode::OK,
+            json!({
+                "bucket": bucket,
+                "group_by": group_by,
+                "metric": "requests",
+                "limit": limit,
+                "source": "empty",
+                "degraded_reason": "rollup_empty",
+                "buckets": [],
+                "series": [],
+                "points": [],
+                "bucket_totals": []
+            }),
+        );
+    }
+    json_response(
+        StatusCode::OK,
+        grouped_timeseries_projection(&rows, bucket, group_by, limit, from_rollups),
+    )
+}
+
+fn grouped_timeseries_projection(
+    rows: &[Value],
+    bucket: &str,
+    group_by: &str,
+    limit: usize,
+    from_rollups: bool,
+) -> Value {
+    let mut totals = std::collections::BTreeMap::<String, i64>::new();
+    for row in rows {
+        let key = row["raw_series_key"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        *totals.entry(key).or_default() += row["request_count"].as_i64().unwrap_or(0);
+    }
+    let mut ranked = totals.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|(left_key, left_count), (right_key, right_count)| {
+        right_count
+            .cmp(left_count)
+            .then_with(|| left_key.cmp(right_key))
+    });
+    let selected = ranked
+        .iter()
+        .take(limit)
+        .map(|(key, _)| key.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut points = std::collections::BTreeMap::<(String, String), (Value, f64, f64)>::new();
+    let mut buckets = std::collections::BTreeSet::new();
+    for row in rows {
+        let bucket_name = row["bucket"].as_str().unwrap_or_default().to_owned();
+        buckets.insert(bucket_name.clone());
+        let raw_key = row["raw_series_key"].as_str().unwrap_or_default();
+        let is_other = !selected.contains(raw_key);
+        let key = if is_other { "__other__" } else { raw_key }.to_owned();
+        let point = points.entry((bucket_name.clone(), key.clone())).or_insert_with(|| {
+            let is_other = key == "__other__";
+            (json!({
+                "bucket": bucket_name,
+                "series_key": key,
+                "label": if is_other { "Other" } else { row["raw_series_label"].as_str().unwrap_or_default() },
+                "provider_id": if is_other { Value::Null } else { row["provider_id"].clone() },
+                "model_id": if is_other { Value::Null } else { row["model_id"].clone() },
+                "account_name": if is_other { Value::Null } else { json!("") },
+                "is_other": is_other,
+                "request_count": 0, "error_count": 0, "input_tokens": 0,
+                "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,
+                "reasoning_tokens": 0, "total_tokens": 0, "cost_microdollars": 0,
+                "bytes_received": 0, "bytes_emitted": 0, "avg_latency_ms": 0.0,
+                "avg_ttft_ms": 0.0
+            }), 0.0, 0.0)
+        });
+        let value = &mut point.0;
+        let count = row["request_count"].as_i64().unwrap_or(0);
+        for field in [
+            "request_count",
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "cost_microdollars",
+            "bytes_received",
+            "bytes_emitted",
+        ] {
+            let next = value[field].as_i64().unwrap_or(0) + row[field].as_i64().unwrap_or(0);
+            value[field] = json!(next);
+        }
+        point.1 += row["avg_latency_ms"].as_f64().unwrap_or(0.0) * count as f64;
+        point.2 += row["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64;
+    }
+    let mut finished_points = points
+        .into_values()
+        .map(|(mut point, latency_sum, ttft_sum)| {
+            let count = point["request_count"].as_i64().unwrap_or(0);
+            point["avg_latency_ms"] = json!(if count > 0 {
+                latency_sum / count as f64
+            } else {
+                0.0
+            });
+            point["avg_ttft_ms"] = json!(if count > 0 {
+                ttft_sum / count as f64
+            } else {
+                0.0
+            });
+            point
+        })
+        .collect::<Vec<_>>();
+    finished_points.sort_by(|left, right| {
+        left["bucket"]
+            .as_str()
+            .cmp(&right["bucket"].as_str())
+            .then_with(|| left["is_other"].as_bool().cmp(&right["is_other"].as_bool()))
+            .then_with(|| left["label"].as_str().cmp(&right["label"].as_str()))
+    });
+    let mut series = std::collections::BTreeMap::<String, Value>::new();
+    let mut bucket_totals = std::collections::BTreeMap::<String, Value>::new();
+    for point in &finished_points {
+        let key = point["series_key"].as_str().unwrap_or_default().to_owned();
+        let is_other = point["is_other"].as_bool().unwrap_or(false);
+        let entry = series.entry(key.clone()).or_insert_with(|| {
+            let label = point["label"].clone();
+            json!({"key":key,"label":label,"provider_id":point["provider_id"],"model_id":point["model_id"],"account_name":point["account_name"],"is_other":is_other,"total_requests":0,"error_count":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"reasoning_tokens":0,"total_tokens":0,"cost_microdollars":0,"bytes_received":0,"bytes_emitted":0,"avg_latency_ms":0.0,"avg_ttft_ms":0.0})
+        });
+        let count = point["request_count"].as_i64().unwrap_or(0);
+        entry["total_requests"] = json!(entry["total_requests"].as_i64().unwrap_or(0) + count);
+        for field in [
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "cost_microdollars",
+            "bytes_received",
+            "bytes_emitted",
+        ] {
+            entry[field] =
+                json!(entry[field].as_i64().unwrap_or(0) + point[field].as_i64().unwrap_or(0));
+        }
+        entry["avg_latency_ms"] = json!(
+            entry["avg_latency_ms"].as_f64().unwrap_or(0.0)
+                + point["avg_latency_ms"].as_f64().unwrap_or(0.0) * count as f64
+        );
+        entry["avg_ttft_ms"] = json!(
+            entry["avg_ttft_ms"].as_f64().unwrap_or(0.0)
+                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64
+        );
+        let bucket = point["bucket"].as_str().unwrap_or_default().to_owned();
+        let total = bucket_totals.entry(bucket).or_insert_with(|| json!({"request_count":0,"error_count":0,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"reasoning_tokens":0,"total_tokens":0,"cost_microdollars":0,"bytes_received":0,"bytes_emitted":0,"avg_latency_ms":0.0,"avg_ttft_ms":0.0}));
+        total["request_count"] = json!(total["request_count"].as_i64().unwrap_or(0) + count);
+        for field in [
+            "error_count",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+            "total_tokens",
+            "cost_microdollars",
+            "bytes_received",
+            "bytes_emitted",
+        ] {
+            total[field] =
+                json!(total[field].as_i64().unwrap_or(0) + point[field].as_i64().unwrap_or(0));
+        }
+        total["avg_latency_ms"] = json!(
+            total["avg_latency_ms"].as_f64().unwrap_or(0.0)
+                + point["avg_latency_ms"].as_f64().unwrap_or(0.0) * count as f64
+        );
+        total["avg_ttft_ms"] = json!(
+            total["avg_ttft_ms"].as_f64().unwrap_or(0.0)
+                + point["avg_ttft_ms"].as_f64().unwrap_or(0.0) * count as f64
+        );
+    }
+    for entry in series.values_mut() {
+        let count = entry["total_requests"].as_i64().unwrap_or(0);
+        if count > 0 {
+            entry["avg_latency_ms"] =
+                json!(entry["avg_latency_ms"].as_f64().unwrap_or(0.0) / count as f64);
+            entry["avg_ttft_ms"] =
+                json!(entry["avg_ttft_ms"].as_f64().unwrap_or(0.0) / count as f64);
+        }
+    }
+    for total in bucket_totals.values_mut() {
+        let count = total["request_count"].as_i64().unwrap_or(0);
+        if count > 0 {
+            total["avg_latency_ms"] =
+                json!(total["avg_latency_ms"].as_f64().unwrap_or(0.0) / count as f64);
+            total["avg_ttft_ms"] =
+                json!(total["avg_ttft_ms"].as_f64().unwrap_or(0.0) / count as f64);
+        }
+    }
+    let series = ranked_series_order(&ranked, &selected, series);
+    let total_rows = bucket_totals
+        .iter()
+        .map(|(bucket, value)| {
+            let mut value = value.clone();
+            value["bucket"] = json!(bucket);
+            value
+        })
+        .collect::<Vec<_>>();
+    json!({"bucket":bucket,"group_by":group_by,"metric":"requests","limit":limit,"source":if from_rollups {"rollup"} else {"raw"},"degraded_reason":"none","buckets":buckets,"series":series,"points":finished_points,"bucket_totals":total_rows})
+}
+
+fn ranked_series_order(
+    ranked: &[(String, i64)],
+    selected: &std::collections::BTreeSet<String>,
+    mut series: std::collections::BTreeMap<String, Value>,
+) -> Vec<Value> {
+    let mut ordered = ranked
+        .iter()
+        .filter(|(key, _)| selected.contains(key))
+        .filter_map(|(key, _)| series.remove(key))
+        .collect::<Vec<_>>();
+    if let Some(other) = series.remove("__other__") {
+        ordered.push(other);
+    }
+    ordered
+}
+
 pub(super) fn normalize_period(value: Option<&str>) -> Result<&'static str, Box<Response>> {
     match value.unwrap_or("24h") {
         "1h" => Ok("1h"),
@@ -402,7 +709,13 @@ pub(super) async fn dashboard_data_page(
             return degraded("dashboard data unavailable");
         }
     };
-    let body = render_dashboard_page_body(title, active_nav, period, &data, &summary);
+    let mut body = render_dashboard_page_body(title, active_nav, period, theme, &data, &summary);
+    if active_nav == "timeseries" {
+        body = body.replace(
+            "class=\"period-selector\"",
+            "class=\"period-selector timeseries-period-selector\"",
+        );
+    }
     dashboard_page_with_body(
         state,
         title,
@@ -413,11 +726,12 @@ pub(super) async fn dashboard_data_page(
     )
 }
 
-pub(super) fn dashboard_header(title: &str, period: &str) -> String {
+pub(super) fn dashboard_header(title: &str, period: &str, theme: &str) -> String {
     format!(
-        "<h2>{}</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"Cyber Red\"></form>",
+        "<h2>{}</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>",
         html_escape(title),
         period_options(period),
+        html_escape(theme),
     )
 }
 
@@ -433,16 +747,17 @@ pub(super) fn render_dashboard_page_body(
     title: &str,
     active_nav: &str,
     period: &str,
+    theme: &str,
     data: &db::DashboardData,
     summary: &db::DashboardSummary,
 ) -> String {
-    let mut body = dashboard_header(title, period);
+    let mut body = dashboard_header(title, period, theme);
     match active_nav {
         "accounts" => body.push_str(&render_accounts_page(data)),
         "models" => body.push_str(&render_models_page(data)),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
-        "timeseries" => body.push_str(&render_timeseries_page(data)),
+        "timeseries" => body.push_str(&render_timeseries_page(data, period)),
         "bandwidth" => body.push_str(&render_bandwidth_page(data)),
         "pings" => body.push_str(&render_pings_page(data)),
         "reliability" => body.push_str(&render_reliability_page(data)),
@@ -615,10 +930,7 @@ pub(super) fn render_events_page(data: &db::DashboardData) -> String {
     )
 }
 
-pub(super) fn render_timeseries_page(data: &db::DashboardData) -> String {
-    if data.timeseries.is_empty() {
-        return dashboard_empty("Timeseries", "No requests in this window.");
-    }
+pub(super) fn render_timeseries_page(data: &db::DashboardData, period: &str) -> String {
     let rows = data
         .timeseries
         .iter()
@@ -642,8 +954,61 @@ pub(super) fn render_timeseries_page(data: &db::DashboardData) -> String {
         .map(|row| format!("[\"{}\",{}]", json_escape(&row.bucket), row.requests))
         .collect::<Vec<_>>()
         .join(",");
+    let empty = if data.timeseries.is_empty() {
+        "<p class=\"empty\" role=\"status\">No requests in this window.</p>"
+    } else {
+        ""
+    };
+    let grouped_rows = data
+        .timeseries
+        .iter()
+        .map(|row| {
+            json!({
+                "bucket": row.bucket,
+                "raw_series_key": format!("{}/{}", row.provider_id, row.model_id),
+                "raw_series_label": row.series,
+                "provider_id": row.provider_id,
+                "model_id": row.model_id,
+                "account_name": "",
+                "request_count": row.requests,
+                "error_count": row.errors,
+                "input_tokens": row.total_tokens,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "reasoning_tokens": 0,
+                "total_tokens": row.total_tokens,
+                "cost_microdollars": row.cost_microdollars,
+                "bytes_received": 0,
+                "bytes_emitted": 0,
+                "avg_latency_ms": row.avg_latency_ms,
+                "avg_ttft_ms": 0
+            })
+        })
+        .collect::<Vec<_>>();
+    let grouped = grouped_timeseries_projection(&grouped_rows, "hour", "provider_model", 12, false);
+    let grouped_json = serde_json::to_string(&grouped)
+        .unwrap_or_else(|_| "{}".to_owned())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026");
+    let grouped_has_data = !data.timeseries.is_empty();
+    let chart_display = if grouped_has_data {
+        ""
+    } else {
+        " style=\"display:none\""
+    };
+    let empty_display = if grouped_has_data {
+        " style=\"display:none\""
+    } else {
+        ""
+    };
     format!(
-        "<section class=\"panel\" id=\"timeseries-chart\"><h3>Usage breakdown</h3><script type=\"application/json\" id=\"timeseries-initial-data\">[{chart_data}]</script><p class=\"empty\" style=\"display:none\">No requests in this window.</p><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Bucket</th><th>Series</th><th>Provider</th><th>Model</th><th>Requests</th><th>Cost</th><th>Errors</th><th>Total tokens</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<form method=\"get\" data-timeseries-controls aria-label=\"Timeseries controls\"><input type=\"hidden\" name=\"period\" value=\"{}\"><label>Bucket<select name=\"bucket\"><option value=\"auto\" selected>Automatic</option><option value=\"hour\">Hour</option><option value=\"day\">Day</option></select></label><label>Group by<select name=\"group_by\"><option value=\"provider_model\">Provider and model</option><option value=\"provider\">Provider</option><option value=\"model\">Model</option><option value=\"account\">Account</option></select></label><label>Metric<select name=\"metric\"><option value=\"tokens\">Tokens</option><option value=\"requests\">Requests</option><option value=\"errors\">Errors</option><option value=\"cost\">Cost</option><option value=\"bytes\">Bytes</option><option value=\"latency\">Latency</option><option value=\"ttft\">TTFT</option></select></label><label>Series limit<input type=\"number\" name=\"limit\" min=\"1\" max=\"25\" value=\"12\"></label><label>Account<input name=\"account\" value=\"\"></label><label>Model<input name=\"model\" value=\"\"></label></form><section class=\"panel timeseries-chart-panel\"><h3>Usage breakdown</h3><div class=\"chart-container\"{chart_display}><canvas class=\"grouped-timeseries-chart\" data-chart-id=\"grouped-timeseries-chart\" data-period=\"{}\" data-bucket=\"hour\" data-group-by=\"provider_model\" data-metric=\"tokens\" data-limit=\"12\" data-account=\"\" data-model=\"\"></canvas></div><p class=\"empty grouped-timeseries-empty\"{empty_display}>No requests in this window.</p><script type=\"application/json\" class=\"grouped-timeseries-data\" data-chart-id=\"grouped-timeseries-chart\">{grouped_json}</script><div class=\"chart-container\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[{chart_data}]</script>{empty}<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Bucket</th><th>Series</th><th>Provider</th><th>Model</th><th>Requests</th><th>Cost</th><th>Errors</th><th>Total tokens</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        html_escape(period),
+        html_escape(period),
+        html_escape(period),
+        html_escape(period)
     )
 }
 
@@ -925,15 +1290,33 @@ pub(super) fn dashboard_page_with_body(
         Err(response) => return *response,
     };
     let theme = selected_theme(theme.as_deref().unwrap_or(&state.server.dashboard_theme));
+    let include_chart_js =
+        body_requires_chart_runtime(&body) || matches!(active_nav, "reliability" | "routing");
+    let shell_period = match active_nav {
+        "runtime" => "runtime",
+        "traces" => "recent",
+        _ => period,
+    };
     html_response(render_dashboard_layout(
         title,
         active_nav,
-        period,
+        shell_period,
         theme,
-        state.server.dashboard_refresh_interval_s,
+        15,
         body,
-        true,
+        include_chart_js,
     ))
+}
+
+fn body_requires_chart_runtime(body: &str) -> bool {
+    [
+        "data-chart-endpoint",
+        "grouped-timeseries-chart",
+        "static-chart-data",
+        "id=\"timeseries-chart\"",
+    ]
+    .iter()
+    .any(|hook| body.contains(hook))
 }
 
 pub(super) fn period_options(current: &str) -> String {
@@ -999,13 +1382,9 @@ pub(super) fn render_dashboard_layout(
     ]
     .iter()
     .map(|(key, href, label)| {
-        let class = if *key == active_nav {
-            " class=\"active\""
-        } else {
-            ""
-        };
+        let class = if *key == active_nav { "active" } else { "" };
         format!(
-            "<a{} href=\"{}?{}\">{}</a>",
+            "<a class=\"{}\" href=\"{}?{}\">{}</a>",
             class,
             href,
             query,
@@ -1035,14 +1414,19 @@ pub(super) fn render_dashboard_layout(
     } else {
         ""
     };
+    let refresh_script = if matches!(active_nav, "overview" | "runtime" | "cache") {
+        auto_refresh_script(refresh_interval_s)
+    } else {
+        String::new()
+    };
     let navigation_markup = format!(
-        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
+        "<div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\" data-tooltip=\"Switch dashboard theme\" data-tooltip-pos=\"bottom\" aria-label=\"Switch dashboard theme\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div>",
         navigation,
         theme_options,
         html_escape(period)
     );
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n<footer><small>Period: <span class=\"period-label\">{}</span> &middot; auto-refresh {}s &middot; <span id=\"dashboard-updated\">ready</span></small></footer>\n<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30\n           C82 30 55 88 57 145\n           C59 202 89 231 128 231\n           C167 231 197 202 199 145\n           C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" data-tooltip=\"Reload this page\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n<footer><small>Period: <span class=\"period-label\">{}</span> &middot; auto-refresh {}s &middot; <span id=\"dashboard-updated\">ready</span></small></footer>\n{}<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
         html_escape(title),
         query_component(theme),
         chart_preload,
@@ -1051,7 +1435,70 @@ pub(super) fn render_dashboard_layout(
         body,
         html_escape(period),
         refresh_interval_s,
+        refresh_script,
         chart_script
+    )
+}
+
+fn auto_refresh_script(refresh_interval_s: u64) -> String {
+    let interval_ms = refresh_interval_s.max(1).saturating_mul(1000);
+    format!(
+        r#"<script>
+(() => {{
+  const intervalMs = {interval_ms};
+  const content = document.getElementById("dashboard-content");
+  const updated = document.getElementById("dashboard-updated");
+  if (!content || !updated || !window.DOMParser) {{
+    return;
+  }}
+  const refresh = async () => {{
+    try {{
+      const response = await fetch(window.location.href, {{
+        cache: "no-store",
+        headers: {{"x-dashboard-refresh": "1"}},
+      }});
+      if (!response.ok) {{
+        return;
+      }}
+      const html = await response.text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const next = doc.getElementById("dashboard-content");
+      if (next) {{
+        if (window.Chart && typeof window.Chart.getChart === "function") {{
+          content.querySelectorAll("canvas").forEach((canvas) => {{
+            const chart = window.Chart.getChart(canvas);
+            if (chart) {{
+              chart.destroy();
+            }}
+          }});
+        }}
+        const replacement = document.importNode(next, true);
+        content.replaceChildren(...replacement.childNodes);
+        updated.textContent = new Date().toLocaleTimeString();
+        if (window.EggPoolDashboard) {{
+          const dash = window.EggPoolDashboard;
+          if (typeof dash.bootstrap === "function") {{
+            dash.bootstrap();
+          }} else {{
+            if (typeof dash.initGroupedTimeseriesCharts === "function") {{
+              dash.initGroupedTimeseriesCharts();
+            }}
+            if (typeof dash.reinitTimeseriesChart === "function") {{
+              dash.reinitTimeseriesChart();
+            }}
+            if (typeof dash.initChartLoadingShells === "function") {{
+              dash.initChartLoadingShells();
+            }}
+          }}
+        }}
+      }}
+    }} catch (_err) {{
+      updated.textContent = "stale";
+    }}
+  }};
+  window.setInterval(refresh, intervalMs);
+}})();
+</script>"#
     )
 }
 
@@ -1073,7 +1520,6 @@ pub(super) fn render_overview(
     refresh_interval_s: u64,
 ) -> String {
     let total = summary.total_requests;
-    let success = summary.successful_requests;
     let errors = summary.error_requests;
     let error_rate = if total == 0 {
         0.0
@@ -1083,95 +1529,29 @@ pub(super) fn render_overview(
     let fresh_tokens = summary.total_input_tokens + summary.total_output_tokens;
     let accounted_tokens =
         fresh_tokens + summary.total_cache_read_tokens + summary.total_cache_write_tokens;
-    let nav = THEME_NAMES
+    let rows = accounts
         .iter()
-        .map(|name| {
-            let selected = if *name == theme { " selected" } else { "" };
+        .map(|account| {
             format!(
-                "<option value=\"{}\"{}>{}</option>",
-                html_escape(name),
-                selected,
-                html_escape(name)
+                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&account.name),
+                html_escape(&account.provider_id),
+                if account.enabled { "yes" } else { "no" }
             )
         })
         .collect::<String>();
-    let period_options = [
-        ("1h", "Last hour"),
-        ("24h", "Last 24 hours"),
-        ("7d", "Last 7 days"),
-        ("30d", "Last 30 days"),
-    ]
-    .iter()
-    .map(|(value, label)| {
-        let selected = if *value == period {
-            " selected=\"selected\""
-        } else {
-            ""
-        };
-        format!("<option value=\"{}\"{}>{}</option>", value, selected, label)
-    })
-    .collect::<String>();
-    let nav_links = [
-        ("/", "Overview"),
-        ("/reliability", "Reliability"),
-        ("/routing", "Routing"),
-        ("/cache", "Cache"),
-        ("/accounts", "Accounts"),
-        ("/models", "Models"),
-        ("/latency", "Latency"),
-        ("/pings", "Pings"),
-        ("/bandwidth", "Bandwidth"),
-        ("/traces", "Traces"),
-        ("/events", "Events"),
-        ("/timeseries", "Timeseries"),
-        ("/runtime", "Runtime"),
-    ]
-    .iter()
-    .map(|(href, label)| {
-        let class = if *href == "/" {
-            " class=\"active\""
-        } else {
-            ""
-        };
-        format!(
-            "<a{} href=\"{}?period={}&amp;theme={}\">{}</a>",
-            class,
-            href,
-            html_escape(period),
-            html_escape(theme),
-            html_escape(label)
-        )
-    })
-    .collect::<String>();
     let account_table = if accounts.is_empty() {
-        "<p class=\"empty-state\">No accounts configured.</p><p class=\"empty-state\">No model activity in this period.</p><p class=\"empty-state\">No recent events.</p><p class=\"empty-state\">No activity data available.</p>".to_owned()
+        "<p class=\"empty-state\">No accounts configured.</p>".to_owned()
     } else {
-        let rows = accounts
-            .iter()
-            .map(|account| {
-                format!(
-                    "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    html_escape(&account.name),
-                    html_escape(&account.provider_id),
-                    if account.enabled { "yes" } else { "no" }
-                )
-            })
-            .collect::<String>();
         format!(
-            "<table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{rows}</tbody></table>"
+            "<div class=\"table-scroll\"><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
-    let html = format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Overview</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"preload\" href=\"/static/chart.js\" as=\"script\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30 C82 30 55 88 57 145 C59 202 89 231 128 231 C167 231 197 202 199 145 C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\">☰</button><h1><a href=\"/?period={}&amp;theme={}\">EggPool</a></h1><nav class=\"topnav\"><div class=\"topnav-menu\" id=\"topnav-menu\">{}<form method=\"get\" class=\"theme-selector\"><select name=\"theme\" onchange=\"this.form.submit()\">{}</select><input type=\"hidden\" name=\"period\" value=\"{}\"></form></div><button type=\"button\" class=\"topnav-refresh\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\"><h2>Overview</h2><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{}</tbody></table></section><section class=\"panel\" id=\"timeseries-chart\"><h3>Timeseries</h3><script type=\"application/json\" id=\"timeseries-initial-data\">[]</script></section></main><footer><small>Period: <span class=\"period-label\">{}</span> · auto-refresh {}s · <span id=\"dashboard-updated\">ready</span></small></footer><script defer src=\"/static/dashboard.js\"></script><script defer src=\"/static/chart.js\"></script>\n</body>\n</html>",
-        html_escape(theme),
-        html_escape(period),
-        html_escape(theme),
-        nav_links,
-        nav,
-        html_escape(period),
-        html_escape(theme),
+    let body = format!(
+        "{}<section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>{}</section><section class=\"panel\"><h3>Timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
+        dashboard_header("Overview", period, theme),
         total,
-        success,
+        summary.successful_requests,
         errors,
         error_rate,
         summary.avg_latency_ms,
@@ -1184,11 +1564,17 @@ pub(super) fn render_overview(
         summary.total_output_tokens,
         account_table,
         html_escape(period),
-        refresh_interval_s
+        html_escape(period),
+        html_escape(period)
     );
-    html.replace(
-        r#"<option value="1h">Last hour</option><option value="24h" selected="selected">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>"#,
-        &period_options,
+    render_dashboard_layout(
+        "Overview",
+        "overview",
+        period,
+        theme,
+        refresh_interval_s,
+        body.clone(),
+        body_requires_chart_runtime(&body),
     )
 }
 
@@ -1364,6 +1750,49 @@ mod tests {
             html_escape("</script> & \" '"),
             "&lt;/script&gt; &amp; &quot; &#x27;"
         );
+    }
+
+    #[test]
+    fn timeseries_chart_contract_uses_a_canvas_even_without_rows() {
+        let html = super::render_timeseries_page(&crate::db::DashboardData::default(), "24h");
+        assert!(html.contains("<canvas id=\"timeseries-chart\" data-period=\"24h\"></canvas>"));
+        assert!(html.contains("class=\"chart-container\""));
+        assert!(html.contains("data-timeseries-controls"));
+        assert!(html.contains("canvas class=\"grouped-timeseries-chart\""));
+        assert!(html.contains("id=\"timeseries-initial-data\""));
+        assert!(!html.contains("<section class=\"panel\" id=\"timeseries-chart\""));
+    }
+
+    #[tokio::test]
+    async fn overview_uses_the_shared_layout_and_keeps_valid_empty_account_markup() {
+        let directory = tempfile::tempdir().expect("temporary dashboard database");
+        let database = crate::db::Database::open(crate::db::DatabaseConfig {
+            path: directory
+                .path()
+                .join("dashboard.sqlite3")
+                .to_string_lossy()
+                .into_owned(),
+            ..crate::db::DatabaseConfig::default()
+        })
+        .await
+        .expect("database opens");
+        crate::db::MigrationRunner::new(&database)
+            .run()
+            .await
+            .expect("migrations run");
+        let summary = crate::db::UsageRollupRepository::new(&database)
+            .dashboard_summary_basic("24h")
+            .await
+            .expect("empty summary reads");
+        let html = super::render_overview(&summary, &[], "24h", "Nord", 60);
+        assert_eq!(html.matches("<!DOCTYPE html>").count(), 1);
+        assert!(html.contains("class=\"topnav-menu\" id=\"topnav-menu\""));
+        assert!(html.contains("/static/theme.css?theme=Nord"));
+        assert!(html.contains("name=\"theme\" value=\"Nord\""));
+        assert!(html.contains("<p class=\"empty-state\">No accounts configured.</p>"));
+        assert!(html.contains("<canvas id=\"timeseries-chart\""));
+        assert_eq!(html.matches("id=\"dashboard-content\"").count(), 1);
+        database.close().await.expect("database closes");
     }
 
     #[test]

@@ -28,6 +28,15 @@ of four validated periods (`1h`, `24h`, `7d`, `30d`; anything else is
 model list and is always authenticated; the rich sanitized projection is
 the separately versioned integration-profile endpoint.
 
+The dashboard chart client also reads `GET /api/timeseries` and
+`GET /api/timeseries/grouped`. These are ordinary dashboard-gated read
+endpoints: they follow `[dashboard].public`, validate the same four periods,
+and return bounded bucket and grouped-series projections from dashboard
+usage/request repositories. The grouped endpoint accepts `group_by` (`model`
+or `account`), `metric` (`requests`, `tokens`, or `cost`), and a bounded
+`limit`; it does not expose request bodies or credentials. Operational
+diagnostics such as `/api/stats/runtime` remain separately authenticated.
+
 The dashboard is observational: it does not alter routing, quota, health, or
 provider state. Authenticated operational endpoints return metadata-only
 responses, and rendering escapes operator/provider-controlled values. Runtime

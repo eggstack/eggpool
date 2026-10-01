@@ -62,6 +62,8 @@ async fn runtime_fixture_with_generation_components(
     let mut config = Config::default();
     config.server.api_key = Some("test-key-transport".to_owned());
     config.server.max_request_body_bytes = max_request_body_bytes;
+    config.dashboard.enabled = true;
+    config.dashboard.public = false;
     let candidate = RuntimeGenerationFactory::prepare(
         &process,
         config.clone(),
@@ -139,6 +141,48 @@ async fn request_with_write_eof(address: std::net::SocketAddr, raw: &[u8]) -> St
         .expect("malformed request closes promptly")
         .expect("read malformed response");
     String::from_utf8_lossy(&response).into_owned()
+}
+
+#[tokio::test]
+async fn dashboard_timeseries_routes_preserve_auth_and_validate_periods() {
+    let (_directory, database, runtime) = runtime_fixture().await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let private = request(
+        address,
+        b"GET /api/timeseries HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(private.starts_with("HTTP/1.1 401"), "{private}");
+    let timeseries = request(address, b"GET /api/timeseries?period=24h HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(timeseries.starts_with("HTTP/1.1 200"), "{timeseries}");
+    assert!(
+        timeseries.contains("content-type: application/json"),
+        "{timeseries}"
+    );
+    assert!(timeseries.contains("[]"), "{timeseries}");
+    let grouped = request(address, b"GET /api/timeseries/grouped?period=24h HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(grouped.starts_with("HTTP/1.1 200"), "{grouped}");
+    assert!(grouped.contains("rollup_empty"), "{grouped}");
+    let invalid = request(address, b"GET /api/timeseries?period=forever HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(invalid.starts_with("HTTP/1.1 400"), "{invalid}");
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let report = tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("dashboard server shutdown is bounded")
+        .expect("server task joins")
+        .expect("server shuts down cleanly");
+    assert!(report.database_closed);
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
 }
 
 async fn streaming_fixture_provider(

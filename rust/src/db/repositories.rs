@@ -368,6 +368,191 @@ impl DashboardRepository {
         }
     }
 
+    /// Return the compatibility API's bounded, bucketed request series.
+    /// All filters are bound values and the bucket expression comes from a
+    /// closed enum at the server boundary.
+    pub async fn timeseries_json(
+        &self,
+        period: String,
+        bucket: String,
+        account: Option<String>,
+        model: Option<String>,
+    ) -> Result<Vec<Value>, DatabaseError> {
+        self.database
+            .call(move |connection| {
+                let format = if bucket == "day" {
+                    "%Y-%m-%d 00:00:00"
+                } else {
+                    "%Y-%m-%d %H:00:00"
+                };
+                let sql = dashboard_sql(&format!(
+                    "SELECT strftime('{format}', r.started_at), COUNT(*),\
+                    COALESCE(SUM(r.input_tokens),0), COALESCE(SUM(r.output_tokens),0),\
+                    COALESCE(SUM(r.input_tokens),0)+COALESCE(SUM(r.output_tokens),0),\
+                    COALESCE(SUM(r.cost_microdollars),0),\
+                    COALESCE(SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END),0),\
+                    COALESCE(SUM(r.bytes_received),0), COALESCE(SUM(r.bytes_emitted),0),\
+                    COALESCE(AVG(CASE WHEN r.streamed=1 THEN r.first_byte_ms END),0)\
+                    FROM requests r JOIN accounts a ON a.id=r.account_id\
+                    WHERE r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
+                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
+                    ELSE datetime('now','-24 hours') END AND r.started_at < datetime('now')\
+                    AND (?2 IS NULL OR a.name=?2)\
+                    AND (?3 IS NULL OR r.model_id=?3 OR r.original_model_id=?3)\
+                    GROUP BY 1 ORDER BY 1 LIMIT 2048"
+                ));
+                let mut statement = connection.prepare(&sql)?;
+                statement
+                    .query_map(params![period, account, model], |row| {
+                        Ok(serde_json::json!({
+                            "bucket": row.get::<_, String>(0)?,
+                            "request_count": row.get::<_, i64>(1)?,
+                            "input_tokens": row.get::<_, i64>(2)?,
+                            "output_tokens": row.get::<_, i64>(3)?,
+                            "total_tokens": row.get::<_, i64>(4)?,
+                            "cost_microdollars": row.get::<_, i64>(5)?,
+                            "error_count": row.get::<_, i64>(6)?,
+                            "bytes_received": row.get::<_, i64>(7)?,
+                            "bytes_emitted": row.get::<_, i64>(8)?,
+                            "avg_ttft_ms": row.get::<_, f64>(9)?,
+                        }))
+                    })?
+                    .collect()
+            })
+            .await
+    }
+
+    /// Return raw rows for the server's bounded top-N grouped timeseries
+    /// compatibility projection. Identifiers and SQL expressions are chosen
+    /// only from the server's validated grouping enum.
+    pub async fn grouped_timeseries_json(
+        &self,
+        period: String,
+        bucket: String,
+        group_by: String,
+        account: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Vec<Value>, bool), DatabaseError> {
+        self.database
+            .call(move |connection| {
+                let format = if bucket == "day" {
+                    "%Y-%m-%d 00:00:00"
+                } else {
+                    "%Y-%m-%d %H:00:00"
+                };
+                let (key, label) = match group_by.as_str() {
+                    "provider" => ("r.provider_id", "r.provider_id"),
+                    "model" => ("r.model_id", "r.model_id"),
+                    "account" => ("CAST(r.account_id AS TEXT)", "CAST(r.account_id AS TEXT)"),
+                    _ => ("r.provider_id || '/' || r.model_id", "r.provider_id || ' / ' || r.model_id"),
+                };
+                let provider = if matches!(group_by.as_str(), "provider" | "provider_model") {
+                    "r.provider_id"
+                } else {
+                    "''"
+                };
+                let model_value = if matches!(group_by.as_str(), "model" | "provider_model") {
+                    "r.model_id"
+                } else {
+                    "''"
+                };
+                let rollup_sql = dashboard_sql(&format!(
+                    "SELECT strftime('{format}',r.bucket_start), {key}, {label}, {provider},\
+                    {model_value}, '', SUM(r.request_count), SUM(r.error_count),\
+                    SUM(r.input_tokens), SUM(r.output_tokens), SUM(r.cache_read_tokens),\
+                    SUM(r.cache_write_tokens), SUM(r.reasoning_tokens),\
+                    SUM(r.input_tokens)+SUM(r.output_tokens), SUM(r.cost_microdollars),\
+                    SUM(r.bytes_received), SUM(r.bytes_emitted),\
+                    CASE WHEN SUM(r.request_count)>0 THEN CAST(SUM(r.latency_ms_sum) AS REAL)/SUM(r.request_count) ELSE 0 END,\
+                    CASE WHEN SUM(r.first_byte_ms_count)>0 THEN CAST(SUM(r.first_byte_ms_sum) AS REAL)/SUM(r.first_byte_ms_count) ELSE 0 END\
+                    FROM usage_rollups r WHERE r.bucket_start >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
+                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
+                    ELSE datetime('now','-24 hours') END AND r.bucket_start < datetime('now')\
+                    AND r.bucket_size_s=(SELECT MAX(bucket_size_s) FROM usage_rollups WHERE bucket_start >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
+                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
+                    ELSE datetime('now','-24 hours') END AND bucket_start < datetime('now'))\
+                    AND (?2 IS NULL OR r.account_id=(SELECT id FROM accounts WHERE name=?2))\
+                    AND (?3 IS NULL OR r.model_id=?3) GROUP BY 1,2,3,4,5 ORDER BY 1,2 LIMIT 5000"
+                ));
+                let mut rollup_statement = connection.prepare(&rollup_sql)?;
+                let rollup_rows = rollup_statement
+                    .query_map(params![period, account, model], |row| {
+                        Ok(serde_json::json!({
+                            "bucket": row.get::<_, String>(0)?,
+                            "raw_series_key": row.get::<_, String>(1)?,
+                            "raw_series_label": row.get::<_, String>(2)?,
+                            "provider_id": row.get::<_, String>(3)?,
+                            "model_id": row.get::<_, String>(4)?,
+                            "account_name": "",
+                            "request_count": row.get::<_, i64>(6)?,
+                            "error_count": row.get::<_, i64>(7)?,
+                            "input_tokens": row.get::<_, i64>(8)?,
+                            "output_tokens": row.get::<_, i64>(9)?,
+                            "cache_read_tokens": row.get::<_, i64>(10)?,
+                            "cache_write_tokens": row.get::<_, i64>(11)?,
+                            "reasoning_tokens": row.get::<_, i64>(12)?,
+                            "total_tokens": row.get::<_, i64>(13)?,
+                            "cost_microdollars": row.get::<_, i64>(14)?,
+                            "bytes_received": row.get::<_, i64>(15)?,
+                            "bytes_emitted": row.get::<_, i64>(16)?,
+                            "avg_latency_ms": row.get::<_, f64>(17)?,
+                            "avg_ttft_ms": row.get::<_, f64>(18)?,
+                        }))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                if !rollup_rows.is_empty() {
+                    return Ok((rollup_rows, true));
+                }
+                let sql = dashboard_sql(&format!(
+                    "SELECT strftime('{format}',r.started_at), {key}, {label}, r.provider_id,\
+                    COALESCE(r.original_model_id,r.model_id), a.name, COUNT(*),\
+                    COALESCE(SUM(CASE WHEN r.status='error' THEN 1 ELSE 0 END),0),\
+                    COALESCE(SUM(r.input_tokens),0), COALESCE(SUM(r.output_tokens),0),\
+                    COALESCE(SUM(r.cache_read_tokens),0), COALESCE(SUM(r.cache_write_tokens),0),\
+                    COALESCE(SUM(r.reasoning_tokens),0),\
+                    COALESCE(SUM(r.input_tokens),0)+COALESCE(SUM(r.output_tokens),0),\
+                    COALESCE(SUM(r.cost_microdollars),0), COALESCE(SUM(r.bytes_received),0),\
+                    COALESCE(SUM(r.bytes_emitted),0), COALESCE(AVG(r.upstream_latency_ms),0),\
+                    COALESCE(AVG(CASE WHEN r.streamed=1 THEN r.first_byte_ms END),0)\
+                    FROM requests r JOIN accounts a ON a.id=r.account_id\
+                    WHERE r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour')\
+                    WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days')\
+                    ELSE datetime('now','-24 hours') END AND r.started_at < datetime('now')\
+                    AND (?2 IS NULL OR a.name=?2)\
+                    AND (?3 IS NULL OR r.model_id=?3 OR r.original_model_id=?3)\
+                    GROUP BY 1,2,3,4,5,6 ORDER BY 1,2 LIMIT 5000"
+                ));
+                let mut statement = connection.prepare(&sql)?;
+                statement
+                    .query_map(params![period, account, model], |row| {
+                        Ok(serde_json::json!({
+                            "bucket": row.get::<_, String>(0)?,
+                            "raw_series_key": row.get::<_, String>(1)?,
+                            "raw_series_label": row.get::<_, String>(2)?,
+                            "provider_id": row.get::<_, Option<String>>(3)?,
+                            "model_id": row.get::<_, Option<String>>(4)?,
+                            "account_name": row.get::<_, Option<String>>(5)?,
+                            "request_count": row.get::<_, i64>(6)?,
+                            "error_count": row.get::<_, i64>(7)?,
+                            "input_tokens": row.get::<_, i64>(8)?,
+                            "output_tokens": row.get::<_, i64>(9)?,
+                            "cache_read_tokens": row.get::<_, i64>(10)?,
+                            "cache_write_tokens": row.get::<_, i64>(11)?,
+                            "reasoning_tokens": row.get::<_, i64>(12)?,
+                            "total_tokens": row.get::<_, i64>(13)?,
+                            "cost_microdollars": row.get::<_, i64>(14)?,
+                            "bytes_received": row.get::<_, i64>(15)?,
+                            "bytes_emitted": row.get::<_, i64>(16)?,
+                            "avg_latency_ms": row.get::<_, f64>(17)?,
+                            "avg_ttft_ms": row.get::<_, f64>(18)?,
+                        }))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|rows| (rows, false))
+            })
+            .await
+    }
+
     pub async fn load(&self, period: &str) -> Result<DashboardData, DatabaseError> {
         let period = period.to_owned();
         self.database

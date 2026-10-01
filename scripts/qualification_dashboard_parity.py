@@ -904,16 +904,67 @@ def compare_dom_projection(
         raise AssertionError(f"unsafe links in oracle/candidate for {route}")
 
 
+def _page_shell_tree(node: DomNode | str) -> DomNode | str:
+    if isinstance(node, str):
+        return node
+    if node.tag == "main" and dict(node.attributes).get("id") == "dashboard-content":
+        return DomNode(node.tag, node.attributes, ())
+    return DomNode(
+        node.tag,
+        node.attributes,
+        tuple(_page_shell_tree(child) for child in node.children),
+    )
+
+
+def compare_shared_shell_projection(
+    expected: HtmlProjection, actual: HtmlProjection, route: str
+) -> None:
+    """Compare the shell while leaving page-owned content to its milestone."""
+    expected_tree = _page_shell_tree(expected.tree)
+    actual_tree = _page_shell_tree(actual.tree)
+    if expected_tree != actual_tree:
+        difference = _first_tree_difference(expected_tree, actual_tree)
+        raise AssertionError(f"shared shell differs for {route} at {difference}")
+    if expected.duplicate_ids or actual.duplicate_ids:
+        raise AssertionError(f"duplicate IDs in oracle/candidate shell for {route}")
+    if expected.unsafe_links or actual.unsafe_links:
+        raise AssertionError(f"unsafe links in oracle/candidate shell for {route}")
+
+
 def _first_tree_difference(expected: DomNode | str, actual: DomNode | str) -> str:
     def visit(left: DomNode | str, right: DomNode | str, path: str) -> str | None:
         if isinstance(left, str) or isinstance(right, str):
-            return None if left == right else f"{path} (text)"
+            return (
+                None
+                if left == right
+                else (
+                    f"{path} (text lengths {len(str(left))}/{len(str(right))}: "
+                    f"{left!r} != {right!r})"
+                    if "/footer[" in path
+                    else f"{path} (text lengths {len(str(left))}/{len(str(right))})"
+                )
+            )
         if left.tag != right.tag:
             return f"{path} (element type)"
         if left.attributes != right.attributes:
-            return f"{path} (attributes)"
+            left_attributes = dict(left.attributes)
+            right_attributes = dict(right.attributes)
+            changed = sorted(
+                key
+                for key in left_attributes.keys() | right_attributes.keys()
+                if left_attributes.get(key) != right_attributes.get(key)
+            )
+            return f"{path} (attributes: {', '.join(changed)})"
         if len(left.children) != len(right.children):
-            return f"{path} (child count)"
+            left_tags = [
+                child.tag if isinstance(child, DomNode) else "#text"
+                for child in left.children
+            ]
+            right_tags = [
+                child.tag if isinstance(child, DomNode) else "#text"
+                for child in right.children
+            ]
+            return f"{path} (children: {left_tags} != {right_tags})"
         for index, (left_child, right_child) in enumerate(
             zip(left.children, right.children, strict=True)
         ):
@@ -969,7 +1020,8 @@ def _write_config(
         f'host = "127.0.0.1"\nport = {port}\n'
         f'api_key = "q012-server-key"\n\n[database]\n'
         f'path = "{database}"\n\n[dashboard]\nenabled = true\n'
-        f'public = {str(public).lower()}\ntheme = "Cyber Red"\n\n[models]\n'
+        f'public = {str(public).lower()}\ntheme = "Cyber Red"\n'
+        "refresh_interval_s = 1\n\n[models]\n"
         "startup_refresh = false\n\n[model_info]\nenabled = false\n"
         "startup_refresh = false\n"
     )
@@ -1301,6 +1353,7 @@ class _DevToolsClient:
             self.socket.close()
             raise QualificationError("Chrome DevTools WebSocket handshake failed")
         self.next_id = 1
+        self.events: list[dict[str, Any]] = []
 
     def _read_until(self, marker: bytes) -> bytes:
         data = bytearray()
@@ -1369,6 +1422,9 @@ class _DevToolsClient:
             if opcode != 1:
                 continue
             message = cast("dict[str, Any]", json.loads(payload.decode()))
+            if "id" not in message:
+                self.events.append(message)
+                continue
             if message.get("id") == request_id:
                 if "error" in message:
                     raise QualificationError(
@@ -1419,6 +1475,26 @@ class _HeadlessScreenshotSession:
             self.client = _DevToolsClient(websocket_url)
             self.client.request("Page.enable")
             self.client.request("Runtime.enable")
+            self.client.request("Network.enable")
+            self.client.request(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": """(() => {
+                      const original = window.setInterval;
+                      window.__eggpoolIntervals = [];
+                      const originalFetch = window.fetch;
+                      window.__eggpoolFetches = [];
+                      window.fetch = function (input, ...args) {
+                        window.__eggpoolFetches.push(String(input));
+                        return originalFetch.call(this, input, ...args);
+                      };
+                      window.setInterval = function (callback, delay, ...args) {
+                        window.__eggpoolIntervals.push({ callback, delay });
+                        return original.call(this, callback, delay, ...args);
+                      };
+                    })();"""
+                },
+            )
         except BaseException:
             self.close()
             raise
@@ -1439,6 +1515,7 @@ class _HeadlessScreenshotSession:
         raise QualificationError("Chrome DevTools endpoint did not start")
 
     def capture(self, url: str, artifact: Path, width: int, height: int) -> None:
+        self.client.events.clear()
         self.client.request(
             "Emulation.setDeviceMetricsOverride",
             {
@@ -1462,8 +1539,148 @@ class _HeadlessScreenshotSession:
             {"format": "png", "fromSurface": True},
         )
         payload = base64.b64decode(str(result.get("data", "")), validate=True)
+        self._assert_clean_browser_events(url)
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(payload)
+
+    def check_interactions(self, url: str) -> list[str]:
+        """Exercise shared controls and the grouped chart on the live page."""
+        expression = r"""(async () => {
+          const checks = [];
+          const burger = document.querySelector('.topnav-burger');
+          if (burger) {
+            burger.click();
+            checks.push(burger.getAttribute('aria-expanded') === 'true'
+              && document.querySelector('.topnav').classList.contains('topnav-open'));
+            burger.click();
+            checks.push(burger.getAttribute('aria-expanded') === 'false');
+          }
+          const originalSubmit = HTMLFormElement.prototype.submit;
+          let submission = null;
+          HTMLFormElement.prototype.submit = function () {
+            submission = Array.from(new FormData(this).entries());
+          };
+          const period = document.querySelector(
+            'form[data-period-selector] select[name="period"]');
+          if (period) {
+            const periodDeadline = Date.now() + 2000;
+            while (period.form && !period.form.__eggpoolPeriodWired
+              && Date.now() < periodDeadline) {
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            const targetPeriod = Array.from(period.options)
+              .map(option => option.value).find(value => value !== period.value);
+            period.value = targetPeriod;
+            period.dispatchEvent(new Event('change', { bubbles: true }));
+            checks.push(Boolean(targetPeriod) && submission !== null
+              && submission.some(([key, value]) =>
+                key === 'period' && value === targetPeriod));
+          }
+          submission = null;
+          const theme = document.querySelector(
+            'form.theme-selector select[name="theme"]');
+          if (theme && theme.options.length > 1) {
+            theme.selectedIndex = (theme.selectedIndex + 1) % theme.options.length;
+            theme.dispatchEvent(new Event('change', { bubbles: true }));
+            checks.push(submission !== null
+              && submission.some(([key]) => key === 'theme')
+              && submission.some(([key, value]) =>
+                key === 'period' && value === '24h'));
+          }
+          HTMLFormElement.prototype.submit = originalSubmit;
+          const refresh = document.querySelector('.topnav-refresh');
+          const refreshHandler = refresh ? refresh.getAttribute('onclick') || '' : '';
+          checks.push(Boolean(refresh && refreshHandler.includes('location.reload')));
+          const grouped = document.querySelector(
+            'form[data-timeseries-controls] select[name="group_by"]');
+          if (grouped && window.EggPoolDashboard) {
+            const form = grouped.form;
+            const deadline = Date.now() + 2000;
+            while (form && !form.__eggpoolTimeseriesWired && Date.now() < deadline) {
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            const oldValue = grouped.value;
+            grouped.value = 'account';
+            grouped.dispatchEvent(new Event('change', { bubbles: true }));
+            await new Promise(resolve => setTimeout(resolve, 350));
+            const requested = (window.__eggpoolFetches || [])
+              .some(name => name.includes('/api/timeseries/grouped')
+                && name.includes('group_by=account'));
+            checks.push(requested);
+            grouped.value = oldValue;
+          }
+          const updated = document.getElementById('dashboard-updated');
+          if (updated && location.pathname === '/') {
+            const interval = (window.__eggpoolIntervals || [])
+              .find(item => item.delay === 1000);
+            if (interval) await interval.callback();
+            const pageResource = () => performance.getEntriesByType('resource')
+              .some(entry => entry.name.startsWith(
+                location.origin + location.pathname));
+            checks.push(Boolean(interval) && pageResource()
+              && updated.textContent !== 'ready');
+          }
+          return JSON.stringify({
+            checks,
+            intervals: (window.__eggpoolIntervals || []).map(item => item.delay),
+            fetches: window.__eggpoolFetches || [],
+            updated: updated ? updated.textContent : null,
+          });
+        })()"""
+        result = self.client.request(
+            "Runtime.evaluate", {"expression": expression, "awaitPromise": True}
+        )
+        remote = cast("dict[str, Any]", result.get("result", {}))
+        value = json.loads(str(remote.get("value", "{}")))
+        checks = cast("list[bool]", value.get("checks", []))
+        self._assert_clean_browser_events(url)
+        if not checks or not all(checks):
+            raise QualificationError(f"dashboard interactions failed on {url}: {value}")
+        return [
+            "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh"
+        ]
+
+    def _assert_clean_browser_events(self, page_url: str) -> None:
+        origin = urllib.parse.urlsplit(page_url).netloc
+        request_urls: dict[str, str] = {}
+        failures: list[str] = []
+        errors: list[str] = []
+        for event in self.client.events:
+            method = event.get("method")
+            params = cast("dict[str, Any]", event.get("params", {}))
+            if method == "Network.requestWillBeSent":
+                request = cast("dict[str, Any]", params.get("request", {}))
+                request_urls[str(params.get("requestId", ""))] = str(
+                    request.get("url", "")
+                )
+            elif method == "Network.loadingFailed":
+                request_id = str(params.get("requestId", ""))
+                failed_url = request_urls.get(request_id, "")
+                if urllib.parse.urlsplit(failed_url).netloc == origin:
+                    failures.append(f"failed same-origin load {failed_url}")
+            elif method == "Network.responseReceived":
+                response = cast("dict[str, Any]", params.get("response", {}))
+                response_url = str(response.get("url", ""))
+                if (
+                    urllib.parse.urlsplit(response_url).netloc == origin
+                    and int(response.get("status", 0)) >= 400
+                ):
+                    failures.append(
+                        f"same-origin response {response.get('status')} {response_url}"
+                    )
+            elif method == "Runtime.exceptionThrown":
+                details = cast("dict[str, Any]", params.get("exceptionDetails", {}))
+                errors.append(str(details.get("text", "JavaScript exception")))
+            elif method == "Runtime.consoleAPICalled" and params.get("type") == "error":
+                args = cast("list[dict[str, Any]]", params.get("args", []))
+                errors.append(
+                    " ".join(str(argument.get("value", "")) for argument in args)
+                    or "console.error"
+                )
+        if failures or errors:
+            raise QualificationError(
+                f"browser errors on {page_url}: " + "; ".join([*failures, *errors])
+            )
 
     def close(self) -> None:
         client = getattr(self, "client", None)
@@ -1523,6 +1740,9 @@ def capture_screenshots(
                     int(entry["width"]),
                     int(entry["height"]),
                 )
+                route = str(entry["route"])
+                if route in {"/", "/timeseries"}:
+                    entry["interaction_checks"] = session.check_interactions(url)
             dimensions = _png_dimensions(artifact)
             expected_dimensions = (int(entry["width"]), int(entry["height"]))
             if dimensions != expected_dimensions:
@@ -1534,9 +1754,12 @@ def capture_screenshots(
             entry["dimensions"] = {"width": dimensions[0], "height": dimensions[1]}
             entry["sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
             entry["result"] = "captured"
+            entry["browser_checks"] = (
+                "passed: no JS exception, console error, failed same-origin load, "
+                "or same-origin HTTP error"
+            )
             entry["manual_disposition"] = (
-                "pass: navigation, clipping, populated content, theme, and mobile "
-                "layout reviewed"
+                "visual review pending; this artifact records a capture only"
             )
     finally:
         if session is not None:
@@ -1622,6 +1845,22 @@ def _run_pair(
             else:
                 python_projection = project_html(python_result.body)
                 rust_projection = project_html(rust_result.body)
+                shell_issues: list[str] = []
+                try:
+                    compare_shared_shell_projection(
+                        python_projection, rust_projection, route
+                    )
+                except AssertionError as error:
+                    shell_issues.append(str(error))
+                observations.append(
+                    {
+                        "state": state_name,
+                        "route": route,
+                        "kind": "shared-shell",
+                        "status": "pass" if not shell_issues else "mismatch",
+                        "mismatches": shell_issues,
+                    }
+                )
                 try:
                     compare_dom_projection(python_projection, rust_projection, route)
                 except AssertionError as error:
@@ -1862,7 +2101,7 @@ def run_qualification(
         screenshot_manifest = populated_result["screenshots"]
     report: dict[str, Any] = {
         "schema_version": "dashboard-parity-current-gaps.v1",
-        "plan": "Dashboard M001",
+        "plan": "Dashboard parity qualification",
         "candidate_sha": os.environ.get("EGGPOOL_DASHBOARD_CANDIDATE_SHA", _git_sha()),
         "python_identity": "python:eggpool:local",
         "rust_identity": f"rust:{RUST_BINARY}",

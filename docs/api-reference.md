@@ -66,10 +66,12 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/stats/summary` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Aggregate request stats (counts, tokens, cost, latency) |
+| `GET` | `/api/timeseries` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Bounded request/usage buckets for the dashboard chart |
+| `GET` | `/api/timeseries/grouped` | Dashboard-gated (`period`, `group_by=model\|account`, `metric=requests\|tokens\|cost`, bounded `limit`) | Grouped chart series and bucket totals |
 | `GET` | `/api/stats/runtime` | Always key | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/update` | Always key | Release update-check status |
 
-There are no other JSON stats/backoff/model-info/network/event endpoints:
+There are no other JSON backoff/model-info/network/event endpoints:
 account backoffs, model-info detail, per-model/account roll-ups, latency and
 bandwidth breakdowns, and event views are rendered server-side into the
 dashboard HTML pages below, not served as JSON. `eggpool accounts status`,
@@ -81,7 +83,8 @@ CLI without HTTP.
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/`
 (overview, accounts, models, latency, events, timeseries, bandwidth, pings,
 reliability, routing, traces, runtime, cache). Pages render server-side HTML;
-the only JSON stats endpoint is `/api/stats/summary`. The dashboard is public
+the chart APIs are `/api/stats/summary`, `/api/timeseries`, and
+`/api/timeseries/grouped`. The dashboard is public
 and read-only by default (`[dashboard].public = true`): browsers render pages
 without an API key. Set `public = false` (or `eggpool dashboard public --off`)
 to require the key there too.

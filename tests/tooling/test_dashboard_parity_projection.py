@@ -17,6 +17,7 @@ from scripts.qualification_dashboard_parity import (
     compare_api_response,
     compare_dom_projection,
     compare_json_projection,
+    compare_shared_shell_projection,
     project_html,
 )
 
@@ -77,6 +78,28 @@ def test_complete_dom_projection_ignores_attribute_order() -> None:
     actual = project_html("<main class='panel page' id='content'></main>")
 
     compare_dom_projection(expected, actual, "/fixture")
+
+
+def test_shared_shell_projection_ignores_page_body_and_rejects_shell_drift() -> None:
+    expected = project_html(
+        "<html><body><header class='topbar'><a href='/'>EggPool</a></header>"
+        "<main id='dashboard-content'><h2>Overview</h2></main>"
+        "<footer>ready</footer></body></html>"
+    )
+    page_change = project_html(
+        "<html><body><header class='topbar'><a href='/'>EggPool</a></header>"
+        "<main id='dashboard-content'><table><tr><td>Accounts</td></tr></table></main>"
+        "<footer>ready</footer></body></html>"
+    )
+    compare_shared_shell_projection(expected, page_change, "/fixture")
+
+    changed_shell = project_html(
+        "<html><body><header class='topbar'><a href='/home'>EggPool</a></header>"
+        "<main id='dashboard-content'><h2>Overview</h2></main>"
+        "<footer>ready</footer></body></html>"
+    )
+    with pytest.raises(AssertionError, match="shared shell differs"):
+        compare_shared_shell_projection(expected, changed_shell, "/fixture")
 
 
 def test_complete_dom_projection_rejects_duplicate_ids_and_unsafe_links() -> None:
