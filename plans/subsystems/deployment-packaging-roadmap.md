@@ -111,11 +111,15 @@ Linux/aarch64 stale-pipx/no-Python regression plus checksum, target, collision,
 owner, historical, lock, and rollback cases.
 
 Post-closure review found two narrower gaps in the shell transaction boundary:
-fresh `--force` can replace an unowned regular destination file when that
+fresh `--force` could replace an unowned regular destination file when that
 file was not classified as an EggPool owner, and a first-time `init-config`
-failure after executable commit can return failure while leaving the newly
-installed executable in place. M002 is the registered corrective for those
-findings and for this roadmap reconciliation.
+failure after executable commit could return failure while leaving the newly
+installed executable in place. M002
+(`plans/closure/deployment-packaging/002-status.md`) corrects both: fresh
+`--force` now refuses unowned destinations byte-for-byte, and config-seeding
+failure rolls back the executable committed by that transaction (never
+deleting a raced replacement or pre-existing config). Deterministic
+qualification is now 46 cases including the M002 regressions.
 
 ## 5. Target architecture
 
@@ -352,4 +356,4 @@ security findings.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
-| 2 | active | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | — | none |
+| 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
