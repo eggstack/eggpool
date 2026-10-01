@@ -94,25 +94,28 @@ client-integration behavior.
 
 ## 4. Current state
 
-The v0.8.1 release pipeline already publishes matching raw EggPool executables
-for Linux x86_64, Linux aarch64, and macOS arm64 alongside a stable
-`SHA256SUMS` asset and versioned release manifest. Post-publication validation
-checks GitHub asset digests against the aggregated release metadata.
+M001 is closed at `plans/closure/deployment-packaging/001-status.md`.
+Fresh current-native quick installs are binary-first: `scripts/install.sh`
+selects the supported raw GitHub release asset from `SHA256SUMS`, binds
+latest selection to the exact release version, verifies digest/version/native
+identity, and installs a standalone Rust command without requiring Python, uv,
+pipx, pip, Cargo, or a source checkout.
 
-The Rust runtime already distinguishes package-managed and standalone
-installations. `operations/update.rs` can resolve GitHub raw release assets,
-verify release-provided SHA-256 evidence, stage/self-check the candidate,
-replace a standalone executable, and attempt rollback/restart recovery.
+Existing native installations preserve ownership by delegating ordinary
+transitions to `operations/update.rs`: standalone remains standalone and
+uv/pipx/pip-managed installs retain their manager. Historical Python-era exact
+targets remain an explicit package-manager compatibility path.
 
-The mismatch is the fresh quick installer. `scripts/install.sh` currently
-chooses uv when present, otherwise pipx when present, and bootstraps uv only
-when neither is available. The native wheel declares `Requires-Python >=3.11`
-for package-manager compatibility. Consequently a supported Linux/aarch64 host
-with an old pipx interpreter can fail package resolution before EggPool's native
-binary is installed.
+The deterministic quick-installer qualification now covers the original
+Linux/aarch64 stale-pipx/no-Python regression plus checksum, target, collision,
+owner, historical, lock, and rollback cases.
 
-The qualification harness models manager invocation but does not model an
-incompatible pipx interpreter, so it does not catch that class of SBC failure.
+Post-closure review found two narrower gaps in the shell transaction boundary:
+fresh `--force` can replace an unowned regular destination file when that
+file was not classified as an EggPool owner, and a first-time `init-config`
+failure after executable commit can return failure while leaving the newly
+installed executable in place. M002 is the registered corrective for those
+findings and for this roadmap reconciliation.
 
 ## 5. Target architecture
 
@@ -218,6 +221,53 @@ Deferred work:
 - System-owned/root production distribution authority changes.
 - Additional proxy targets.
 
+### Milestone 2 — Installer transaction and collision corrective
+
+Class: invariant
+
+Objective:
+
+Correct the two post-M001 findings without changing the binary-first
+architecture: make `--force` refuse unowned regular-file destinations and
+make first-time config-seeding failure roll back the executable committed by
+that fresh-install transaction.
+
+Dependencies:
+
+- M001 is closed and supplies the binary-first authority and qualification
+  baseline.
+- ADR-0001 already defines the required ownership and failed-install
+  invariants.
+- No hard dependency is open.
+
+Deliverable boundary:
+
+A narrow `scripts/install.sh` + deterministic qualification + planning/docs
+corrective. Existing updater, release publication, target matrix, historical
+compatibility, and production/root deployment remain unchanged.
+
+User or operator value:
+
+`--force` cannot destroy an unrelated file, and a failed first-time install
+does not misleadingly leave a newly installed executable behind.
+
+Exit conditions:
+
+- unowned regular destination + `--force` fails closed byte-for-byte;
+- verified standalone/package-managed repair still works without owner change;
+- injected first-time `init-config` failure restores the pre-install
+  executable/config state;
+- rollback never deletes a destination changed by a concurrent actor;
+- all M001 regressions remain green;
+- roadmap/registry/closure evidence accurately records why M001 verification
+  missed the two cases.
+
+Deferred work:
+
+- Independent artifact signing/attestation.
+- Broader installer transaction framework extraction.
+- System/root deployment authority changes.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -302,3 +352,4 @@ security findings.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
+| 2 | ready | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | — | none |
