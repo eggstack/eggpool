@@ -66,6 +66,7 @@ const THEME_NAMES: &[&str] = &[
 pub(super) struct PeriodQuery {
     period: Option<String>,
     theme: Option<String>,
+    show_disabled: Option<String>,
 }
 
 /// Start the development server using the configured address and database.
@@ -109,7 +110,15 @@ pub(super) async fn accounts_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_data_page(&state, "Accounts", "accounts", query.period, query.theme).await
+    dashboard_data_page_with_options(
+        &state,
+        "Accounts",
+        "accounts",
+        query.period,
+        query.theme,
+        query.show_disabled.as_deref() == Some("1"),
+    )
+    .await
 }
 
 pub(super) async fn models_page(
@@ -687,6 +696,17 @@ pub(super) async fn dashboard_data_page(
     period: Option<String>,
     theme: Option<String>,
 ) -> Response {
+    dashboard_data_page_with_options(state, title, active_nav, period, theme, false).await
+}
+
+async fn dashboard_data_page_with_options(
+    state: &AppState,
+    title: &str,
+    active_nav: &str,
+    period: Option<String>,
+    theme: Option<String>,
+    show_disabled: bool,
+) -> Response {
     let period = match normalize_period(period.as_deref()) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -727,6 +747,7 @@ pub(super) async fn dashboard_data_page(
         &data,
         &summary,
         &model_info,
+        show_disabled,
     );
     if active_nav == "timeseries" {
         body = body.replace(
@@ -769,11 +790,16 @@ pub(super) fn render_dashboard_page_body(
     data: &db::DashboardData,
     summary: &db::DashboardSummary,
     model_info: &[Value],
+    show_disabled: bool,
 ) -> String {
-    let mut body = dashboard_header(title, period, theme);
+    let mut body = if matches!(active_nav, "accounts" | "models") {
+        String::new()
+    } else {
+        dashboard_header(title, period, theme)
+    };
     match active_nav {
-        "accounts" => body.push_str(&render_accounts_page(data)),
-        "models" => body.push_str(&render_models_page(data, model_info)),
+        "accounts" => body.push_str(&render_accounts_page(data, show_disabled)),
+        "models" => body.push_str(&render_models_page(data, period, theme, model_info)),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
         "timeseries" => body.push_str(&render_timeseries_page(data, period)),
@@ -789,13 +815,18 @@ pub(super) fn render_dashboard_page_body(
     body
 }
 
-pub(super) fn render_accounts_page(data: &db::DashboardData) -> String {
-    if data.accounts.is_empty() {
+pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool) -> String {
+    if data
+        .accounts
+        .iter()
+        .all(|account| !show_disabled && !account.enabled)
+    {
         return "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><p class=\"empty\">No accounts configured.</p></section>".to_owned();
     }
     let rows = data
         .accounts
         .iter()
+        .filter(|row| show_disabled || row.enabled)
         .map(|row| {
             format!(
                 "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">unknown</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\"><span class=\"exactness-badge empty\">—</span></td>{}",
@@ -819,14 +850,28 @@ pub(super) fn render_accounts_page(data: &db::DashboardData) -> String {
     )
 }
 
-pub(super) fn render_models_page(data: &db::DashboardData, model_info: &[Value]) -> String {
+pub(super) fn render_models_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    model_info: &[Value],
+) -> String {
+    let filters = format!(
+        "<form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\"><option value=\"\" selected>(any account)</option></select></label><label>Used: <select name=\"used\"><option value=\"\" selected>All</option><option value=\"used\">Used</option><option value=\"unused\">Unused</option></select></label><label>Info: <select name=\"info_status\"><option value=\"\" selected>All</option><option value=\"fresh\">Fresh</option><option value=\"partial\">Partial</option><option value=\"sparse_new\">Sparse</option><option value=\"stale\">Stale</option><option value=\"conflicting\">Conflict</option><option value=\"unmatched\">Unmatched</option></select></label><label>Availability: <select name=\"availability\"><option value=\"\" selected>All</option><option value=\"available\">Available</option><option value=\"unavailable\">Unavailable</option></select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>",
+        html_escape(period),
+        html_escape(theme),
+        period_options(period),
+        html_escape(theme),
+    );
     let models = data
         .models
         .iter()
         .filter(|row| row.model_id != "__deprecated__")
         .collect::<Vec<_>>();
     if models.is_empty() {
-        return "<h2>Models</h2><section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>".to_owned();
+        return format!(
+            "<h2>Models</h2>{filters}<section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>"
+        );
     }
     let rows = models
         .iter()
@@ -868,7 +913,7 @@ pub(super) fn render_models_page(data: &db::DashboardData, model_info: &[Value])
         })
         .collect::<String>();
     format!(
-        "<h2>Models</h2><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Models</h2>{filters}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         "<th data-priority=\"3\">Priority</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th>"
     )
 }
@@ -1852,7 +1897,7 @@ mod tests {
             ttft_requests: 0,
             avg_ttft_ms: 0.0,
         });
-        let html = super::render_models_page(&data, &[]);
+        let html = super::render_models_page(&data, "24h", "Nord", &[]);
         assert!(html.contains("pill-configured\">configured"));
         assert!(html.contains("href=\"/models/vendor%2Fmodel\""));
         assert!(html.contains("No model info available"));

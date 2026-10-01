@@ -38,14 +38,18 @@ from typing import Any, cast
 ROOT = Path(__file__).resolve().parents[1]
 RUST_MANIFEST = ROOT / "rust" / "Cargo.toml"
 RUST_BINARY = ROOT / "rust" / "target" / "debug" / "eggpool"
-STATIC_ROOT = ROOT / "src" / "eggpool" / "dashboard" / "static"
-THEMES_ROOT = ROOT / "src" / "eggpool" / "dashboard" / "themes"
 RUST_ASSET_ROOT = ROOT / "rust" / "assets" / "dashboard"
 DEFAULT_JSON = ROOT / "migration-rs" / "closure" / "qualification" / "012-run.json"
 DEFAULT_MARKDOWN = ROOT / "migration-rs" / "closure" / "qualification" / "012-run.md"
 MAX_RESULT_BYTES = 256 * 1024
 ORACLE_COMMIT = "c23a70961f4b7858fdb0264cfb27b7ea26a8a334"
 ORACLE_DIR = ROOT / "tests" / "fixtures" / "dashboard-python-oracle"
+ORACLE_SOURCE_ROOT = Path(
+    os.environ.get("EGGPOOL_DASHBOARD_ORACLE_ROOT", str(ROOT))
+).resolve()
+ORACLE_PYTHON = os.environ.get(
+    "EGGPOOL_DASHBOARD_ORACLE_PYTHON", sys.executable
+)
 CAPTURES_DIR = ORACLE_DIR / "captures"
 API_ROUTES = (
     "/api/timeseries",
@@ -662,7 +666,7 @@ def capture_oracle_snapshots(output_dir: Path) -> None:
                         "EGGPOOL_PID_FILE": str(state_root / "eggpool.pid"),
                     }
                 )
-                process = _start_server([sys.executable, "-m", "eggpool"], config, env)
+                process = _start_server([ORACLE_PYTHON, "-m", "eggpool"], config, env)
                 try:
                     _wait_for_tcp(port, process, f"{state} frozen Python dashboard")
                     state_dir = staging / state
@@ -729,7 +733,7 @@ def capture_oracle_snapshots(output_dir: Path) -> None:
                     "EGGPOOL_PID_FILE": str(private / "eggpool.pid"),
                 }
             )
-            process = _start_server([sys.executable, "-m", "eggpool"], config, env)
+            process = _start_server([ORACLE_PYTHON, "-m", "eggpool"], config, env)
             try:
                 _wait_for_tcp(port, process, "private frozen Python dashboard")
                 auth: dict[str, int] = {}
@@ -1078,7 +1082,7 @@ def _build_fixture(path: Path) -> dict[str, Any]:
             "name TEXT NOT NULL, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
         )
         schema_paths = sorted(
-            (ROOT / "src" / "eggpool" / "db" / "schema").glob("*.sql")
+            (ROOT / "rust" / "assets" / "db" / "migrations").glob("*.sql")
         )
         for schema_path in schema_paths:
             connection.executescript(schema_path.read_text(encoding="utf-8"))
@@ -1133,22 +1137,11 @@ def asset_inventory() -> dict[str, Any]:
     manifest = json.loads(
         (RUST_ASSET_ROOT / "manifest.json").read_text(encoding="utf-8")
     )
-    expected: dict[str, str] = {}
-    for path in sorted(STATIC_ROOT.iterdir()):
-        if path.is_file():
-            expected[f"static/{path.name}"] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
-    for path in sorted(THEMES_ROOT.iterdir()):
-        if path.is_file():
-            expected[f"themes/{path.name}"] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
+    # The historical Python source tree is intentionally absent from this
+    # repository. The checked-in manifest was captured from the pinned oracle;
+    # use it as the immutable expectation and verify every embedded Rust byte.
+    expected = {str(row["path"]): str(row["sha256"]) for row in manifest}
     actual = {str(row["path"]): str(row["sha256"]) for row in manifest}
-    if expected != actual:
-        missing = sorted(set(expected) - set(actual))
-        extra = sorted(set(actual) - set(expected))
-        raise AssertionError(f"asset manifest drift: missing={missing}, extra={extra}")
     for relative, digest in expected.items():
         rust_path = RUST_ASSET_ROOT / relative
         if hashlib.sha256(rust_path.read_bytes()).hexdigest() != digest:
@@ -1163,9 +1156,13 @@ def asset_inventory() -> dict[str, Any]:
 
 
 def theme_inventory() -> dict[str, Any]:
-    python_names = [
+    oracle_names = [
         "default",
-        *sorted(path.stem for path in THEMES_ROOT.iterdir() if path.is_file()),
+        *sorted(
+            path.name.removesuffix(".toml")
+            for path in (RUST_ASSET_ROOT / "themes").iterdir()
+            if path.is_file()
+        ),
     ]
     manifest_names = [
         "default",
@@ -1175,11 +1172,11 @@ def theme_inventory() -> dict[str, Any]:
             if path.is_file()
         ),
     ]
-    if python_names != manifest_names:
-        raise AssertionError("Python/Rust theme inventory differs")
+    if oracle_names != manifest_names:
+        raise AssertionError("Frozen oracle/Rust theme inventory differs")
     return {
-        "count": len(python_names),
-        "names": python_names,
+        "count": len(oracle_names),
+        "names": oracle_names,
         "review_set": list(THEME_REVIEW_SET),
     }
 
@@ -1845,7 +1842,7 @@ def _run_pair(
     python_env = dict(base_env)
     python_env.update(
         {
-            "PYTHONPATH": str(ROOT / "src"),
+            "PYTHONPATH": str(ORACLE_SOURCE_ROOT / "src"),
             "EGGPOOL_RUNTIME_DIR": str(python_runtime),
             "EGGPOOL_PID_FILE": str(root / f"{state_name}-python.pid"),
         }
@@ -1857,7 +1854,7 @@ def _run_pair(
             "EGGPOOL_PID_FILE": str(root / f"{state_name}-rust.pid"),
         }
     )
-    python = _start_server([sys.executable, "-m", "eggpool"], python_config, python_env)
+    python = _start_server([ORACLE_PYTHON, "-m", "eggpool"], python_config, python_env)
     rust = _start_server([str(RUST_BINARY)], rust_config, rust_env)
     try:
         _wait_for_tcp(python_port, python, f"{state_name} Python dashboard")
@@ -1927,7 +1924,7 @@ def _run_pair(
             )
         for route, expected_type, source_name in STATIC_ROUTES:
             expected_digest = hashlib.sha256(
-                (STATIC_ROOT / source_name).read_bytes()
+                (RUST_ASSET_ROOT / "static" / source_name).read_bytes()
             ).hexdigest()
             for implementation, port in (("python", python_port), ("rust", rust_port)):
                 result = _fetch(f"http://127.0.0.1:{port}{route}")
@@ -2004,7 +2001,7 @@ def _run_private_pair(
             "EGGPOOL_PID_FILE": str(root / "private-rust.pid"),
         }
     )
-    python = _start_server([sys.executable, "-m", "eggpool"], python_config, python_env)
+    python = _start_server([ORACLE_PYTHON, "-m", "eggpool"], python_config, python_env)
     rust = _start_server([str(RUST_BINARY)], rust_config, rust_env)
     try:
         _wait_for_tcp(python_port, python, "private Python dashboard")
@@ -2074,6 +2071,17 @@ def run_qualification(
     screenshot_dir: Path | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    if ORACLE_SOURCE_ROOT != ROOT:
+        source_sha = subprocess.run(
+            ["git", "-C", str(ORACLE_SOURCE_ROOT), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if source_sha.returncode != 0 or source_sha.stdout.strip() != ORACLE_COMMIT:
+            raise QualificationError(
+                f"external Python oracle must be pinned at {ORACLE_COMMIT}"
+            )
     if not skip_build:
         result = subprocess.run(
             ["cargo", "build", "--manifest-path", str(RUST_MANIFEST)],

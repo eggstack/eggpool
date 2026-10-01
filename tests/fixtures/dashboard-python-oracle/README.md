@@ -54,3 +54,18 @@ databases, provider credentials, or real request content.
 These captures establish the oracle only; they do not establish parity for the
 current Rust implementation. The current-gap report and projection tests are
 the implementation substrate for M002-M006.
+
+The Python source is deliberately kept out of the active repository. To run
+the current candidate against it, keep the detached oracle worktree at the
+pinned commit and use its frozen environment:
+
+```sh
+EGGPOOL_DASHBOARD_ORACLE_ROOT=/tmp/eggpool-dashboard-oracle \
+EGGPOOL_DASHBOARD_ORACLE_PYTHON=/tmp/eggpool-dashboard-oracle/.venv/bin/python \
+uv run python scripts/qualification_dashboard_parity.py
+```
+
+The populated qualification database is constructed from the canonical Rust
+migration chain plus the checked-in, secret-free Q012 SQL fixture. Oracle
+asset hashes come from the checked-in Rust asset manifest captured from the
+pinned source.
