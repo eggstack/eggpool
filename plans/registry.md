@@ -42,14 +42,13 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 ready — Python oracle freeze and strict parity substrate | No hard blocker for M001; M002-M006 are dependency-sequenced behind the frozen oracle/common-shell work. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
 | Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
 
 ## Blocked work
@@ -67,6 +66,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Deployment and packaging M003 — config publication ownership corrective | closed — transaction-owned staging + no-clobber publish, concurrent config preserved, final never deleted, 60-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/003-status.md`, implementation `292a1e3f` |
 | Deployment and packaging M002 — installer transaction and collision corrective | closed — fresh `--force` refuses unowned files, config-seed failure rolls back executable, 46-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/002-status.md`, implementation `02ee2873` |
 | Deployment and packaging M001 — binary-first quick installer and ownership cleanup | closed — verified raw-binary fresh path, owner delegation, 42-case deterministic qualification, docs/validators green, zero Rust diff | `plans/closure/deployment-packaging/001-status.md`, implementation `05600504` |
 | Provider transport M005 — Eggfetch 0.2.1 / Eggress 1.0.11 refresh | closed — provider, consumer, workspace, dependency, tooling, hosted CI, and audit qualification passed | `plans/closure/provider-transport/005-status.md`, implementation `e08c0e25`, test portability correction `7715a448` |
@@ -229,6 +229,19 @@ remains independently blocked on the upstream Eggfetch typed classification
 interface. Routing-selection M002 stays evidence-gated (no affinity workload
 measured). Persistence has no eligible successor. No deployment-packaging
 successor is registered; future hardening requires new bounded plans.
+
+Unblock audit (deployment-packaging M003 closed, implementation `292a1e3f`,
+`plans/closure/deployment-packaging/003-status.md`): M003 is a corrective to
+closed M002 with no hard dependencies; it consumed only the stable ADR-0001
+ownership/failure invariants and the M002 binary-first + guarded-rollback
+baseline. Closure promotes no blocked work and unblocks no future plan.
+Provider-transport M002 remains independently blocked on the upstream Eggfetch
+typed classification interface. Routing-selection M002 stays evidence-gated (no
+affinity workload measured). Persistence has no eligible successor.
+Dashboard M001 remains the sole ready handoff (independent workstream).
+No deployment-packaging successor is registered; future hardening
+(attestations, system/root distribution, additional targets) requires new
+bounded plans.
 
 
 Dashboard parity planning audit (registered at research baseline

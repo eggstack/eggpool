@@ -122,12 +122,16 @@ executable identity. Deterministic qualification is now 46 cases including the
 M002 regressions.
 
 Post-M002 review found one remaining ownership ambiguity: config rollback still
-infers that a regular final config file belongs to the installer merely because
+inferred that a regular final config file belongs to the installer merely because
 the path was absent at preflight. An unrelated process can create that path
 while `init-config` is running, after which rollback may delete operator state.
-M003 is the registered corrective: generate config only in transaction-owned
-staging and publish it to the final path with true no-clobber semantics so final
-config is never rollback scratch space.
+M003 corrects it: first-time config is generated only in transaction-owned
+staging and published with true no-clobber (hard-link) semantics so the final
+config path is never written directly and never deleted by rollback. Deterministic
+qualification is now 60 cases including concurrent-writer preservation,
+publish-race winner preservation, staged success/failure cleanup, symlink/special
+refusal, no-clobber, signal staging cleanup, executable-rollback preservation,
+and existing-owner safe staging.
 
 ## 5. Target architecture
 
@@ -410,4 +414,4 @@ security findings.
 |---|---|---|---|---|
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
-| 3 | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | — | none |
+| 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
