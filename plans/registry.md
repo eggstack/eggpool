@@ -42,11 +42,13 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 closed — binary-first quick installer and ownership cleanup | No eligible successor; further hardening requires a new bounded plan. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M002 ready — installer transaction and collision corrective | M001 closed; M002 has no hard blocker and corrects two post-closure installer invariants. |
 
 ## Dependency-ready implementation plans
 
-No dependency-ready implementation plans are currently registered.
+| Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
+|---|---|---|---|---|
+| Deployment and packaging | M002 installer transaction and collision corrective | ready | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | Corrective to closed M001; ADR-0001 already defines ownership/failure invariants; no hard blocker. |
 
 ## Blocked work
 
@@ -80,6 +82,19 @@ No dependency-ready implementation plans are currently registered.
 | Request admission and wire M005 — planning reconciliation and minor wire cleanup | closed | `plans/closure/request-admission-wire/005-status.md`, implementation `4a1315a1` |
 
 ## Unblock audit
+
+Post-closure review of deployment-packaging M001 found two concrete invariant
+gaps not exercised by its 42-case qualification: fresh `--force` can replace
+an unowned regular destination that was never classified as an EggPool owner,
+and first-time `init-config` failure after executable commit can return
+failure while leaving that executable installed. M001 remains immutable and
+closed as historical evidence; corrective M002 is registered `ready` at
+baseline `6639d4e6028e7aeebfc46b0c6743b67dc19774c7` to add the missing
+regressions, tighten repair attribution, make fresh config seeding rollback
+transactional, and reconcile stale roadmap current-state prose. No new ADR or
+external dependency is required. Provider-transport M002 remains independently
+blocked and is unaffected.
+
 
 Explicit user direction opens deployment-packaging M001 at baseline `5dc8aeccf06c0f012d6fae81410a805586c9d9d3`. `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` establishes the fresh native curl-install ownership contract; the existing qualified raw release assets/checksum sidecar and standalone provenance/update path satisfy M001's interface dependencies, so `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` is `ready`. Provider-transport M002 remains independently blocked and is unaffected.
 
