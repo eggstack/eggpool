@@ -227,7 +227,16 @@ async fn journal_size_limit_rejects_values_outside_sqlite_integer_range() {
     })
     .await
     .expect_err("SQLite signed integer boundary is checked");
-    assert!(error.to_string().contains("out of range"));
+    let sqlite_error = std::error::Error::source(&error)
+        .expect("SQLite conversion error remains in the source chain");
+    let conversion_error = std::error::Error::source(sqlite_error)
+        .expect("the out-of-range integer conversion error remains typed");
+    assert!(
+        conversion_error
+            .downcast_ref::<std::num::TryFromIntError>()
+            .is_some(),
+        "unexpected journal-size-limit error: {error:?}"
+    );
     let _ = fs::remove_file(&path);
 }
 
