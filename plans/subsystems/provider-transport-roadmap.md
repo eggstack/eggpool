@@ -136,6 +136,19 @@ preservation of caller rustls trust/mTLS/verifier state during ALPN
 adaptation. The public `OutboundConnector::from_pproxy_uri` and
 `connect_tcp_detailed` surfaces used by EggPool remain available.
 
+At the M005 planning baseline (`869964c236cfd985a771beeb0ee815df3e1cf601`), upstream has since published
+`eggfetch-core 0.2.1` / `eggfetch-http-connect 0.2.1` and the Eggress
+1.0.11 family. Eggfetch 0.2.1 is a coordinated patch release whose published
+release notes state that runtime behavior, public APIs, feature graph/defaults,
+and MSRV are unchanged from 0.2.0. Eggress 1.0.11 is not merely a release
+identity bump: the v1.0.10..v1.0.11 range contains substantive fixes in
+pproxy parsing/validation, timeout/fail-closed handling, redaction, HTTP proxy
+bounds, SSH compatibility/session scoping, and other protocol/runtime code
+reachable through the outbound family. M005 therefore treats Eggfetch as a
+narrow exact-pin refresh but requires a full Eggress provider-transport
+requalification. `eggserve-server 0.4.0` remains the latest published
+EggServe server line and requires no server-transport milestone in this pass.
+
 At the coordinator boundary, finite and streaming paths intentionally reduce
 ordinary `TransportError` values to `FailureSource::Transport` for policy. The
 observation model already has a separate `error_class` field, but current
@@ -194,6 +207,10 @@ coordinator to Eggress/Eggfetch internal error types.
 - M003 operational dependency: hosted CI/dependency-audit evidence is required for closure.
 - M004 hard dependencies: M001 and M003 closure, so diagnostics target the final qualified provider-body/error adapter and current Eggress baseline.
 - M004 does not depend on M002: it consumes EggPool's existing stable `TransportError` categories and does not replace Eggfetch source-chain classification.
+- M005 hard dependencies: M001, M003, and M004 are closed; `eggfetch-core 0.2.1`, `eggfetch-http-connect 0.2.1`, and the Eggress 1.0.11 family are published.
+- M005 is independent of blocked M002: Eggfetch 0.2.1 intentionally does not add the missing general-purpose typed transport taxonomy, so M002 remains blocked after the patch refresh.
+- M005 interface dependency: the existing `eggfetch-core` native HTTP/1/custom-`Dialer` contract plus Eggress `OutboundConnector::connect_tcp_detailed` typed route surface must remain semantically compatible.
+- M005 operational dependency: hosted CI and dependency-audit evidence are required for closure after the targeted lockfile refresh.
 - Deferred upstream simplification: an additive Eggress pproxy constructor accepting caller executor/TLS options could later eliminate the private test-root chain-executor seam. No EggPool-local replacement is authorized without that upstream contract.
 
 ## 7. Milestones
@@ -368,6 +385,63 @@ Deferred work:
 
 - any policy change based on detailed proxy classes requires a separate evidence-driven milestone.
 
+### Milestone 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh
+
+Class: infrastructure
+
+Objective:
+
+Move EggPool's exact-pinned provider transport graph from
+`eggfetch-core 0.2.0` / transitive `eggfetch-http-connect 0.2.0` and the
+Eggress 1.0.10 family to the latest published patch lines
+(`eggfetch-core 0.2.1`, `eggfetch-http-connect 0.2.1`, Eggress 1.0.11),
+while proving that transport ownership, feature containment, routing
+fail-closed behavior, error semantics, TLS separation, cancellation recovery,
+and release footprint do not regress.
+
+Dependencies:
+
+- Hard: M001, M003, and M004 closed.
+- Published registry artifacts for Eggfetch 0.2.1 and Eggress 1.0.11.
+- Independent of blocked M002; no new typed taxonomy is claimed by Eggfetch 0.2.1.
+
+Deliverable boundary:
+
+- targeted exact-pin and lockfile refresh only;
+- source compatibility changes only if required by the new registry crates and
+  only inside the established provider adapter/test boundary;
+- default, `test-support`, and no-default provider transport qualification;
+- focused coordinator/wire non-regression;
+- dependency/security/feature/footprint evidence;
+- current-authority documentation updated after qualification;
+- no EggServe dependency change because `eggserve-server 0.4.0` is already current.
+
+User or operator value:
+
+Consume the current qualified patch releases and Eggress correctness/security
+hardening without widening EggPool's provider transport surface or adding a
+second networking policy owner.
+
+Exit conditions:
+
+- every resolved Eggress package in EggPool's lockfile is 1.0.11 with no
+  mixed 1.0.10 residue;
+- `eggfetch-core` and resolved `eggfetch-http-connect` are 0.2.1;
+- production remains listener-free and directly uses `eggress-outbound`;
+- default/no-default SSH capability behavior, fail-closed proxy routing,
+  route/origin TLS separation, typed route errors, cancellation recovery,
+  multi-hop target integrity, redaction, and account-pool isolation remain green;
+- Eggfetch remains native HTTP/1 with high-level retry/redirect/auth/proxy
+  policy disabled;
+- dependency graph and release artifact deltas are measured and explained;
+- closure record accepted.
+
+Deferred work:
+
+- M002 typed Eggfetch taxonomy adoption remains blocked on a distinct upstream
+  API and is not satisfied by this version refresh;
+- any future EggServe release requires its own server-transport qualification.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: none.
@@ -430,6 +504,15 @@ M004 adds exhaustive `TransportError` label tests plus finite/streaming propagat
 and a policy-invariance matrix proving that changing only `error_class` does not
 change `FailureEffects`.
 
+M005 reuses the M003 dependency-requalification shape but starts from the
+post-M004 baseline: provider transport under default/`test-support`/no-default,
+the focused C008/C009/C011 + boundaries/finalization/publication +
+`wire_runtime` targets, Cargo feature/dependency/security inspection, a locked
+release build, the serial workspace suites, and immediate pre/post graph and
+binary-size measurements. Because Eggress 1.0.11 changes parser, timeout,
+redaction, proxy-protocol, and SSH/session code, compilation alone is not
+sufficient closure evidence.
+
 ## 10. Risks and decision points
 
 - If preserving trailers requires changing Eggfetch itself rather than a narrow
@@ -447,6 +530,8 @@ change `FailureEffects`.
 - The current test-support `eggress-server/ssh` cfg coupling may or may not remain necessary in 1.0.10; preserve it unless both feature graphs and fixtures prove removal safe.
 - On proxied clients, Eggfetch's connect deadline spans route establishment and subsequent origin TLS establishment. `ProxyConnectTimeout` therefore means connection establishment timed out while using a proxy route, not proof that the proxy itself timed out.
 - If M004 discovers `error_class` exact values are an external/persisted compatibility contract, stop and plan an additive compatible field or migration instead of silently renaming values.
+- If Eggress 1.0.11 requires production listener/runtime ownership, weakens fail-closed validation, changes `connect_tcp_detailed` semantics, or pulls unrelated QUIC/UDP/runtime capability into the production graph, stop M005 rather than adapting around the regression.
+- If the targeted refresh produces unrelated lockfile churn, isolate the cause and keep only dependency changes required by the two upstream patch lines; do not accept broad opportunistic upgrades in the same milestone.
 
 ## 11. Completion definition
 
@@ -456,9 +541,10 @@ explicitly deferred/superseded. M001 closure must leave runtime behavior
 unchanged while making the response-frame/error boundary explicit. M002 may
 remain blocked on its upstream interface without preventing other milestones.
 M003 must leave the Eggress ownership/feature contract unchanged while moving
-to the current qualified upstream family. M004 may close the roadmap once its
-diagnostic-only evidence is accepted and no additional sustaining milestone is
-registered.
+to the then-current qualified upstream family. M004 is closed. M005 is now the
+registered sustaining milestone and must refresh the published Eggfetch/Eggress
+patch lines without changing transport ownership or policy. The roadmap remains
+active while M002 is blocked and M005 is open.
 
 ## 12. Milestone status
 
@@ -468,3 +554,4 @@ registered.
 | 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
+| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | ready | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | — | none; M002 remains independently blocked |

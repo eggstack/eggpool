@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 blocked — stable Eggfetch transport error taxonomy | Requires a published upstream typed classification interface. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 ready — Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 
@@ -47,6 +47,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider transport | M005 Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | ready | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | M001/M003/M004 closed; upstream patch releases published; M002 remains independently blocked. |
 
 ## Blocked work
 
@@ -152,3 +153,14 @@ M003's explicit no-tail-transfer gate. Its runtime implementation was reverted
 `plans/closure/persistence/003-status.md`. No successor is eligible from this
 closure. Any future checkpoint redesign must be separately planned and must
 address storage stalls without transferring them to foreground gate wait.
+
+Explicit user direction opens Provider transport M005 as a dependency-ready
+patch refresh at baseline `869964c236cfd985a771beeb0ee815df3e1cf601`. It upgrades
+`eggfetch-core 0.2.0 -> 0.2.1`, resolves `eggfetch-http-connect` to 0.2.1,
+and upgrades the live Eggress family `1.0.10 -> 1.0.11` under the existing
+listener-free outbound/typed-error/default-no-default contracts. Upstream
+Eggfetch 0.2.1 is documented as runtime/API-equivalent to 0.2.0; Eggress
+1.0.11 contains substantive parser/timeout/redaction/SSH/protocol fixes and
+therefore requires full provider-transport requalification. EggServe needs no
+parallel plan: `eggserve-server 0.4.0` is already the latest published line.
+Provider M002 remains blocked and is not promoted by M005.
