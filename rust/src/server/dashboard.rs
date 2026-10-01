@@ -2028,7 +2028,7 @@ pub(super) fn render_overview(
         "—".to_owned()
     };
     let cards_second = format!(
-        "<section class=\"cards\">{}{}</section><section class=\"cards\">{}{}{}{}</section>",
+        "<section class=\"cards\">{}{}{}{}{}{}</section>",
         overview_metric_card(
             "Pending requests",
             "—",
@@ -2128,9 +2128,15 @@ pub(super) fn render_overview(
         html_escape(period)
     );
     let body = body.replace(
+        "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
+        &format!(
+            "</section>{cards_second}{cards_third}{cards_fourth}<section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>"
+        ),
+    );
+    let body = body.replace(
         "</section><section class=\"panel\"><h3>Timeseries",
         &format!(
-            "</section>{cards_second}{cards_third}{cards_fourth}{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
+            "</section>{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
         ),
     );
     render_dashboard_layout(
