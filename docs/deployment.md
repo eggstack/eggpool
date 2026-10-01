@@ -31,7 +31,12 @@ checkout. Direct `uv tool install eggpool`, `pipx install eggpool`, and
 detects an existing `eggpool` on PATH and preserves its owner — native
 installs delegate to `eggpool update`, legacy Python-era installs use their
 owning manager, and source-checkout or ambiguous ownership fails closed.
-Pass `--force` for an intentional same-owner repair. It seeds
+Pass `--force` for an intentional same-owner repair of a verified EggPool
+installation; it never overwrites an unrelated file at the destination.
+A fresh install is transactional through first-time config seeding: if
+`init-config` fails after executable publication, the newly installed
+executable is removed again (unless the destination changed concurrently,
+in which case manual recovery is reported). It seeds
 `~/.config/eggpool/config.toml` from the example template only after the
 command is committed and verified, without overwriting an existing file, and
 prints the resolved config path.

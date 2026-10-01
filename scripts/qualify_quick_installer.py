@@ -102,6 +102,85 @@ def _fake_raw_binary(
     _fake_command(path, kind=full_kind, version=version, native=native)
 
 
+def _fake_raw_binary_failing_init(path: Path, *, version: str) -> None:
+    # Candidate passes release/provenance/version checks but fails
+    # `init-config` after writing a partial file. Used to prove fresh-install
+    # rollback removes the committed executable and the partial config.
+    _exe(
+        path,
+        f"""#!{sys.executable}
+import pathlib
+import sys
+
+VERSION = "{version}"
+
+def _report():
+    print("kind\\tstandalone-rust")
+    print("version\\t" + VERSION)
+    print("native\\ttrue")
+
+if sys.argv[1:] == ["install-provenance", "--shell"]:
+    _report()
+elif sys.argv[1:] == ["version"]:
+    print(VERSION)
+elif sys.argv[1:2] == ["init-config"]:
+    target = pathlib.Path(sys.argv[2])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("[server\\npartial = true\\n", encoding="utf-8")
+    raise SystemExit(3)
+elif sys.argv[1:2] == ["runtime-status"]:
+    raise SystemExit(1)
+elif sys.argv[1:2] in (["stop"], ["restart"]):
+    pass
+else:
+    raise SystemExit(2)
+""",
+    )
+
+
+def _fake_raw_binary_race_on_config(path: Path, *, version: str) -> None:
+    # Candidate passes verification but its `init-config` replaces the
+    # destination executable with unrelated bytes before failing. Rollback
+    # must detect the identity change and refuse to delete the replacement.
+    _exe(
+        path,
+        f"""#!{sys.executable}
+import os
+import pathlib
+import sys
+
+VERSION = "{version}"
+
+def _report():
+    print("kind\\tstandalone-rust")
+    print("version\\t" + VERSION)
+    print("native\\ttrue")
+
+if sys.argv[1:] == ["install-provenance", "--shell"]:
+    _report()
+elif sys.argv[1:] == ["version"]:
+    print(VERSION)
+elif sys.argv[1:2] == ["init-config"]:
+    home = pathlib.Path(os.environ.get("HOME", str(pathlib.Path.home())))
+    default_bin = str(home / ".local/bin")
+    bin_dir = pathlib.Path(os.environ.get("EGGPOOL_INSTALL_BIN_DIR", default_bin))
+    dest = bin_dir / "eggpool"
+    try:
+        dest.write_bytes(b"racing\\n")
+        dest.chmod(0o755)
+    except OSError:
+        pass
+    raise SystemExit(3)
+elif sys.argv[1:2] == ["runtime-status"]:
+    raise SystemExit(1)
+elif sys.argv[1:2] in (["stop"], ["restart"]):
+    pass
+else:
+    raise SystemExit(2)
+""",
+    )
+
+
 def _fake_manager(path: Path, *, kind: str) -> None:
     bin_variable = "UV_TOOL_BIN_DIR" if kind == "uv-tool" else "PIPX_BIN_DIR"
     _exe(
@@ -783,6 +862,120 @@ def _case_dest_unrelated() -> dict[str, str]:
         return {"case": "dest-unrelated-collision", "status": "pass"}
 
 
+def _case_fresh_force_unowned_refusal() -> dict[str, str]:
+    # M002 Finding A: fresh `--force` must not replace an unowned regular
+    # file. No EggPool command is on PATH, so the destination is a collision
+    # even with `--force`.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        dest_dir = root / "home/.local/bin"
+        dest_dir.mkdir(parents=True)
+        dest = dest_dir / "eggpool"
+        dest.write_bytes(b"unrelated\n")
+        dest.chmod(0o755)
+        before_bytes = dest.read_bytes()
+        before_mode = dest.stat().st_mode & 0o777
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            args=["--force"],
+            expected=1,
+        )
+        assert (
+            "not a verified" in result.stderr
+            or "cannot overwrite" in result.stderr
+            or "collision" in result.stderr
+        )
+        assert "--force" in result.stderr
+        assert dest.read_bytes() == before_bytes
+        assert (dest.stat().st_mode & 0o777) == before_mode
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        assert not (root / "manager.log").exists()
+        return {"case": "fresh-force-unowned-regular-refusal", "status": "pass"}
+
+
+def _fresh_failing_release(root: Path, *, version: str, kind: str = "failing") -> Path:
+    releases = root / "releases"
+    candidate = root / "candidate-bin"
+    if kind == "race":
+        _fake_raw_binary_race_on_config(candidate, version=version)
+    else:
+        _fake_raw_binary_failing_init(candidate, version=version)
+    _make_release(
+        releases,
+        version=version,
+        raw_os="linux",
+        raw_arch="x86_64",
+        binary_path=candidate,
+    )
+    return releases
+
+
+def _case_fresh_init_config_failure_rollback() -> dict[str, str]:
+    # M002 Finding B: first-time `init-config` failure after executable commit
+    # must roll back the executable and any partial config created by this
+    # invocation.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="failing")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        assert "init-config" in result.stderr or "config" in result.stderr
+        assert not (root / "home/.local/bin/eggpool").exists()
+        assert not (root / "config-home/eggpool/config.toml").exists()
+        # Lock and temp state must be released so a later clean install can
+        # proceed; the lock dir is removed by the installer trap.
+        assert not (root / "state-home/eggpool/install.lock.d").exists()
+        return {"case": "fresh-init-config-failure-rolls-back-binary", "status": "pass"}
+
+
+def _case_fresh_init_failure_preserves_preexisting() -> dict[str, str]:
+    # When config already exists, fresh install never invokes `init-config`
+    # (seed-after-commit is skipped by dispatch), so a failing `init-config`
+    # implementation cannot trigger rollback. This case proves pre-existing
+    # config is preserved and documents why the failure-with-existing-config
+    # state is impossible by dispatch.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="failing")
+        config = root / "config-home/eggpool/config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_bytes(b"operator-config\n")
+        _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        assert (root / "home/.local/bin/eggpool").is_file()
+        assert config.read_bytes() == b"operator-config\n"
+        return {
+            "case": "fresh-init-config-failure-preserves-preexisting-config",
+            "status": "pass",
+        }
+
+
+def _case_fresh_config_failure_race_refusal() -> dict[str, str]:
+    # Rollback must prove it is removing the candidate committed by this
+    # transaction. If the destination changed after commit, it must not be
+    # deleted and the installer must emit manual recovery guidance.
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1", kind="race")
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        dest = root / "home/.local/bin/eggpool"
+        assert dest.is_file()
+        assert dest.read_bytes() == b"racing\n"
+        combined = result.stderr + result.stdout
+        assert (
+            "manual recovery" in combined
+            or "changed" in combined
+            or "could not be proven safe" in combined
+        )
+        return {
+            "case": "fresh-config-failure-destination-race-refusal",
+            "status": "pass",
+        }
+
+
 def _case_lock_contention() -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
         root = Path(value)
@@ -1168,6 +1361,10 @@ def main() -> int:
         _case_dest_symlink(),
         _case_dest_special(),
         _case_dest_unrelated(),
+        _case_fresh_force_unowned_refusal(),
+        _case_fresh_init_config_failure_rollback(),
+        _case_fresh_init_failure_preserves_preexisting(),
+        _case_fresh_config_failure_race_refusal(),
         _case_lock_contention(),
         _case_target_race(),
         _case_existing_standalone_delegates(),

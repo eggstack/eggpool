@@ -352,4 +352,4 @@ security findings.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
-| 2 | ready | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | — | none |
+| 2 | active | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | — | none |

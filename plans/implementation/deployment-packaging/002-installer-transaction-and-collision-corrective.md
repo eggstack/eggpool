@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone 002 — Installer transaction and collision corrective
 
-Status: ready
+Status: active
 
 Repository baseline: `6639d4e6028e7aeebfc46b0c6743b67dc19774c7`
 

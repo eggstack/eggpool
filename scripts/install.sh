@@ -54,7 +54,8 @@ Usage:
 Options:
     --version X.Y.Z     Install that exact catalogued release (leading v is accepted)
     --upgrade           Install the latest stable release explicitly
-    --force             Reinstall or repair without changing owner
+    --force             Repair a verified EggPool installation without changing
+                        owner; never overwrites an unrelated file
     --adopt-standalone  Explicitly migrate a standalone Rust binary to wheel management
     --package-manager uv|pipx|pip
                         Explicitly use a package-manager wheel path for a fresh
@@ -454,6 +455,20 @@ INSTALL_DEST_DIR="${EGGPOOL_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_DEST="$INSTALL_DEST_DIR/eggpool"
 LOCK_HELD=0
 
+# Fresh-install transaction state (M002). The fresh transaction ends only
+# after executable publication, provenance/version revalidation, and
+# first-time config seeding. Rollback removes only the executable committed
+# by this invocation when its identity still matches, plus a newly-created
+# partial config only when safely attributable. It never deletes a raced
+# replacement, a pre-existing config, or a symlink/special-file boundary.
+FRESH_TX_ACTIVE=0
+FRESH_TX_COMMITTED=0
+FRESH_TX_EXPECTED_HASH=""
+FRESH_TX_EXPECTED_VERSION=""
+FRESH_TX_CONFIG=""
+FRESH_TX_CONFIG_EXISTED=0
+FRESH_TX_ROLLBACK_DONE=0
+
 cleanup_install_temp() {
     if [[ -n "$INSTALL_TMPDIR" && -d "$INSTALL_TMPDIR" ]]; then
         rm -rf "$INSTALL_TMPDIR"
@@ -468,13 +483,109 @@ release_install_lock() {
     LOCK_HELD=0
 }
 
+# Guarded fresh-install rollback. Returns 0 when the executable committed by
+# this transaction was removed (or was already absent) and any partial config
+# was cleaned or was absent. Returns 1 when manual recovery is required
+# (destination identity changed, unsafe config boundary, or removal failed).
+# Idempotent via FRESH_TX_ROLLBACK_DONE; safe to call from traps.
+fresh_tx_rollback_guarded() {
+    local dest="${INSTALL_DEST}"
+    local expected_hash="${FRESH_TX_EXPECTED_HASH:-}"
+    local expected_version="${FRESH_TX_EXPECTED_VERSION:-}"
+    local config_path="${FRESH_TX_CONFIG:-}"
+    local config_existed="${FRESH_TX_CONFIG_EXISTED:-0}"
+    local need_manual=0
+
+    if ((FRESH_TX_ROLLBACK_DONE)); then
+        return 0
+    fi
+    FRESH_TX_ROLLBACK_DONE=1
+
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        if [[ -L "$dest" ]]; then
+            need_manual=1
+        elif [[ ! -f "$dest" ]]; then
+            need_manual=1
+        elif [[ -z "$expected_hash" ]]; then
+            need_manual=1
+        else
+            local current_hash=""
+            current_hash="$(hash_file_sha256 "$dest" 2>/dev/null || true)"
+            if [[ -z "$current_hash" || "$current_hash" != "$expected_hash" ]]; then
+                need_manual=1
+            else
+                local ver_out=""
+                ver_out="$("$dest" version 2>/dev/null | head -n 1 | tr -d '\r' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//' || true)"
+                if [[ -n "$expected_version" && -n "$ver_out" && "$ver_out" != "$expected_version" ]]; then
+                    need_manual=1
+                else
+                    rm -f "$dest" 2>/dev/null || need_manual=1
+                    if [[ -e "$dest" ]]; then
+                        need_manual=1
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    if [[ -n "$config_path" ]] && (( ! config_existed )); then
+        if [[ -e "$config_path" || -L "$config_path" ]]; then
+            if [[ -L "$config_path" ]]; then
+                need_manual=1
+            elif [[ -f "$config_path" ]]; then
+                rm -f "$config_path" 2>/dev/null || need_manual=1
+            else
+                need_manual=1
+            fi
+        fi
+    fi
+
+    if ((need_manual)); then
+        return 1
+    fi
+    return 0
+}
+
 install_trap_cleanup() {
+    if ((FRESH_TX_ACTIVE)) && ((FRESH_TX_COMMITTED)) && (( ! FRESH_TX_ROLLBACK_DONE )); then
+        fresh_tx_rollback_guarded >/dev/null 2>&1 || true
+    fi
     cleanup_install_temp
     release_install_lock
 }
 
+fresh_tx_signal_handler() {
+    if ((FRESH_TX_ACTIVE)) && ((FRESH_TX_COMMITTED)) && (( ! FRESH_TX_ROLLBACK_DONE )); then
+        fresh_tx_rollback_guarded >/dev/null 2>&1 || true
+    fi
+    cleanup_install_temp
+    release_install_lock
+    exit 130
+}
+
+# Fail after fresh commit with transactional rollback. Attempts guarded
+# removal of the executable committed by this invocation plus any partial
+# config, then exits via fail() with diagnostics distinguishing rollback
+# success from manual-recovery. Keeps the install lock held until rollback
+# completes.
+fail_fresh_tx() {
+    local reason="$1"
+    local cfg="${FRESH_TX_CONFIG:-unknown config path}"
+    if fresh_tx_rollback_guarded; then
+        FRESH_TX_ACTIVE=0
+        release_install_lock
+        cleanup_install_temp
+        fail "$reason; fresh install was rolled back (executable and partial config removed)"
+    else
+        FRESH_TX_ACTIVE=0
+        release_install_lock
+        cleanup_install_temp
+        fail "$reason; rollback could not be proven safe (destination may have changed) — manual recovery required: verify $INSTALL_DEST identity and remove any partial config at $cfg explicitly"
+    fi
+}
+
 trap install_trap_cleanup EXIT
-trap 'cleanup_install_temp; release_install_lock; exit 130' INT TERM HUP
+trap fresh_tx_signal_handler INT TERM HUP
 
 acquire_install_lock() {
     mkdir -p "$INSTALL_STATE_DIR" 2>/dev/null || fail "could not create install state directory"
@@ -679,6 +790,9 @@ same_path() {
 }
 
 # Fresh verified raw-binary install (WP-B). No Python/manager on this path.
+# M002: `--force` is a verified-repair switch, never permission to overwrite
+# an unowned file. A fresh destination that already exists is always a
+# collision, even with `--force`, because no EggPool owner was classified.
 install_fresh_raw_binary() {
     local requested="$1" # "latest" or exact X.Y.Z
     local sidecar_url sidecar_file asset_url asset_file
@@ -687,19 +801,22 @@ install_fresh_raw_binary() {
     make_install_tempdir
     mkdir -p "$INSTALL_DEST_DIR" 2>/dev/null || fail "could not create $INSTALL_DEST_DIR"
     refuse_dest_collision "$INSTALL_DEST"
-    if [[ -e "$INSTALL_DEST" ]]; then
-        if ((FORCE_REINSTALL)); then
-            # Fresh repair still refuses symlinks/special files; a regular
-            # file may be replaced after verified self-check.
-            :
-        else
-            fail "destination $INSTALL_DEST already exists; remove it explicitly or rerun with --force for a verified repair"
-        fi
+    if [[ -e "$INSTALL_DEST" || -L "$INSTALL_DEST" ]]; then
+        fail "destination $INSTALL_DEST already exists and is not a verified EggPool installation; --force repairs a verified EggPool installation and cannot overwrite an unrelated file (remove it explicitly to proceed)"
     fi
     # Revalidate: no existing command may have appeared after preflight.
     if command -v eggpool >/dev/null 2>&1; then
         fail "an eggpool command appeared during install preflight; rerun to classify its owner"
     fi
+    # Arm the fresh transaction before any mutation. The EXIT/signal traps
+    # use this state for guarded rollback; success disarms it below.
+    FRESH_TX_ACTIVE=1
+    FRESH_TX_COMMITTED=0
+    FRESH_TX_EXPECTED_HASH=""
+    FRESH_TX_EXPECTED_VERSION=""
+    FRESH_TX_CONFIG=""
+    FRESH_TX_CONFIG_EXISTED=0
+    FRESH_TX_ROLLBACK_DONE=0
     sidecar_file="$INSTALL_TMPDIR/SHA256SUMS"
     asset_file="$INSTALL_TMPDIR/eggpool-candidate"
     if [[ "$requested" == "latest" ]]; then
@@ -729,67 +846,115 @@ install_fresh_raw_binary() {
     rm -f "$staged_samefs"
     cp "$asset_file" "$staged_samefs" || fail "could not stage the verified candidate"
     chmod 755 "$staged_samefs" || fail "could not stage the verified candidate"
-    # Race-proof revalidation before atomic commit.
+    # Race-proof revalidation before atomic commit. Fresh never replaces an
+    # existing destination, even with --force.
     refuse_dest_collision "$INSTALL_DEST"
-    if [[ -e "$INSTALL_DEST" ]] && (( ! FORCE_REINSTALL )); then
+    if [[ -e "$INSTALL_DEST" || -L "$INSTALL_DEST" ]]; then
         rm -f "$staged_samefs"
-        fail "destination $INSTALL_DEST changed during install; refusing to overwrite"
+        fail "destination $INSTALL_DEST changed during install; refusing to overwrite an unverified file (remove it explicitly to proceed)"
     fi
     if command -v eggpool >/dev/null 2>&1; then
         rm -f "$staged_samefs"
         fail "an eggpool command appeared during install; rerun to classify its owner"
     fi
-    if [[ -e "$INSTALL_DEST" ]]; then
-        # Verified repair: keep no rollback for a fresh-path regular file;
-        # the staged file is already verified, so atomic replace is safe.
-        mv -f "$staged_samefs" "$INSTALL_DEST" || {
-            rm -f "$staged_samefs"
-            fail "could not commit the verified executable"
-        }
+    # Record transaction identity before commit: expected hash/version plus
+    # config existence. Rollback revalidates hash/version before deleting.
+    FRESH_TX_EXPECTED_HASH="$SELECTED_SHA256"
+    FRESH_TX_EXPECTED_VERSION="$SELECTED_VERSION"
+    local fresh_config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
+    FRESH_TX_CONFIG="$fresh_config_path"
+    if [[ -f "$fresh_config_path" ]]; then
+        FRESH_TX_CONFIG_EXISTED=1
     else
-        mv "$staged_samefs" "$INSTALL_DEST" || {
-            rm -f "$staged_samefs"
-            fail "could not commit the verified executable"
-        }
+        FRESH_TX_CONFIG_EXISTED=0
     fi
+    mv "$staged_samefs" "$INSTALL_DEST" || {
+        rm -f "$staged_samefs"
+        fail "could not commit the verified executable"
+    }
     chmod 755 "$INSTALL_DEST" 2>/dev/null || true
+    FRESH_TX_COMMITTED=1
     export PATH="$INSTALL_DEST_DIR:$PATH"
     local active
     active="$(command -v eggpool 2>/dev/null || true)"
-    [[ -n "$active" ]] || fail "installed eggpool command is not on PATH"
-    same_path "$active" "$INSTALL_DEST" || \
-        fail "installed eggpool at an unexpected PATH location; refusing a silent command collision"
+    if [[ -z "$active" ]]; then
+        fail_fresh_tx "installed eggpool command is not on PATH"
+    fi
+    if ! same_path "$active" "$INSTALL_DEST"; then
+        fail_fresh_tx "installed eggpool at an unexpected PATH location; refusing a silent command collision"
+    fi
     local report cli_version
     if report="$("$active" install-provenance --shell 2>/dev/null)" && parse_provenance_report "$report"; then
         :
     else
-        fail "installed command did not provide verifiable native provenance"
+        fail_fresh_tx "installed command did not provide verifiable native provenance"
     fi
-    [[ "$PROVENANCE_KIND" == "standalone-rust" ]] || \
-        fail "installed command is owned by $PROVENANCE_KIND, expected standalone-rust"
-    [[ "$PROVENANCE_NATIVE" == "true" ]] || \
-        fail "installed command is not the native Rust release"
-    [[ "$PROVENANCE_VERSION" == "$SELECTED_VERSION" ]] || \
-        fail "installed version is ${PROVENANCE_VERSION:-unknown}, expected $SELECTED_VERSION"
-    cli_version="$("$active" version 2>/dev/null | head -n 1 | tr -d '\r')" || \
-        fail "installed eggpool version check failed"
-    [[ -n "$cli_version" ]] || fail "installed eggpool returned an empty version"
-    seed_config_after_commit "$active"
+    if [[ "$PROVENANCE_KIND" != "standalone-rust" ]]; then
+        fail_fresh_tx "installed command is owned by $PROVENANCE_KIND, expected standalone-rust"
+    fi
+    if [[ "$PROVENANCE_NATIVE" != "true" ]]; then
+        fail_fresh_tx "installed command is not the native Rust release"
+    fi
+    if [[ "$PROVENANCE_VERSION" != "$SELECTED_VERSION" ]]; then
+        fail_fresh_tx "installed version is ${PROVENANCE_VERSION:-unknown}, expected $SELECTED_VERSION"
+    fi
+    cli_version="$("$active" version 2>/dev/null | head -n 1 | tr -d '\r' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')" || \
+        fail_fresh_tx "installed eggpool version check failed"
+    if [[ -z "$cli_version" ]]; then
+        fail_fresh_tx "installed eggpool returned an empty version"
+    fi
+    # Transactional first-time config seeding. Existing config means no write.
+    # Failure after commit rolls back the executable committed by this
+    # invocation plus any partial config it created; a raced replacement is
+    # never deleted.
+    if [[ -f "$fresh_config_path" ]]; then
+        echo "Preserved existing config: $fresh_config_path"
+    else
+        if "$active" init-config "$fresh_config_path"; then
+            echo "Created $fresh_config_path from the installed package's canonical template."
+        else
+            fail_fresh_tx "could not seed the missing config at $fresh_config_path (init-config failed)"
+        fi
+    fi
     print_binary_next_steps "$cli_version" "$SELECTED_VERSION" "$active"
+    # Disarm the transaction on success; the install is complete.
+    FRESH_TX_ACTIVE=0
+    FRESH_TX_COMMITTED=0
     release_install_lock
     cleanup_install_temp
 }
 
 seed_config_after_commit() {
+    # Explicit result/ownership contract (M002 §6.3):
+    # - preserved-existing when config existed before invocation;
+    # - created-successfully on first-time seed success;
+    # - failed-with-no-created-file vs failed-with-new-partial-file on error.
+    # A new partial file is removed only when this invocation can prove it
+    # created it (did not exist at preflight, still a regular file, never a
+    # symlink/special boundary). A pre-existing config is never removed.
     local active="$1"
     local config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
-    if [[ ! -f "$config_path" ]]; then
-        "$active" init-config "$config_path" || \
-            fail "could not seed the missing config at $config_path"
-        echo "Created $config_path from the installed package's canonical template."
-    else
-        echo "Preserved existing config: $config_path"
+    local existed=0
+    if [[ -f "$config_path" ]]; then
+        existed=1
     fi
+    if ((existed)); then
+        echo "Preserved existing config: $config_path"
+        return 0
+    fi
+    if "$active" init-config "$config_path"; then
+        echo "Created $config_path from the installed package's canonical template."
+        return 0
+    fi
+    if [[ -L "$config_path" ]]; then
+        fail "could not seed the missing config at $config_path; partial config could not be proven safe (symlink boundary) — manual recovery required"
+    fi
+    if [[ -f "$config_path" ]]; then
+        rm -f "$config_path" 2>/dev/null || true
+    elif [[ -e "$config_path" ]]; then
+        fail "could not seed the missing config at $config_path; partial config could not be proven safe (special-file boundary) — manual recovery required"
+    fi
+    fail "could not seed the missing config at $config_path"
 }
 
 print_binary_next_steps() {
