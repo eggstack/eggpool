@@ -181,6 +181,19 @@ async fn dashboard_timeseries_routes_preserve_auth_and_validate_periods() {
     assert!(bounded.contains("\"metric\":\"requests\""), "{bounded}");
     assert!(bounded.contains("\"limit\":25"), "{bounded}");
 
+    let accounts = request(address, b"GET /accounts?period=1h&show_disabled=1&theme=Nord HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(accounts.starts_with("HTTP/1.1 200"), "{accounts}");
+    assert!(accounts.contains("name=\"show_disabled\""), "{accounts}");
+    assert!(accounts.contains("value=\"Nord\""), "{accounts}");
+    assert!(accounts.contains("value=\"1h\" selected"), "{accounts}");
+
+    let models = request(address, b"GET /models?availability=available&used=unused&period=7d HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(models.starts_with("HTTP/1.1 200"), "{models}");
+    assert!(models.contains("name=\"availability\""), "{models}");
+    assert!(models.contains("name=\"used\""), "{models}");
+    assert!(models.contains("value=\"available\" selected"), "{models}");
+    assert!(models.contains("value=\"7d\" selected"), "{models}");
+
     assert!(handle.request_shutdown(ShutdownReason::Requested));
     let report = tokio::time::timeout(Duration::from_secs(6), task)
         .await

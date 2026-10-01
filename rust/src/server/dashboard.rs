@@ -67,6 +67,18 @@ pub(super) struct PeriodQuery {
     period: Option<String>,
     theme: Option<String>,
     show_disabled: Option<String>,
+    account: Option<String>,
+    used: Option<String>,
+    info_status: Option<String>,
+    availability: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct ModelFilters {
+    account: Option<String>,
+    used: Option<String>,
+    info_status: Option<String>,
+    availability: Option<String>,
 }
 
 /// Start the development server using the configured address and database.
@@ -125,6 +137,7 @@ pub(super) async fn accounts_page(
         query.period,
         query.theme,
         query.show_disabled.as_deref() == Some("1"),
+        ModelFilters::default(),
     )
     .await
 }
@@ -133,7 +146,18 @@ pub(super) async fn models_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_data_page(&state, "Models", "models", query.period, query.theme).await
+    dashboard_data_page_with_model_filters(
+        &state,
+        query.period,
+        query.theme,
+        ModelFilters {
+            account: query.account,
+            used: query.used,
+            info_status: query.info_status,
+            availability: query.availability,
+        },
+    )
+    .await
 }
 
 pub(super) async fn model_detail_page(
@@ -708,7 +732,16 @@ pub(super) async fn dashboard_data_page(
     period: Option<String>,
     theme: Option<String>,
 ) -> Response {
-    dashboard_data_page_with_options(state, title, active_nav, period, theme, false).await
+    dashboard_data_page_with_options(
+        state,
+        title,
+        active_nav,
+        period,
+        theme,
+        false,
+        ModelFilters::default(),
+    )
+    .await
 }
 
 async fn dashboard_data_page_with_options(
@@ -718,6 +751,7 @@ async fn dashboard_data_page_with_options(
     period: Option<String>,
     theme: Option<String>,
     show_disabled: bool,
+    model_filters: ModelFilters,
 ) -> Response {
     let period = match normalize_period(period.as_deref()) {
         Ok(value) => value,
@@ -760,6 +794,7 @@ async fn dashboard_data_page_with_options(
         &summary,
         &model_info,
         show_disabled,
+        &model_filters,
     );
     if active_nav == "timeseries" {
         body = body.replace(
@@ -775,6 +810,24 @@ async fn dashboard_data_page_with_options(
         Some(theme.to_owned()),
         body,
     )
+}
+
+async fn dashboard_data_page_with_model_filters(
+    state: &AppState,
+    period: Option<String>,
+    theme: Option<String>,
+    model_filters: ModelFilters,
+) -> Response {
+    dashboard_data_page_with_options(
+        state,
+        "Models",
+        "models",
+        period,
+        theme,
+        false,
+        model_filters,
+    )
+    .await
 }
 
 pub(super) fn dashboard_header(title: &str, period: &str, theme: &str) -> String {
@@ -804,6 +857,7 @@ pub(super) fn render_dashboard_page_body(
     summary: &db::DashboardSummary,
     model_info: &[Value],
     show_disabled: bool,
+    model_filters: &ModelFilters,
 ) -> String {
     let mut body = if matches!(active_nav, "accounts" | "models") {
         String::new()
@@ -812,7 +866,13 @@ pub(super) fn render_dashboard_page_body(
     };
     match active_nav {
         "accounts" => body.push_str(&render_accounts_page(data, period, theme, show_disabled)),
-        "models" => body.push_str(&render_models_page(data, period, theme, model_info)),
+        "models" => body.push_str(&render_models_page(
+            data,
+            period,
+            theme,
+            model_info,
+            model_filters,
+        )),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
         "timeseries" => body.push_str(&render_timeseries_page(data, period)),
@@ -948,9 +1008,53 @@ pub(super) fn render_models_page(
     period: &str,
     theme: &str,
     model_info: &[Value],
+    filters: &ModelFilters,
 ) -> String {
-    let filters = format!(
-        "<form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\"><option value=\"\" selected>(any account)</option></select></label><label>Used: <select name=\"used\"><option value=\"\" selected>All</option><option value=\"used\">Used</option><option value=\"unused\">Unused</option></select></label><label>Info: <select name=\"info_status\"><option value=\"\" selected>All</option><option value=\"fresh\">Fresh</option><option value=\"partial\">Partial</option><option value=\"sparse_new\">Sparse</option><option value=\"stale\">Stale</option><option value=\"conflicting\">Conflict</option><option value=\"unmatched\">Unmatched</option></select></label><label>Availability: <select name=\"availability\"><option value=\"\" selected>All</option><option value=\"available\">Available</option><option value=\"unavailable\">Unavailable</option></select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>",
+    let option = |label: &str, value: &str, selected: Option<&str>| {
+        format!(
+            "<option value=\"{}\"{}>{}</option>",
+            html_escape(value),
+            if selected == Some(value) {
+                " selected"
+            } else {
+                ""
+            },
+            html_escape(label),
+        )
+    };
+    let account_options = std::iter::once(option("(any account)", "", filters.account.as_deref()))
+        .chain(
+            data.accounts
+                .iter()
+                .map(|account| option(&account.name, &account.name, filters.account.as_deref())),
+        )
+        .collect::<String>();
+    let used_options = [("All", ""), ("Used", "used"), ("Unused", "unused")]
+        .into_iter()
+        .map(|(label, value)| option(label, value, filters.used.as_deref()))
+        .collect::<String>();
+    let info_options = [
+        ("All", ""),
+        ("Fresh", "fresh"),
+        ("Partial", "partial"),
+        ("Sparse", "sparse_new"),
+        ("Stale", "stale"),
+        ("Conflict", "conflicting"),
+        ("Unmatched", "unmatched"),
+    ]
+    .into_iter()
+    .map(|(label, value)| option(label, value, filters.info_status.as_deref()))
+    .collect::<String>();
+    let availability_options = [
+        ("All", ""),
+        ("Available", "available"),
+        ("Unavailable", "unavailable"),
+    ]
+    .into_iter()
+    .map(|(label, value)| option(label, value, filters.availability.as_deref()))
+    .collect::<String>();
+    let controls = format!(
+        "<form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\">{account_options}</select></label><label>Used: <select name=\"used\">{used_options}</select></label><label>Info: <select name=\"info_status\">{info_options}</select></label><label>Availability: <select name=\"availability\">{availability_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>",
         html_escape(period),
         html_escape(theme),
         period_options(period),
@@ -960,10 +1064,69 @@ pub(super) fn render_models_page(
         .models
         .iter()
         .filter(|row| row.model_id != "__deprecated__")
+        .filter(|row| match filters.used.as_deref() {
+            Some("used") => row.requests > 0,
+            Some("unused") => row.requests == 0,
+            _ => true,
+        })
+        .filter(|row| match filters.availability.as_deref() {
+            Some("available") => matches!(row.resolution_status.as_str(), "available" | "resolved"),
+            Some("unavailable") => {
+                matches!(row.resolution_status.as_str(), "unavailable" | "withdrawn")
+            }
+            _ => true,
+        })
+        .filter(|row| {
+            filters.account.as_deref().is_none_or(str::is_empty)
+                || data.requests.iter().any(|request| {
+                    request.model_id == row.model_id
+                        && filters.account.as_deref() == Some(request.account_name.as_str())
+                })
+        })
+        .filter(|row| {
+            let Some(status) = filters
+                .info_status
+                .as_deref()
+                .filter(|status| !status.is_empty())
+            else {
+                return true;
+            };
+            model_info.iter().any(|info| {
+                info["model_id"]
+                    .as_str()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(&row.model_id))
+                    && info["status"].as_str() == Some(status)
+            })
+        })
         .collect::<Vec<_>>();
     if models.is_empty() {
+        let empty_message = if data
+            .models
+            .iter()
+            .any(|row| row.model_id != "__deprecated__")
+            && (filters
+                .account
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+                || filters
+                    .used
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                || filters
+                    .info_status
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                || filters
+                    .availability
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty()))
+        {
+            "No models match the selected filters."
+        } else {
+            "No models discovered from configured providers."
+        };
         return format!(
-            "<h2>Models</h2><p class=\"empty\" role=\"status\">No canonical model information is available.</p>{filters}<section class=\"panel\"><p class=\"empty\">No models discovered from configured providers.</p></section>"
+            "<h2>Models</h2><p class=\"empty\" role=\"status\">No canonical model information is available.</p>{controls}<section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>"
         );
     }
     let rows = models
@@ -980,10 +1143,10 @@ pub(super) fn render_models_page(
                     format!("<span class=\"pill pill-{}\" data-tooltip=\"{}\">{}</span>", html_escape(status), html_escape(summary), html_escape(status))
                 },
             );
-            let availability = match row.resolution_status.as_str() {
-                "available" | "resolved" => "available",
-                "unavailable" | "withdrawn" => "unavailable",
-                _ => "configured",
+            let (availability, availability_class) = match row.resolution_status.as_str() {
+                "available" | "resolved" => ("available", "available"),
+                "unavailable" | "withdrawn" => ("unavailable", "unavailable"),
+                _ => ("configured", "configured"),
             };
             let exactness = exactness_badge(
                 row.exact_count,
@@ -998,7 +1161,7 @@ pub(super) fn render_models_page(
                 query_component(&row.model_id),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
-                availability,
+                availability_class,
                 availability,
                 info_pill,
                 row.requests,
@@ -1015,7 +1178,7 @@ pub(super) fn render_models_page(
         })
         .collect::<String>();
     format!(
-        "<h2>Models</h2>{filters}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Models</h2>{controls}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         "<th data-priority=\"3\">Priority</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th>"
     )
 }
@@ -2068,10 +2231,22 @@ mod tests {
             unknown_count: 0,
             provider_reported_count: 0,
         });
-        let html = super::render_models_page(&data, "24h", "Nord", &[]);
+        let html =
+            super::render_models_page(&data, "24h", "Nord", &[], &super::ModelFilters::default());
         assert!(html.contains("pill-configured\">configured"));
         assert!(html.contains("href=\"/models/vendor%2Fmodel\""));
         assert!(html.contains("No model info available"));
+        let html = super::render_models_page(
+            &data,
+            "24h",
+            "Nord",
+            &[],
+            &super::ModelFilters {
+                availability: Some("available".into()),
+                ..super::ModelFilters::default()
+            },
+        );
+        assert!(html.contains("No models match the selected filters."));
     }
 
     #[test]
