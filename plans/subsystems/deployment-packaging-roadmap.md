@@ -117,9 +117,17 @@ failure after executable commit could return failure while leaving the newly
 installed executable in place. M002
 (`plans/closure/deployment-packaging/002-status.md`) corrects both: fresh
 `--force` now refuses unowned destinations byte-for-byte, and config-seeding
-failure rolls back the executable committed by that transaction (never
-deleting a raced replacement or pre-existing config). Deterministic
-qualification is now 46 cases including the M002 regressions.
+failure rolls back the executable committed by that transaction while guarding
+executable identity. Deterministic qualification is now 46 cases including the
+M002 regressions.
+
+Post-M002 review found one remaining ownership ambiguity: config rollback still
+infers that a regular final config file belongs to the installer merely because
+the path was absent at preflight. An unrelated process can create that path
+while `init-config` is running, after which rollback may delete operator state.
+M003 is the registered corrective: generate config only in transaction-owned
+staging and publish it to the final path with true no-clobber semantics so final
+config is never rollback scratch space.
 
 ## 5. Target architecture
 
@@ -272,6 +280,51 @@ Deferred work:
 - Broader installer transaction framework extraction.
 - System/root deployment authority changes.
 
+### Milestone 3 — Config publication ownership corrective
+
+Class: invariant
+
+Objective:
+
+Remove the remaining config-path ownership race by generating first-time config
+into transaction-owned staging and publishing it with true no-clobber
+semantics. Rollback must never delete the final config path.
+
+Dependencies:
+
+- M001 and M002 are closed and provide the binary-first installer, owner
+  preservation, install locking, and guarded executable rollback.
+- ADR-0001 already requires unrelated user state to be preserved.
+- No hard dependency is open.
+
+Deliverable boundary:
+
+A narrow installer/qualification/planning corrective. Prefer one shared safe
+config-staging helper for fresh and existing-owner first-time config creation.
+No release, runtime, schema, target, or production/root deployment changes.
+
+User or operator value:
+
+A concurrent operator/process creating `config.toml` cannot have that file
+deleted or overwritten by a failing installer transaction.
+
+Exit conditions:
+
+- fresh config generation never writes directly to the final config path;
+- concurrent final config creation is preserved byte-for-byte;
+- staged publication cannot overwrite a concurrent winner;
+- final symlink/special-file boundaries fail closed;
+- rollback removes only transaction-owned staging, never final config;
+- M002 executable rollback remains intact;
+- existing-owner first config uses equivalent safe semantics;
+- all prior installer regressions remain green.
+
+Deferred work:
+
+- Independent artifact signing/attestation.
+- General installer transaction framework extraction.
+- System/root deployment authority changes.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -357,3 +410,4 @@ security findings.
 |---|---|---|---|---|
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
+| 3 | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | — | none |
