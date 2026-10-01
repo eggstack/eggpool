@@ -2107,6 +2107,29 @@ pub(super) fn render_overview(
         ),
     );
     let token_activity = "<section class=\"panel\"><h3>Token activity (last 180 days)</h3><p class=\"empty\">No activity data available.</p></section>";
+    let operational_panels = if summary.total_requests > 0 {
+        let ping_state = if page_data.pings.is_empty() {
+            "<p class=\"empty\">No provider pings recorded.</p>".to_owned()
+        } else {
+            format!(
+                "<p>{} provider ping observations are recorded.</p>",
+                page_data.pings.len()
+            )
+        };
+        let warning_state = if summary.reservation_fallback_rows > 0 {
+            format!(
+                "<p class=\"empty\" role=\"status\">{} reservation cost fallback rows require review.</p>",
+                summary.reservation_fallback_rows
+            )
+        } else {
+            "<p class=\"empty\">No reservation fallback warnings.</p>".to_owned()
+        };
+        format!(
+            "<section class=\"panel\"><h3>Provider health</h3>{ping_state}</section><section class=\"panel\"><h3>Warnings</h3>{warning_state}</section>"
+        )
+    } else {
+        String::new()
+    };
     let body = format!(
         "{}<section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>{}</section><section class=\"panel\"><h3>Timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
         dashboard_header("Overview", period, theme),
@@ -2135,13 +2158,20 @@ pub(super) fn render_overview(
     let body = body.replace(
         "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
         &format!(
+            "<div class=\"card\"><h3>Enabled accounts</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
+            accounts.iter().filter(|account| account.enabled).count()
+        ),
+    );
+    let body = body.replace(
+        "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
+        &format!(
             "</section>{cards_second}{cards_third}{cards_fourth}<section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>"
         ),
     );
     let body = body.replace(
         "</section><section class=\"panel\"><h3>Timeseries",
         &format!(
-            "</section>{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
+            "</section>{operational_panels}{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
         ),
     );
     render_dashboard_layout(
