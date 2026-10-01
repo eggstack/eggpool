@@ -42,12 +42,13 @@ pair is a known numbering accident.
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M001 ready — binary-first quick installer and ownership cleanup | No hard blockers; release raw/checksum and native provenance/update interfaces are available. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-No dependency-ready implementation plans are currently registered.
+| Deployment and packaging | M001 binary-first quick installer and ownership cleanup | ready | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` accepted; existing raw/checksum and native ownership interfaces satisfy dependencies. |
 
 ## Blocked work
 
@@ -80,6 +81,8 @@ No dependency-ready implementation plans are currently registered.
 | Request admission and wire M005 — planning reconciliation and minor wire cleanup | closed | `plans/closure/request-admission-wire/005-status.md`, implementation `4a1315a1` |
 
 ## Unblock audit
+
+Explicit user direction opens deployment-packaging M001 at baseline `5dc8aeccf06c0f012d6fae81410a805586c9d9d3`. `plans/adrs/ADR-0001-binary-first-quick-install-authority.md` establishes the fresh native curl-install ownership contract; the existing qualified raw release assets/checksum sidecar and standalone provenance/update path satisfy M001's interface dependencies, so `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` is `ready`. Provider-transport M002 remains independently blocked and is unaffected.
 
 Provider-transport M001, M003, and M004 are closed. M004 did not depend on
 M002 and did not change its upstream API blocker.
