@@ -712,7 +712,22 @@ pub(super) async fn dashboard_data_page(
             return degraded("dashboard data unavailable");
         }
     };
-    let mut body = render_dashboard_page_body(title, active_nav, period, theme, &data, &summary);
+    let model_info = if active_nav == "models" {
+        crate::operations::operator::list_model_info(&state.database, None)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut body = render_dashboard_page_body(
+        title,
+        active_nav,
+        period,
+        theme,
+        &data,
+        &summary,
+        &model_info,
+    );
     if active_nav == "timeseries" {
         body = body.replace(
             "class=\"period-selector\"",
@@ -753,11 +768,12 @@ pub(super) fn render_dashboard_page_body(
     theme: &str,
     data: &db::DashboardData,
     summary: &db::DashboardSummary,
+    model_info: &[Value],
 ) -> String {
     let mut body = dashboard_header(title, period, theme);
     match active_nav {
         "accounts" => body.push_str(&render_accounts_page(data)),
-        "models" => body.push_str(&render_models_page(data)),
+        "models" => body.push_str(&render_models_page(data, model_info)),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
         "timeseries" => body.push_str(&render_timeseries_page(data, period)),
@@ -803,7 +819,7 @@ pub(super) fn render_accounts_page(data: &db::DashboardData) -> String {
     )
 }
 
-pub(super) fn render_models_page(data: &db::DashboardData) -> String {
+pub(super) fn render_models_page(data: &db::DashboardData, model_info: &[Value]) -> String {
     let models = data
         .models
         .iter()
@@ -815,18 +831,30 @@ pub(super) fn render_models_page(data: &db::DashboardData) -> String {
     let rows = models
         .iter()
         .map(|row| {
+            let info = model_info
+                .iter()
+                .find(|info| info["model_id"].as_str().is_some_and(|id| id.eq_ignore_ascii_case(&row.model_id)));
+            let info_pill = info.map_or_else(
+                || "<span class=\"pill pill-unknown\" data-tooltip=\"No model info available\" aria-label=\"No model info available\">—</span>".to_owned(),
+                |info| {
+                    let status = info["status"].as_str().unwrap_or("unknown");
+                    let summary = info["summary"].as_str().unwrap_or("");
+                    format!("<span class=\"pill pill-{}\" data-tooltip=\"{}\">{}</span>", html_escape(status), html_escape(summary), html_escape(status))
+                },
+            );
             let availability = match row.resolution_status.as_str() {
                 "available" | "resolved" => "available",
                 "unavailable" | "withdrawn" => "unavailable",
                 _ => "configured",
             };
             format!(
-                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\"><span class=\"pill pill-unknown\" data-tooltip=\"No model info available\" aria-label=\"No model info available\">—</span></td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"exactness-badge empty\">—</span></td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
+                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"exactness-badge empty\">—</span></td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
                 query_component(&row.model_id),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
                 availability,
                 availability,
+                info_pill,
                 row.requests,
                 format_microdollars(row.cost_microdollars),
                 row.errors,
@@ -1824,7 +1852,7 @@ mod tests {
             ttft_requests: 0,
             avg_ttft_ms: 0.0,
         });
-        let html = super::render_models_page(&data);
+        let html = super::render_models_page(&data, &[]);
         assert!(html.contains("pill-configured\">configured"));
         assert!(html.contains("href=\"/models/vendor%2Fmodel\""));
         assert!(html.contains("No model info available"));
