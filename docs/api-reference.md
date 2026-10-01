@@ -67,7 +67,7 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 |--------|------|------|-------------|
 | `GET` | `/api/stats/summary` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Aggregate request stats (counts, tokens, cost, latency) |
 | `GET` | `/api/timeseries` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Bounded request/usage buckets for the dashboard chart |
-| `GET` | `/api/timeseries/grouped` | Dashboard-gated (`period`, `group_by=model\|account`, `metric=requests\|tokens\|cost`, bounded `limit`) | Grouped chart series and bucket totals |
+| `GET` | `/api/timeseries/grouped` | Dashboard-gated (`period`, `group_by=provider_model\|provider\|model\|account`, bounded `limit`; `metric` retained for compatibility) | Grouped request-count chart series and bucket totals |
 | `GET` | `/api/stats/runtime` | Always key | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/update` | Always key | Release update-check status |
 

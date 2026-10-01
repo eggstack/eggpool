@@ -32,9 +32,10 @@ The dashboard chart client also reads `GET /api/timeseries` and
 `GET /api/timeseries/grouped`. These are ordinary dashboard-gated read
 endpoints: they follow `[dashboard].public`, validate the same four periods,
 and return bounded bucket and grouped-series projections from dashboard
-usage/request repositories. The grouped endpoint accepts `group_by` (`model`
-or `account`), `metric` (`requests`, `tokens`, or `cost`), and a bounded
-`limit`; it does not expose request bodies or credentials. Operational
+usage/request repositories. The grouped endpoint accepts `group_by`
+(`provider_model`, `provider`, `model`, or `account`), a bounded `limit`, and
+retains the historical `metric` parameter while ranking by request count. It
+does not expose request bodies or credentials. Operational
 diagnostics such as `/api/stats/runtime` remain separately authenticated.
 
 The dashboard is observational: it does not alter routing, quota, health, or

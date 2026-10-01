@@ -293,8 +293,18 @@ fn normalized_bucket(value: Option<&str>, period: &str) -> &'static str {
     match value.unwrap_or("auto") {
         "day" => "day",
         "hour" => "hour",
-        "auto" | "" if period == "30d" => "day",
+        _ if period == "30d" => "day",
         _ => "hour",
+    }
+}
+
+fn normalized_group_by(value: &str) -> &'static str {
+    match value {
+        "provider" => "provider",
+        "model" => "model",
+        "account" => "account",
+        "provider_model" => "provider_model",
+        _ => "provider_model",
     }
 }
 
@@ -306,21 +316,9 @@ pub(super) async fn grouped_timeseries_api(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    let _compat_metric = query.metric;
     let bucket = normalized_bucket(query.bucket.as_deref(), period);
-    let group_by = query.group_by.as_deref().unwrap_or("provider_model");
-    let metric = query.metric.as_deref().unwrap_or("requests");
-    if !matches!(
-        group_by,
-        "provider" | "model" | "account" | "provider_model"
-    ) || !matches!(
-        metric,
-        "requests" | "errors" | "tokens" | "cost" | "bytes" | "latency" | "ttft"
-    ) {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({"detail":"Invalid timeseries query"}),
-        );
-    }
+    let group_by = normalized_group_by(query.group_by.as_deref().unwrap_or("provider_model"));
     let limit = query.limit.unwrap_or(12).clamp(1, 25);
     let (rows, from_rollups) = match db::DashboardRepository::new(&state.database)
         .grouped_timeseries_json(

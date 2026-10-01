@@ -171,6 +171,15 @@ async fn dashboard_timeseries_routes_preserve_auth_and_validate_periods() {
     assert!(grouped.contains("rollup_empty"), "{grouped}");
     let invalid = request(address, b"GET /api/timeseries?period=forever HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
     assert!(invalid.starts_with("HTTP/1.1 400"), "{invalid}");
+    let bounded = request(address, b"GET /api/timeseries/grouped?period=30d&bucket=unknown&group_by=unknown&metric=unknown&limit=999 HTTP/1.1\r\nHost: localhost\r\nX-API-Key: test-key-transport\r\nConnection: close\r\n\r\n").await;
+    assert!(bounded.starts_with("HTTP/1.1 200"), "{bounded}");
+    assert!(bounded.contains("\"bucket\":\"day\""), "{bounded}");
+    assert!(
+        bounded.contains("\"group_by\":\"provider_model\""),
+        "{bounded}"
+    );
+    assert!(bounded.contains("\"metric\":\"requests\""), "{bounded}");
+    assert!(bounded.contains("\"limit\":25"), "{bounded}");
 
     assert!(handle.request_shutdown(ShutdownReason::Requested));
     let report = tokio::time::timeout(Duration::from_secs(6), task)
