@@ -135,13 +135,18 @@ pub(super) async fn model_detail_page(
             .as_deref()
             .unwrap_or(&state.server.dashboard_theme),
     );
-    let body = match db::DashboardRepository::new(&state.database)
+    let data = match db::DashboardRepository::new(&state.database)
         .load(period)
         .await
     {
-        Ok(data) => render_model_detail(&data, model_id),
+        Ok(data) => data,
         Err(_) => return degraded("dashboard data unavailable"),
     };
+    let model_info = crate::operations::operator::show_model_info(&state.database, model_id)
+        .await
+        .ok()
+        .flatten();
+    let body = render_model_detail(&data, model_id, model_info.as_ref());
     dashboard_page_with_body(
         &state,
         &format!("Model: {model_id}"),
@@ -840,7 +845,11 @@ pub(super) fn render_models_page(data: &db::DashboardData) -> String {
     )
 }
 
-pub(super) fn render_model_detail(data: &db::DashboardData, model_id: &str) -> String {
+pub(super) fn render_model_detail(
+    data: &db::DashboardData,
+    model_id: &str,
+    model_info: Option<&Value>,
+) -> String {
     let Some(model) = data
         .models
         .iter()
@@ -852,8 +861,33 @@ pub(super) fn render_model_detail(data: &db::DashboardData, model_id: &str) -> S
             html_escape(model_id)
         );
     };
+    let info_panel = if let Some(info) = model_info {
+        let summary = info
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(html_escape)
+            .unwrap_or_else(|| "No summary available.".to_owned());
+        let status = info
+            .get("status")
+            .and_then(Value::as_str)
+            .map(html_escape)
+            .unwrap_or_else(|| "unknown".to_owned());
+        let limits = info
+            .get("detail")
+            .and_then(|detail| detail.get("limits"))
+            .filter(|limits| {
+                !limits.is_null() && !limits.as_object().is_some_and(serde_json::Map::is_empty)
+            })
+            .map(|limits| html_escape(&limits.to_string()))
+            .unwrap_or_else(|| "Limits unavailable.".to_owned());
+        format!(
+            "<section class=\"panel\"><h3>Model information</h3><p class=\"model-info-status\">{status}</p><p>{summary}</p><h4>Limits</h4><p>{limits}</p></section>"
+        )
+    } else {
+        "<section class=\"panel\"><h3>Model information</h3><p class=\"empty\">Model info not available.</p></section>".to_owned()
+    };
     format!(
-        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Model information</h3><p class=\"empty\">Model info not available.</p></section>",
+        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section>{info_panel}",
         html_escape(model_id),
         html_escape(&model.provider_id),
         html_escape(&model.resolution_status),
@@ -1772,6 +1806,55 @@ mod tests {
         assert!(html.contains("canvas class=\"grouped-timeseries-chart\""));
         assert!(html.contains("id=\"timeseries-initial-data\""));
         assert!(!html.contains("<section class=\"panel\" id=\"timeseries-chart\""));
+    }
+
+    #[test]
+    fn model_catalog_status_does_not_use_usage_as_availability() {
+        let mut data = crate::db::DashboardData::default();
+        data.models.push(crate::db::DashboardModelRow {
+            model_id: "vendor/model".into(),
+            provider_id: "provider".into(),
+            resolution_status: "unresolved".into(),
+            requests: 18,
+            errors: 0,
+            cost_microdollars: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            avg_latency_ms: 0.0,
+            ttft_requests: 0,
+            avg_ttft_ms: 0.0,
+        });
+        let html = super::render_models_page(&data);
+        assert!(html.contains("pill-configured\">configured"));
+        assert!(html.contains("href=\"/models/vendor%2Fmodel\""));
+        assert!(html.contains("No model info available"));
+    }
+
+    #[test]
+    fn model_detail_uses_canonical_info_and_escapes_values() {
+        let mut data = crate::db::DashboardData::default();
+        data.models.push(crate::db::DashboardModelRow {
+            model_id: "model".into(),
+            provider_id: "provider".into(),
+            resolution_status: "resolved".into(),
+            requests: 1,
+            errors: 0,
+            cost_microdollars: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            avg_latency_ms: 0.0,
+            ttft_requests: 0,
+            avg_ttft_ms: 0.0,
+        });
+        let info = serde_json::json!({
+            "status": "fresh",
+            "summary": "<script>bad()</script>",
+            "detail": {"limits": {"context": 32000}}
+        });
+        let html = super::render_model_detail(&data, "model", Some(&info));
+        assert!(html.contains("&lt;script&gt;bad()&lt;/script&gt;"));
+        assert!(!html.contains("<script>bad()</script>"));
+        assert!(html.contains("32000"));
     }
 
     #[tokio::test]
