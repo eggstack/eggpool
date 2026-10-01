@@ -1,0 +1,1 @@
+{"body": {"bucket": "hour", "bucket_totals": [], "buckets": [], "degraded_reason": "rollup_empty", "group_by": "provider_model", "limit": 12, "metric": "requests", "points": [], "series": [], "source": "empty"}, "content_type": "application/json", "status": 200}

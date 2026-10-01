@@ -1,0 +1,945 @@
+{
+  "candidate_sha": "454b60c008cc6234d9c3db3b637402cfe8d2f1d8",
+  "dom_comparisons": [
+    {
+      "mismatches": [
+        "complete DOM tree differs for / at $/#document[0]/html[0]/head[6] (attributes)"
+      ],
+      "route": "/",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /accounts at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/accounts",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/models",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models/example-model at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/models/example-model",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /latency at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/latency",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /events at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/events",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /timeseries at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/timeseries",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /bandwidth at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/bandwidth",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /pings at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/pings",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /reliability at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/reliability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /routing at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/routing",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /traces at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/traces",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /runtime at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/runtime",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /cache at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/cache",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries: 200/404"
+      ],
+      "route": "/api/timeseries",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries/grouped: 200/404"
+      ],
+      "route": "/api/timeseries/grouped",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/transcoding: 200/404"
+      ],
+      "route": "/api/stats/transcoding",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-observability: 200/404"
+      ],
+      "route": "/api/stats/cache-observability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/canonical-request-segmentation: 200/404"
+      ],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-stability: 200/404"
+      ],
+      "route": "/api/stats/cache-stability",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/request-shaping: 200/404"
+      ],
+      "route": "/api/stats/request-shaping",
+      "state": "empty",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for / at $/#document[0]/html[0]/head[6] (attributes)"
+      ],
+      "route": "/",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /accounts at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/accounts",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/models",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /models/example-model at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/models/example-model",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /latency at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/latency",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /events at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/events",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /timeseries at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/timeseries",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /bandwidth at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/bandwidth",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /pings at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/pings",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /reliability at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/reliability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /routing at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
+      ],
+      "route": "/routing",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /traces at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/traces",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /runtime at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/runtime",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "mismatches": [
+        "complete DOM tree differs for /cache at $/#document[0]/html[0] (child count)"
+      ],
+      "route": "/cache",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries: 200/404"
+      ],
+      "route": "/api/timeseries",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/timeseries/grouped: 200/404"
+      ],
+      "route": "/api/timeseries/grouped",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard JSON projection differs for /api/stats/summary"
+      ],
+      "route": "/api/stats/summary",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/transcoding: 200/404"
+      ],
+      "route": "/api/stats/transcoding",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-observability: 500/404"
+      ],
+      "route": "/api/stats/cache-observability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/canonical-request-segmentation: 200/404"
+      ],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/cache-stability: 200/404"
+      ],
+      "route": "/api/stats/cache-stability",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "kind": "api",
+      "mismatches": [
+        "dashboard API status differs for /api/stats/request-shaping: 200/404"
+      ],
+      "route": "/api/stats/request-shaping",
+      "state": "populated",
+      "status": "mismatch"
+    },
+    {
+      "inventory": 54,
+      "route": "static-assets",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/latency",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/latency",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/events",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/events",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/pings",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/pings",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/routing",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/routing",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/traces",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/traces",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/timeseries",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/timeseries/grouped",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/timeseries/grouped",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/summary",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/transcoding",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/stats/transcoding",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-observability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/stats/cache-observability",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/stats/canonical-request-segmentation",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/cache-stability",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/stats/cache-stability",
+      "state": "private",
+      "status": "mismatch"
+    },
+    {
+      "implementation": "python",
+      "kind": "auth",
+      "mismatches": [],
+      "route": "/api/stats/request-shaping",
+      "state": "private",
+      "status": "pass"
+    },
+    {
+      "implementation": "rust",
+      "kind": "auth",
+      "mismatches": [
+        "unauthorized/authorized 401/404"
+      ],
+      "route": "/api/stats/request-shaping",
+      "state": "private",
+      "status": "mismatch"
+    }
+  ],
+  "duration_ms": 6240,
+  "environment": {
+    "browser": "isolated headless Chrome via Chrome DevTools Protocol",
+    "os": "darwin",
+    "python": "3.12.13"
+  },
+  "fixture": {
+    "accounts": 3,
+    "attempts": 6,
+    "events": 2,
+    "models": 3,
+    "path": "migration-rs/fixtures/dashboard/q012-populated.sql",
+    "pings": 3,
+    "providers": 2,
+    "requests": 5,
+    "routing_decisions": 5,
+    "secrets": "none",
+    "sha256": "3196d41b840d352de2c977647457808f5eda85a57cc5ec45f6b98d86c1854fce"
+  },
+  "fixture_matrix": [
+    {
+      "database": "fresh canonical schema",
+      "state": "empty"
+    },
+    {
+      "database": "one copied canonical SQLite fixture",
+      "state": "populated"
+    },
+    {
+      "classes": [
+        "multiple providers",
+        "multiple accounts",
+        "multiple models",
+        "long/unicode/HTML escaping",
+        "error and retry",
+        "missing model-info"
+      ],
+      "state": "populated"
+    },
+    {
+      "classes": [
+        "unauthorized",
+        "authorized",
+        "all dashboard pages and JSON routes"
+      ],
+      "state": "private"
+    }
+  ],
+  "mismatch_count": 50,
+  "mismatch_groups": {
+    "overview-account-model": 8,
+    "runtime-cache": 4,
+    "shared-shell-and-api": 22,
+    "telemetry-routing-trace": 16
+  },
+  "page_routes": [
+    "/",
+    "/accounts",
+    "/models",
+    "/models/example-model",
+    "/latency",
+    "/events",
+    "/timeseries",
+    "/bandwidth",
+    "/pings",
+    "/reliability",
+    "/routing",
+    "/traces",
+    "/runtime",
+    "/cache"
+  ],
+  "parity_status": "gaps",
+  "plan": "Dashboard M001",
+  "python_identity": "python:eggpool:local",
+  "rust_identity": "rust:/private/tmp/eggpool-dashboard-oracle/rust/target/debug/eggpool",
+  "schema_version": "dashboard-parity-current-gaps.v1",
+  "screenshots": {
+    "count": 0,
+    "entries": [],
+    "procedure": "not requested"
+  },
+  "static_assets": {
+    "count": 54,
+    "paths": [
+      "static/chart.umd.min.js",
+      "static/dashboard.css",
+      "static/dashboard.js",
+      "static/favicon.svg",
+      "themes/Booberry.toml",
+      "themes/Catppuccin Latte.toml",
+      "themes/Catppuccin Macchiato.toml",
+      "themes/Catppuccin Mocha.toml",
+      "themes/Cyber Red.toml",
+      "themes/Cyberpunk.toml",
+      "themes/Dark Green.toml",
+      "themes/Discord (80_ Saturation).toml",
+      "themes/Discord.toml",
+      "themes/Dracula.toml",
+      "themes/Ferra Light.toml",
+      "themes/Flexor Dark.toml",
+      "themes/Gruvbox.toml",
+      "themes/Halcyon Dark.toml",
+      "themes/IntelliJ Light.toml",
+      "themes/Kanagawa.toml",
+      "themes/Macaw Dark.toml",
+      "themes/Macaw Light.toml",
+      "themes/Matrix.toml",
+      "themes/Noctis Lilac.toml",
+      "themes/Nord.toml",
+      "themes/Nostromo Terminal.toml",
+      "themes/One Dark.toml",
+      "themes/Oxocarbon.toml",
+      "themes/Rose Pine Dawn.toml",
+      "themes/Rose Pine Moon.toml",
+      "themes/Rose Pine.toml",
+      "themes/Solarized Dark.toml",
+      "themes/Sonokai.toml",
+      "themes/Tokyo Night Storm.toml",
+      "themes/VESPER.toml",
+      "themes/Zenburn.toml",
+      "themes/acton.toml",
+      "themes/bam.toml",
+      "themes/base16-atelier-forest-light.toml",
+      "themes/berlin.toml",
+      "themes/black but with important highlights.toml",
+      "themes/broc.toml",
+      "themes/cork.toml",
+      "themes/ferra.toml",
+      "themes/forest.toml",
+      "themes/lisbon.toml",
+      "themes/midnight.toml",
+      "themes/oslo.toml",
+      "themes/plum.toml",
+      "themes/portland.toml",
+      "themes/sunset.toml",
+      "themes/tofino.toml",
+      "themes/vanimo.toml",
+      "themes/vik.toml"
+    ],
+    "sha256": "e7d1e10c243dd699669b366fa9820d53a26a572308e26105b352861830d80904"
+  },
+  "themes": {
+    "count": 51,
+    "names": [
+      "default",
+      "Booberry",
+      "Catppuccin Latte",
+      "Catppuccin Macchiato",
+      "Catppuccin Mocha",
+      "Cyber Red",
+      "Cyberpunk",
+      "Dark Green",
+      "Discord",
+      "Discord (80_ Saturation)",
+      "Dracula",
+      "Ferra Light",
+      "Flexor Dark",
+      "Gruvbox",
+      "Halcyon Dark",
+      "IntelliJ Light",
+      "Kanagawa",
+      "Macaw Dark",
+      "Macaw Light",
+      "Matrix",
+      "Noctis Lilac",
+      "Nord",
+      "Nostromo Terminal",
+      "One Dark",
+      "Oxocarbon",
+      "Rose Pine",
+      "Rose Pine Dawn",
+      "Rose Pine Moon",
+      "Solarized Dark",
+      "Sonokai",
+      "Tokyo Night Storm",
+      "VESPER",
+      "Zenburn",
+      "acton",
+      "bam",
+      "base16-atelier-forest-light",
+      "berlin",
+      "black but with important highlights",
+      "broc",
+      "cork",
+      "ferra",
+      "forest",
+      "lisbon",
+      "midnight",
+      "oslo",
+      "plum",
+      "portland",
+      "sunset",
+      "tofino",
+      "vanimo",
+      "vik"
+    ],
+    "review_set": [
+      "default",
+      "Cyber Red",
+      "Catppuccin Latte",
+      "Cyberpunk"
+    ]
+  }
+}

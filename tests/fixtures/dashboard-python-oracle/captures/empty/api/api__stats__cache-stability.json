@@ -1,0 +1,1 @@
+{"body": {"notes": "Cache-stability tracking is per-request and in-memory on TranscodeContext.cache_boundary_tracker; durable summary counts are reported-only.", "transcoded_request_count": 0}, "content_type": "application/json", "status": 200}

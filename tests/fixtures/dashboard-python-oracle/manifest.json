@@ -1,0 +1,449 @@
+{
+  "assets": [
+    {
+      "content_type": "text/css",
+      "filename": "dashboard.css",
+      "git_blob": "5242e07e36da614698991ce884277416b9aedbab",
+      "route": "/static/dashboard.css",
+      "sha256": "3f399629eb182de5689cb475b02f60dc468969d5e8fead059a6ebda82222ac6d"
+    },
+    {
+      "content_type": "application/javascript",
+      "filename": "dashboard.js",
+      "git_blob": "1a7ff048b435043a127414092ec92fdf7893f3c5",
+      "route": "/static/dashboard.js",
+      "sha256": "e08fcc2259cd25a0fbed62bafeb37520cddc2931c6600123734e0404f31d989f"
+    },
+    {
+      "content_type": "application/javascript",
+      "filename": "chart.umd.min.js",
+      "git_blob": "0bae5b84bcf2dbd6d81aed3bc652f97eb9b00b1a",
+      "route": "/static/chart.js",
+      "sha256": "206b6e8bb00fc7bba2c7ee80ca41db3e9e05ba7be0aa35abeba9cfd5357f5d0e"
+    },
+    {
+      "content_type": "image/svg+xml",
+      "filename": "favicon.svg",
+      "git_blob": "a075c45b9d3a9938ade60eb399f18c0d9cd7383a",
+      "route": "/static/favicon.svg",
+      "sha256": "593a7d0f464160e832f62399cf224a04dda68a55f3a6ce847dffb62016d37653"
+    }
+  ],
+  "dashboard_json_routes": [
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/timeseries"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/timeseries/grouped"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/summary"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/transcoding"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/cache-observability"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/canonical-request-segmentation"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/cache-stability"
+    },
+    {
+      "auth": "dashboard-public-or-api-key",
+      "method": "GET",
+      "path": "/api/stats/request-shaping"
+    }
+  ],
+  "javascript_hooks": {
+    "api_endpoints": [
+      "/api/timeseries",
+      "/api/timeseries/grouped"
+    ],
+    "conditional_selector_producers": {
+      "[data-update-command]": "update-available footer only",
+      "[data-update-copied]": "update-available footer only"
+    },
+    "selector_producers": {
+      "#timeseries-chart": [
+        "/"
+      ],
+      "#timeseries-initial-data": [
+        "/"
+      ],
+      ".chart-container, .chart-container-compact": [
+        "/timeseries"
+      ],
+      ".grouped-timeseries-empty": [
+        "/timeseries"
+      ],
+      ".number-stepper": [
+        "/traces"
+      ],
+      "[data-chart-endpoint]": [
+        "/"
+      ],
+      "[data-update-command]": [],
+      "[data-update-copied]": [],
+      "a": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "button[data-stepper-action]": [
+        "/traces"
+      ],
+      "canvas.grouped-timeseries-chart": [
+        "/timeseries"
+      ],
+      "canvas.grouped-timeseries-chart[data-chart-id=\"grouped-timeseries-chart\"]": [
+        "/timeseries"
+      ],
+      "form[data-period-selector]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/cache"
+      ],
+      "form[data-period-selector] select[name=\"period\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/cache"
+      ],
+      "form[data-timeseries-controls]": [
+        "/timeseries"
+      ],
+      "header.topbar .topnav-burger": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "header.topbar .topnav-menu": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "header.topbar nav.topnav": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "input[data-stepper-input], input[type=\"number\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "input[name=\"account\"], select[name=\"account\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "input[name=\"model\"], select[name=\"model\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "input[name=\"period\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "script.grouped-timeseries-data[data-chart-id=\"": [
+        "/timeseries"
+      ],
+      "script.static-chart-data[data-chart-id]": [
+        "/reliability"
+      ],
+      "select": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "select[data-auto-submit]": [
+        "/accounts",
+        "/events",
+        "/bandwidth"
+      ],
+      "select[name=\"period\"]": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ],
+      "span:last-child": [
+        "/",
+        "/accounts",
+        "/models",
+        "/models/example-model",
+        "/latency",
+        "/events",
+        "/timeseries",
+        "/bandwidth",
+        "/pings",
+        "/reliability",
+        "/routing",
+        "/traces",
+        "/runtime",
+        "/cache"
+      ]
+    },
+    "selectors": [
+      "#timeseries-chart",
+      "#timeseries-initial-data",
+      ".chart-container, .chart-container-compact",
+      ".grouped-timeseries-empty",
+      ".number-stepper",
+      "[data-chart-endpoint]",
+      "[data-update-command]",
+      "[data-update-copied]",
+      "a",
+      "button[data-stepper-action]",
+      "canvas.grouped-timeseries-chart",
+      "canvas.grouped-timeseries-chart[data-chart-id=\"grouped-timeseries-chart\"]",
+      "form[data-period-selector]",
+      "form[data-period-selector] select[name=\"period\"]",
+      "form[data-timeseries-controls]",
+      "header.topbar .topnav-burger",
+      "header.topbar .topnav-menu",
+      "header.topbar nav.topnav",
+      "input[data-stepper-input], input[type=\"number\"]",
+      "input[name=\"account\"], select[name=\"account\"]",
+      "input[name=\"model\"], select[name=\"model\"]",
+      "input[name=\"period\"]",
+      "script.grouped-timeseries-data[data-chart-id=\"",
+      "script.static-chart-data[data-chart-id]",
+      "select",
+      "select[data-auto-submit]",
+      "select[name=\"period\"]",
+      "span:last-child"
+    ]
+  },
+  "normalizations": [
+    "HTML insignificant whitespace runs",
+    "class attribute token order",
+    "JSON object key order",
+    "runtime-only process, host, memory, load, database-path, and countdown values",
+    "standalone local timestamps matching YYYY-MM-DD HH:MM:SS"
+  ],
+  "oracle_commit": "c23a70961f4b7858fdb0264cfb27b7ea26a8a334",
+  "page_routes": [
+    "/",
+    "/accounts",
+    "/models",
+    "/models/example-model",
+    "/latency",
+    "/events",
+    "/timeseries",
+    "/bandwidth",
+    "/pings",
+    "/reliability",
+    "/routing",
+    "/traces",
+    "/runtime",
+    "/cache"
+  ],
+  "projection": "complete ordered DOM tree and canonical JSON; object keys sorted, array order retained",
+  "provenance": "source and preserved assets from immutable Git history; synthetic state only",
+  "schema_version": "dashboard-python-oracle.v1",
+  "state_matrix": [
+    "empty",
+    "populated",
+    "escaping-unicode-long",
+    "error-missing",
+    "private-auth"
+  ],
+  "themes": [
+    "Booberry.toml",
+    "Catppuccin Latte.toml",
+    "Catppuccin Macchiato.toml",
+    "Catppuccin Mocha.toml",
+    "Cyber Red.toml",
+    "Cyberpunk.toml",
+    "Dark Green.toml",
+    "Discord (80_ Saturation).toml",
+    "Discord.toml",
+    "Dracula.toml",
+    "Ferra Light.toml",
+    "Flexor Dark.toml",
+    "Gruvbox.toml",
+    "Halcyon Dark.toml",
+    "IntelliJ Light.toml",
+    "Kanagawa.toml",
+    "Macaw Dark.toml",
+    "Macaw Light.toml",
+    "Matrix.toml",
+    "Noctis Lilac.toml",
+    "Nord.toml",
+    "Nostromo Terminal.toml",
+    "One Dark.toml",
+    "Oxocarbon.toml",
+    "Rose Pine Dawn.toml",
+    "Rose Pine Moon.toml",
+    "Rose Pine.toml",
+    "Solarized Dark.toml",
+    "Sonokai.toml",
+    "Tokyo Night Storm.toml",
+    "VESPER.toml",
+    "Zenburn.toml",
+    "acton.toml",
+    "bam.toml",
+    "base16-atelier-forest-light.toml",
+    "berlin.toml",
+    "black but with important highlights.toml",
+    "broc.toml",
+    "cork.toml",
+    "ferra.toml",
+    "forest.toml",
+    "lisbon.toml",
+    "midnight.toml",
+    "oslo.toml",
+    "plum.toml",
+    "portland.toml",
+    "sunset.toml",
+    "tofino.toml",
+    "vanimo.toml",
+    "vik.toml"
+  ]
+}

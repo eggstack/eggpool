@@ -275,7 +275,7 @@ This roadmap closes only when the native Rust dashboard preserves the final Pyth
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 | active | plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md | — | none |
+| 001 | closing | plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md | plans/closure/dashboard/001-status.md | none |
 | 002 | blocked | plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md | — | M001 |
 | 003 | blocked | plans/implementation/dashboard/003-overview-account-model-parity.md | — | M002 |
 | 004 | blocked | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | — | M002 |
