@@ -790,6 +790,7 @@ pub(super) fn dashboard_empty(title: &str, message: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_dashboard_page_body(
     title: &str,
     active_nav: &str,
@@ -959,7 +960,7 @@ pub(super) fn render_model_detail(
             .filter(|limits| {
                 !limits.is_null() && !limits.as_object().is_some_and(serde_json::Map::is_empty)
             })
-            .map(|limits| html_escape(&limits.to_string()))
+            .map(|limits| html_escape(limits.to_string()))
             .unwrap_or_else(|| "Limits unavailable.".to_owned());
         format!(
             "<section class=\"panel\"><h3>Model information</h3><p class=\"model-info-status\">{status}</p><p>{summary}</p><h4>Limits</h4><p>{limits}</p></section>"
