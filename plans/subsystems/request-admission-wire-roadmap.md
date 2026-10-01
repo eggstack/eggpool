@@ -1,6 +1,6 @@
 # Request Admission and Wire Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -234,7 +234,7 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 ## 11. Completion definition
 
-M001 is closed on its recorded body-admission evidence. M002–M004 are also closed on the extraction and fidelity/provenance evidence recorded in their closure files. Explicit user direction keeps this roadmap active for the bounded M005 corrective/cleanup pass. It closes again only after M005 reconciles the planning control surfaces, resolves the two low-severity M004 cleanup findings without changing wire behavior, and records closure evidence.
+M001 is closed on its recorded body-admission evidence. M002–M005 are closed on the extraction, fidelity/provenance, and cleanup evidence recorded in their closure files. Explicit user direction reopens the roadmap for M006, the bounded external semantic-producer consumer contract. The roadmap closes again only after M006 preserves EggPool behavior while exposing a source-neutral canonical origin, consumer-oriented encode/options seam, bounded completed-tool-call accumulation, source-isolated consumer evidence, and an immutable downstream pin.
 
 ## 12. Milestone status
 
@@ -245,12 +245,13 @@ M001 is closed on its recorded body-admission evidence. M002–M004 are also clo
 | 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
 | 005 — planning reconciliation and minor wire cleanup | closed | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | `plans/closure/request-admission-wire/005-status.md` | none |
+| 006 — external semantic-producer consumer contract | ready | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
 
 
 ## 13. Wire-kernel extraction extension
 
 The M001 sections above remain the closed record for body admission. This
-extension governs M002–M004 and does not reopen M001 implementation.
+extension governs M002–M006 and does not reopen M001 implementation.
 
 ### Current extraction evidence
 
@@ -452,3 +453,38 @@ Exit conditions:
   Codex Responses, default, and no-default workspace suites remain green;
 - closure record accepted with no medium-or-higher finding and no remaining
   contradictory request-admission-wire status metadata.
+
+
+### Milestone 006 — External semantic-producer consumer contract
+
+Status: ready.
+
+Class: infrastructure
+
+Objective: make the already-extracted `eggpool-wire` kernel directly consumable by a sibling application that starts from provider-neutral semantics, without forcing that caller to impersonate an EggPool client wire surface or construct EggPool runtime configuration.
+
+Dependencies:
+
+- M002–M005: hard, closed.
+- No external runtime dependency. CodeGG is a downstream consumer and is not required to modify EggPool in order for implementation to begin.
+
+Deliverable boundary:
+
+- an explicit canonical request origin that can carry no source wire surface;
+- a surface-oriented encode API over existing built-in codecs, with a closed option for OpenAI streaming-usage opt-in while default EggPool output remains unchanged;
+- a bounded provider-neutral completed-tool-call accumulator over `CanonicalEvent`;
+- package/source-isolated consumer tests and documentation that prove the crate remains sans-I/O and application-neutral;
+- documentation reconciliation for the crate's actual publication/consumption status;
+- no provider transport, routing, account, config, persistence, or HTTP behavior change.
+
+User/developer value: CodeGG and other semantic producers can share the exact protocol codecs and streaming state machines EggPool already qualifies instead of maintaining parallel OpenAI/Anthropic/Gemini serializers and SSE parsers.
+
+Exit conditions:
+
+- canonical-origin requests report no fabricated source surface in fidelity/errors;
+- every existing wire-origin request preserves its current source identity and EggPool behavior;
+- external callers can encode any current built-in surface without runtime path/priority objects;
+- explicit OpenAI stream-usage opt-in is covered while default payloads remain unchanged;
+- completed tool-call accumulation is bounded, interleaving-safe, terminal-aware, and exercised across all five current stream adapters and arbitrary chunk splits;
+- `wire_kernel_boundary`, extraction/conformance, default/no-default, and strict workspace gates pass;
+- closure records the immutable EggPool commit intended for the CodeGG dependency.
