@@ -1543,8 +1543,27 @@ class _HeadlessScreenshotSession:
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(payload)
 
-    def check_interactions(self, url: str) -> list[str]:
+    def check_interactions(self, url: str, width: int, height: int) -> list[str]:
         """Exercise shared controls and the grouped chart on the live page."""
+        self.client.events.clear()
+        self.client.request(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": width < 600,
+            },
+        )
+        self.client.request("Page.navigate", {"url": url})
+        time.sleep(0.2)
+        self.client.request(
+            "Runtime.evaluate",
+            {
+                "expression": "document.fonts ? document.fonts.ready : true",
+                "awaitPromise": True,
+            },
+        )
         expression = r"""(async () => {
           const checks = [];
           const burger = document.querySelector('.topnav-burger');
@@ -1740,9 +1759,6 @@ def capture_screenshots(
                     int(entry["width"]),
                     int(entry["height"]),
                 )
-                route = str(entry["route"])
-                if route in {"/", "/timeseries"}:
-                    entry["interaction_checks"] = session.check_interactions(url)
             dimensions = _png_dimensions(artifact)
             expected_dimensions = (int(entry["width"]), int(entry["height"]))
             if dimensions != expected_dimensions:
@@ -1761,6 +1777,24 @@ def capture_screenshots(
             entry["manual_disposition"] = (
                 "visual review pending; this artifact records a capture only"
             )
+        interaction_matrix: list[dict[str, str]] = []
+        if session is not None:
+            for implementation, port in ports.items():
+                for width, height, viewport in (
+                    (1440, 900, "desktop"),
+                    (390, 844, "mobile"),
+                ):
+                    for route in ("/", "/timeseries"):
+                        url = f"http://127.0.0.1:{port}{route}?period=24h&theme=default"
+                        checks = session.check_interactions(url, width, height)
+                        interaction_matrix.append(
+                            {
+                                "implementation": implementation,
+                                "route": route,
+                                "viewport": viewport,
+                                "result": "; ".join(checks),
+                            }
+                        )
     finally:
         if session is not None:
             session.close()
@@ -1775,6 +1809,7 @@ def capture_screenshots(
         "artifact_root": str(output_dir),
         "count": len(entries),
         "entries": entries,
+        "interaction_checks": interaction_matrix,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
     }
 
