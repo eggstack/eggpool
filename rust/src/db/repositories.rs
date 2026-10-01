@@ -234,6 +234,12 @@ pub struct DashboardAccountRow {
     pub cost_microdollars: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    pub exact_count: i64,
+    pub derived_count: i64,
+    pub partial_count: i64,
+    pub estimated_count: i64,
+    pub unknown_count: i64,
+    pub provider_reported_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,6 +255,12 @@ pub struct DashboardModelRow {
     pub avg_latency_ms: f64,
     pub ttft_requests: i64,
     pub avg_ttft_ms: f64,
+    pub exact_count: i64,
+    pub derived_count: i64,
+    pub partial_count: i64,
+    pub estimated_count: i64,
+    pub unknown_count: i64,
+    pub provider_reported_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -563,7 +575,13 @@ impl DashboardRepository {
                      COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0),\
                      COALESCE(SUM(r.cost_microdollars), 0),\
                      COALESCE(SUM(r.input_tokens), 0),\
-                     COALESCE(SUM(r.output_tokens), 0)\
+                     COALESCE(SUM(r.output_tokens), 0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='exact' THEN 1 ELSE 0 END),0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='derived' THEN 1 ELSE 0 END),0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='partial' THEN 1 ELSE 0 END),0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='estimated' THEN 1 ELSE 0 END),0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='unknown' THEN 1 ELSE 0 END),0),\
+                     COALESCE(SUM(CASE WHEN r.exactness='provider_reported' THEN 1 ELSE 0 END),0)\
                      FROM accounts a\
                      LEFT JOIN requests r ON r.account_id = a.id\
                        AND r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
@@ -584,6 +602,12 @@ impl DashboardRepository {
                             cost_microdollars: row.get(5)?,
                             input_tokens: row.get(6)?,
                             output_tokens: row.get(7)?,
+                            exact_count: row.get(8)?,
+                            derived_count: row.get(9)?,
+                            partial_count: row.get(10)?,
+                            estimated_count: row.get(11)?,
+                            unknown_count: row.get(12)?,
+                            provider_reported_count: row.get(13)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -598,6 +622,12 @@ impl DashboardRepository {
                      COALESCE(AVG(r.upstream_latency_ms), 0),\
                      COALESCE(SUM(CASE WHEN r.streamed = 1 THEN 1 ELSE 0 END), 0),\
                      COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='exact' THEN 1 ELSE 0 END),0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='derived' THEN 1 ELSE 0 END),0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='partial' THEN 1 ELSE 0 END),0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='estimated' THEN 1 ELSE 0 END),0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='unknown' THEN 1 ELSE 0 END),0)\
+                     ,COALESCE(SUM(CASE WHEN r.exactness='provider_reported' THEN 1 ELSE 0 END),0)\
                      FROM models m\
                      LEFT JOIN requests r ON r.model_id = m.model_id\
                        AND r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
@@ -622,6 +652,12 @@ impl DashboardRepository {
                             avg_latency_ms: row.get(8)?,
                             ttft_requests: row.get(9)?,
                             avg_ttft_ms: row.get(10)?,
+                            exact_count: row.get(11)?,
+                            derived_count: row.get(12)?,
+                            partial_count: row.get(13)?,
+                            estimated_count: row.get(14)?,
+                            unknown_count: row.get(15)?,
+                            provider_reported_count: row.get(16)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;

@@ -841,8 +841,16 @@ pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool
         .iter()
         .filter(|row| show_disabled || row.enabled)
         .map(|row| {
+            let exactness = exactness_badge(
+                row.exact_count,
+                row.derived_count,
+                row.partial_count,
+                row.estimated_count,
+                row.unknown_count,
+                row.provider_reported_count,
+            );
             format!(
-                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">unknown</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\"><span class=\"exactness-badge empty\">—</span></td>{}",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">unknown</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\">{}</td>{}",
                 html_escape(&row.name),
                 html_escape(&row.provider_id),
                 if row.enabled { "yes" } else { "no" },
@@ -853,6 +861,7 @@ pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool
                 format_tokens(row.input_tokens),
                 format_tokens(row.output_tokens),
                 format_tokens(row.input_tokens + row.output_tokens),
+                exactness,
                 "<td data-priority=\"3\">—</td>".repeat(19),
             )
         })
@@ -860,6 +869,33 @@ pub(super) fn render_accounts_page(data: &db::DashboardData, show_disabled: bool
     format!(
         "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\"><option value=\"1h\">Last hour</option><option value=\"24h\" selected=\"selected\">Last 24 hours</option><option value=\"7d\">Last 7 days</option><option value=\"30d\">Last 30 days</option></select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\" selected=\"selected\">Hide disabled accounts</option><option value=\"1\">Show disabled accounts</option></select></form><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         "<th data-priority=\"3\">Reserved</th>".repeat(19)
+    )
+}
+
+fn exactness_badge(
+    exact: i64,
+    derived: i64,
+    partial: i64,
+    estimated: i64,
+    unknown: i64,
+    provider_reported: i64,
+) -> String {
+    let total = exact + derived + partial + estimated + unknown + provider_reported;
+    if total == 0 {
+        return "<span class=\"exactness-badge empty\">—</span>".to_owned();
+    }
+    let class = if estimated + unknown == total {
+        "est-major"
+    } else if estimated + unknown + partial > 0 {
+        "partial-mix"
+    } else {
+        "derived"
+    };
+    let label = format!(
+        "u:{provider_reported},e:{exact},d:{derived},p:{partial},~:{estimated},?:{unknown}"
+    );
+    format!(
+        "<span class=\"exactness-badge {class}\" data-tooltip=\"{label}\" aria-label=\"{label}\">{label}</span>"
     )
 }
 
@@ -905,8 +941,16 @@ pub(super) fn render_models_page(
                 "unavailable" | "withdrawn" => "unavailable",
                 _ => "configured",
             };
+            let exactness = exactness_badge(
+                row.exact_count,
+                row.derived_count,
+                row.partial_count,
+                row.estimated_count,
+                row.unknown_count,
+                row.provider_reported_count,
+            );
             format!(
-                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"exactness-badge empty\">—</span></td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
+                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
                 query_component(&row.model_id),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
@@ -915,6 +959,7 @@ pub(super) fn render_models_page(
                 info_pill,
                 row.requests,
                 format_microdollars(row.cost_microdollars),
+                exactness,
                 row.errors,
                 format_tokens(row.input_tokens),
                 format_tokens(row.output_tokens),
@@ -1972,6 +2017,12 @@ mod tests {
             avg_latency_ms: 0.0,
             ttft_requests: 0,
             avg_ttft_ms: 0.0,
+            exact_count: 0,
+            derived_count: 0,
+            partial_count: 0,
+            estimated_count: 0,
+            unknown_count: 0,
+            provider_reported_count: 0,
         });
         let html = super::render_models_page(&data, "24h", "Nord", &[]);
         assert!(html.contains("pill-configured\">configured"));
@@ -1994,6 +2045,12 @@ mod tests {
             avg_latency_ms: 0.0,
             ttft_requests: 0,
             avg_ttft_ms: 0.0,
+            exact_count: 0,
+            derived_count: 0,
+            partial_count: 0,
+            estimated_count: 0,
+            unknown_count: 0,
+            provider_reported_count: 0,
         });
         let info = serde_json::json!({
             "status": "fresh",
@@ -2021,6 +2078,12 @@ mod tests {
             avg_latency_ms: 0.0,
             ttft_requests: 0,
             avg_ttft_ms: 0.0,
+            exact_count: 0,
+            derived_count: 0,
+            partial_count: 0,
+            estimated_count: 0,
+            unknown_count: 0,
+            provider_reported_count: 0,
         });
         let observations = vec![serde_json::json!({
             "source": "<catalog>",
