@@ -85,7 +85,7 @@ It must not own:
 
 ## 4. Current state
 
-The current qualified baseline exact-pins `eggfetch-core =0.2.0` with
+The current qualified baseline exact-pins `eggfetch-core =0.2.1` with
 `default-features = false` and `native-http1,tls-rustls`. Legacy Plan 241
 closed the 0.2.0 adoption with the provider transport, coordinator, no-default,
 dependency, and footprint gates green.
@@ -119,7 +119,7 @@ and proxied request shape, TLS, keepalive, pool pressure, cancellation recovery,
 timeouts, premature closes, body bounds, account isolation, supported Eggress
 route families, route authentication/refusal, and fail-closed behavior.
 
-Eggress is exact-pinned at 1.0.10 across the live outbound/test-support family.
+Eggress is exact-pinned at 1.0.11 across the live outbound/test-support family.
 Production uses the listener-free `eggress-outbound` `OutboundConnector` and
 `connect_tcp_detailed` typed failure surface; the full `eggress-embed`/runtime
 service facade is absent from the normal release path. The root `ssh` capability
@@ -133,8 +133,15 @@ embedding consumers:
 physical TCP metadata recovery, hop-zero SSH/H2 pooling/reuse isolation,
 TLS-policy identity scoping for pooled H2, nested-hop pooling behavior, and
 preservation of caller rustls trust/mTLS/verifier state during ALPN
-adaptation. The public `OutboundConnector::from_pproxy_uri` and
+adaptation. M005 then moved the live family to 1.0.11 without source adapter
+changes; provider fixtures passed under default, `test-support`, and
+no-default profiles. The public `OutboundConnector::from_pproxy_uri` and
 `connect_tcp_detailed` surfaces used by EggPool remain available.
+
+The live Eggfetch profile is now `eggfetch-core =0.2.1` with
+`native-http1,tls-rustls`; the lockfile also selects
+`eggfetch-http-connect 0.2.1` through Eggress HTTP CONNECT support. The
+Eggress family resolves at 1.0.11 and `eggserve-server` remains 0.4.0.
 
 At the M005 planning baseline (`869964c236cfd985a771beeb0ee815df3e1cf601`), upstream has since published
 `eggfetch-core 0.2.1` / `eggfetch-http-connect 0.2.1` and the Eggress
@@ -192,7 +199,7 @@ coordinator to Eggress/Eggfetch internal error types.
 
 - Hard: current provider/coordinator ownership from legacy Plans 215–220 and
   241 is closed and remains authoritative.
-- Hard: exact-pinned `eggfetch-core 0.2.0` native/custom-dialer surface.
+- Hard: exact-pinned `eggfetch-core 0.2.1` native/custom-dialer surface.
 - Hard: exact-pinned Eggress outbound surface used by the current custom dialer.
 - Interface: coordinator consumes only stable `TransportError` plus
   incremental DATA; M001 must preserve this interface.
@@ -554,4 +561,4 @@ active while M002 is blocked and M005 is open.
 | 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
-| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | ready | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | — | none; M002 remains independently blocked |
+| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closing | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | — | hosted CI/dependency-audit evidence pending; M002 remains independently blocked |

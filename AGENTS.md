@@ -106,7 +106,7 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing. Default SSH is the root `ssh` capability forwarded to
-  Eggress 1.0.10 (`eggress-outbound/ssh` plus the compat crate's SSH
+  Eggress 1.0.11 (`eggress-outbound/ssh` plus the compat crate's SSH
   translation support); there is no Eggpool SSH executor fallback.
 - Cancellation-path tests must synchronize on an observable fixture boundary or
   invariant under a bounded timeout. Do not use fixed millisecond sleeps or
@@ -117,10 +117,10 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   seam — run both for any `rust/src/wire/` change.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
-- Provider transport is exact-pinned to `eggfetch-core =0.2.0` with
+- Provider transport is exact-pinned to `eggfetch-core =0.2.1` with
   `native-http1,tls-rustls` (not the `http1` alias or `standard-http1`),
   excluding high-level URL/retry/redirect/Basic-auth, built-in proxy, and
-  HTTP/2/3; provider proxy dialing is exact-pinned Eggress `1.0.10`
+  HTTP/2/3; provider proxy dialing is exact-pinned Eggress `1.0.11`
   `eggress-outbound` via `connect_tcp_detailed` with a typed kind/stage
   adapter (no message-string classifier). `operations/update.rs` is a separate
   Hyper/Rustls owner. Downstream HTTP/1 is exact-pinned `eggserve-server =0.4.0`

@@ -236,7 +236,7 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
-The provider transport currently requires exact `eggfetch-core =0.2.0` with
+The provider transport currently requires exact `eggfetch-core =0.2.1` with
 `native-http1,tls-rustls` (not the high-level `http1` alias or
 `standard-http1`). Dependency/profile changes must run both provider transport
 targets and the C008/C009/C011 plus boundary/finalization/publication suites
@@ -257,7 +257,7 @@ tests locally.
 
 No-default builds must preserve direct and non-SSH proxy construction while
 returning `TransportError::ProxyConfiguration` for SSH proxy configuration.
-Default SSH uses the root `ssh` capability forwarded to Eggress 1.0.10
+Default SSH uses the root `ssh` capability forwarded to Eggress 1.0.11
 (`eggress-outbound/ssh` plus the compatibility crate's SSH translation
 support; pproxy-style SSH needs both); no Eggpool-owned
 SSH executor fallback is permitted. The production dial path uses

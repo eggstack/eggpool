@@ -82,9 +82,9 @@ transport failures to their public contracts.
 
 `rust/Cargo.toml` (package `eggpool`, currently `0.8.1`) plus its locked
 resolved graph is the native dependency authority. Exact pins:
-`eggserve-server =0.4.0` (`tower` feature), the Eggress `1.0.10` family
+`eggserve-server =0.4.0` (`tower` feature), the Eggress `1.0.11` family
 (normal path via `eggress-outbound` directly), and
-`eggfetch-core =0.2.0` (`native-http1`, `tls-rustls`). Feature gates:
+`eggfetch-core =0.2.1` (`native-http1`, `tls-rustls`). Feature gates:
 default `ssh` (root capability forwarded to `eggress-outbound/ssh` plus the
 compat crate's SSH translation support); `--no-default-features` still
 compiles/tests, keeps direct/non-SSH proxy paths, and rejects SSH proxy

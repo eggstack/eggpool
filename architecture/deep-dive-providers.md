@@ -37,7 +37,7 @@ request, and successful client reuse rather than an incidental handshake count.
 
 ## Native dependency boundaries
 
-Direct provider transport uses exact-pinned `eggfetch-core =0.2.0` with
+Direct provider transport uses exact-pinned `eggfetch-core =0.2.1` with
 `native-http1` + `tls-rustls` through the native
 `Client::execute_http_body` API. `native-http1` expands to
 `transport-http1`, `standard-route`, and `advanced-routing`: it supplies the
@@ -62,7 +62,7 @@ native roots, JSON, cookies, and multipart features disabled. Eggpool does not
 configure Eggfetch `Timeout.total`; connect and established read/write
 inactivity remain the separate Eggpool-owned timeout layers described below.
 
-Eggfetch 0.2.0 derives native origin facts directly from Eggpool's parsed
+Eggfetch 0.2.1 derives native origin facts directly from Eggpool's parsed
 `http::Uri`; the provider path does not serialize through `url::Url` or add
 IDNA conversion. `join_provider_target()` remains the boundary that validates
 the configured authority and rejects unsafe absolute or authority-form
@@ -105,7 +105,7 @@ chain-executor path keeps its own fully typed `ChainError` classification.
 route timeout; Eggfetch's connect timeout owns the provider deadline.
 
 Eggpool delegates provider proxy-chain construction and execution to
-`eggress-outbound` 1.0.10. The root `ssh` capability enables the outbound
+`eggress-outbound` 1.0.11. The root `ssh` capability enables the outbound
 crate's native SSH session ownership plus the compatibility crate's SSH
 translation support by default (pproxy-style SSH expressions construct only
 when both cfg gates agree); `--no-default-features` omits that capability
@@ -307,9 +307,10 @@ HTTP trailer frames observed while polling are retained separately and can be
 moved out with `take_trailers()`; they never become downstream wire terminal
 evidence. Its debug representation reports trailer presence only. Eggfetch
 physical-admission expiry uses its typed predicate; residual pool errors fail
-closed without parsing upstream display text. The live Eggress package family
-is now exact-pinned to 1.0.10; the preceding Plan 243 measurements remain
-historical.
+closed without parsing upstream display text. At M003 closure, the live Eggress
+package family was exact-pinned to 1.0.10; the preceding Plan 243 measurements
+remain historical. M005 subsequently qualified Eggress 1.0.11 as the current
+family.
 
 For coordinator diagnostic observations, each `TransportError` also owns one
 static `diagnostic_class()` label. Finite submit/body-read failures and

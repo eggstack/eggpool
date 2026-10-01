@@ -12,7 +12,7 @@ in the default build through the root `ssh` capability (forwarded to
 support); a deliberate `--no-default-features` build rejects SSH proxy
 configuration at construction time while retaining the other proxy
 protocols.
-The implementation keeps these protocols in the native Eggress feature graph
+The implementation keeps these protocols in the native Eggress 1.0.11 feature graph
 and applies the same provider TLS, timeout, and retry ownership after the
 proxy connection is established. In a no-default build, the graph omits the
 optional SSH compatibility implementation; configured SSH is rejected rather

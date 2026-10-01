@@ -1,6 +1,6 @@
 # Provider Transport Milestone 005 — Eggfetch 0.2.1 and Eggress 1.0.11 Dependency Refresh
 
-Status: active
+Status: closing
 
 Repository baseline: `869964c236cfd985a771beeb0ee815df3e1cf601`
 
