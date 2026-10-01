@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 ready — Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | M002 remains independently blocked on a published upstream typed classification interface. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 active — Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | M002 remains independently blocked on a published upstream typed classification interface. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 
@@ -47,7 +47,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider transport | M005 Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | ready | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | M001/M003/M004 closed; upstream patch releases published; M002 remains independently blocked. |
+| Provider transport | M005 Eggfetch 0.2.1 / Eggress 1.0.11 dependency refresh | active | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | M001/M003/M004 closed; upstream patch releases published; M002 remains independently blocked. |
 
 ## Blocked work
 
