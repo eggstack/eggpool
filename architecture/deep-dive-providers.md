@@ -8,6 +8,30 @@ and the per-provider/account client pool. Provider profiles
 describe protocol, URL, auth shape, wire surface, and capability facts without
 storing secrets in metadata.
 
+## Bundled provider-template authority
+
+`rust/assets/providers/_templates.toml` is the bundled bootstrap authority
+consumed by `operations/config_mutation.rs::load_provider_templates`. The
+templates carry secret-free setup facts only (canonical base URL, protocol
+families/wire surfaces, auth/header shape, model-discovery path, verification
+model/protocol, conservative capability hints). Provider IDs and config keys
+are stable; operator-configured endpoints keep winning per existing config
+semantics.
+
+Review authority is current first-party provider documentation, never a
+sibling repository. The 2026-10-02 review (provider-profile metadata M001)
+checked every bundled entry against first-party docs: Together stays on the
+canonical `https://api.together.ai/v1` (`docs.together.ai`; the
+`api.together.xyz` host is a legacy alias), OpenCode Go stays on
+`https://opencode.ai/zen/go/v1`, and all other bundled base URLs were
+confirmed. Base URL and endpoint path are always qualified as one
+composition so version segments are neither duplicated nor dropped; the
+`operations_o004` template tests lock the Together/OpenCode Go compositions
+plus representative edge shapes (DeepSeek's `/v1`-less base, MiniMax's
+Anthropic subpath, Alibaba's compatible-mode prefix). There is no runtime or
+CI web freshness checker: template facts are re-reviewed by bounded
+corrective passes, with the review matrix recorded in the closure evidence.
+
 `ProviderClientPool` is generation-owned. Direct and configured proxy accounts
 use the selected transport path; a configured proxy never silently falls back
 to direct transport. Credentials are rendered only while constructing dispatch
