@@ -53,6 +53,12 @@ because its eligible-input denominator is not persisted. Metrics not owned by
 the current runtime (such as outbound pool build/request counts) are rendered
 as not collected rather than as zero.
 
+Runtime process age, parent PID, daemon hint, and host platform are read from
+the current process. Linux load average is read from `/proc/loadavg`; hosts
+without that safe snapshot source report load average as unavailable. The
+dashboard does not spawn host utilities or add unsafe process APIs for this
+observation.
+
 The dashboard is observational: it does not alter routing, quota, health, or
 provider state. Authenticated operational endpoints return metadata-only
 responses, and rendering escapes operator/provider-controlled values. Runtime

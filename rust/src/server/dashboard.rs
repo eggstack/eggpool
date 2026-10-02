@@ -3576,8 +3576,8 @@ pub(super) fn render_cache_page(
         ("Mode", "reporting_only".to_owned()),
         ("Cache metrics", "no".to_owned()),
         ("Compression metrics", "no".to_owned()),
-        ("Stable-prefix hash", "not collected".to_owned()),
-        ("Compression policy", "not collected".to_owned()),
+        ("Stable-prefix hash", "no".to_owned()),
+        ("Compression policy", "no".to_owned()),
     ];
     let cards = [
         runtime_metric_card("Request changes", "no changes", "disabled by config"),
@@ -3670,7 +3670,7 @@ pub(super) fn render_cache_page(
             .collect::<String>()
     };
     let advanced = format!(
-        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">{}</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section><div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody>{}</tbody></table></div></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based.</p><section class=\"cards\">{}</section></section>",
+        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">{}</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section><div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody>{}</tbody></table></div></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based. These flags are hardcoded; they reflect how the router is built, not the current request stream.</p><section class=\"cards\">{}</section><p class=\"sub\">Scorer inputs (allowed): <code>health, quota, active_requests, model_eligibility</code></p></section>",
         html_escape(period),
         runtime_metric_card(
             "Transcoded requests",
