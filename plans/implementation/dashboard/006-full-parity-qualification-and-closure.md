@@ -29,7 +29,7 @@ This milestone is a closure gate, not a venue for redesign.
 
 ## 2. Why this milestone is ready
 
-Blocked on Dashboard M003, M004, and M005. M001 must remain the unchanged oracle authority and M002 the closed common shell/API foundation.
+Blocked on Dashboard M005. M003 and M004 are closed. M001 must remain the unchanged oracle authority and M002 the closed common shell/API foundation.
 
 When the prerequisite capability milestones close, M006 has no expected external runtime dependency. Browser tooling remains qualification-only.
 

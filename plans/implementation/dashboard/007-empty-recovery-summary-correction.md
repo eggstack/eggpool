@@ -1,6 +1,6 @@
 # Dashboard Corrective Pass 007 — Deterministic Recovery Summary Qualification
 
-Status: closing
+Status: closed
 
 Repository baseline: `36e3a93f8ec45e9571abba579cb4c46112bc8659`
 
