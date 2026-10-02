@@ -49,6 +49,17 @@ At the research baseline:
 - Current Rust architecture already identifies operations/metrics.rs, operations/status.rs, runtime_lifecycle/diagnostics.rs, task supervision, health/routing state, and DB repositories as current authorities for relevant bounded observations.
 - The dashboard must not infer safety/health from absence of data.
 
+### Current strict-qualification blockers
+
+The tracked strict baseline report is `tests/fixtures/dashboard-python-oracle/current-gap-report.json`; a fresh local qualification reproduced the M005 gaps below. M005 remains active because:
+
+- Runtime and Cache full-DOM comparisons still fail in both empty and populated states. Runtime host/process labels and unavailable-source wording still need an evidence-backed mapping to the frozen structure; Cache card/detail structure still differs.
+- Populated `/api/stats/cache-observability` returns HTTP 500 in the frozen Python oracle while Rust returns HTTP 200. Preserve the frozen source and keep Rust's successful bounded response; document this oracle defect and obtain a plan disposition before treating it as accepted parity.
+- Populated `/api/stats/request-shaping` differs because the Python projection reports one known cache-status row after collapsing distinct unknown raw statuses, while Rust counts each unknown row. Do not reproduce the Python undercount without an explicit semantic disposition.
+- The full report also contains four M003 DOM findings already reserved for M006 disposition. M005's two populated stats API findings remain owned by this milestone.
+
+The qualification comparator now applies the Runtime metric/text volatility normalization already used by frozen Runtime captures to both live sides. It retains exact DOM structure, labels, attributes, and non-normalized text; a focused tooling test guards label differences.
+
 ## 4. Invariants that must not regress
 
 - Runtime/generation/task/client/reload ownership remains with existing runtime modules; dashboard is projection-only.

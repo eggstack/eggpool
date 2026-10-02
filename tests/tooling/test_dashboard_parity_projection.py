@@ -119,6 +119,33 @@ def test_complete_dom_projection_normalizes_documented_local_timestamps() -> Non
         )
 
 
+def test_runtime_comparison_keeps_capture_metrics_normalized_and_labels_strict() -> (
+    None
+):
+    expected = project_html(
+        "<main><div class='card'><h3>Server PID</h3>"
+        "<p class='metric'>12345</p></div>"
+        "<div class='card'><h3>Requests</h3>"
+        "<p class='metric'>12</p></div></main>"
+    )
+    different_host = project_html(
+        "<main><div class='card'><h3>Server PID</h3>"
+        "<p class='metric'>67890</p></div>"
+        "<div class='card'><h3>Requests</h3>"
+        "<p class='metric'>12</p></div></main>"
+    )
+    compare_dom_projection(expected, different_host, "/runtime")
+
+    changed_label = project_html(
+        "<main><div class='card'><h3>Server PID</h3>"
+        "<p class='metric'>67890</p></div>"
+        "<div class='card'><h3>Request count</h3>"
+        "<p class='metric'>13</p></div></main>"
+    )
+    with pytest.raises(AssertionError, match="complete DOM tree differs"):
+        compare_dom_projection(expected, changed_label, "/runtime")
+
+
 def test_shared_shell_projection_ignores_page_body_and_rejects_shell_drift() -> None:
     expected = project_html(
         "<html><body><header class='topbar'><a href='/'>EggPool</a></header>"

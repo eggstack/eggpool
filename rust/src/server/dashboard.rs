@@ -1304,6 +1304,8 @@ pub(super) fn render_dashboard_page_body(
             | "reliability"
             | "routing"
             | "traces"
+            | "runtime"
+            | "cache"
     ) {
         String::new()
     } else {
@@ -1354,7 +1356,7 @@ pub(super) fn render_dashboard_page_body(
             observability,
             runtime_diagnostics,
         )),
-        "cache" => body.push_str(&render_cache_page(data, observability)),
+        "cache" => body.push_str(&render_cache_page(data, observability, period, theme)),
         _ => body.push_str(&dashboard_empty(title, "No data available.")),
     }
     body
@@ -3170,20 +3172,16 @@ pub(super) fn render_runtime_page(
                 .take(64)
                 .map(|task| {
                     format!(
-                        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"4\">—/—</td><td data-priority=\"4\">—</td></tr>",
                         html_escape(&task.name),
                         if task.running {
-                            "running"
+                            "yes"
                         } else if task.enabled {
-                            "stopped"
+                            ""
                         } else {
-                            "disabled"
+                            "no"
                         },
-                        task.tick_count,
-                        task.last_outcome
-                            .as_deref()
-                            .map(html_escape)
-                            .unwrap_or_else(|| "—".to_owned())
+                        if task.running { "running" } else { "stopped" },
                     )
                 })
                 .collect::<String>()
@@ -3193,35 +3191,174 @@ pub(super) fn render_runtime_page(
         .as_i64()
         .map(|n| n.to_string())
         .unwrap_or_else(|| "—".to_owned());
-    format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Configured providers</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Active generation</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Retiring generations</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Pending requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Active reservations</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Outbound builds</h3><p class=\"metric\">not collected</p></div><div class=\"card\"><h3>Outbound requests</h3><p class=\"metric\">not collected</p></div><div class=\"card\"><h3>Total requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Native requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Transcoded requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Reload outcomes</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Reload failures</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Runtime snapshot</h3><p class=\"status\">Lifecycle phase: {}</p><p class=\"status\">Reload phase: {}</p><p class=\"status\">Metrics received/flushed/dropped: {}/{}/{}</p><p class=\"status\">{} dashboard records in the selected period.</p></section><section class=\"panel\"><h3>Background tasks</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Task</th><th>Status</th><th>Ticks</th><th>Last outcome</th></tr></thead><tbody>{}</tbody></table></div></section><p class=\"empty\">No loss warnings recorded in this period.</p><p class=\"empty\">Health state detail is not collected by this view.</p>",
-        summary.total_providers,
-        metric(&["active_generation", "generation_id"]),
-        diagnostics
-            .map(|d| d.retiring_generations.len().to_string())
-            .unwrap_or_else(|| "not collected".to_owned()),
-        data.pending_requests,
-        data.active_reservations,
-        summary.total_requests,
-        summary.total_requests.saturating_sub(
-            observability["transcoding"]["transcoded_count"]
-                .as_i64()
-                .unwrap_or(0)
+    let server_cards = format!(
+        "<section class=\"cards\">{}{}{}</section>",
+        runtime_metric_card(
+            "Server PID",
+            &std::process::id().to_string(),
+            "process id not collected"
         ),
-        transcoded,
-        metric(&["counters", "reload_attempts"]),
-        metric(&["counters", "reload_failures"]),
-        state(&["shutdown", "phase"]),
-        state(&["reload", "phase"]),
+        runtime_metric_card("Uptime", "—", "process uptime not collected"),
+        runtime_metric_card("Python", "not applicable", "native Rust runtime"),
+    );
+    let memory_cards = format!(
+        "<section class=\"cards\">{}{}{}{}{}</section>",
+        runtime_metric_card("RSS memory", "not collected", "resident set size"),
+        runtime_metric_card("Open FDs", "not collected", "file descriptors"),
+        runtime_metric_card("Active threads", "not collected", "thread count"),
+        runtime_metric_card("Load average", "not collected", "load average unavailable"),
+        runtime_metric_card(
+            "Dispatch overhead",
+            "not collected",
+            "no dispatch-span source"
+        ),
+    );
+    let task_rows = if tasks.is_empty() {
+        "<p class=\"empty\">No background tasks registered.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Task</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Restarts</th><th data-priority=\"2\">Max restarts</th><th data-priority=\"2\">Interval</th><th data-priority=\"3\">Next run</th><th data-priority=\"3\">Done</th><th data-priority=\"4\">Success/Fail</th><th data-priority=\"4\">Last error</th></tr></thead><tbody>{}</tbody></table></div>",
+            tasks
+        )
+    };
+    let database_cards = format!(
+        "<section class=\"cards\">{}{}{}{}</section>",
+        runtime_metric_card(
+            "Database",
+            "not collected",
+            "file path and size unavailable"
+        ),
+        runtime_metric_card("WAL", "not collected", "WAL mode unavailable"),
+        runtime_metric_card("Sync", "not collected", "synchronous mode unavailable"),
+        runtime_metric_card("Stats DB", "shared", "single serialized SQLite owner"),
+    );
+    let routing_cards = format!(
+        "<section class=\"cards\">{}{}{}{}</section>",
+        runtime_metric_card(
+            "Pending requests",
+            &data.pending_requests.to_string(),
+            "oldest age not collected"
+        ),
+        runtime_metric_card(
+            "Active reservations",
+            &data.active_reservations.to_string(),
+            "reserved amount not collected"
+        ),
+        runtime_metric_card("In-flight requests", "not collected", "active upstream"),
+        runtime_metric_card("Active backoffs", "not collected", "account backoff rows"),
+    );
+    let network_cards = format!(
+        "<section class=\"cards\">{}{}{}</section>",
+        runtime_metric_card("Outbound builds", "not collected", "client lifecycle"),
+        runtime_metric_card(
+            "Outbound requests",
+            "not collected",
+            "request count unavailable"
+        ),
+        runtime_metric_card(
+            "Provider clients",
+            "not collected",
+            "pool snapshot unavailable"
+        ),
+    );
+    let reload_cards = format!(
+        "<section class=\"cards\">{}{}{}</section>",
+        runtime_metric_card(
+            "Reload outcomes",
+            &metric(&["counters", "reload_attempts"]),
+            "attempts observed"
+        ),
+        runtime_metric_card(
+            "Reload failures",
+            &metric(&["counters", "reload_failures"]),
+            "failures observed"
+        ),
+        runtime_metric_card(
+            "Reload phase",
+            &state(&["reload", "phase"]),
+            "runtime diagnostic snapshot"
+        ),
+    );
+    let transcoding_panel = format!(
+        "<section class=\"panel\"><h3>Transcoding (24h)</h3><section class=\"cards\">{}{}{}</section><p class=\"empty-state\">Loss warnings are not collected for this period.</p></section>",
+        runtime_metric_card(
+            "Total requests",
+            &summary.total_requests.to_string(),
+            "in period"
+        ),
+        runtime_metric_card(
+            "Native",
+            &summary
+                .total_requests
+                .saturating_sub(
+                    observability["transcoding"]["transcoded_count"]
+                        .as_i64()
+                        .unwrap_or(0)
+                )
+                .to_string(),
+            "no transcoding"
+        ),
+        runtime_metric_card("Transcoded", &transcoded, "cross-protocol"),
+    );
+    let runtime_snapshot = format!(
+        "<section class=\"panel\"><h3>Dispatch spans</h3><p class=\"empty\">Dispatch span details are not collected.</p><p class=\"status\">Metrics received/flushed/dropped: {}/{}/{}</p></section>",
         metric(&["metrics", "total_received"]),
         metric(&["metrics", "total_flushed"]),
         metric(&["metrics", "total_dropped"]),
-        summary.total_requests,
-        tasks
+    );
+    format!(
+        "<h2>Runtime</h2><p class=\"sub\">Process-level diagnostics for the running EggPool instance.</p>{server_cards}{memory_cards}<section class=\"panel\"><h3>Background tasks</h3>{task_rows}</section>{database_cards}{routing_cards}{network_cards}{transcoding_panel}{runtime_snapshot}{reload_cards}<section class=\"panel\"><h3>Health states</h3><p class=\"empty\">No health state data.</p></section>",
     )
 }
 
-pub(super) fn render_cache_page(data: &db::DashboardData, stats: &Value) -> String {
+fn runtime_metric_card(title: &str, metric: &str, sub: &str) -> String {
+    let tooltip = match title {
+        "Server PID" => "Process identity of the running supervisor (PPID and daemon mode).",
+        "Uptime" => "Elapsed time since the current EggPool process started.",
+        "Python" => "Python runtime version and platform for the running process.",
+        "RSS memory" => "Resident memory currently held by the EggPool process.",
+        "Open FDs" => "Open file descriptors currently held by the process.",
+        "Active threads" => "Current number of active Python threads in the process.",
+        "Load average" => {
+            "Host load average (1m primary, subtext shows normalized load or 5m/15m)."
+        }
+        "Dispatch overhead" => {
+            "EggPool-local time spent before each upstream dispatch attempt begins."
+        }
+        "Database" => "Primary SQLite database path and on-disk size.",
+        "WAL" => "SQLite write-ahead log size and whether WAL mode is active.",
+        "Sync" => "SQLite synchronous mode and whether the primary DB connection is live.",
+        "Stats DB" => "Whether stats use a separate SQLite connection.",
+        "Pending requests" => "Requests still in progress. Subtext shows the oldest pending age.",
+        "Active reservations" => "Active quota or spend reservations for in-flight work.",
+        "In-flight requests" => "Requests currently active against upstream providers.",
+        "Active backoffs" => {
+            "Persisted account backoff rows currently suppressing or delaying eligible accounts."
+        }
+        "Outbound builds" => {
+            "How many times the shared outbound client manager has built a client."
+        }
+        "Outbound requests" => "Requests via the shared outbound client. Subtext shows errors.",
+        "Provider clients" => {
+            "How many per-provider HTTP clients were built in the provider client pool."
+        }
+        _ => title,
+    };
+    let tooltip = html_escape(tooltip);
+    format!(
+        "<div class=\"card\" data-tooltip=\"{tooltip}\" data-tooltip-pos=\"bottom\" aria-label=\"{tooltip}\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{}</p></div>",
+        html_escape(title),
+        html_escape(metric),
+        html_escape(sub),
+    )
+}
+
+pub(super) fn render_cache_page(
+    data: &db::DashboardData,
+    stats: &Value,
+    period: &str,
+    theme: &str,
+) -> String {
     let num = |path: &[&str]| {
         path.iter()
             .fold(stats, |v, k| &v[*k])
@@ -3232,10 +3369,23 @@ pub(super) fn render_cache_page(data: &db::DashboardData, stats: &Value) -> Stri
     let rate = stats["cache_observability"]["cache_counter_coverage_rate"]
         .as_f64()
         .map(|v| format!("{:.1}%", v * 100.0))
-        .unwrap_or_else(|| "not collected".to_owned());
+        .unwrap_or_else(|| "—".to_owned());
+    let hit_rate = stats["cache_observability"]["cache_hit_ratio_known_only"]
+        .as_f64()
+        .map(|v| format!("{:.1}%", v * 100.0))
+        .unwrap_or_else(|| "—".to_owned());
+    let write_rate = stats["cache_observability"]["cache_write_rate"]
+        .as_f64()
+        .map(|v| format!("{:.1}%", v * 100.0))
+        .unwrap_or_else(|| "—".to_owned());
+    let cache_sub = format!(
+        "{} provider-reported rows · {} classified rows",
+        num(&["request_shaping", "cache", "cache_counter_reported_rows"]),
+        num(&["request_shaping", "cache", "cache_counter_known_rows"]),
+    );
     let values = [
         ("Request changes", "not collected".to_owned()),
-        ("Provider cache counter coverage", rate),
+        ("Provider cache counter coverage", rate.clone()),
         (
             "Rows with cache reads",
             data.cache.rows_with_read.to_string(),
@@ -3318,18 +3468,106 @@ pub(super) fn render_cache_page(data: &db::DashboardData, stats: &Value) -> Stri
         ("Stable-prefix hash", "not collected".to_owned()),
         ("Compression policy", "not collected".to_owned()),
     ];
-    let cards = values
-        .iter()
-        .map(|(name, value)| {
-            format!(
-                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p></div>",
-                html_escape(name),
-                html_escape(value)
-            )
-        })
-        .collect::<String>();
+    let cards = [
+        runtime_metric_card(
+            "Request changes",
+            "not collected",
+            "configuration source unavailable",
+        ),
+        runtime_metric_card("Provider cache counters", &rate, &cache_sub),
+        runtime_metric_card(
+            "Safety guardrail",
+            "not collected",
+            "fallback and policy-warning counters unavailable",
+        ),
+        runtime_metric_card(
+            "Routing isolation",
+            "Isolated",
+            "mode reporting_only · cache/compression stay out of scorer",
+        ),
+    ]
+    .concat();
+    let reporting_cards = [
+        runtime_metric_card(
+            "Rows with cache counters",
+            &num(&["cache_observability", "cache_counter_reported_requests"]),
+            "upstream returned cache fields",
+        ),
+        runtime_metric_card(
+            "Rows without cache counters",
+            &num(&["cache_observability", "cache_counter_not_reported_requests"]),
+            "payload clean, no cache keys",
+        ),
+        runtime_metric_card(
+            "Unrecognized payload shape",
+            &num(&["cache_observability", "cache_counter_unknown_requests"]),
+            "parse failure or unrecognized",
+        ),
+        runtime_metric_card(
+            "Provider cache hit rate",
+            &hit_rate,
+            &format!(
+                "read {} / eligible {} · write/warmup {} · {} reported",
+                num(&["cache_observability", "cache_read_tokens_canonical"]),
+                num(&["cache_observability", "cache_eligible_input_tokens"]),
+                write_rate,
+                num(&["cache_observability", "cache_counter_reported_requests"])
+            ),
+        ),
+        runtime_metric_card(
+            "Cache write/warmup rate",
+            &write_rate,
+            &format!(
+                "warmup, not hits · eligible {}",
+                num(&["cache_observability", "cache_eligible_requests"])
+            ),
+        ),
+    ]
+    .concat();
+    let reporting_table = format!(
+        "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th>Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody><tr><td>Total finalized requests</td><td class=\"num\">{}</td></tr><tr><td>Input tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Output tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Read tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Write tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Eligible input tokens (denominator)</td><td class=\"num\">{}</td></tr><tr><td>Provider cache hit rate</td><td class=\"num\">{}</td></tr><tr><td>Cache write/warmup rate</td><td class=\"num\">{}</td></tr><tr><td>Coverage (cache counters reported)</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache read</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache creation</td><td class=\"num\">{}</td></tr></tbody></table></div>",
+        num(&["cache_observability", "total_requests"]),
+        num(&["cache_observability", "input_tokens_total"]),
+        num(&["cache_observability", "output_tokens_total"]),
+        num(&["cache_observability", "cache_read_tokens_canonical"]),
+        num(&["cache_observability", "cache_write_tokens_canonical"]),
+        num(&["cache_observability", "cache_eligible_input_tokens"]),
+        hit_rate,
+        write_rate,
+        rate,
+        num(&["cache_observability", "total_cache_read_input_tokens"]),
+        num(&["cache_observability", "total_cache_creation_input_tokens"]),
+    );
+    let card_slice = |items: &[(&str, String)]| {
+        items
+            .iter()
+            .map(|(name, value)| runtime_metric_card(name, value, "persisted scalar observation"))
+            .collect::<String>()
+    };
+    let advanced = format!(
+        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">Boundary detail lives in per-request traces; durable summaries count transcoded requests only.</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based.</p><section class=\"cards\">{}</section></section><section class=\"panel\"><h3>Transcoding ({})</h3><section class=\"cards\">{}</section><p class=\"empty-state\">Loss warnings are not collected for this period.</p></section>",
+        html_escape(period),
+        runtime_metric_card(
+            "Transcoded requests",
+            &num(&["cache_stability", "transcoded_request_count"]),
+            "boundary tracker active"
+        ),
+        html_escape(period),
+        card_slice(&values[11..18]),
+        card_slice(&values[18..]),
+        html_escape(period),
+        runtime_metric_card(
+            "Total requests",
+            &num(&["transcoding", "total"]),
+            "in period"
+        ),
+    );
     format!(
-        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Request shaping and cache observations</h3><p class=\"status\">Routing mode: reporting_only; cache metrics, compression metrics, stable-prefix hashes, and compression policy are not routing inputs.</p><p class=\"status\">Source: persisted scalar request observations. Cache keys and request content are not read.</p></section>"
+        "<h2>Cache</h2><p class=\"sub\">Cache reporting, request shaping, and safety guardrails.</p>{}<div id=\"cache-summary\"><section class=\"panel\"><h3>Request shaping ({})</h3><p class=\"sub\">Operator summary for request changes, provider cache counter coverage, safety guardrails, and routing isolation. Routing stays load-based and reporting-only metrics never enter the scorer.</p><section class=\"cards\">{cards}</section></section></div><div id=\"cache-reporting\"><section class=\"panel\"><h3>Provider cache counters ({})</h3><p class=\"sub\">Provider-reported cache counters from upstream payloads. Missing cache fields mean the upstream did not surface them. They are not cache misses and do not prove the upstream is uncached. EggPool never disables provider-side caching.</p><section class=\"cards\">{reporting_cards}</section>{reporting_table}</section></div><details class=\"advanced-details\" id=\"advanced-diagnostics\"><summary>Show advanced diagnostics</summary><div class=\"advanced-body\">{}</div></details>",
+        dashboard_period_selector(period, theme),
+        html_escape(period),
+        html_escape(period),
+        advanced,
     )
 }
 

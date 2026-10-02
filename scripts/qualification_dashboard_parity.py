@@ -900,13 +900,37 @@ def compare_dom_projection(
     expected: HtmlProjection, actual: HtmlProjection, route: str
 ) -> None:
     """Compare the complete canonical tree, retaining all meaningful DOM facts."""
-    if expected.tree != actual.tree:
-        difference = _first_tree_difference(expected.tree, actual.tree)
+    expected_tree = expected.tree
+    actual_tree = actual.tree
+    if route == "/runtime":
+        expected_tree = _normalize_runtime_dom_tree(expected_tree)
+        actual_tree = _normalize_runtime_dom_tree(actual_tree)
+    if expected_tree != actual_tree:
+        difference = _first_tree_difference(expected_tree, actual_tree)
         raise AssertionError(f"complete DOM tree differs for {route} at {difference}")
     if expected.duplicate_ids or actual.duplicate_ids:
         raise AssertionError(f"duplicate IDs in oracle/candidate for {route}")
     if expected.unsafe_links or actual.unsafe_links:
         raise AssertionError(f"unsafe links in oracle/candidate for {route}")
+
+
+def _normalize_runtime_dom_tree(
+    node: DomNode | str, *, metric: bool = False
+) -> DomNode | str:
+    """Apply the bounded Runtime volatility rules used for frozen captures."""
+    if isinstance(node, str):
+        return "<volatile:runtime-metric>" if metric else _normalize_runtime_text(node)
+    is_metric = metric or any(
+        key == "class" and "metric" in value.split() for key, value in node.attributes
+    )
+    return DomNode(
+        node.tag,
+        node.attributes,
+        tuple(
+            _normalize_runtime_dom_tree(child, metric=is_metric)
+            for child in node.children
+        ),
+    )
 
 
 def _page_shell_tree(node: DomNode | str) -> DomNode | str:
