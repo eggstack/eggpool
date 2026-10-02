@@ -44,15 +44,20 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 ready — parity qualification harness decomposition | M009 closed with exact strict-oracle parity; M008 and M011 are closed. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 active — parity qualification harness decomposition | M009 closed with exact strict-oracle parity; M008 and M011 are closed. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
-| Dashboard | M010 parity qualification harness decomposition | ready | `plans/implementation/dashboard/010-parity-harness-decomposition.md` | M009 closed with unchanged strict-oracle comparisons, assets, and production behavior. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
+
+## Active implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Handoff note |
+|---|---|---|---|---|
+| Dashboard | M010 parity qualification harness decomposition | active | `plans/implementation/dashboard/010-parity-harness-decomposition.md` | Strict oracle and browser/lifecycle qualification in progress; no production changes. |
 
 ## Blocked work
 
