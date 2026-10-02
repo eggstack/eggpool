@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closing — parity qualification harness decomposition | Local strict/browser/lifecycle and full Rust/tooling gates passed; hosted CI in progress. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closed — parity qualification harness decomposition | No registered successor became ready; new qualification work requires a bounded plan. |
 
 ## Dependency-ready implementation plans
 
@@ -52,12 +52,6 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
-
-## Active implementation plans
-
-| Subsystem | Milestone | Status | Implementation plan | Handoff note |
-|---|---|---|---|---|
-| Dashboard | M010 parity qualification harness decomposition | closing | `plans/implementation/dashboard/010-parity-harness-decomposition.md` | Local strict/browser/lifecycle and full Rust/tooling gates passed; hosted CI in progress. |
 
 ## Blocked work
 
@@ -76,6 +70,7 @@ pair is a known numbering accident.
 | Dashboard M011 — hosted oracle history qualification | closed — checkout now includes the pinned oracle source commit; all hosted CI gates pass | `plans/closure/dashboard/011-status.md`, run `37049147155`, implementation `30b8282a` |
 | Dashboard M008 — post-merge strict-CI and planning reconciliation | closed — strict Clippy, no-default, serial Rust, tooling, strict oracle baseline, and hosted CI all pass; M009 ready | `plans/closure/dashboard/008-status.md`, run `37049147155`, implementation `3c40e34f` |
 | Dashboard M009 — production module decomposition and ownership cleanup | closed — strict parity, full local/hosted gates pass; M010 is ready | `plans/closure/dashboard/009-status.md`, implementation `caa0b042`, hosted run `37053752173` |
+| Dashboard M010 — parity qualification harness decomposition | closed — stable command facade, unchanged oracle/report semantics, browser/lifecycle and full local/hosted gates pass; no successor unblocked | `plans/closure/dashboard/010-status.md`, implementation `06c950f`, hosted run `37057371175` |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
 | Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |

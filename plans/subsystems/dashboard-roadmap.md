@@ -379,12 +379,15 @@ behavior changes occur.
 | 007 | closed | plans/implementation/dashboard/007-empty-recovery-summary-correction.md | plans/closure/dashboard/007-status.md | none |
 | 008 | closed | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | plans/closure/dashboard/008-status.md | Strict CI and all hosted gates green in run 37049147155; M009 promoted. |
 | 009 | closed | plans/implementation/dashboard/009-production-module-decomposition.md | plans/closure/dashboard/009-status.md | Strict oracle, full Rust/tooling gates, and hosted CI passed. |
-| 010 | closing | plans/implementation/dashboard/010-parity-harness-decomposition.md | — | Decomposition and local strict/browser/lifecycle/Rust/tooling gates pass; hosted CI in progress. |
+| 010 | closed | plans/implementation/dashboard/010-parity-harness-decomposition.md | plans/closure/dashboard/010-status.md | Strict oracle/report semantics, browser/lifecycle, local gates, and hosted CI pass. |
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
 
 M001-M008 remain closed historical evidence. M008 corrected the post-merge
 strict-CI failure and reconciled planning state without reopening accepted
 dashboard parity dispositions. M009 decomposed production modules while
 preserving the qualification harness and exact accepted parity differences.
-M010 is closing after local gates pass; M011 closed the hosted checkout history
-prerequisite for the frozen oracle blob test.
+M010 is closed after strict oracle/report semantics, browser/lifecycle, local
+gates, and hosted CI passed. M011 closed the hosted checkout history
+prerequisite for the frozen oracle blob test. No registered dashboard
+successor is dependency-ready; future qualification maintenance requires a
+new bounded plan.
