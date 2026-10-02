@@ -51,12 +51,15 @@ At the research baseline:
 
 ### Current strict-qualification blockers
 
-The tracked strict baseline report is `tests/fixtures/dashboard-python-oracle/current-gap-report.json`; a fresh local qualification reproduced the M005 gaps below. M005 remains active because:
+The tracked strict report is `tests/fixtures/dashboard-python-oracle/current-gap-report.json`; local qualification against the frozen M002 source continues to own four Runtime/Cache cells. The latest reviewed report before the current source-only runtime label refinements recorded:
 
-- Runtime and Cache full-DOM comparisons still fail in both empty and populated states. Runtime host/process labels and unavailable-source wording still need an evidence-backed mapping to the frozen structure; Cache card/detail structure still differs.
-- Populated `/api/stats/cache-observability` returns HTTP 500 in the frozen Python oracle while Rust returns HTTP 200. Preserve the frozen source and keep Rust's successful bounded response; document this oracle defect and obtain a plan disposition before treating it as accepted parity.
-- Populated `/api/stats/request-shaping` differs because the Python projection reports one known cache-status row after collapsing distinct unknown raw statuses, while Rust counts each unknown row. Do not reproduce the Python undercount without an explicit semantic disposition.
-- The full report also contains four M003 DOM findings already reserved for M006 disposition. M005's two populated stats API findings remain owned by this milestone.
+- Runtime task inventory differs in empty and populated states: the frozen Python snapshot lists `catalog_refresh` and `retention_cleanup`; Rust's supervisor also registers the live `checkpoint` and `metrics_flush` tasks. Keep the authoritative Rust inventory visible rather than hiding registered tasks to match the fixture.
+- Cache advanced-panel DOM still differs in the empty state, where the frozen renderer supplies a Python cache-stability note not present in the current Rust projection.
+- Populated `/api/stats/cache-observability` returns HTTP 500 in the frozen Python oracle while Rust returns HTTP 200 with its bounded response. Preserve Rust's successful response; this is an oracle defect requiring an explicit closure disposition.
+- Populated `/api/stats/request-shaping` differs because the Python projection reports one known cache-status row after collapsing multiple distinct unknown raw statuses, while Rust counts each unknown row. Keep Rust's raw-row count; accepting an undercount requires an explicit semantic disposition.
+- The full report also has four M003 DOM findings reserved for M006 disposition. M005 owns its Runtime/Cache DOM and two populated stats API findings.
+
+Runtime projection now includes process parent/daemon hints, process uptime, host platform, safe load-average text where `/proc/loadavg` is available, and source-matched metric labels. Cache rendering now restores the frozen segmentation totals table and six-card grouping, and uses the bounded cache-stability note supplied by its stats projection when present. Focused unit coverage verifies runtime age formatting, platform labels, and bounded load-average behavior. These changes improve the source-backed surface but do not erase the strict mismatches listed above.
 
 The qualification comparator now applies the Runtime metric/text volatility normalization already used by frozen Runtime captures to both live sides. It retains exact DOM structure, labels, attributes, and non-normalized text; a focused tooling test guards label differences.
 

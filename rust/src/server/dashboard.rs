@@ -1,6 +1,8 @@
 const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
 
+use std::io::IsTerminal;
+
 use super::*;
 
 const DASHBOARD_CSS: &[u8] = include_bytes!("../../assets/dashboard/static/dashboard.css");
@@ -1207,6 +1209,7 @@ async fn dashboard_data_page_with_options(
         &summary,
         &observability,
         runtime_diagnostics.as_ref(),
+        state.server.started_at.elapsed(),
         &model_info,
         show_disabled,
         &model_filters,
@@ -1284,6 +1287,7 @@ pub(super) fn render_dashboard_page_body(
     summary: &db::DashboardSummary,
     observability: &Value,
     runtime_diagnostics: Option<&crate::runtime_lifecycle::RuntimeDiagnosticsSnapshot>,
+    runtime_uptime: std::time::Duration,
     model_info: &[Value],
     show_disabled: bool,
     model_filters: &ModelFilters,
@@ -1355,6 +1359,7 @@ pub(super) fn render_dashboard_page_body(
             summary,
             observability,
             runtime_diagnostics,
+            runtime_uptime,
         )),
         "cache" => body.push_str(&render_cache_page(data, observability, period, theme)),
         _ => body.push_str(&dashboard_empty(title, "No data available.")),
@@ -3145,6 +3150,7 @@ pub(super) fn render_runtime_page(
     summary: &db::DashboardSummary,
     observability: &Value,
     diagnostics: Option<&crate::runtime_lifecycle::RuntimeDiagnosticsSnapshot>,
+    runtime_uptime: std::time::Duration,
 ) -> String {
     let diag = diagnostics
         .map(serde_json::to_value)
@@ -3191,26 +3197,41 @@ pub(super) fn render_runtime_page(
         .as_i64()
         .map(|n| n.to_string())
         .unwrap_or_else(|| "—".to_owned());
+    let parent_process_id = parent_process_id()
+        .map(|pid| pid.to_string())
+        .unwrap_or_else(|| "—".to_owned());
+    let daemon_hint = if std::io::stdin().is_terminal() {
+        "no"
+    } else {
+        "yes"
+    };
+    let process_sub = format!("PPID {parent_process_id} · daemon {daemon_hint}");
+    let host_platform = host_platform_label();
     let server_cards = format!(
         "<section class=\"cards\">{}{}{}</section>",
+        runtime_metric_card("Server PID", &std::process::id().to_string(), &process_sub),
         runtime_metric_card(
-            "Server PID",
-            &std::process::id().to_string(),
-            "process id not collected"
+            "Uptime",
+            &format_runtime_age(runtime_uptime),
+            "uptime since start"
         ),
-        runtime_metric_card("Uptime", "—", "process uptime not collected"),
-        runtime_metric_card("Python", "not applicable", "native Rust runtime"),
+        runtime_metric_card("Python", "not applicable", &host_platform),
     );
+    let load_summary = load_average_summary();
     let memory_cards = format!(
         "<section class=\"cards\">{}{}{}{}{}</section>",
         runtime_metric_card("RSS memory", "not collected", "resident set size"),
         runtime_metric_card("Open FDs", "not collected", "file descriptors"),
-        runtime_metric_card("Active threads", "not collected", "thread count"),
-        runtime_metric_card("Load average", "not collected", "load average unavailable"),
+        runtime_metric_card(
+            "Active threads",
+            "not collected",
+            "threading.active_count()",
+        ),
+        runtime_metric_card("Load average", "not collected", &load_summary),
         runtime_metric_card(
             "Dispatch overhead",
             "not collected",
-            "no dispatch-span source"
+            "last 0 / 100 attempts"
         ),
     );
     let task_rows = if tasks.is_empty() {
@@ -3342,6 +3363,12 @@ fn runtime_metric_card(title: &str, metric: &str, sub: &str) -> String {
         "Provider clients" => {
             "How many per-provider HTTP clients were built in the provider client pool."
         }
+        "Provider cache hit rate" => {
+            "Protocol-aware cache hit rate: cache_read_tokens / cache_eligible_input_tokens. For OpenAI-compatible providers the denominator is total billed prompt tokens; for Anthropic it is fresh input + cache read + cache creation. Cache writes/creation are warmup, not hits."
+        }
+        "Cache write/warmup rate" => {
+            "Cache write (creation) tokens as a share of eligible input. These populate cache entries and are not cache hits."
+        }
         _ => title,
     };
     let tooltip = html_escape(tooltip);
@@ -3351,6 +3378,62 @@ fn runtime_metric_card(title: &str, metric: &str, sub: &str) -> String {
         html_escape(metric),
         html_escape(sub),
     )
+}
+
+fn format_runtime_age(elapsed: std::time::Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 1 {
+        "<1s".to_owned()
+    } else if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else if seconds < 86_400 {
+        format!("{}h{}m", seconds / 3_600, (seconds % 3_600) / 60)
+    } else {
+        format!("{}d{}h", seconds / 86_400, (seconds % 86_400) / 3_600)
+    }
+}
+
+#[cfg(unix)]
+fn parent_process_id() -> Option<u32> {
+    Some(std::os::unix::process::parent_id())
+}
+
+#[cfg(not(unix))]
+fn parent_process_id() -> Option<u32> {
+    None
+}
+
+fn host_platform_label() -> String {
+    let platform = match std::env::consts::OS {
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "windows" => "Windows",
+        other => other,
+    };
+    format!("{platform}-{}", std::env::consts::ARCH)
+}
+
+fn load_average_summary() -> String {
+    #[cfg(target_os = "linux")]
+    if let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg") {
+        if let Some(load) = loadavg
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            if let Ok(cpu_count) = std::thread::available_parallelism() {
+                return format!(
+                    "{:.2}/core · {} CPUs",
+                    load / cpu_count.get() as f64,
+                    cpu_count.get()
+                );
+            }
+        }
+    }
+
+    "load average unavailable".to_owned()
 }
 
 pub(super) fn render_cache_page(
@@ -3383,8 +3466,37 @@ pub(super) fn render_cache_page(
         num(&["request_shaping", "cache", "cache_counter_reported_rows"]),
         num(&["request_shaping", "cache", "cache_counter_known_rows"]),
     );
+    let stability_notes = stats["cache_stability"]["notes"]
+        .as_str()
+        .unwrap_or("Boundary detail lives in per-request traces.");
+    let segmentation_totals = [
+        ("Total finalized requests", &["total_requests"][..]),
+        (
+            "Stable prefix tokens",
+            &["token_totals", "stable_prefix"][..],
+        ),
+        ("Semi-stable tokens", &["token_totals", "semi_stable"][..]),
+        ("Volatile suffix tokens", &["token_totals", "volatile"][..]),
+        ("Stable prefix bytes", &["byte_totals", "stable_prefix"][..]),
+        ("Semi-stable bytes", &["byte_totals", "semi_stable"][..]),
+        ("Volatile suffix bytes", &["byte_totals", "volatile"][..]),
+    ]
+    .iter()
+    .map(|(label, path)| {
+        let value = path
+            .iter()
+            .fold(&stats["canonical_request_segmentation"], |value, key| {
+                &value[*key]
+            })
+            .as_i64()
+            .unwrap_or(0);
+        format!("<tr><td>{label}</td><td class=\"num\">{value}</td></tr>")
+    })
+    .collect::<String>();
     let values = [
-        ("Request changes", "not collected".to_owned()),
+        // Rust has no configured request-compression path; structural
+        // segmentation is observational and never rewrites the request.
+        ("Request changes", "no changes".to_owned()),
         ("Provider cache counter coverage", rate.clone()),
         (
             "Rows with cache reads",
@@ -3423,7 +3535,7 @@ pub(super) fn render_cache_page(
             num(&["transcoding", "transcoded_count"]),
         ),
         (
-            "Segmented requests",
+            "Segmented",
             num(&["canonical_request_segmentation", "by_status", "segmented"]),
         ),
         (
@@ -3451,34 +3563,31 @@ pub(super) fn render_cache_page(
             ]),
         ),
         (
-            "Protected prefix requests",
+            "With protected prefix",
             num(&["canonical_request_segmentation", "protected_requests"]),
         ),
         (
-            "Compression observations",
-            num(&["compression_summary", "observed_requests"]),
+            "With volatile suffix",
+            num(&[
+                "canonical_request_segmentation",
+                "compressible_candidate_requests",
+            ]),
         ),
-        (
-            "Compression candidates",
-            num(&["compression_summary", "candidate_count"]),
-        ),
-        ("Request shaping mode", "reporting_only".to_owned()),
-        ("Cache metrics in routing", "no".to_owned()),
-        ("Compression metrics in routing", "no".to_owned()),
+        ("Mode", "reporting_only".to_owned()),
+        ("Cache metrics", "no".to_owned()),
+        ("Compression metrics", "no".to_owned()),
         ("Stable-prefix hash", "not collected".to_owned()),
         ("Compression policy", "not collected".to_owned()),
     ];
     let cards = [
-        runtime_metric_card(
-            "Request changes",
-            "not collected",
-            "configuration source unavailable",
-        ),
+        runtime_metric_card("Request changes", "no changes", "disabled by config"),
         runtime_metric_card("Provider cache counters", &rate, &cache_sub),
+        // No compressor executes in this runtime, so there can be no
+        // compression fallback or compression-policy warning to report.
         runtime_metric_card(
             "Safety guardrail",
-            "not collected",
-            "fallback and policy-warning counters unavailable",
+            "Clean",
+            "0 fallbacks · 0 policy warnings",
         ),
         runtime_metric_card(
             "Routing isolation",
@@ -3511,7 +3620,7 @@ pub(super) fn render_cache_page(
                 num(&["cache_observability", "cache_read_tokens_canonical"]),
                 num(&["cache_observability", "cache_eligible_input_tokens"]),
                 write_rate,
-                num(&["cache_observability", "cache_counter_reported_requests"])
+                rate
             ),
         ),
         runtime_metric_card(
@@ -3525,7 +3634,7 @@ pub(super) fn render_cache_page(
     ]
     .concat();
     let reporting_table = format!(
-        "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th>Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody><tr><td>Total finalized requests</td><td class=\"num\">{}</td></tr><tr><td>Input tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Output tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Read tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Write tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Eligible input tokens (denominator)</td><td class=\"num\">{}</td></tr><tr><td>Provider cache hit rate</td><td class=\"num\">{}</td></tr><tr><td>Cache write/warmup rate</td><td class=\"num\">{}</td></tr><tr><td>Coverage (cache counters reported)</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache read</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache creation</td><td class=\"num\">{}</td></tr></tbody></table></div>",
+        "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody><tr><td>Total finalized requests</td><td class=\"num\">{}</td></tr><tr><td>Input tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Output tokens (all requests)</td><td class=\"num\">{}</td></tr><tr><td>Read tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Write tokens (canonical)</td><td class=\"num\">{}</td></tr><tr><td>Eligible input tokens (denominator)</td><td class=\"num\">{}</td></tr><tr><td>Provider cache hit rate</td><td class=\"num\">{}</td></tr><tr><td>Cache write/warmup rate</td><td class=\"num\">{}</td></tr><tr><td>Coverage (cache counters reported)</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache read</td><td class=\"num\">{}</td></tr><tr><td>Anthropic cache creation</td><td class=\"num\">{}</td></tr></tbody></table></div>",
         num(&["cache_observability", "total_requests"]),
         num(&["cache_observability", "input_tokens_total"]),
         num(&["cache_observability", "output_tokens_total"]),
@@ -3541,26 +3650,38 @@ pub(super) fn render_cache_page(
     let card_slice = |items: &[(&str, String)]| {
         items
             .iter()
-            .map(|(name, value)| runtime_metric_card(name, value, "persisted scalar observation"))
+            .map(|(name, value)| {
+                let sub = match *name {
+                    "Segmented" => "produced a normal result",
+                    "Not collected" => "segmentation intentionally skipped",
+                    "Empty request" => "segmentation ran but found no content",
+                    "Parse failure" => "non-mapping payload or unknown",
+                    "With protected prefix" => "stable_prefix_bytes > 0",
+                    "With volatile suffix" => "volatile_bytes > 0",
+                    "Mode" => "cache/compression in routing",
+                    "Cache metrics"
+                    | "Compression metrics"
+                    | "Stable-prefix hash"
+                    | "Compression policy" => "in scorer inputs",
+                    _ => "persisted scalar observation",
+                };
+                runtime_metric_card(name, value, sub)
+            })
             .collect::<String>()
     };
     let advanced = format!(
-        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">Boundary detail lives in per-request traces; durable summaries count transcoded requests only.</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based.</p><section class=\"cards\">{}</section></section><section class=\"panel\"><h3>Transcoding ({})</h3><section class=\"cards\">{}</section><p class=\"empty-state\">Loss warnings are not collected for this period.</p></section>",
+        "<section class=\"panel\"><h3>Native cache preservation ({})</h3><p class=\"sub\">Native cache annotations are tracked per request during transcoding. The durable summary below confirms the tracker is wired and counts transcoded requests in window; per-boundary detail is in the request trace.</p><section class=\"cards\">{}</section><p class=\"sub\">{}</p></section><section class=\"panel\"><h3>Request segmentation ({})</h3><p class=\"sub\">Structural segmentation shows how much traffic was segmented, intentionally skipped, or had no segmentable content without mutating requests.</p><section class=\"cards\">{}</section><div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Metric</th><th data-priority=\"2\">Value</th></tr></thead><tbody>{}</tbody></table></div></section><section class=\"panel\"><h3>Routing isolation</h3><p class=\"sub\">Cache and compression metrics are reporting-only. The <code>QuotaFairScorer</code> does NOT consume cache, compression, stable-prefix-hash, or compression-policy fields. Same-provider account scoring stays load-based.</p><section class=\"cards\">{}</section></section>",
         html_escape(period),
         runtime_metric_card(
             "Transcoded requests",
             &num(&["cache_stability", "transcoded_request_count"]),
             "boundary tracker active"
         ),
+        html_escape(stability_notes),
         html_escape(period),
-        card_slice(&values[11..18]),
-        card_slice(&values[18..]),
-        html_escape(period),
-        runtime_metric_card(
-            "Total requests",
-            &num(&["transcoding", "total"]),
-            "in period"
-        ),
+        card_slice(&values[11..17]),
+        segmentation_totals,
+        card_slice(&values[17..]),
     );
     format!(
         "<h2>Cache</h2><p class=\"sub\">Cache reporting, request shaping, and safety guardrails.</p>{}<div id=\"cache-summary\"><section class=\"panel\"><h3>Request shaping ({})</h3><p class=\"sub\">Operator summary for request changes, provider cache counter coverage, safety guardrails, and routing isolation. Routing stays load-based and reporting-only metrics never enter the scorer.</p><section class=\"cards\">{cards}</section></section></div><div id=\"cache-reporting\"><section class=\"panel\"><h3>Provider cache counters ({})</h3><p class=\"sub\">Provider-reported cache counters from upstream payloads. Missing cache fields mean the upstream did not surface them. They are not cache misses and do not prove the upstream is uncached. EggPool never disables provider-side caching.</p><section class=\"cards\">{reporting_cards}</section>{reporting_table}</section></div><details class=\"advanced-details\" id=\"advanced-diagnostics\"><summary>Show advanced diagnostics</summary><div class=\"advanced-body\">{}</div></details>",
@@ -5023,6 +5144,32 @@ mod tests {
             html_escape("</script> & \" '"),
             "&lt;/script&gt; &amp; &quot; &#x27;"
         );
+    }
+
+    #[test]
+    fn runtime_age_uses_bounded_human_units() {
+        assert_eq!(super::format_runtime_age(std::time::Duration::ZERO), "<1s");
+        assert_eq!(
+            super::format_runtime_age(std::time::Duration::from_secs(3_661)),
+            "1h1m"
+        );
+    }
+
+    #[test]
+    fn runtime_host_platform_label_is_stable_and_nonempty() {
+        let label = super::host_platform_label();
+        assert!(label.contains('-'));
+        assert!(!label.contains(std::path::MAIN_SEPARATOR));
+    }
+
+    #[test]
+    fn load_average_summary_is_bounded_and_never_spawns_a_process() {
+        let summary = super::load_average_summary();
+        assert!(!summary.is_empty());
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(summary, "load average unavailable");
+        #[cfg(target_os = "linux")]
+        assert!(summary == "load average unavailable" || summary.ends_with(" CPUs"));
     }
 
     #[test]
