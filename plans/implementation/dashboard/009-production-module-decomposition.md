@@ -1,6 +1,6 @@
 # Dashboard Milestone 009 — Production module decomposition and ownership cleanup
 
-Status: ready
+Status: active
 
 Repository baseline: `30b8282a`
 
