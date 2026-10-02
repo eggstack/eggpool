@@ -374,7 +374,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture. The workstream may close only when later bounded evidence and any required architecture decision either eliminate the target-class tail without transferring it to foreground gate/I/O wait, or explicitly accept the residual behavior.
+This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture and is blocked until the required physical Linux/aarch64 Pi/MMC target is available. The workstream may close only when later bounded evidence and any required architecture decision either eliminate the target-class tail without transferring it to foreground gate/I/O wait, or explicitly accept the residual behavior.
 
 ## 12. Milestone status
 
@@ -386,4 +386,4 @@ This roadmap remains active while the foreground SQLite checkpoint tail is unres
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
-| 007 — dedicated checkpointer qualification experiment | ready | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | — | operational Pi/MMC target required for closure; production adoption intentionally out of scope |
+| 007 — dedicated checkpointer qualification experiment | blocked | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-status.md | Physically attested Linux/aarch64 Raspberry Pi-class MMC target required for paired control/candidate and lifecycle evidence; unavailable in this work environment. |
