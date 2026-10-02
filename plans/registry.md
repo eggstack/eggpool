@@ -43,14 +43,13 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 conditionally closed; M006 ready — full parity qualification | M005 source-truth dispositions are recorded in its closure; M006 owns matched browser and shutdown/restart evidence. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M006 active — full parity qualification | Audit the nine-cell report and complete matched browser and shutdown/restart evidence. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
-| Dashboard | M006 full parity qualification and closure | ready | `plans/implementation/dashboard/006-full-parity-qualification-and-closure.md` | M005 is conditionally closed; audit the nine-cell report and complete matched browser/shutdown evidence. |
 
 ## Blocked work
 

@@ -1,6 +1,6 @@
 # Dashboard Milestone 006 — Full Parity Qualification and Closure
 
-Status: ready
+Status: active
 
 Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus conditionally closed Dashboard M001-M005
 
