@@ -1,8 +1,8 @@
 # Dashboard Milestone 009 — Production module decomposition and ownership cleanup
 
-Status: blocked
+Status: ready
 
-Repository baseline: `deafb2c143cfa0992af7715e220fe8f574a23f9b`
+Repository baseline: `30b8282a`
 
 Source roadmap:
 
@@ -32,16 +32,17 @@ The milestone is successful only if the frozen Python-oracle comparator
 continues to report exactly the already accepted source-backed differences and
 no new DOM/API/theme/auth behavior appears.
 
-## 2. Why this milestone is blocked
+## 2. Why this milestone is ready
 
-Hard dependency: Dashboard M008 must close first.
+Hard dependency: Dashboard M008 is closed at `plans/closure/dashboard/008-status.md`.
 
-M008 owns the current-head strict-Clippy/hosted-CI corrective. M009 must not
-mix structural movement with an unresolved CI regression because doing so
-would make it harder to attribute failures and would weaken the value of the
-post-merge CI evidence.
+M008 restored strict Clippy and completed all hosted CI gates in run
+`37049147155`. M009's pre-refactor strict qualification is recorded at
+`/tmp/dashboard-m009-baseline.json` and reports only the nine accepted M006
+differences. The frozen oracle worktree is available at
+`/tmp/eggpool-dashboard-oracle-m002`.
 
-Once M008 closes, no external dependency is expected.
+No external dependency remains.
 
 ## 3. Current implementation evidence
 

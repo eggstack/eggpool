@@ -1,6 +1,6 @@
 # Dashboard Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
 
-Status: active
+Status: closed
 
 Repository baseline: `299a0b3657667af509742a184e658c14df22d406`
 
@@ -122,9 +122,9 @@ Planning evidence at the same baseline:
   supported feature boundary.
 - Deployment/Packaging M001-M003 remain closed; registry cleanup must not
   rewrite their closure records.
-- Provider Transport M002 remains blocked on its upstream Eggfetch interface;
-  Routing Selection M002 remains evidence-gated unless independent evidence
-  changes during closure audit.
+- Provider Transport M002 is currently ready after its upstream Eggfetch
+  interface was published; Routing Selection M002 remains evidence-gated
+  because no affinity workload measurement is available.
 
 ## 5. Scope
 

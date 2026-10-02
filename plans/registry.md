@@ -44,21 +44,20 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M008 active — post-merge strict-CI and planning reconciliation corrective | M011 fixed hosted checkout history; complete CI run `37049147155` is green. Final M008 closure audit remains. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M009 ready — production module decomposition and ownership cleanup | M008 strict-CI/planning corrective and M011 hosted-history qualification are closed. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
-| Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | active | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | Local Rust/tooling gates and hosted CI run `37049147155` pass; M011 closed. |
+| Dashboard | M009 production module decomposition and ownership cleanup | ready | `plans/implementation/dashboard/009-production-module-decomposition.md` | M008 and M011 closed; strict pre-refactor oracle baseline is available. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Dashboard | M009 production module decomposition and ownership cleanup | Hard-blocked on M008 strict-CI/planning corrective closure; preserve the current oracle harness unchanged while refactoring production. |
 | Dashboard | M010 parity qualification harness decomposition | Hard-blocked on M009 production decomposition closure; refactor the guard only after it has qualified M009. |
 
 ## Recently closed
@@ -71,6 +70,7 @@ pair is a known numbering accident.
 | Dashboard M006 — Full parity qualification and closure | closed — strict report retains nine explicitly accepted source-backed differences; 144 matched captures, eight interaction runs, lifecycle shutdown/restart, and full local Rust/tooling gates passed | `plans/closure/dashboard/006-status.md`, browser manifest `plans/closure/dashboard/006-browser-manifest.json`; implementation `6bfa1781`, `5bb3aba1` |
 | Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
 | Dashboard M011 — hosted oracle history qualification | closed — checkout now includes the pinned oracle source commit; all hosted CI gates pass | `plans/closure/dashboard/011-status.md`, run `37049147155`, implementation `30b8282a` |
+| Dashboard M008 — post-merge strict-CI and planning reconciliation | closed — strict Clippy, no-default, serial Rust, tooling, strict oracle baseline, and hosted CI all pass; M009 ready | `plans/closure/dashboard/008-status.md`, run `37049147155`, implementation `3c40e34f` |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
 | Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
@@ -108,14 +108,12 @@ existing typed APIs. M002 is registered `ready` at baseline `8db2d16c73cb7bb832c
 Eggress stays 1.0.11 and no separate upstream work remains before downstream
 implementation.
 
-Dashboard M008 is registered `ready` against baseline
-`299a0b3657667af509742a184e658c14df22d406` after hosted CI run
-`37040025250` failed on two strict-Clippy `collapsible_if` diagnostics in
-the Linux load-average dashboard projection and skipped all subsequent CI
-gates. M001-M007 remain closed historical evidence; M008 does not reopen
-dashboard parity semantics. Deployment/Packaging M003 remains closed.
-Provider-transport M002 remains independently blocked on the upstream Eggfetch
-typed-classification interface, and Routing-selection M002 remains
+Historical unblock-audit snapshot: Dashboard M008 was registered `ready` at
+baseline `299a0b3657667af509742a184e658c14df22d406` after hosted run
+`37040025250` reported two strict-Clippy findings. This snapshot is superseded
+by M008's closure record and the current tables above. M008 and M011 are now
+closed, M009 is ready, Deployment/Packaging M003 remains closed,
+Provider-transport M002 is ready, and Routing-selection M002 remains
 evidence-gated.
 
 Post-closure review of deployment-packaging M001 found two concrete invariant
