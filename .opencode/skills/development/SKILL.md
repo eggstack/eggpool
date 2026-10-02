@@ -294,8 +294,12 @@ uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
 For dashboard rendering, API, asset, or qualification changes, use the focused
-Rust renderer suite and the frozen Python oracle runner. The oracle source is
-provided by the M001 pinned worktree through these environment variables:
+Rust renderer suite and the frozen Python oracle runner. The stable command
+facade is `scripts/qualification_dashboard_parity.py`; its internal tooling
+owners live in `scripts/dashboard_parity/` (`projection.py`, `oracle.py`,
+`process.py`, `fixtures.py`, `browser.py`, `report.py`, `runner.py`, and
+`cli.py`). The oracle source is provided by the M001 pinned worktree through
+these environment variables:
 
 Production dashboard ownership is under `rust/src/server/dashboard/`:
 `routes.rs` gathers bounded snapshots, `api.rs` projects dashboard JSON,
