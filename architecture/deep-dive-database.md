@@ -32,7 +32,7 @@ Plan 238's `scripts/qualification_sbc.py --diagnose-publication-storage` waits f
 
 ## M004 checkpoint context
 
-Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC artifacts and rejected the periodic 60s/256 strategy on the target class: three 60-request phase runs showed maxima of 1709 ms, 561 ms, and 10 943 ms with foreground publication `COMMIT` owning 522 ms–10.9 s of automatic-checkpoint work, and ordinary 30-sample benchmarks cannot complete against the runner's 5 s per-request timeout. The M001 mechanism is retained as additive-safe with no retune; persistence M003's event-assisted wake was separately rejected and reverted after transferring 1.88–3.30 s stalls into finalization gate wait.
+Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC artifacts and rejected the periodic 60s/256 strategy on the target class: three 60-request phase runs showed maxima of 1709 ms, 561 ms, and 10 943 ms with foreground publication `COMMIT` owning 522 ms–10.9 s of automatic-checkpoint work, and ordinary 30-sample benchmarks cannot complete against the runner's 5 s per-request timeout. The M001 mechanism is retained as additive-safe with no retune; persistence M003's event-assisted wake was separately rejected and reverted after transferring 1.88–3.30 s stalls into finalization gate wait. Persistence M007 is registered as a qualification-only experiment of a dedicated checkpoint connection/worker; the production invariant below remains one connection/gate/worker until target evidence and a separate architecture decision justify otherwise.
 
 ## Invariants
 

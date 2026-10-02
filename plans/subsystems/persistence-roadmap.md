@@ -298,6 +298,39 @@ Exit conditions:
 
 **Closure:** See `plans/closure/persistence/006-status.md`.
 
+
+### Milestone 007 — Dedicated checkpointer qualification experiment
+
+Class: infrastructure
+
+Status: ready
+
+Objective:
+
+Test, strictly under a new repository-only qualification feature, whether one checkpoint-only SQLite connection/worker can run PASSIVE checkpoints concurrently with the existing foreground SQLite authority and eliminate both the foreground COMMIT tail and M003's finalization gate-wait transfer.
+
+Dependencies:
+
+- Hard: M003 closed rejected with paired Pi/MMC tail-transfer evidence.
+- Hard: M006 closed with SQLite 3.53.2 true-NOOP/WAL-reset-fixed baseline.
+- Interface: existing process-owned checkpoint task and physical qualification diagnostics.
+- Operational: qualifying Linux/aarch64 Pi 5-class ext4/MMC target required for closure.
+
+Deliverable boundary:
+
+- New non-default `qualification-dedicated-checkpointer` feature layered on `qualification-db-diagnostics`.
+- Startup-only qualification toggle; disabled mode remains one connection.
+- Exactly one feature-private checkpoint-only connection/worker when enabled.
+- Same-binary disabled/enabled target comparison plus bounded steady-state WAL evidence.
+- No production/default topology change and no production adoption decision.
+
+Exit conditions:
+
+- Local PASSIVE/write concurrency and lifecycle guards pass.
+- Three paired control/candidate target runs plus fixed 300-request candidate convergence evidence are recorded.
+- Candidate either clears the existing latency/integrity gates or is rejected truthfully.
+- Positive evidence may justify proposing a separate ADR; it does not authorize a production second connection.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -336,11 +369,12 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 - Disabling automatic checkpointing would remove SQLite's existing growth safety. That is intentionally outside M001 unless a later reviewed design supplies an equally strong bound.
 - Metrics flush failure rebuffering is correctness behavior, not expendable analytics polish.
 - Moving publication serialization outside the transaction must preserve its existing observable error category and fault-injection stages.
-- If a clean routing/persistence optimization requires a public API break, new dependency, or new concurrency owner, stop and re-plan.
+- M007 is the only authorized exception for experimenting with a second SQLite worker, and only behind its new non-default qualification feature. Production remains one connection/gate/worker.
+- If a clean routing/persistence optimization requires a public API break, new dependency, or durable production concurrency owner, stop and re-plan.
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. The workstream may close only when a later bounded design either eliminates the target-class tail without transferring it to foreground gate wait, or an explicit architectural/product decision accepts the residual behavior.
+This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture. The workstream may close only when later bounded evidence and any required architecture decision either eliminate the target-class tail without transferring it to foreground gate/I/O wait, or explicitly accept the residual behavior.
 
 ## 12. Milestone status
 
@@ -352,3 +386,4 @@ This roadmap remains active while the foreground SQLite checkpoint tail is unres
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
+| 007 — dedicated checkpointer qualification experiment | ready | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | — | operational Pi/MMC target required for closure; production adoption intentionally out of scope |
