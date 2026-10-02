@@ -1,6 +1,6 @@
 # Provider Transport Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -549,22 +549,22 @@ sufficient closure evidence.
 
 ## 11. Completion definition
 
-This roadmap is not complete when M001 or M003 lands. It remains active until
-all registered provider-transport sustaining milestones are closed or
-explicitly deferred/superseded. M001 closure left runtime behavior unchanged
-while making the response-frame/error boundary explicit. M003 left the Eggress
-ownership/feature contract unchanged while moving to the then-current qualified
-upstream family. M004 and M005 are closed. M005 refreshed the published
-Eggfetch/Eggress patch lines without changing transport ownership or policy.
-Eggfetch 0.2.2 now satisfies M002's former upstream interface blocker, and M002
-is registered ready for bounded downstream adoption.
+All registered provider-transport milestones M001–M005 are now closed.
+M001 left runtime behavior unchanged while making the response-frame/error
+boundary explicit. M003 retained the Eggress ownership/feature contract while
+moving to the qualified upstream family. M004 and M005 refreshed typed
+diagnostics and published dependency patch lines without changing transport
+ownership or policy. M002 adopts Eggfetch 0.2.2's typed failure classifier
+without changing EggPool retry, health, routing, or transport policy. No
+registered successor is dependency-ready; future sustaining work requires a
+new bounded plan.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — Eggfetch adapter contract hardening | closed | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | `plans/closure/provider-transport/001-status.md` | none |
-| 002 — Adopt stable Eggfetch transport error taxonomy | closing | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | — | Local implementation and qualification pass; hosted CI and dependency audit pending |
+| 002 — Adopt stable Eggfetch transport error taxonomy | closed | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | `plans/closure/provider-transport/002-status.md` | none; no successor registered |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
 | 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 later unblocked by published Eggfetch 0.2.2 |
