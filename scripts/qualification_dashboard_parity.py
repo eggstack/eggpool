@@ -2601,6 +2601,7 @@ def _run_model_info_detail_pair(
                             {
                                 "route": route,
                                 "state": "populated-model-info",
+                                "theme": "Cyber Red",
                                 "implementation": implementation,
                                 "viewport": viewport,
                                 "artifact": str(artifact.relative_to(screenshot_dir)),
