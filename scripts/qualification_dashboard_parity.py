@@ -2092,8 +2092,13 @@ def _run_private_pair(
 
 
 def _run_model_info_detail_pair(
-    *, root: Path, fixture_path: Path, observations: list[dict[str, Any]]
-) -> None:
+    *,
+    root: Path,
+    fixture_path: Path,
+    observations: list[dict[str, Any]],
+    capture: bool,
+    screenshot_dir: Path,
+) -> dict[str, Any] | None:
     """Compare the populated canonical model-info detail branch without probes."""
     detail_root = root / "model-info-detail"
     python_root = detail_root / "python"
@@ -2184,6 +2189,59 @@ def _run_model_info_detail_pair(
                 "mismatches": issues,
             }
         )
+        if capture:
+            artifacts = screenshot_dir / "model-info-detail"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            entries: list[dict[str, Any]] = []
+            session = _HeadlessScreenshotSession()
+            try:
+                for implementation, port in (
+                    ("python", python_port),
+                    ("rust", rust_port),
+                ):
+                    for width, height, viewport in (
+                        (1440, 900, "desktop"),
+                        (390, 844, "mobile"),
+                    ):
+                        artifact = artifacts / f"{implementation}-{viewport}.png"
+                        url = (
+                            f"http://127.0.0.1:{port}{route}"
+                            "?period=24h&theme=Cyber%20Red"
+                        )
+                        session.capture(url, artifact, width, height)
+                        dimensions = _png_dimensions(artifact)
+                        entries.append(
+                            {
+                                "route": route,
+                                "state": "populated-model-info",
+                                "implementation": implementation,
+                                "viewport": viewport,
+                                "artifact": str(artifact.relative_to(screenshot_dir)),
+                                "width": width,
+                                "height": height,
+                                "dimensions": {
+                                    "width": dimensions[0],
+                                    "height": dimensions[1],
+                                },
+                                "bytes": artifact.stat().st_size,
+                                "sha256": hashlib.sha256(
+                                    artifact.read_bytes()
+                                ).hexdigest(),
+                                "result": "captured",
+                                "browser_checks": (
+                                    "passed: no JS exception, console error, failed "
+                                    "same-origin load, or same-origin HTTP error"
+                                ),
+                                "manual_disposition": (
+                                    "visual review pending; this artifact records a "
+                                    "capture only"
+                                ),
+                            }
+                        )
+            finally:
+                session.close()
+            return {"count": len(entries), "entries": entries}
+        return None
     finally:
         _stop_server(python)
         _stop_server(rust)
@@ -2249,8 +2307,12 @@ def run_qualification(
             capture=include_screenshots,
             screenshot_dir=screenshot_root,
         )
-        _run_model_info_detail_pair(
-            root=root, fixture_path=fixture_path, observations=observations
+        detail_screenshots = _run_model_info_detail_pair(
+            root=root,
+            fixture_path=fixture_path,
+            observations=observations,
+            capture=include_screenshots,
+            screenshot_dir=screenshot_root,
         )
         observations.append(
             {
@@ -2272,6 +2334,12 @@ def run_qualification(
         )
         del private_ports
         screenshot_manifest = populated_result["screenshots"]
+        if detail_screenshots is not None:
+            screenshot_manifest["entries"].extend(detail_screenshots["entries"])
+            screenshot_manifest["count"] += detail_screenshots["count"]
+            screenshot_manifest["manifest_sha256"] = hashlib.sha256(
+                json.dumps(screenshot_manifest["entries"], sort_keys=True).encode()
+            ).hexdigest()
     report: dict[str, Any] = {
         "schema_version": "dashboard-parity-current-gaps.v1",
         "plan": "Dashboard parity qualification",
