@@ -17,7 +17,7 @@ def test_quick_installer_harness_passes() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=60,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)

@@ -47,9 +47,7 @@ ORACLE_DIR = ROOT / "tests" / "fixtures" / "dashboard-python-oracle"
 ORACLE_SOURCE_ROOT = Path(
     os.environ.get("EGGPOOL_DASHBOARD_ORACLE_ROOT", str(ROOT))
 ).resolve()
-ORACLE_PYTHON = os.environ.get(
-    "EGGPOOL_DASHBOARD_ORACLE_PYTHON", sys.executable
-)
+ORACLE_PYTHON = os.environ.get("EGGPOOL_DASHBOARD_ORACLE_PYTHON", sys.executable)
 CAPTURES_DIR = ORACLE_DIR / "captures"
 API_ROUTES = (
     "/api/timeseries",

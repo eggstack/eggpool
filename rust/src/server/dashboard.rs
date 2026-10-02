@@ -95,10 +95,7 @@ pub(super) async fn overview(
         Ok(summary) => summary,
         Err(_) => return degraded("dashboard data unavailable"),
     };
-    let accounts = match db::AccountRepository::new(&state.database)
-        .list_enabled()
-        .await
-    {
+    let accounts = match db::AccountRepository::new(&state.database).list_all().await {
         Ok(accounts) => accounts,
         Err(_) => return degraded("dashboard data unavailable"),
     };
@@ -115,13 +112,31 @@ pub(super) async fn overview(
             .as_deref()
             .unwrap_or(&state.server.dashboard_theme),
     );
+    let show_disabled = query.show_disabled.as_deref() == Some("1");
+    let health_snapshots = state
+        .runtime
+        .acquire()
+        .await
+        .ok()
+        .map(|lease| {
+            lease
+                .generation()
+                .inference()
+                .router_handle()
+                .health_snapshots()
+        })
+        .unwrap_or_default();
     let html = render_overview(
         &summary,
-        &accounts,
-        &page_data,
-        period,
-        theme_name,
-        state.server.dashboard_refresh_interval_s,
+        OverviewPage {
+            accounts: &accounts,
+            page_data: &page_data,
+            period,
+            theme: theme_name,
+            refresh_interval_s: state.server.dashboard_refresh_interval_s,
+            show_disabled,
+            health_snapshots: &health_snapshots,
+        },
     );
     html_response(html)
 }
@@ -785,6 +800,42 @@ async fn dashboard_data_page_with_options(
     } else {
         Vec::new()
     };
+    let health_snapshots = if active_nav == "accounts" {
+        state
+            .runtime
+            .acquire()
+            .await
+            .ok()
+            .map(|lease| {
+                lease
+                    .generation()
+                    .inference()
+                    .router_handle()
+                    .health_snapshots()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let provider_priorities = if active_nav == "models" {
+        state
+            .runtime
+            .acquire()
+            .await
+            .ok()
+            .map(|lease| {
+                lease
+                    .generation()
+                    .config()
+                    .providers
+                    .iter()
+                    .map(|(provider_id, provider)| (provider_id.clone(), provider.routing_priority))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            })
+            .unwrap_or_default()
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let mut body = render_dashboard_page_body(
         title,
         active_nav,
@@ -795,6 +846,8 @@ async fn dashboard_data_page_with_options(
         &model_info,
         show_disabled,
         &model_filters,
+        &health_snapshots,
+        &provider_priorities,
     );
     if active_nav == "timeseries" {
         body = body.replace(
@@ -858,6 +911,8 @@ pub(super) fn render_dashboard_page_body(
     model_info: &[Value],
     show_disabled: bool,
     model_filters: &ModelFilters,
+    health_snapshots: &[crate::health::AccountHealthSnapshot],
+    provider_priorities: &std::collections::BTreeMap<String, u32>,
 ) -> String {
     let mut body = if matches!(active_nav, "accounts" | "models") {
         String::new()
@@ -865,13 +920,20 @@ pub(super) fn render_dashboard_page_body(
         dashboard_header(title, period, theme)
     };
     match active_nav {
-        "accounts" => body.push_str(&render_accounts_page(data, period, theme, show_disabled)),
+        "accounts" => body.push_str(&render_accounts_page(
+            data,
+            period,
+            theme,
+            show_disabled,
+            health_snapshots,
+        )),
         "models" => body.push_str(&render_models_page(
             data,
             period,
             theme,
             model_info,
             model_filters,
+            provider_priorities,
         )),
         "latency" => body.push_str(&render_latency_page(data)),
         "events" => body.push_str(&render_events_page(data)),
@@ -893,7 +955,32 @@ pub(super) fn render_accounts_page(
     period: &str,
     theme: &str,
     show_disabled: bool,
+    health_snapshots: &[crate::health::AccountHealthSnapshot],
 ) -> String {
+    let detail_headers = [
+        "Reserved",
+        "Resv.",
+        "5h rate",
+        "7d rate",
+        "30d rate",
+        "BW received",
+        "BW emitted",
+        "Over budget",
+        "Upstream backoff",
+        "Backoff until",
+        "Failures",
+        "Auth fail",
+        "Disabled",
+        "Est. cost",
+        "Cache R",
+        "Cache W",
+        "Reasoning",
+        "Avg cost/req",
+        "Avg cost/1k tok",
+    ]
+    .iter()
+    .map(|label| format!("<th data-priority=\"3\">{label}</th>"))
+    .collect::<String>();
     let disabled_count = data
         .accounts
         .iter()
@@ -933,6 +1020,29 @@ pub(super) fn render_accounts_page(
         .iter()
         .filter(|row| show_disabled || row.enabled)
         .map(|row| {
+            let live_health = health_snapshots
+                .iter()
+                .find(|snapshot| snapshot.account_name == row.name);
+            let health_state = live_health
+                .map(|snapshot| snapshot.health_state.as_str())
+                .or_else(|| {
+                    data.pings
+                        .iter()
+                        .find(|ping| ping.account_name == row.name)
+                        .map(|ping| {
+                            if ping
+                                .status_code
+                                .is_some_and(|status| (200..300).contains(&status))
+                            {
+                                "healthy"
+                            } else if ping.status_code.is_some() || ping.error.is_some() {
+                                "unhealthy"
+                            } else {
+                                "unknown"
+                            }
+                        })
+                })
+                .unwrap_or("unknown");
             let exactness = exactness_badge(
                 row.exact_count,
                 row.derived_count,
@@ -941,25 +1051,112 @@ pub(super) fn render_accounts_page(
                 row.unknown_count,
                 row.provider_reported_count,
             );
+            let tokens_per_second = if row.avg_latency_ms > 0.0 && row.requests > 0 {
+                format!(
+                    "{:.1} tok/s",
+                    row.output_tokens as f64 * 1_000.0
+                        / (row.avg_latency_ms * row.requests as f64)
+                )
+            } else {
+                "0.0 tok/s".to_owned()
+            };
+            let authentication_failed = live_health.map_or("—", |snapshot| {
+                if snapshot.health_state == "authentication_failed" {
+                    "yes"
+                } else {
+                    "no"
+                }
+            });
+            let operator_disabled = live_health.map_or("—", |snapshot| {
+                if snapshot
+                    .disabled_until
+                    .is_some_and(|until| until > snapshot.last_check)
+                {
+                    "yes"
+                } else {
+                    "no"
+                }
+            });
+            let auth_class = if authentication_failed == "—" {
+                String::new()
+            } else {
+                format!(" class=\"{authentication_failed}\"")
+            };
+            let disabled_class = if operator_disabled == "—" {
+                String::new()
+            } else {
+                format!(" class=\"{operator_disabled}\"")
+            };
+            let detail_cells = format!(
+                "<td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td>",
+                format_microdollars(row.reserved_microdollars),
+                row.active_reservations,
+                format_microdollars(row.utilization_5h),
+                format_microdollars(row.utilization_7d),
+                format_microdollars(row.utilization_30d),
+                format_bytes(row.bytes_received),
+                format_bytes(row.bytes_emitted),
+                live_health.map_or(0, |snapshot| i64::from(snapshot.consecutive_failures)),
+                auth_class,
+                authentication_failed,
+                disabled_class,
+                operator_disabled,
+                format_ratio_percent(Some(row.estimated_cost_fraction)),
+                format_ratio_percent(row.cache_read_ratio),
+                format_ratio_percent(row.cache_write_ratio),
+                format_ratio_percent(row.reasoning_output_ratio),
+                row.avg_cost_per_request
+                    .map(format_microdollars)
+                    .unwrap_or_else(|| "—".to_owned()),
+                row.avg_cost_per_1k_tokens
+                    .map(format_microdollars)
+                    .unwrap_or_else(|| "—".to_owned()),
+            );
             format!(
-                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">unknown</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"2\">—</td><td data-priority=\"2\">{}</td>{}",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\" class=\"{}\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td>{}</tr>",
                 html_escape(&row.name),
                 html_escape(&row.provider_id),
                 if row.enabled { "yes" } else { "no" },
                 if row.enabled { "yes" } else { "no" },
                 row.requests,
                 format_microdollars(row.cost_microdollars),
+                html_escape(health_state),
+                html_escape(health_state),
                 row.errors,
                 format_tokens(row.input_tokens),
                 format_tokens(row.output_tokens),
                 format_tokens(row.input_tokens + row.output_tokens),
+                format_latency(row.avg_latency_ms),
+                tokens_per_second,
                 exactness,
-                "<td data-priority=\"3\">—</td>".repeat(19),
+                detail_cells,
             )
         })
         .collect::<String>();
+    let high_spend_rows = data
+        .accounts
+        .iter()
+        .filter_map(|row| {
+            let estimated_microdollars = row.cost_microdollars as f64 * row.estimated_cost_fraction;
+            (estimated_microdollars >= 10_000_000.0).then(|| {
+                format!(
+                    "<li><code>{}</code>: ~${:.2} estimated ({}% of total)</li>",
+                    html_escape(&row.name),
+                    estimated_microdollars / 1_000_000.0,
+                    (row.estimated_cost_fraction * 100.0).round() as i64
+                )
+            })
+        })
+        .collect::<String>();
+    let pricing_warning = if high_spend_rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div class=\"panel warn pricing-warning\"><strong>Pricing warning:</strong> the following accounts have substantial cost on estimated (non-exact) pricing in the selected period:<ul>{high_spend_rows}</ul></div>"
+        )
+    };
     format!(
-        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form><section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Accounts</h2><form method=\"get\" class=\"period-selector account-filters\" data-period-selector aria-label=\"Account filters\"><label for=\"period\">Period: </label><select id=\"period\" name=\"period\" data-auto-submit=\"1\">{}</select><label for=\"show_disabled\">Disabled: </label><select id=\"show_disabled\" name=\"show_disabled\" data-auto-submit=\"1\"><option value=\"0\"{}>Hide disabled accounts</option><option value=\"1\"{}>Show disabled accounts</option></select><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>{pricing_warning}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         period_options(period),
         if show_disabled {
             ""
@@ -972,7 +1169,7 @@ pub(super) fn render_accounts_page(
             ""
         },
         html_escape(theme),
-        "<th data-priority=\"3\">Reserved</th>".repeat(19)
+        detail_headers
     )
 }
 
@@ -988,7 +1185,7 @@ fn exactness_badge(
     if total == 0 {
         return "<span class=\"exactness-badge empty\">—</span>".to_owned();
     }
-    let class = if estimated + unknown == total {
+    let class = if estimated == total || unknown == total {
         "est-major"
     } else if estimated + unknown + partial > 0 {
         "partial-mix"
@@ -1009,12 +1206,13 @@ pub(super) fn render_models_page(
     theme: &str,
     model_info: &[Value],
     filters: &ModelFilters,
+    provider_priorities: &std::collections::BTreeMap<String, u32>,
 ) -> String {
     let option = |label: &str, value: &str, selected: Option<&str>| {
         format!(
             "<option value=\"{}\"{}>{}</option>",
             html_escape(value),
-            if selected == Some(value) {
+            if selected.map_or(value.is_empty(), |selected| selected == value) {
                 " selected"
             } else {
                 ""
@@ -1099,6 +1297,11 @@ pub(super) fn render_models_page(
             })
         })
         .collect::<Vec<_>>();
+    let model_info_warning = if model_info.is_empty() {
+        "<p class=\"empty\" role=\"status\">Model info unavailable: service not attached. Check `app.state.model_info` and server logs.</p>"
+    } else {
+        ""
+    };
     if models.is_empty() {
         let empty_message = if data
             .models
@@ -1126,7 +1329,7 @@ pub(super) fn render_models_page(
             "No models discovered from configured providers."
         };
         return format!(
-            "<h2>Models</h2><p class=\"empty\" role=\"status\">No canonical model information is available.</p>{controls}<section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>"
+            "<h2>Models</h2><p class=\"empty\" role=\"status\">Model info unavailable: service not attached. Check `app.state.model_info` and server logs.</p>{controls}<section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>"
         );
     }
     let rows = models
@@ -1148,6 +1351,13 @@ pub(super) fn render_models_page(
                 "unavailable" | "withdrawn" => ("unavailable", "unavailable"),
                 _ => ("configured", "configured"),
             };
+            let availability_tooltip = if availability == "available" {
+                " aria-label=\"Catalog entry with resolved protocol; can be routed.\" data-tooltip=\"Catalog entry with resolved protocol; can be routed.\""
+            } else if availability == "unavailable" {
+                " aria-label=\"Catalog entry is unavailable for routing.\" data-tooltip=\"Catalog entry is unavailable for routing.\""
+            } else {
+                ""
+            };
             let exactness = exactness_badge(
                 row.exact_count,
                 row.derived_count,
@@ -1156,12 +1366,52 @@ pub(super) fn render_models_page(
                 row.unknown_count,
                 row.provider_reported_count,
             );
-            format!(
-                "<tr><td data-priority=\"1\"><a href=\"/models/{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\">{}</span></td><td data-priority=\"1\">{}</td><td data-priority=\"2\">—</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">—</td>{}",
+            let tokens_per_second = if row.avg_latency_ms > 0.0 && row.requests > 0 {
+                format!(
+                    "{:.1} tok/s",
+                    row.output_tokens as f64 * 1_000.0
+                        / (row.avg_latency_ms * row.requests as f64)
+                )
+            } else {
+                "—".to_owned()
+            };
+            let detail_cells = format!(
+                "<td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td>",
+                provider_priorities
+                    .get(&row.provider_id)
+                    .map_or_else(|| "—".to_owned(), |priority| priority.to_string()),
+                format_ratio_percent(Some(row.estimated_cost_fraction)),
+                format_ratio_percent(row.cache_read_ratio),
+                format_ratio_percent(row.cache_write_ratio),
+                format_ratio_percent(row.reasoning_output_ratio),
+                row.avg_cost_per_request.map(format_microdollars).unwrap_or_else(|| "—".to_owned()),
+                row.avg_cost_per_1k_tokens.map(format_microdollars).unwrap_or_else(|| "—".to_owned()),
+            );
+            let model_info_link_tooltip = info
+                .and_then(|info| info["summary"].as_str())
+                .filter(|summary| !summary.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Open model info for {}", row.model_id));
+            let model_link = format!(
+                "<a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"{}\" aria-label=\"{}\">{}</a>",
                 query_component(&row.model_id),
+                query_component(theme),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                html_escape(&model_info_link_tooltip),
+                html_escape(&model_info_link_tooltip),
+                html_escape(&row.model_id),
+            );
+            format!(
+                "<tr data-model-id=\"{}\" data-model-info-key=\"{}\" data-provider-id=\"{}\"><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"pill pill-{}\"{}>{}</span></td><td data-priority=\"1\">{}</td><td data-priority=\"2\"><span class=\"muted\">—</span></td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{:.1} ms</td><td data-priority=\"2\">{}</td>{}</tr>",
+                html_escape(&row.model_id),
+                html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                model_link,
+                html_escape(&row.provider_id),
                 availability_class,
+                availability_tooltip,
                 availability,
                 info_pill,
                 row.requests,
@@ -1173,12 +1423,13 @@ pub(super) fn render_models_page(
                 format_tokens(row.input_tokens + row.output_tokens),
                 row.avg_latency_ms,
                 row.avg_ttft_ms,
-                "<td data-priority=\"3\">—</td>".repeat(7),
+                tokens_per_second,
+                detail_cells,
             )
         })
         .collect::<String>();
     format!(
-        "<h2>Models</h2>{controls}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Models</h2>{model_info_warning}{controls}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Avail.</th><th data-priority=\"1\">Info</th><th data-priority=\"2\">Benchmarks</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"1\">Exactness</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Avg TTFT</th><th data-priority=\"2\">TPS</th>{}</tr></thead><tbody>{rows}</tbody></table></div></section>",
         "<th data-priority=\"3\">Priority</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th>"
     )
 }
@@ -1189,17 +1440,16 @@ pub(super) fn render_model_detail(
     model_info: Option<&Value>,
     observations: &[Value],
 ) -> String {
-    let Some(model) = data
+    let model_exists = data
         .models
         .iter()
-        .filter(|row| row.model_id != "__deprecated__")
-        .find(|row| row.model_id == model_id)
-    else {
+        .any(|row| row.model_id != "__deprecated__" && row.model_id == model_id);
+    if !model_exists {
         return format!(
             "<h2>Model: {}</h2><p class=\"empty\">Model info not available.</p>",
             html_escape(model_id)
         );
-    };
+    }
     let info_panel = if let Some(info) = model_info {
         let summary = info
             .get("summary")
@@ -1223,7 +1473,7 @@ pub(super) fn render_model_detail(
             "<section class=\"panel\"><h3>Model information</h3><p class=\"model-info-status\">{status}</p><p>{summary}</p><h4>Limits</h4><p>{limits}</p></section>"
         )
     } else {
-        "<section class=\"panel\"><h3>Model information</h3><p class=\"empty\">Model info not available.</p></section>".to_owned()
+        "<p class=\"empty\">Model info not available.</p>".to_owned()
     };
     let observation_panel = if observations.is_empty() {
         String::new()
@@ -1241,11 +1491,8 @@ pub(super) fn render_model_detail(
         )
     };
     format!(
-        "<h2>Model: {}</h2><section class=\"cards\"><div class=\"card\"><h3>Provider</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Status</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p></div></section>{info_panel}{observation_panel}",
+        "<h2>Model: {}</h2>{info_panel}{observation_panel}",
         html_escape(model_id),
-        html_escape(&model.provider_id),
-        html_escape(&model.resolution_status),
-        model.requests,
     )
 }
 
@@ -1635,6 +1882,258 @@ pub(super) fn format_latency(value: f64) -> String {
     format!("{value:.1} ms")
 }
 
+fn civil_date_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let shifted = days_since_epoch + 719_468;
+    let era = if shifted >= 0 {
+        shifted / 146_097
+    } else {
+        (shifted - 146_096) / 146_097
+    };
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
+}
+
+fn parse_theme_rgb(color: &str) -> Option<(f64, f64, f64)> {
+    let color = color.strip_prefix('#')?;
+    if color.len() != 6 {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&color[0..2], 16).ok()? as f64 / 255.0,
+        u8::from_str_radix(&color[2..4], 16).ok()? as f64 / 255.0,
+        u8::from_str_radix(&color[4..6], 16).ok()? as f64 / 255.0,
+    ))
+}
+
+fn theme_heatmap_colors(name: &str) -> [String; 5] {
+    let Some(bytes) = theme_bytes(name) else {
+        return [
+            "#ebedf0".to_owned(),
+            "#9be9a8".to_owned(),
+            "#40c463".to_owned(),
+            "#30a14e".to_owned(),
+            "#216e39".to_owned(),
+        ];
+    };
+    let value = std::str::from_utf8(bytes)
+        .unwrap_or("")
+        .parse::<toml::Value>()
+        .unwrap_or_else(|_| toml::Value::Table(Default::default()));
+    let background = theme_value(&value, &["general", "background"], "#1e1e2e");
+    let primary = theme_value(&value, &["text", "primary"], "#cdd6f4");
+    let success = theme_value(&value, &["text", "success"], "#a6e3a1");
+    let page_background = if parse_theme_rgb(background)
+        .is_some_and(|(r, g, b)| (r.max(g).max(b) + r.min(g).min(b)) / 2.0 < 0.5)
+    {
+        theme_value(&value, &["buffer", "background"], background)
+    } else {
+        background
+    };
+    let mix = |base: &str, target: &str, ratio: f64| {
+        let (Some((r1, g1, b1)), Some((r2, g2, b2))) =
+            (parse_theme_rgb(base), parse_theme_rgb(target))
+        else {
+            return base.to_owned();
+        };
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            (r1 * 255.0 + (r2 - r1) * 255.0 * ratio) as u8,
+            (g1 * 255.0 + (g2 - g1) * 255.0 * ratio) as u8,
+            (b1 * 255.0 + (b2 - b1) * 255.0 * ratio) as u8,
+        )
+    };
+    let adjust = |color: &str, factor: f64| {
+        let Some((r, g, b)) = parse_theme_rgb(color) else {
+            return color.to_owned();
+        };
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let mut lightness = (max + min) / 2.0;
+        let delta = max - min;
+        if delta == 0.0 {
+            lightness = (lightness * factor).clamp(0.0, 1.0);
+            let channel = (lightness * 255.0) as u8;
+            return format!("#{channel:02x}{channel:02x}{channel:02x}");
+        }
+        let saturation = if lightness > 0.5 {
+            delta / (2.0 - max - min)
+        } else {
+            delta / (max + min)
+        };
+        let hue = if max == r {
+            (g - b) / delta + if g < b { 6.0 } else { 0.0 }
+        } else if max == g {
+            (b - r) / delta + 2.0
+        } else {
+            (r - g) / delta + 4.0
+        } / 6.0;
+        lightness = (lightness * factor).clamp(0.0, 1.0);
+        let q = if lightness < 0.5 {
+            lightness * (1.0 + saturation)
+        } else {
+            lightness + saturation - lightness * saturation
+        };
+        let p = 2.0 * lightness - q;
+        let hue_channel = |mut t: f64| {
+            if t < 0.0 {
+                t += 1.0;
+            }
+            if t > 1.0 {
+                t -= 1.0;
+            }
+            if t < 1.0 / 6.0 {
+                p + (q - p) * 6.0 * t
+            } else if t < 1.0 / 2.0 {
+                q
+            } else if t < 2.0 / 3.0 {
+                p + (q - p) * (2.0 / 3.0 - t) * 6.0
+            } else {
+                p
+            }
+        };
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            (hue_channel(hue + 1.0 / 3.0) * 255.0) as u8,
+            (hue_channel(hue) * 255.0) as u8,
+            (hue_channel(hue - 1.0 / 3.0) * 255.0) as u8,
+        )
+    };
+    [
+        mix(page_background, primary, 0.06),
+        mix(page_background, success, 0.35),
+        success.to_owned(),
+        adjust(success, 0.7),
+        adjust(success, 0.45),
+    ]
+}
+
+fn render_token_heatmap(
+    rows: &[crate::db::repositories::DashboardTokenActivityRow],
+    theme: &str,
+) -> String {
+    if rows.is_empty() {
+        return "<p class=\"empty\">No activity data available.</p>".to_owned();
+    }
+    let values = rows
+        .iter()
+        .map(|row| (row.day.as_str(), (row.total_tokens, row.requests)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let epoch_days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        / 86_400;
+    let start_day = epoch_days - 179;
+    let weekday_sunday = (start_day + 4).rem_euclid(7);
+    let grid_start = start_day - weekday_sunday;
+    let weeks = (epoch_days - grid_start) / 7 + 1;
+    let step = 16_i64;
+    let cell = 13_i64;
+    let left = 36_i64;
+    let top = 20_i64;
+    let svg_width = left + weeks * step + 10;
+    let svg_height = top + 7 * step + 10;
+    let max_value = (0..180)
+        .map(|offset| {
+            let (year, month, day) = civil_date_from_days(start_day + offset);
+            let key = format!("{year:04}-{month:02}-{day:02}");
+            values.get(key.as_str()).map_or(0, |value| value.0)
+        })
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let colors = theme_heatmap_colors(theme);
+    let day_labels = [(1, "Mon"), (3, "Wed"), (5, "Fri")]
+        .into_iter()
+        .map(|(day, label)| {
+            format!(
+                "<text x=\"0\" y=\"{}\" class=\"heatmap-label\" text-anchor=\"start\" dominant-baseline=\"central\">{label}</text>",
+                top + day * step + cell / 2
+            )
+        })
+        .collect::<String>();
+    let month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut month_labels = String::new();
+    let mut prior_month = 0;
+    for week in 0..weeks {
+        let (_, month, _) = civil_date_from_days(grid_start + week * 7);
+        if month != prior_month {
+            prior_month = month;
+            month_labels.push_str(&format!(
+                "<text x=\"{}\" y=\"10\" class=\"heatmap-label\" text-anchor=\"start\">{}</text>",
+                left + week * step,
+                month_names[(month - 1) as usize]
+            ));
+        }
+    }
+    let mut cells = format!("{day_labels}{month_labels}");
+    let mut hitboxes = String::new();
+    for week in 0..weeks {
+        for day_of_week in 0..7 {
+            let day_number = grid_start + week * 7 + day_of_week;
+            if day_number < start_day || day_number > epoch_days {
+                hitboxes.push_str("<div class=\"heatmap-hitbox\"></div>");
+                continue;
+            }
+            let (year, month, day) = civil_date_from_days(day_number);
+            let key = format!("{year:04}-{month:02}-{day:02}");
+            let (token_count, request_count) = values.get(key.as_str()).copied().unwrap_or((0, 0));
+            let ratio = token_count as f64 / max_value as f64;
+            let level = if token_count == 0 {
+                0
+            } else if ratio < 0.25 {
+                1
+            } else if ratio < 0.5 {
+                2
+            } else if ratio < 0.75 {
+                3
+            } else {
+                4
+            };
+            let color = &colors[level];
+            let x = left + week * step;
+            let y = top + day_of_week * step;
+            let weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                [(day_number + 4).rem_euclid(7) as usize];
+            let tooltip = format!(
+                "{weekday}, {} {day} {year}\n{} tokens · {request_count} request{}",
+                month_names[(month - 1) as usize],
+                format_tokens(token_count),
+                if request_count == 1 { "" } else { "s" }
+            );
+            let title = format!("{key}: {}", tooltip.replace('\n', " — "));
+            cells.push_str(&format!(
+                "<rect x=\"{x}\" y=\"{y}\" width=\"{cell}\" height=\"{cell}\" rx=\"2\" fill=\"{color}\" class=\"heatmap-cell\" pointer-events=\"none\"><title>{}</title></rect>",
+                html_escape(title)
+            ));
+            let tooltip = html_escape(tooltip);
+            hitboxes.push_str(&format!(
+                "<div class=\"heatmap-hitbox\" data-tooltip=\"{tooltip}\" aria-label=\"{tooltip}\"></div>"
+            ));
+        }
+    }
+    format!(
+        "<div class=\"heatmap\"><svg width=\"{svg_width}\" height=\"{svg_height}\" viewBox=\"0 0 {svg_width} {svg_height}\" role=\"img\" aria-label=\"Token activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
+    )
+}
+
+fn format_ratio_percent(value: Option<f64>) -> String {
+    value
+        .filter(|ratio| ratio.is_finite())
+        .map(|ratio| format!("{:.1}%", ratio * 100.0))
+        .unwrap_or_else(|| "—".to_owned())
+}
+
 pub(super) fn format_bytes(value: i64) -> String {
     if value < 1_000 {
         return format!("{value} B");
@@ -1911,8 +2410,68 @@ pub(super) fn html_escape(value: impl std::fmt::Display) -> String {
         .replace('\'', "&#x27;")
 }
 
+fn sanitize_class_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn overview_metric_card(label: &str, value: impl std::fmt::Display, subtext: &str) -> String {
     let tooltip = match label {
+        "Requests" => Some(
+            "Total proxied requests in the selected period. The subtext splits them into successful and error requests.",
+        ),
+        "Error rate" => Some("Fraction of requests in the selected period that ended in an error."),
+        "Total cost" => Some(
+            "Total recorded request cost in the selected period. When the upstream provider reports a cost (e.g. OpenCode Go's usage.cost field), that value takes precedence over locally computed rates; otherwise eggpool falls back to per-token rates from the catalog. Reservation-derived estimates are advisory and never inflate the totals when more trustworthy data is available.",
+        ),
+        "Utilization imbalance" => Some(
+            "Coefficient of variation across active accounts. Higher values mean load is concentrated unevenly.",
+        ),
+        "Total tokens" => Some(
+            "Input, output, cache-read, and cache-write tokens recorded for the selected period. This total includes provider cache counters and can exceed fresh input/output volume on cache-heavy workloads.",
+        ),
+        "Fresh tokens" => Some(
+            "Input plus output tokens recorded for the selected period, excluding cache-read and cache-write counters.",
+        ),
+        "Request shaping" => Some("Request shaping"),
+        "Cache reads" => Some(
+            "Provider-reported prompt-cache read tokens. The subtext shows the bounded read share cache_read / (input + cache_read + cache_write) and the cache write volume.",
+        ),
+        "Provider cache hit rate" => Some(
+            "Protocol-aware cache hit rate: cache_read_tokens / cache_eligible_input_tokens. For OpenAI-compatible providers the denominator is total billed prompt tokens; for Anthropic it is fresh input + cache read + cache creation. Cache writes/creation are warmup, not hits.",
+        ),
+        "Cache write/warmup rate" => Some(
+            "Cache write (creation) tokens as a share of eligible input. These populate cache entries and are not cache hits.",
+        ),
+        "Reasoning tokens" => {
+            Some("Tokens reported by upstreams as reasoning or extended-thinking output.")
+        }
+        "Throughput" => Some(
+            "Aggregate token throughput across requests, computed from total tokens divided by total latency.",
+        ),
+        "Streaming" => {
+            Some("How many requests used streaming responses versus non-streaming responses.")
+        }
+        "Exactness" => Some(
+            "Count of requests whose cost was exact. The subtext also shows derived, estimated, and unknown-cost rows.",
+        ),
+        "Bandwidth received" => {
+            Some("Total bytes received from clients by EggPool in the selected period.")
+        }
+        "Bandwidth emitted" => {
+            Some("Total bytes emitted by EggPool toward clients in the selected period.")
+        }
+        "Avg TTFT (streamed)" => {
+            Some("Average time to first token for streamed requests, with P50 and P99 shown below.")
+        }
         "Pending requests" => {
             Some("Requests still in progress. Subtext shows the oldest pending age.")
         }
@@ -1938,14 +2497,26 @@ fn overview_metric_card(label: &str, value: impl std::fmt::Display, subtext: &st
     )
 }
 
-pub(super) fn render_overview(
-    summary: &db::DashboardSummary,
-    accounts: &[db::Account],
-    page_data: &db::DashboardData,
-    period: &str,
-    theme: &str,
+pub(super) struct OverviewPage<'a> {
+    accounts: &'a [db::Account],
+    page_data: &'a db::DashboardData,
+    period: &'a str,
+    theme: &'a str,
     refresh_interval_s: u64,
-) -> String {
+    show_disabled: bool,
+    health_snapshots: &'a [crate::health::AccountHealthSnapshot],
+}
+
+pub(super) fn render_overview(summary: &db::DashboardSummary, page: OverviewPage<'_>) -> String {
+    let OverviewPage {
+        accounts,
+        page_data,
+        period,
+        theme,
+        refresh_interval_s,
+        show_disabled,
+        health_snapshots,
+    } = page;
     let total = summary.total_requests;
     let errors = summary.error_requests;
     let error_rate = if total == 0 {
@@ -1956,66 +2527,241 @@ pub(super) fn render_overview(
     let fresh_tokens = summary.total_input_tokens + summary.total_output_tokens;
     let accounted_tokens =
         fresh_tokens + summary.total_cache_read_tokens + summary.total_cache_write_tokens;
-    let rows = accounts
+    let cost_subtext = if summary.provider_reported_count > 0 {
+        format!(
+            "in {} · out {} · total {} · {} provider-billed",
+            format_tokens(summary.total_input_tokens),
+            format_tokens(summary.total_output_tokens),
+            format_tokens(fresh_tokens),
+            summary.provider_reported_count
+        )
+    } else {
+        format!(
+            "in {} · out {} · total {}",
+            format_tokens(summary.total_input_tokens),
+            format_tokens(summary.total_output_tokens),
+            format_tokens(fresh_tokens),
+        )
+    };
+    let disabled_count = accounts.iter().filter(|account| !account.enabled).count();
+    let account_rows = accounts
         .iter()
+        .filter(|account| show_disabled || account.enabled)
         .map(|account| {
+            let row = page_data.accounts.iter().find(|row| row.name == account.name);
+            let live_health = health_snapshots
+                .iter()
+                .find(|snapshot| snapshot.account_name == account.name);
+            let health = live_health
+                .map(|snapshot| snapshot.health_state.as_str())
+                .or_else(|| {
+                    page_data
+                        .pings
+                        .iter()
+                        .find(|ping| ping.account_name == account.name)
+                        .map(|ping| {
+                            if ping.status_code.is_some_and(|status| (200..300).contains(&status)) {
+                                "healthy"
+                            } else if ping.status_code.is_some() || ping.error.is_some() {
+                                "unhealthy"
+                            } else {
+                                "unknown"
+                            }
+                        })
+                })
+                .unwrap_or("unknown");
+            let exactness = row.map_or_else(String::new, |row| {
+                exactness_badge(
+                    row.exact_count,
+                    row.derived_count,
+                    row.partial_count,
+                    row.estimated_count,
+                    row.unknown_count,
+                    row.provider_reported_count,
+                )
+            });
+            let requests = row.map_or(0, |row| row.requests);
+            let errors = row.map_or(0, |row| row.errors);
+            let input_tokens = row.map_or(0, |row| row.input_tokens);
+            let output_tokens = row.map_or(0, |row| row.output_tokens);
+            let latency = row.map_or(0.0, |row| row.avg_latency_ms);
+            let tps = if latency > 0.0 && requests > 0 {
+                format!("{:.1} tok/s", output_tokens as f64 * 1_000.0 / (latency * requests as f64))
+            } else {
+                "0.0 tok/s".to_owned()
+            };
+            let authentication_failed = live_health.map_or("—", |snapshot| {
+                if snapshot.health_state == "authentication_failed" {
+                    "yes"
+                } else {
+                    "no"
+                }
+            });
+            let operator_disabled = live_health.map_or("—", |snapshot| {
+                if snapshot
+                    .disabled_until
+                    .is_some_and(|until| until > snapshot.last_check)
+                {
+                    "yes"
+                } else {
+                    "no"
+                }
+            });
+            let auth_class = if authentication_failed == "—" {
+                String::new()
+            } else {
+                format!(" class=\"{authentication_failed}\"")
+            };
+            let disabled_class = if operator_disabled == "—" {
+                String::new()
+            } else {
+                format!(" class=\"{operator_disabled}\"")
+            };
+            let detail_cells = row.map_or_else(
+                || "<td data-priority=\"3\">—</td>".repeat(19),
+                |row| {
+                    format!(
+                        "<td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">—</td><td data-priority=\"3\">{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\"{}>{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td>",
+                        format_microdollars(row.reserved_microdollars),
+                        row.active_reservations,
+                        format_microdollars(row.utilization_5h),
+                        format_microdollars(row.utilization_7d),
+                        format_microdollars(row.utilization_30d),
+                        format_bytes(row.bytes_received),
+                        format_bytes(row.bytes_emitted),
+                        live_health.map_or(0, |snapshot| snapshot.consecutive_failures),
+                        auth_class, authentication_failed,
+                        disabled_class, operator_disabled,
+                        format_ratio_percent(Some(row.estimated_cost_fraction)),
+                        format_ratio_percent(row.cache_read_ratio),
+                        format_ratio_percent(row.cache_write_ratio),
+                        format_ratio_percent(row.reasoning_output_ratio),
+                        row.avg_cost_per_request.map(format_microdollars).unwrap_or_else(|| "—".to_owned()),
+                        row.avg_cost_per_1k_tokens.map(format_microdollars).unwrap_or_else(|| "—".to_owned()),
+                    )
+                },
+            );
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&account.name),
-                html_escape(&account.provider_id),
-                if account.enabled { "yes" } else { "no" }
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{}\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\" class=\"{}\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td>{}</tr>",
+                html_escape(&account.name), html_escape(&account.provider_id),
+                if account.enabled { "yes" } else { "no" }, if account.enabled { "yes" } else { "no" },
+                requests, row.map_or_else(|| "$0.00".to_owned(), |row| format_microdollars(row.cost_microdollars)),
+                sanitize_class_name(health), html_escape(health), errors, format_tokens(input_tokens),
+                format_tokens(output_tokens), format_tokens(input_tokens + output_tokens), format_latency(latency), tps,
+                exactness, detail_cells,
             )
         })
         .collect::<String>();
-    let account_table = if accounts.is_empty() {
-        "<p class=\"empty-state\">No accounts configured.</p>".to_owned()
+    let toggle_label = if show_disabled {
+        "Hide disabled".to_owned()
+    } else if disabled_count > 0 {
+        format!("Show {disabled_count} disabled")
+    } else {
+        "Show disabled".to_owned()
+    };
+    let toggle_value = if show_disabled { "0" } else { "1" };
+    let account_href = format!(
+        "?period={}&amp;theme={}&amp;show_disabled={toggle_value}",
+        query_component(period),
+        query_component(theme)
+    );
+    let account_table = if account_rows.is_empty() {
+        "<p class=\"empty\">No accounts configured.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table><thead><tr><th>Account</th><th>Provider</th><th>Enabled</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th><th data-priority=\"3\">Reserved</th><th data-priority=\"3\">Resv.</th><th data-priority=\"3\">5h rate</th><th data-priority=\"3\">7d rate</th><th data-priority=\"3\">30d rate</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Over budget</th><th data-priority=\"3\">Upstream backoff</th><th data-priority=\"3\">Backoff until</th><th data-priority=\"3\">Failures</th><th data-priority=\"3\">Auth fail</th><th data-priority=\"3\">Disabled</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th></tr></thead><tbody>{account_rows}</tbody></table></div>"
         )
     };
-    let model_rows = page_data
+    let mut glance_models = page_data
         .models
         .iter()
-        .take(8)
+        .filter(|row| row.model_id != "__deprecated__")
+        .collect::<Vec<_>>();
+    glance_models.sort_by(|left, right| {
+        right
+            .requests
+            .cmp(&left.requests)
+            .then_with(|| right.cost_microdollars.cmp(&left.cost_microdollars))
+            .then_with(|| left.model_id.cmp(&right.model_id))
+            .then_with(|| left.provider_id.cmp(&right.provider_id))
+    });
+    let model_rows = glance_models
+        .into_iter()
+        .take(10)
         .map(|row| {
+            let tooltip = format!("Open model info for {}", row.model_id);
             format!(
-                "<tr><td><a href=\"/models/{}\">{}</a></td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\"><a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"{}\" aria-label=\"{}\">{}</a></td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td></tr>",
                 query_component(&row.model_id),
+                query_component(theme),
                 html_escape(&row.model_id),
                 html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                html_escape(&tooltip),
+                html_escape(&tooltip),
+                html_escape(&row.model_id),
                 row.requests,
+                format_microdollars(row.cost_microdollars),
+                html_escape(&row.provider_id),
+                row.errors,
+                format_latency(row.avg_latency_ms),
+                format_tokens(row.input_tokens + row.output_tokens),
             )
         })
         .collect::<String>();
     let event_rows = page_data
         .events
         .iter()
-        .take(8)
+        .take(10)
         .map(|row| {
             format!(
-                "<li><time>{}</time> · {} · {}</li>",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"event-tag {}\">{}</span></td><td data-priority=\"2\">{}</td></tr>",
                 html_escape(&row.created_at),
                 html_escape(&row.account_name),
+                sanitize_class_name(&row.event_type),
                 html_escape(&row.event_type),
+                html_escape(row.details.chars().take(120).collect::<String>()),
             )
         })
         .collect::<String>();
     let overview_glance = format!(
         "<section class=\"overview-grid\"><div class=\"panel\"><h3>Top models</h3>{}</div><div class=\"panel\"><h3>Recent events</h3>{}</div></section>",
         if model_rows.is_empty() {
-            "<p class=\"empty\">No model usage recorded.</p>".to_owned()
+            "<p class=\"empty\">No model activity in this period.</p>".to_owned()
         } else {
             format!(
-                "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Requests</th></tr></thead><tbody>{model_rows}</tbody></table></div>"
+                "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Reqs</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Errs</th><th data-priority=\"2\">Latency</th><th data-priority=\"3\">Total tokens</th></tr></thead><tbody>{model_rows}</tbody></table></div>"
             )
         },
         if event_rows.is_empty() {
-            "<p class=\"empty\">No events recorded.</p>".to_owned()
+            "<p class=\"empty\">No recent events.</p>".to_owned()
         } else {
-            format!("<ul class=\"event-list\">{event_rows}</ul>")
+            format!(
+                "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{event_rows}</tbody></table></div>"
+            )
         },
     );
+    let ip_rows = page_data
+        .ip_stats
+        .iter()
+        .take(10)
+        .map(|row| {
+            format!(
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td></tr>",
+                html_escape(&row.client_ip), row.requests,
+                format_microdollars(row.cost_microdollars), format_latency(row.avg_latency_ms),
+                row.errors, format_tokens(row.input_tokens), format_tokens(row.output_tokens),
+                format_tokens(row.input_tokens + row.output_tokens), row.unique_models,
+            )
+        })
+        .collect::<String>();
+    let ip_panel = if ip_rows.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<section class=\"panel\"><h3>Request breakdown by IP</h3><div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">IP Address</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Errors</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Total tokens</th><th data-priority=\"3\">Models</th></tr></thead><tbody>{ip_rows}</tbody></table></div></section>"
+        )
+    };
     let retry_attempts = page_data
         .retries
         .iter()
@@ -2026,34 +2772,72 @@ pub(super) fn render_overview(
         .iter()
         .map(|row| row.retry_outcomes)
         .sum::<i64>();
-    let exactness = exactness_badge(
-        summary.exact_count,
-        summary.derived_count,
-        summary.partial_count,
-        summary.estimated_count,
-        summary.unknown_count,
-        summary.provider_reported_count,
-    );
-    let cache_denominator = summary.total_input_tokens
-        + summary.total_cache_read_tokens
-        + summary.total_cache_write_tokens;
-    let cache_hit_rate = if cache_denominator > 0 {
+    let success_attempts = page_data
+        .retries
+        .iter()
+        .map(|row| row.successes)
+        .sum::<i64>();
+    let first_attempt_success = if retry_attempts > 0 {
         format!(
             "{:.1}%",
-            summary.total_cache_read_tokens as f64 / cache_denominator as f64 * 100.0
+            success_attempts as f64 / retry_attempts as f64 * 100.0
         )
     } else {
-        "—".to_owned()
+        "0.0%".to_owned()
     };
+    let pending_subtext = if page_data.pending_requests == 0 {
+        "oldest — · stale 0"
+    } else {
+        "oldest — · stale count unavailable"
+    };
+    let active_accounts = accounts
+        .iter()
+        .filter(|account| account.enabled)
+        .filter_map(|account| {
+            page_data
+                .accounts
+                .iter()
+                .find(|row| row.name == account.name)
+                .filter(|row| row.requests > 0)
+                .map(|row| row.cost_microdollars as f64)
+        })
+        .collect::<Vec<_>>();
+    let utilization_imbalance = if active_accounts.len() < 2 {
+        "0.00%".to_owned()
+    } else {
+        let mean = active_accounts.iter().sum::<f64>() / active_accounts.len() as f64;
+        if mean == 0.0 {
+            "0.00%".to_owned()
+        } else {
+            let variance = active_accounts
+                .iter()
+                .map(|cost| (cost - mean).powi(2))
+                .sum::<f64>()
+                / active_accounts.len() as f64;
+            format!("{:.2}%", variance.sqrt() / mean * 100.0)
+        }
+    };
+    let cache_hit_rate = "—";
     let cards_second = format!(
-        "<section class=\"cards\">{}{}{}{}{}{}</section>",
+        "<section class=\"cards system-health\">{}{}{}{}{}</section>",
         overview_metric_card(
             "Pending requests",
-            "—",
-            "Current pending snapshot unavailable"
+            page_data.pending_requests,
+            pending_subtext
         ),
-        overview_metric_card("Active reservations", "—", "Reservation count unavailable"),
-        overview_metric_card("Finalizer (24h)", "—", "Finalizer observations unavailable"),
+        overview_metric_card(
+            "Active reservations",
+            page_data.active_reservations,
+            &format!(
+                "reserved {}",
+                format_microdollars(page_data.active_reserved_microdollars)
+            )
+        ),
+        overview_metric_card(
+            "Finalizer (24h)",
+            page_data.finalizer_cleaned_24h,
+            &format!("cleaned · {} recovery", page_data.crash_recovery_24h)
+        ),
         overview_metric_card(
             "Retry rate",
             if retry_attempts > 0 {
@@ -2062,107 +2846,167 @@ pub(super) fn render_overview(
                     retry_outcomes as f64 / retry_attempts as f64 * 100.0
                 )
             } else {
-                "—".to_owned()
+                "0.0%".to_owned()
             },
-            "from recorded retry categories",
+            &format!("of {retry_attempts} attempts"),
         ),
         overview_metric_card(
             "First-attempt success",
-            "—",
-            "first-attempt outcome unavailable"
+            first_attempt_success,
+            "no retry needed"
         ),
-        overview_metric_card("Utilization imbalance", "—", "No utilization projection"),
     );
     let cards_third = format!(
-        "<section class=\"cards\">{}{}{}{}</section>",
-        overview_metric_card("Request shaping", "—", "No request-shaping snapshot"),
+        "<section class=\"cards\">{}{}{}{}{}{}{}{}</section>",
+        overview_metric_card(
+            "Total tokens",
+            format_tokens(accounted_tokens),
+            &format!(
+                "fresh {} · cache read {} · cache write {}",
+                format_tokens(fresh_tokens),
+                format_tokens(summary.total_cache_read_tokens),
+                format_tokens(summary.total_cache_write_tokens)
+            )
+        ),
+        overview_metric_card("Request shaping", "—", "request shaping state unavailable"),
+        overview_metric_card(
+            "Fresh tokens",
+            format_tokens(fresh_tokens),
+            &format!(
+                "in {} · out {}",
+                format_tokens(summary.total_input_tokens),
+                format_tokens(summary.total_output_tokens)
+            )
+        ),
         overview_metric_card(
             "Provider cache hit rate",
-            &cache_hit_rate,
-            "cache-read / input and cache tokens"
+            cache_hit_rate,
+            "legacy summary estimate"
         ),
         overview_metric_card(
             "Reasoning tokens",
             format_tokens(summary.total_reasoning_tokens),
-            "recorded reasoning output"
+            "extended thinking"
         ),
         overview_metric_card(
             "Throughput",
-            format!("{:.1} tokens/s", summary.tokens_per_second),
-            "recorded output / upstream latency"
+            format!("{:.1} tok/s", summary.tokens_per_second),
+            "aggregate Σtokens / Σlatency"
+        ),
+        overview_metric_card(
+            "Streaming",
+            summary.streamed_requests,
+            &format!("streamed · {} non-streamed", summary.non_streamed_requests)
+        ),
+        overview_metric_card(
+            "Exactness",
+            summary.exact_count,
+            &format!(
+                "exact · {} derived · {} upstream · {} est · {} unk",
+                summary.derived_count,
+                summary.provider_reported_count,
+                summary.estimated_count,
+                summary.unknown_count
+            )
         ),
     );
     let cards_fourth = format!(
-        "<section class=\"cards\">{}{}{}{}{}{}</section>",
-        overview_metric_card(
-            "Streaming",
-            format!(
-                "{} / {}",
-                summary.streamed_requests, summary.non_streamed_requests
-            ),
-            "streamed / non-streamed"
-        ),
-        overview_metric_card("Exactness", &exactness, "recorded request cost exactness"),
+        "<section class=\"cards\">{}{}{}</section>",
         overview_metric_card(
             "Bandwidth received",
             format_bytes(summary.total_bytes_received),
-            "recorded request bytes"
+            "client → proxy"
         ),
         overview_metric_card(
             "Bandwidth emitted",
             format_bytes(summary.total_bytes_emitted),
-            "recorded response bytes"
+            "upstream → proxy"
         ),
         overview_metric_card(
             "Avg TTFT (streamed)",
             format_latency(summary.avg_ttft_ms),
-            "recorded first-byte latency"
-        ),
-        overview_metric_card(
-            "Total cost",
-            format_microdollars(summary.total_cost_microdollars),
-            "selected period"
+            &format!(
+                "P50 {} · P99 {}",
+                format_latency(summary.p50_ttft_ms),
+                format_latency(summary.p99_ttft_ms)
+            )
         ),
     );
-    let token_activity = "<section class=\"panel\"><h3>Token activity (last 180 days)</h3><p class=\"empty\">No activity data available.</p></section>";
+    let token_activity = format!(
+        "<section class=\"panel\"><h3>Token activity (last 180 days)</h3>{}</section>",
+        render_token_heatmap(&page_data.token_activity, theme)
+    );
     let operational_panels = if summary.total_requests > 0 {
-        let ping_state = if page_data.pings.is_empty() {
-            "<p class=\"empty\">No provider pings recorded.</p>".to_owned()
+        let mut ping_groups = std::collections::BTreeMap::<String, Vec<&db::Ping>>::new();
+        for ping in &page_data.pings {
+            ping_groups
+                .entry(ping.provider_id.clone())
+                .or_default()
+                .push(ping);
+        }
+        let ping_rows = ping_groups
+            .iter()
+            .map(|(provider, observations)| {
+                let successes = observations
+                    .iter()
+                    .filter(|ping| ping.status_code.is_some_and(|status| (200..300).contains(&status)))
+                    .count();
+                let success_rate = successes as f64 / observations.len() as f64 * 100.0;
+                let avg_latency = observations
+                    .iter()
+                    .filter_map(|ping| ping.latency_ms)
+                    .map(|latency| latency as f64)
+                    .sum::<f64>()
+                    / observations
+                        .iter()
+                        .filter(|ping| ping.latency_ms.is_some())
+                        .count()
+                        .max(1) as f64;
+                let latest = observations[0];
+                let status = if success_rate >= 90.0 { "healthy" } else { "degraded" };
+                format!(
+                    "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{status}\">{status}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{success_rate:.1}%</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td></tr>",
+                    html_escape(provider),
+                    format_latency(avg_latency),
+                    latest.model_count,
+                    html_escape(&latest.probed_at),
+                )
+            })
+            .collect::<String>();
+        let provider_health = if ping_rows.is_empty() {
+            String::new()
         } else {
             format!(
-                "<p>{} provider ping observations are recorded.</p>",
-                page_data.pings.len()
+                "<section class=\"panel\"><h3>Provider health</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Success rate</th><th data-priority=\"3\">Models</th><th data-priority=\"3\">Last ping</th></tr></thead><tbody>{ping_rows}</tbody></table></div></section>"
             )
         };
-        let warning_state = if summary.reservation_fallback_rows > 0 {
+        let warning_panel = if summary.reservation_fallback_rows > 0 {
             format!(
-                "<p class=\"empty\" role=\"status\">{} reservation cost fallback rows require review.</p>",
+                "<section class=\"panel warn reservation-fallback-warning\"><h3>Warnings</h3><p role=\"status\">{} reservation cost fallback rows require review.</p></section>",
                 summary.reservation_fallback_rows
             )
         } else {
-            "<p class=\"empty\">No reservation fallback warnings.</p>".to_owned()
+            String::new()
         };
-        format!(
-            "<section class=\"panel\"><h3>Provider health</h3>{ping_state}</section><section class=\"panel\"><h3>Warnings</h3>{warning_state}</section>"
-        )
+        format!("{provider_health}{warning_panel}")
     } else {
         String::new()
     };
     let body = format!(
-        "{}<section class=\"cards\"><div class=\"card\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\"><h3>Total tokens</h3><p class=\"metric\">{}</p><p class=\"sub\">fresh {} · cache read {} · cache write {}</p></div><div class=\"card\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">in {} · out {}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>{}</section><section class=\"panel\"><h3>Timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
+        "{}<section class=\"cards\"><div class=\"card\" aria-label=\"Total proxied requests in the selected period. The subtext splits them into successful and error requests.\" data-tooltip=\"Total proxied requests in the selected period. The subtext splits them into successful and error requests.\" data-tooltip-pos=\"bottom\"><h3>Requests</h3><p class=\"metric\">{}</p><p class=\"sub\">Success {} · Errors {}</p></div><div class=\"card\" aria-label=\"Fraction of requests in the selected period that ended in an error.\" data-tooltip=\"Fraction of requests in the selected period that ended in an error.\" data-tooltip-pos=\"bottom\"><h3>Error rate</h3><p class=\"metric\">{:.2}%</p><p class=\"sub\">avg latency {:.1} ms</p></div><div class=\"card\" aria-label=\"Total recorded request cost in the selected period. When the upstream provider reports a cost (e.g. OpenCode Go's usage.cost field), that value takes precedence over locally computed rates; otherwise eggpool falls back to per-token rates from the catalog. Reservation-derived estimates are advisory and never inflate the totals when more trustworthy data is available.\" data-tooltip=\"Total recorded request cost in the selected period. When the upstream provider reports a cost (e.g. OpenCode Go's usage.cost field), that value takes precedence over locally computed rates; otherwise eggpool falls back to per-token rates from the catalog. Reservation-derived estimates are advisory and never inflate the totals when more trustworthy data is available.\" data-tooltip-pos=\"bottom\"><h3>Total cost</h3><p class=\"metric\">${:.2}</p><p class=\"sub\">{}</p></div><div class=\"card\" aria-label=\"Coefficient of variation across active accounts. Higher values mean load is concentrated unevenly.\" data-tooltip=\"Coefficient of variation across active accounts. Higher values mean load is concentrated unevenly.\" data-tooltip-pos=\"bottom\"><h3>Utilization imbalance</h3><p class=\"metric\">{}</p><p class=\"sub\">CV across active accounts</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h3>Account breakdown<span class=\"panel-header-chip\">{} enabled</span></h3><a class=\"show-disabled-toggle\" href=\"{}\" aria-pressed=\"{}\"><span class=\"disabled-toggle-icon\" aria-hidden=\"true\">&#x25BE;</span>{}</a></div>{}</section><section class=\"panel\"><h3>Request timeseries</h3><div class=\"chart-loading-shell\" data-chart-endpoint=\"/api/timeseries?period={}&amp;bucket=hour\" data-chart-canvas=\"timeseries-chart\" data-chart-state=\"loading\" style=\"height: 300px;\"><span class=\"chart-loading-spinner\" aria-hidden=\"true\"></span><span>Loading chart data…</span></div><script type=\"application/json\" class=\"chart-loading-shell-data\" data-chart-canvas=\"timeseries-chart\">{{}}</script><noscript><div class=\"chart-wrap\" style=\"height: 300px;\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[]</script></noscript></section>",
         dashboard_header("Overview", period, theme),
         total,
         summary.successful_requests,
         errors,
         error_rate,
         summary.avg_latency_ms,
-        format_tokens(accounted_tokens),
-        fresh_tokens,
-        summary.total_cache_read_tokens,
-        summary.total_cache_write_tokens,
         summary.total_cost_microdollars as f64 / 1_000_000.0,
-        summary.total_input_tokens,
-        summary.total_output_tokens,
+        cost_subtext,
+        utilization_imbalance,
+        accounts.iter().filter(|account| account.enabled).count(),
+        account_href,
+        show_disabled,
+        toggle_label,
         account_table,
         html_escape(period),
         html_escape(period),
@@ -2170,26 +3014,20 @@ pub(super) fn render_overview(
     );
     let body = body.replacen(
         "<section class=\"cards\">",
-        "<section class=\"cards system-health\">",
+        &format!("{cards_second}<section class=\"cards\">"),
+        1,
+    );
+    let body = body.replacen(
+        "<section class=\"panel\"><div class=\"panel-header\"><h3>Account breakdown",
+        &format!(
+            "{cards_third}{cards_fourth}<section class=\"panel\"><div class=\"panel-header\"><h3>Account breakdown"
+        ),
         1,
     );
     let body = body.replace(
-        "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
+        "</noscript></section>",
         &format!(
-            "<div class=\"card\"><h3>Enabled accounts</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
-            accounts.iter().filter(|account| account.enabled).count()
-        ),
-    );
-    let body = body.replace(
-        "</section><section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>",
-        &format!(
-            "</section>{cards_second}{cards_third}{cards_fourth}<section class=\"panel\"><div class=\"panel-header\"><h2>Account breakdown</h2></div>"
-        ),
-    );
-    let body = body.replace(
-        "</section><section class=\"panel\"><h3>Timeseries",
-        &format!(
-            "</section>{operational_panels}{overview_glance}{token_activity}<section class=\"panel\"><h3>Timeseries"
+            "</noscript></section>{overview_glance}{ip_panel}{token_activity}{operational_panels}"
         ),
     );
     render_dashboard_layout(
@@ -2409,12 +3247,26 @@ mod tests {
             estimated_count: 0,
             unknown_count: 0,
             provider_reported_count: 0,
+            estimated_cost_fraction: 0.0,
+            cache_read_ratio: None,
+            cache_write_ratio: None,
+            reasoning_output_ratio: None,
+            avg_cost_per_request: None,
+            avg_cost_per_1k_tokens: None,
         });
-        let html =
-            super::render_models_page(&data, "24h", "Nord", &[], &super::ModelFilters::default());
+        let provider_priorities = std::collections::BTreeMap::from([("provider".to_owned(), 17)]);
+        let html = super::render_models_page(
+            &data,
+            "24h",
+            "Nord",
+            &[],
+            &super::ModelFilters::default(),
+            &provider_priorities,
+        );
         assert!(html.contains("pill-configured\">configured"));
-        assert!(html.contains("href=\"/models/vendor%2Fmodel\""));
+        assert!(html.contains("href=\"/models/vendor%2Fmodel?theme=Nord\""));
         assert!(html.contains("No model info available"));
+        assert!(html.contains("<td data-priority=\"3\">17</td>"));
         let html = super::render_models_page(
             &data,
             "24h",
@@ -2424,6 +3276,7 @@ mod tests {
                 availability: Some("available".into()),
                 ..super::ModelFilters::default()
             },
+            &std::collections::BTreeMap::new(),
         );
         assert!(html.contains("No models match the selected filters."));
     }
@@ -2449,6 +3302,12 @@ mod tests {
             estimated_count: 0,
             unknown_count: 0,
             provider_reported_count: 0,
+            estimated_cost_fraction: 0.0,
+            cache_read_ratio: None,
+            cache_write_ratio: None,
+            reasoning_output_ratio: None,
+            avg_cost_per_request: None,
+            avg_cost_per_1k_tokens: None,
         });
         let info = serde_json::json!({
             "status": "fresh",
@@ -2482,6 +3341,12 @@ mod tests {
             estimated_count: 0,
             unknown_count: 0,
             provider_reported_count: 0,
+            estimated_cost_fraction: 0.0,
+            cache_read_ratio: None,
+            cache_write_ratio: None,
+            reasoning_output_ratio: None,
+            avg_cost_per_request: None,
+            avg_cost_per_1k_tokens: None,
         });
         let observations = vec![serde_json::json!({
             "source": "<catalog>",
@@ -2521,18 +3386,25 @@ mod tests {
             .expect("empty summary reads");
         let html = super::render_overview(
             &summary,
-            &[],
-            &crate::db::DashboardData::default(),
-            "24h",
-            "Nord",
-            60,
+            super::OverviewPage {
+                accounts: &[],
+                page_data: &crate::db::DashboardData::default(),
+                period: "24h",
+                theme: "Nord",
+                refresh_interval_s: 60,
+                show_disabled: false,
+                health_snapshots: &[],
+            },
         );
         assert_eq!(html.matches("<!DOCTYPE html>").count(), 1);
         assert!(html.contains("class=\"topnav-menu\" id=\"topnav-menu\""));
         assert!(html.contains("/static/theme.css?theme=Nord"));
         assert!(html.contains("name=\"theme\" value=\"Nord\""));
-        assert!(html.contains("<p class=\"empty-state\">No accounts configured.</p>"));
+        assert!(html.contains("<p class=\"empty\">No accounts configured.</p>"));
         assert!(html.contains("<canvas id=\"timeseries-chart\""));
+        assert!(
+            html.contains("data-chart-endpoint=\"/api/timeseries?period=24h&amp;bucket=hour\"")
+        );
         assert!(html.contains("Pending requests"));
         assert!(html.contains("First-attempt success"));
         assert!(html.contains("Top models"));
@@ -2540,6 +3412,22 @@ mod tests {
         assert!(html.contains("No activity data available."));
         assert_eq!(html.matches("id=\"dashboard-content\"").count(), 1);
         database.close().await.expect("database closes");
+    }
+
+    #[test]
+    fn token_heatmap_emits_bounded_theme_aware_calendar_markup() {
+        let rows = [crate::db::repositories::DashboardTokenActivityRow {
+            day: "2026-10-01".to_owned(),
+            total_tokens: 1234,
+            requests: 2,
+        }];
+        let html = super::render_token_heatmap(&rows, "Cyber Red");
+        assert!(html.starts_with("<div class=\"heatmap\"><svg"));
+        assert!(html.contains("class=\"heatmap-cell\""));
+        assert!(html.contains("fill=\"#16090c\""));
+        assert!(html.contains("data-tooltip=\""));
+        let hitboxes = html.matches("class=\"heatmap-hitbox\"").count();
+        assert!(matches!(hitboxes, 182 | 189));
     }
 
     #[test]

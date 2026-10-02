@@ -80,6 +80,35 @@ dashboard assets or API contracts must update the Rust asset manifest and the
 corresponding Rust integration tests. Dashboard handlers remain observational
 and do not become a second runtime authority.
 
+## Overview, Accounts, and Models projections
+
+`DashboardRepository` and `UsageRollupRepository` provide bounded historical
+usage, per-account/model/IP aggregates, events, pings, token activity, and
+latency percentiles. Overview and account renderers take enabled state from
+the account configuration/database projection and health/backoff state from
+the current router health snapshots. Persisted pings are used only when no
+live snapshot exists; a newer live snapshot wins over an older successful
+ping. Model availability follows the current catalog resolution result, and
+model metadata/pricing/benchmarks come from the existing model-info and
+pricing owners. The overview token calendar is built from the 180-day rollup
+projection and uses the selected embedded theme palette.
+
+Some fields from the retired renderer have no corresponding current source.
+Request-shaping/compression policy, provider cache-hit denominators, account
+budget status, and a missing live account health snapshot remain unavailable.
+Model routing priority comes from the active generation's provider
+configuration. Renderers preserve an explicit unknown value;
+they do not infer these facts from request counts, model ordering, or an
+absence of errors. Catalog resolution can also differ from the retired
+renderer's broader “available” label: the current label reflects whether the
+configured model resolves through the Rust catalog and can be routed.
+
+Dashboard HTML does not add persistence or provider probes to fill these
+gaps. The page handlers project owner-maintained snapshots, while read/query
+costs remain bounded on the shared SQLite gate. The work package, acceptance
+criteria, and evidence requirements are tracked in
+`plans/implementation/dashboard/003-overview-account-model-parity.md`.
+
 ## Verification
 
 ```bash
