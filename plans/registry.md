@@ -40,6 +40,7 @@ pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
+| Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 ready — provider template endpoint/source reconciliation | Current first-party evidence confirms Together template drift while OpenCode Go is already correct. Audit/correct all bundled endpoint/protocol/auth/discovery facts without runtime freshness checks or cross-repo authority. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -49,6 +50,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider profile metadata corrective | M001 provider template endpoint/source reconciliation | ready | `plans/implementation/provider-profile-metadata/001-provider-template-endpoint-and-source-reconciliation.md` | No hard dependency. Correct known Together endpoint drift, retain/qualify OpenCode Go, audit every bundled provider against first-party documentation, and leave path-composition regressions. |
 | Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
 
 ## Blocked work
@@ -260,3 +262,6 @@ decision rather than a compatibility restoration.
 
 
 Explicit user direction reopened request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`; M006 is now closed at `f05b18b7358d9a4125d1e20c491151eec265e403`. The work remains bounded to the extracted `eggpool-wire` API and does not reopen provider transport, routing, accounts, persistence, or public HTTP behavior. `eggpool-wire 0.1.0` is already on crates.io; this milestone neither released a new version nor changed versioning policy. The downstream CodeGG adoption dependency is satisfied and may proceed using the immutable pin. No future in-repository plan was registered as blocked on M006, so no other blocked row was promoted; provider transport and dashboard blockers remain independent.
+
+
+Explicit user direction opens the provider-profile metadata corrective at baseline `c17a55218b2810791fcf6f3136b8805becfa27c1`. Current first-party documentation reviewed on 2026-10-02 confirms that EggPool's Together template is stale (`api.together.ai` vs current `api.together.xyz`) while its OpenCode Go `/zen/go/v1` prefix is correct. The corrective therefore treats first-party provider documentation—not CodeGG or EggPool sibling state—as authority. M001 is dependency-ready and does not reopen provider transport, routing, request-admission/wire, persistence, or publication work.
