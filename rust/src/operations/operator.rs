@@ -377,26 +377,110 @@ pub async fn list_compact_model_observations(
     model_id: &str,
 ) -> Result<Vec<Value>, DatabaseError> {
     let model_id = model_id.to_owned();
-    database.call(move |connection| {
-        let mut statement = connection.prepare(
-            "SELECT o.source, o.source_model_id, o.provider_id, o.observed_at, o.confidence, o.normalized_json +             FROM model_info_observations o +             INNER JOIN (SELECT source, MAX(observed_at) AS max_observed +                         FROM model_info_observations WHERE lower(model_id)=lower(?1) GROUP BY source) latest +               ON o.source=latest.source AND o.observed_at=latest.max_observed +             WHERE lower(o.model_id)=lower(?1) ORDER BY o.source, o.confidence DESC LIMIT 50"
-        )?;
-        statement.query_map([model_id], |row| {
-            let normalized: String = row.get(5)?;
-            let normalized = serde_json::from_str::<Value>(&normalized).unwrap_or_else(|_| json!({}));
-            Ok(json!({
-                "source": row.get::<_, String>(0)?,
-                "source_model_id": row.get::<_, String>(1)?,
-                "provider_id": row.get::<_, Option<String>>(2)?,
-                "observed_at": row.get::<_, String>(3)?,
-                "confidence": row.get::<_, f64>(4)?,
-                "display_name": normalized.get("display_name"),
-                "context_window": normalized.get("context_window"),
-                "max_output_tokens": normalized.get("max_output_tokens"),
-                "modalities": normalized.get("modalities"),
-            }))
-        })?.collect()
-    }).await
+    database
+        .call(move |connection| {
+            let mut statement = connection.prepare(
+                r#"SELECT o.source, o.source_model_id, o.provider_id, o.observed_at,
+                      o.confidence, o.normalized_json
+               FROM model_info_observations o
+               INNER JOIN (
+                   SELECT source, MAX(observed_at) AS max_observed
+                   FROM model_info_observations
+                   WHERE lower(model_id)=lower(?1)
+                   GROUP BY source
+               ) latest
+                 ON o.source=latest.source AND o.observed_at=latest.max_observed
+               WHERE lower(o.model_id)=lower(?1)
+               ORDER BY o.source, o.confidence DESC LIMIT 50"#,
+            )?;
+            let mut observations = statement
+                .query_map([&model_id], |row| {
+                    let normalized: String = row.get(5)?;
+                    let normalized =
+                        serde_json::from_str::<Value>(&normalized).unwrap_or_else(|_| json!({}));
+                    Ok(json!({
+                        "source": row.get::<_, String>(0)?,
+                        "source_model_id": row.get::<_, String>(1)?,
+                        "provider_id": row.get::<_, Option<String>>(2)?,
+                        "observed_at": row.get::<_, String>(3)?,
+                        "confidence": row.get::<_, f64>(4)?,
+                        "display_name": normalized.get("display_name"),
+                        "context_window": normalized.get("context_window"),
+                        "max_output_tokens": normalized.get("max_output_tokens"),
+                        "modalities": normalized.get("modalities"),
+                    }))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Python's provider-catalog source publishes an observation from
+            // the authoritative catalog even when no persisted observation
+            // row exists. Preserve that projection only when canonical
+            // provenance explicitly records the source.
+            let provenance = connection
+                .query_row(
+                    "SELECT provenance_json FROM model_info_canonical WHERE lower(model_id)=lower(?1)",
+                    [&model_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let has_provider_catalog = provenance
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .is_some_and(|value| {
+                    let sources = value.get("sources").unwrap_or(&value);
+                    sources.as_array().is_some_and(|items| {
+                        items.iter().any(|item| item.as_str() == Some("provider_catalog"))
+                    }) || sources
+                        .as_object()
+                        .is_some_and(|items| items.contains_key("provider_catalog"))
+                });
+            if has_provider_catalog
+                && !observations
+                    .iter()
+                    .any(|row| row["source"].as_str() == Some("provider_catalog"))
+            {
+                let mut statement = connection.prepare(
+                    "SELECT model_id, provider_id, display_name, last_seen_at FROM models WHERE lower(model_id)=lower(?1) LIMIT 1",
+                )?;
+                if let Some((source_model_id, provider_id, display_name, observed_at)) = statement
+                    .query_row([&model_id], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    })
+                    .optional()?
+                {
+                    observations.push(json!({
+                        "source": "provider_catalog",
+                        "source_model_id": source_model_id,
+                        "provider_id": provider_id,
+                        "observed_at": observed_at,
+                        "confidence": 1.0,
+                        "display_name": display_name,
+                        "context_window": Value::Null,
+                        "max_output_tokens": Value::Null,
+                        "modalities": Value::Null,
+                    }));
+                }
+            }
+            observations.sort_by(|left, right| {
+                left["source"]
+                    .as_str()
+                    .cmp(&right["source"].as_str())
+                    .then_with(|| {
+                        right["confidence"]
+                            .as_f64()
+                            .partial_cmp(&left["confidence"].as_f64())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            });
+            observations.truncate(50);
+            Ok(observations)
+        })
+        .await
 }
 
 pub async fn list_aliases(

@@ -1013,7 +1013,12 @@ def _wait_for_tcp(port: int, process: subprocess.Popen[bytes], name: str) -> Non
 
 
 def _write_config(
-    root: Path, port: int, *, public: bool = True, populated: bool = False
+    root: Path,
+    port: int,
+    *,
+    public: bool = True,
+    populated: bool = False,
+    model_info_enabled: bool = False,
 ) -> Path:
     database = root / "dashboard.sqlite3"
     path = root / "dashboard.toml"
@@ -1024,7 +1029,8 @@ def _write_config(
         f'path = "{database}"\n\n[dashboard]\nenabled = true\n'
         f'public = {str(public).lower()}\ntheme = "Cyber Red"\n'
         "refresh_interval_s = 1\n\n[models]\n"
-        "startup_refresh = false\n\n[model_info]\nenabled = false\n"
+        "startup_refresh = false\n\n[model_info]\n"
+        f"enabled = {str(model_info_enabled).lower()}\n"
         "startup_refresh = false\n"
     )
     if populated:
@@ -1208,7 +1214,7 @@ def screenshot_metadata() -> dict[str, Any]:
 
 SCREENSHOT_ROUTES: tuple[tuple[str, str], ...] = tuple(
     (route, label) for route, label in PAGE_ROUTES if route != "/models/example-model"
-) + (('/models/q012-escape-模型<&"', "Model detail"),)
+) + (("/models/q012-chat-model", "Model detail"),)
 
 
 def screenshot_plan(output_dir: Path) -> list[dict[str, Any]]:
@@ -2062,6 +2068,106 @@ def _run_private_pair(
         shutil.rmtree(rust_runtime, ignore_errors=True)
 
 
+def _run_model_info_detail_pair(
+    *, root: Path, fixture_path: Path, observations: list[dict[str, Any]]
+) -> None:
+    """Compare the populated canonical model-info detail branch without probes."""
+    detail_root = root / "model-info-detail"
+    python_root = detail_root / "python"
+    rust_root = detail_root / "rust"
+    python_root.mkdir(parents=True)
+    rust_root.mkdir(parents=True)
+    detail_fixture = detail_root / "dashboard.sqlite3"
+    shutil.copy2(fixture_path, detail_fixture)
+    with sqlite3.connect(detail_fixture) as connection:
+        connection.executescript(
+            (ROOT / "migration-rs/fixtures/dashboard/q012-model-info.sql").read_text(
+                encoding="utf-8"
+            )
+        )
+    shutil.copy2(detail_fixture, python_root / "dashboard.sqlite3")
+    shutil.copy2(detail_fixture, rust_root / "dashboard.sqlite3")
+    python_port = _port()
+    rust_port = _port()
+    python_config = _write_config(
+        python_root, python_port, populated=False, model_info_enabled=True
+    )
+    rust_config = _write_config(
+        rust_root, rust_port, populated=False, model_info_enabled=True
+    )
+    base_env = dict(os.environ)
+    base_env.update({"PYTHONHASHSEED": "0", "TZ": "UTC", "HOME": str(root / "home")})
+    python_runtime = Path(f"/tmp/eq12-model-info-py-{python_port}")
+    rust_runtime = Path(f"/tmp/eq12-model-info-rs-{rust_port}")
+    for runtime in (python_runtime, rust_runtime):
+        if runtime.exists():
+            shutil.rmtree(runtime)
+    python_env = dict(base_env)
+    python_env.update(
+        {
+            "PYTHONPATH": str(ORACLE_SOURCE_ROOT / "src"),
+            "EGGPOOL_RUNTIME_DIR": str(python_runtime),
+            "EGGPOOL_PID_FILE": str(detail_root / "python.pid"),
+        }
+    )
+    rust_env = dict(base_env)
+    rust_env.update(
+        {
+            "EGGPOOL_RUNTIME_DIR": str(rust_runtime),
+            "EGGPOOL_PID_FILE": str(detail_root / "rust.pid"),
+        }
+    )
+    python = _start_server([ORACLE_PYTHON, "-m", "eggpool"], python_config, python_env)
+    rust = _start_server([str(RUST_BINARY)], rust_config, rust_env)
+    route = "/models/q012-chat-model"
+    try:
+        _wait_for_tcp(python_port, python, "Python model-info dashboard")
+        _wait_for_tcp(rust_port, rust, "Rust model-info dashboard")
+        query = "?period=24h&theme=Cyber%20Red"
+        python_result = _fetch(f"http://127.0.0.1:{python_port}{route}{query}")
+        rust_result = _fetch(f"http://127.0.0.1:{rust_port}{route}{query}")
+        issues: list[str] = []
+        if python_result.status != rust_result.status or python_result.status != 200:
+            issues.append(f"status {python_result.status}/{rust_result.status}")
+        else:
+            python_projection = project_html(python_result.body)
+            rust_projection = project_html(rust_result.body)
+            shell_issues: list[str] = []
+            try:
+                compare_shared_shell_projection(
+                    python_projection, rust_projection, route
+                )
+            except AssertionError as error:
+                shell_issues.append(str(error))
+            observations.append(
+                {
+                    "state": "populated-model-info",
+                    "route": route,
+                    "kind": "shared-shell",
+                    "status": "pass" if not shell_issues else "mismatch",
+                    "mismatches": shell_issues,
+                }
+            )
+            try:
+                compare_dom_projection(python_projection, rust_projection, route)
+            except AssertionError as error:
+                issues.append(str(error))
+        observations.append(
+            {
+                "state": "populated-model-info",
+                "route": route,
+                "kind": "m003-model-info-detail",
+                "status": "pass" if not issues else "mismatch",
+                "mismatches": issues,
+            }
+        )
+    finally:
+        _stop_server(python)
+        _stop_server(rust)
+        shutil.rmtree(python_runtime, ignore_errors=True)
+        shutil.rmtree(rust_runtime, ignore_errors=True)
+
+
 def run_qualification(
     *,
     skip_build: bool,
@@ -2120,6 +2226,9 @@ def run_qualification(
             capture=include_screenshots,
             screenshot_dir=screenshot_root,
         )
+        _run_model_info_detail_pair(
+            root=root, fixture_path=fixture_path, observations=observations
+        )
         observations.append(
             {
                 "route": "static-assets",
@@ -2156,6 +2265,11 @@ def run_qualification(
         "fixture_matrix": [
             {"state": "empty", "database": "fresh canonical schema"},
             {"state": "populated", "database": "one copied canonical SQLite fixture"},
+            {
+                "state": "populated-model-info",
+                "route": "/models/q012-chat-model",
+                "database": "same secret-free fixture, model-info source work disabled",
+            },
             {
                 "state": "populated",
                 "classes": [
