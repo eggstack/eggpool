@@ -39,10 +39,11 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 active — Eggfetch 0.2.2 transport failure classification adoption | Published classifier API adoption and downstream qualification in progress. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 closing — Eggfetch 0.2.2 transport failure classification adoption | Local implementation/qualification passed; final hosted evidence and closure audit in progress. |
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
+| Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Required paired physical Linux/aarch64 Pi/MMC qualification target is unavailable in this work environment. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Qualification-only topology experiment; physical Pi/MMC evidence remains required for disposition. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closed — parity qualification harness decomposition | No registered successor became ready; new qualification work requires a bounded plan. |
 
@@ -50,6 +51,8 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
+| Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; production adoption requires separate decision. |
 
 ## Active implementation plans
 
@@ -61,7 +64,8 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Persistence | M007 dedicated checkpointer qualification experiment | Requires one physically attested Linux/aarch64 Raspberry Pi-class MMC target for the paired same-binary control/candidate phases and lifecycle corpus; current environment is macOS. |
+
+Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persistence/007-status.md`) is superseded by the revised ready scope: the qualification feature and local gates can be implemented here; paired Pi/MMC performance evidence remains an operational closure requirement.
 
 ## Recently closed
 
@@ -289,3 +293,6 @@ in `plans/closure/dashboard/006-status.md`. No dashboard work is blocked on
 M006, no successor remains registered, and no plan is newly eligible from this
 closure. Provider Transport M002 and Routing Selection M002 retain their
 unrelated independent blockers/evidence gates.
+
+
+Explicit user direction opens a documentation-only provider-profile metadata reconciliation at baseline `43c987ea458bd563d5108fd8051ad31185704bb0`. The accepted technical outcome remains M001 closure `805d6f70`: canonical Together `api.together.ai/v1` retained, OpenCode Go `/zen/go/v1` retained, zero template diff, two low discovery uncertainties deferred. C001 exists only to reconcile the predecessor roadmap's stale top-level `active` state, the registry's active/no-successor contradiction, and planning-time Together `.xyz` wording that was superseded by execution-time first-party evidence. No provider/template/runtime work is reopened.
