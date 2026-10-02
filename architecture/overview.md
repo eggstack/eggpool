@@ -140,7 +140,9 @@ is always authenticated and never inherits a dashboard-public exemption),
 `GET /api/integrations/v1/profile`, `GET /api/stats/runtime`, `GET /api/stats/update`, `GET /api/status`), `inference.rs`
 (`chat_completions`, `messages`, `responses`, `responses_compact`; finite vs. stream dispatch on the
 `stream` flag; exactly one `coordinator::execute_finite`/`execute_stream` call
-per request, compact via finite-only `execute_compact_finite`), `dashboard.rs` (server-rendered pages plus static assets).
+per request, compact via finite-only `execute_compact_finite`), `dashboard/`
+(thin route facade plus bounded read projections, static/theme delivery,
+shared formatting, and page-family renderers).
 Route topology: inference at `/v1/chat/completions`, `/v1/messages`,
 `/v1/responses`, `/v1/responses/compact` (bounded distinct compaction
 operation, not a Responses alias); dashboard at `/`, `/accounts`, `/models`,
@@ -507,7 +509,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
 | Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
 | Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
-| Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard.rs`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
+| Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard/`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
 | Tooling/tests | `scripts/`, `tests/tooling/`, `rust/tests/`, `packaging/` | [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md) |
 
 ## Source-development flow

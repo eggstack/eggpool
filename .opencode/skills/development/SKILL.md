@@ -297,6 +297,13 @@ For dashboard rendering, API, asset, or qualification changes, use the focused
 Rust renderer suite and the frozen Python oracle runner. The oracle source is
 provided by the M001 pinned worktree through these environment variables:
 
+Production dashboard ownership is under `rust/src/server/dashboard/`:
+`routes.rs` gathers bounded snapshots, `api.rs` projects dashboard JSON,
+`assets.rs`/`theme.rs` serve assets and theme CSS, shared response/format
+helpers have dedicated modules, and `render/` contains pure page-family
+renderers. `mod.rs` preserves the `server::dashboard` facade; focused unit
+tests stay at `server::dashboard::tests` in `tests.rs`.
+
 ```bash
 cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
 EGGPOOL_DASHBOARD_ORACLE_ROOT=/path/to/dashboard-python-oracle \

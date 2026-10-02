@@ -2,8 +2,18 @@
 
 Back to [Architecture](README.md)
 
-`rust/src/server/dashboard.rs` serves the dashboard and static routes, while
-`rust/src/server/health.rs` owns `GET /v1/healthz`, `GET /v1/readyz`,
+`rust/src/server/dashboard/` is the dashboard subsystem. Its `mod.rs` is a
+thin facade that preserves the route entry points consumed by
+`rust/src/server/mod.rs`. `routes.rs` owns page request parsing and bounded
+data gathering; `api.rs` owns dashboard JSON request parsing and projections;
+`assets.rs` and `theme.rs` own static/theme delivery; `response.rs` owns
+response/degraded helpers; and `format.rs` owns shared escaping and scalar
+formatting. Pure page renderers live under `render/`: `layout.rs`,
+`overview.rs`, `accounts.rs`, `models.rs`, `telemetry.rs`, `diagnostics.rs`,
+`runtime.rs`, and `cache.rs`. They consume gathered snapshots and do not read
+database or runtime state. Unit tests remain in `tests.rs` under the same
+`server::dashboard::tests` test path. `rust/src/server/health.rs` owns
+`GET /v1/healthz`, `GET /v1/readyz`,
 `GET /v1/models`, `GET /api/stats/runtime`, `GET /api/stats/update`, and the
 authenticated compact `GET /api/status` snapshot plus the authenticated
 versioned `GET /api/integrations/v1/profile` (aggregation lives in
