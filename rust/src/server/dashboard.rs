@@ -3417,20 +3417,18 @@ fn host_platform_label() -> String {
 
 fn load_average_summary() -> String {
     #[cfg(target_os = "linux")]
-    if let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg") {
-        if let Some(load) = loadavg
+    if let Ok(loadavg) = std::fs::read_to_string("/proc/loadavg")
+        && let Some(load) = loadavg
             .split_whitespace()
             .next()
             .and_then(|value| value.parse::<f64>().ok())
-        {
-            if let Ok(cpu_count) = std::thread::available_parallelism() {
-                return format!(
-                    "{:.2}/core · {} CPUs",
-                    load / cpu_count.get() as f64,
-                    cpu_count.get()
-                );
-            }
-        }
+        && let Ok(cpu_count) = std::thread::available_parallelism()
+    {
+        return format!(
+            "{:.2}/core · {} CPUs",
+            load / cpu_count.get() as f64,
+            cpu_count.get()
+        );
     }
 
     "load average unavailable".to_owned()
