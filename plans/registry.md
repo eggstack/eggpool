@@ -55,7 +55,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Provider transport | M002 stable Eggfetch transport error taxonomy | active | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Dependency convergence, mapping cutover, and full transport qualification in progress. |
+| Provider transport | M002 stable Eggfetch transport error taxonomy | closing | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Local implementation gates pass; hosted CI and dependency audit are the remaining closure gates. |
 
 ## Blocked work
 
