@@ -1,6 +1,6 @@
 # Dashboard Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
 
-Status: blocked
+Status: active
 
 Repository baseline: `299a0b3657667af509742a184e658c14df22d406`
 
@@ -415,5 +415,6 @@ qualification gates. Its tooling pytest gate then failed because the default
 depth-one checkout did not contain the pinned oracle commit required by
 `test_frozen_manifest_identity_inventory_and_asset_blobs`. This is outside
 the original source correction. Dashboard M011 is registered to make the
-pinned commit available without changing the test or oracle. M008 remains
-blocked until M011 closes and a complete hosted run passes.
+pinned commit available without changing the test or oracle. M011 is now
+closed, and hosted run `37049147155` completed all gates successfully; M008 is
+active again for its final closure pass.

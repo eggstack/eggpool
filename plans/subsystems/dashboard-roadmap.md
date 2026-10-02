@@ -377,7 +377,7 @@ behavior changes occur.
 | 005 | closed | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | plans/closure/dashboard/005-status.md; additive resolution in plans/closure/dashboard/005-follow-up-006.md | Four source-truth dispositions accepted by M006; no further Runtime/Cache work |
 | 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; parity capability remains closed. |
 | 007 | closed | plans/implementation/dashboard/007-empty-recovery-summary-correction.md | plans/closure/dashboard/007-status.md | none |
-| 008 | blocked | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | M011 hosted CI qualification corrective |
+| 008 | active | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | hosted-history prerequisite M011 closed; final closure audit pending |
 | 009 | blocked | plans/implementation/dashboard/009-production-module-decomposition.md | — | M008 |
 | 010 | blocked | plans/implementation/dashboard/010-parity-harness-decomposition.md | — | M009 |
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
