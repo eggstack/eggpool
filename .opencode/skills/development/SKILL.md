@@ -293,6 +293,25 @@ uv run pyright scripts/
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
+For dashboard rendering, API, asset, or qualification changes, use the focused
+Rust renderer suite and the frozen Python oracle runner. The oracle source is
+provided by the M001 pinned worktree through these environment variables:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
+EGGPOOL_DASHBOARD_ORACLE_ROOT=/path/to/dashboard-python-oracle \
+EGGPOOL_DASHBOARD_ORACLE_PYTHON=/path/to/dashboard-python-oracle/.venv/bin/python \
+  uv run python scripts/qualification_dashboard_parity.py --screenshots
+EGGPOOL_DASHBOARD_ORACLE_ROOT=/path/to/dashboard-python-oracle \
+EGGPOOL_DASHBOARD_ORACLE_PYTHON=/path/to/dashboard-python-oracle/.venv/bin/python \
+  uv run python scripts/qualification_dashboard_parity.py --shutdown-restart
+```
+
+The browser run records matched route/theme/viewport hashes and interaction
+checks; the shutdown/restart mode keeps browser and concurrent dashboard reads
+active across bounded SIGTERM and restart. Browser tooling remains outside the
+Rust dependency graph.
+
 Focused release checks include the catalog, package boundary, release
 workflow, retirement boundary, and quick-installer qualification validators.
 Do not add a Python application fallback or import the retired application.

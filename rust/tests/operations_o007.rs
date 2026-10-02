@@ -63,11 +63,15 @@ async fn model_info_stats_cost_and_explain_services_are_real_and_safe() {
                 [],
             )?;
             connection.execute(
-                "INSERT INTO model_info_canonical (model_id,status,detail_json,provenance_json,conflicts_json) VALUES ('fixture-model','sparse_new','{}','{}','{}')",
+                "INSERT INTO model_info_canonical (model_id,status,detail_json,provenance_json,conflicts_json) VALUES ('fixture-model','sparse_new','{}','{\"sources\":[\"provider_catalog\"]}','{}')",
                 [],
             )?;
             connection.execute(
                 "INSERT INTO model_info_aliases (model_id,provider_id,alias,source) VALUES ('fixture-model','fixture','fixture-alias','curated')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO model_info_observations (model_id,provider_id,source,source_model_id,confidence,raw_hash,normalized_json,raw_json) VALUES ('fixture-model','fixture','fixture-source','fixture-source-model',0.9,'fixture-hash','{\"display_name\":\"safe\"}','{\"raw\":\"must not render\"}')",
                 [],
             )?;
             Ok(())
@@ -92,6 +96,16 @@ async fn model_info_stats_cost_and_explain_services_are_real_and_safe() {
             .expect("show")
             .is_some()
     );
+    let observations = operator::list_compact_model_observations(&database, "FIXTURE-MODEL")
+        .await
+        .expect("compact model observations");
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations[0]["source"], "fixture-source");
+    assert_eq!(observations[0]["display_name"], "safe");
+    assert_eq!(observations[1]["source"], "provider_catalog");
+    assert_eq!(observations[1]["provider_id"], "fixture");
+    assert!(observations[0].get("raw_json").is_none());
+    assert!(observations[0].get("raw_hash").is_none());
 
     let explain = operator::explain_dashboard(&database, "24h", "hour", "provider_model")
         .await

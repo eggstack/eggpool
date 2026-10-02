@@ -1,8 +1,8 @@
 # Dashboard Milestone 006 — Full Parity Qualification and Closure
 
-Status: blocked
+Status: closed
 
-Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001-M005
+Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus conditionally closed Dashboard M001-M005
 
 Source roadmap:
 
@@ -29,7 +29,7 @@ This milestone is a closure gate, not a venue for redesign.
 
 ## 2. Why this milestone is ready
 
-Blocked on Dashboard M003, M004, and M005. M001 must remain the unchanged oracle authority and M002 the closed common shell/API foundation.
+M005 is conditionally closed with explicit source-truth dispositions; M003 and M004 are closed. M001 remains the unchanged oracle authority and M002 the common shell/API foundation. M006 is ready to qualify the remaining strict gaps, matched browser behavior, and shutdown/restart boundary.
 
 When the prerequisite capability milestones close, M006 has no expected external runtime dependency. Browser tooling remains qualification-only.
 
@@ -42,6 +42,14 @@ Historical Q012 cannot serve as final evidence because:
 - its comparator selected a subset of semantic content and explicitly permitted richer Python diagnostics;
 - its browser evidence used Python desktop/default and Rust mobile/Catppuccin combinations rather than matched pairs;
 - screenshot artifacts were external and not a complete enduring parity contract.
+
+M006's matched browser audit identified a narrow mobile overflow correction:
+the frozen CSS allowed a panel's intrinsic minimum width to expand around its
+max-content table despite the historical `.table-scroll` wrapper. Rust sets
+`.panel { min-width: 0; }`, preserving the wrapper's horizontal scroll and
+preventing root-page horizontal scrolling. This is a single, hashed CSS rule
+change with an explicit oracle/candidate asset disposition; all other
+dashboard CSS, JavaScript, and Chart.js bytes remain frozen.
 
 M006 must use the stricter M001 oracle and matched-pair methodology.
 

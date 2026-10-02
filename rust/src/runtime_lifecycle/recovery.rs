@@ -1,4 +1,7 @@
-use crate::coordinator::{CrashReconciler, ReconciliationError};
+use crate::{
+    coordinator::{CrashReconciler, ReconciliationError},
+    db::DatabaseError,
+};
 use serde::Serialize;
 
 use super::{MAX_STARTUP_RECONCILIATION_PASSES, ProcessRuntime};
@@ -16,6 +19,8 @@ pub struct StartupRecoveryReport {
 pub enum StartupRecoveryError {
     #[error("startup crash reconciliation failed: {0}")]
     Reconciliation(#[from] ReconciliationError),
+    #[error("startup recovery event could not be persisted: {0}")]
+    Database(#[from] DatabaseError),
     #[error("startup crash reconciliation exceeded the bounded pass limit")]
     PassLimit,
 }
@@ -27,6 +32,20 @@ pub(crate) async fn reconcile(
     process: &ProcessRuntime,
 ) -> Result<StartupRecoveryReport, StartupRecoveryError> {
     let reconciler = CrashReconciler::new(process.database());
+    let affected_accounts = process
+        .database()
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COUNT(DISTINCT account_id) FROM (\
+                SELECT account_id FROM requests WHERE status = 'pending'\
+                UNION SELECT account_id FROM reservations WHERE status = 'active'\
+             )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+        })
+        .await?
+        .max(0) as usize;
     let mut aggregate = StartupRecoveryReport {
         passes: 0,
         requests_interrupted: 0,
@@ -50,6 +69,17 @@ pub(crate) async fn reconcile(
         aggregate.last_classification = report.classification;
         if !report.truncated && report.converged {
             aggregate.converged = true;
+            let details = format!(
+                "{{\"interrupted_requests\":{},\"released_reservations\":{},\"affected_accounts\":{}}}",
+                aggregate.requests_interrupted, aggregate.reservations_released, affected_accounts,
+            );
+            process.database().with_transaction(move |connection| {
+                connection.execute(
+                    "INSERT INTO operational_events (event_type, details_json) VALUES ('crash_recovery', ?1)",
+                    [details],
+                )?;
+                Ok(())
+            }).await?;
             process.set_startup_recovery_report(aggregate.clone());
             return Ok(aggregate);
         }

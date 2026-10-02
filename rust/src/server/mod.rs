@@ -12,10 +12,12 @@ mod inference;
 mod middleware;
 
 use dashboard::{
-    accounts_page, bandwidth_page, cache_page, events_page, json_response, latency_page,
-    model_detail_page, models_page, overview, pings_page, reliability_page, routing_page,
-    runtime_page, static_chart_js, static_css, static_favicon, static_js, summary, sync_accounts,
-    theme_css, timeseries_page, traces_page,
+    accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, json_response,
+    latency_page, model_detail_page, models_page, overview, pings_page, reliability_page,
+    routing_page, runtime_page, static_chart_js, static_css, static_favicon, static_js,
+    stats_cache_observability, stats_cache_stability, stats_request_segmentation,
+    stats_request_shaping, stats_transcoding, summary, sync_accounts, theme_css, timeseries_api,
+    timeseries_page, traces_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
@@ -1064,7 +1066,20 @@ pub fn build_router(state: AppState) -> Router {
             .route("/traces", get(traces_page))
             .route("/runtime", get(runtime_page))
             .route("/cache", get(cache_page))
-            .route("/api/stats/summary", get(summary));
+            .route("/api/stats/summary", get(summary))
+            .route("/api/stats/transcoding", get(stats_transcoding))
+            .route(
+                "/api/stats/cache-observability",
+                get(stats_cache_observability),
+            )
+            .route(
+                "/api/stats/canonical-request-segmentation",
+                get(stats_request_segmentation),
+            )
+            .route("/api/stats/cache-stability", get(stats_cache_stability))
+            .route("/api/stats/request-shaping", get(stats_request_shaping))
+            .route("/api/timeseries", get(timeseries_api))
+            .route("/api/timeseries/grouped", get(grouped_timeseries_api));
     }
 
     router

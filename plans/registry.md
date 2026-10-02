@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Request admission and wire M006 (external semantic-producer
-consumer contract; `plans/closure/request-admission-wire/006-status.md`).
+Most recently closed: Dashboard M006 (full parity qualification;
+`plans/closure/dashboard/006-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -44,24 +44,18 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M001 ready — Python oracle freeze and strict parity substrate | No hard blocker for M001; M002-M006 are dependency-sequenced behind the frozen oracle/common-shell work. |
+| Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M006 closed — full parity qualification | No dashboard corrective work remains; future UI features require new bounded plans. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
-| Dashboard | M002 shared shell, interaction, and dashboard API restoration | Hard-blocked on M001 oracle/strict comparator closure. |
-| Dashboard | M003 overview/account/model/model-detail parity | Hard-blocked on M002 shared shell/API closure. |
-| Dashboard | M004 telemetry/routing/reliability/trace parity | Hard-blocked on M002 shared shell/API closure; may run in parallel with M003 afterward. |
-| Dashboard | M005 runtime/cache observability parity | Hard-blocked on M002; M003/M004 interfaces must stabilize and both must close before M005 closure. |
-| Dashboard | M006 full parity qualification and closure | Hard-blocked on M003-M005. |
 
 ## Recently closed
 
@@ -70,6 +64,13 @@ pair is a known numbering accident.
 | Provider profile metadata corrective M001 — provider template endpoint/source reconciliation | closed — all 23 bundled templates dispositioned against first-party docs; Together retained on canonical `.ai` (plan's `.xyz` correction refuted), OpenCode Go retained on `/zen/go/v1`; 5 template regression tests + authority docs; zero template diff; 815 workspace tests green | `plans/closure/provider-profile-metadata/001-status.md`, implementation `805d6f70` |
 | Request admission and wire M006 — external semantic-producer consumer contract | closed — source-neutral canonical requests, surface encoding/options, bounded tool-call accumulation, isolated consumer compile, and EggPool regression gates pass; downstream pin available | `plans/closure/request-admission-wire/006-status.md`, implementation `f05b18b7358d9a4125d1e20c491151eec265e403` |
 | Deployment and packaging M003 — config publication ownership corrective | closed — transaction-owned staging + no-clobber publish, concurrent config preserved, final never deleted, 60-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/003-status.md`, implementation `292a1e3f` |
+| Dashboard M006 — Full parity qualification and closure | closed — strict report retains nine explicitly accepted source-backed differences; 144 matched captures, eight interaction runs, lifecycle shutdown/restart, and full local Rust/tooling gates passed | `plans/closure/dashboard/006-status.md`, browser manifest `plans/closure/dashboard/006-browser-manifest.json`; implementation `6bfa1781`, `5bb3aba1` |
+| Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
+| Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
+| Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
+| Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
+| Dashboard M002 — shared shell, interaction, and dashboard API restoration | closed — exact shared-shell projection passed all 28 route/state cells; timeseries APIs matched empty/populated/private cases; eight paired desktop/mobile interaction runs and clean browser checks; 804 serial Rust tests passed | `plans/closure/dashboard/002-status.md`, implementation `da8183d`, paired viewport gate `00c69f5` |
+| Dashboard M001 — Python oracle freeze and strict parity substrate | closed — fixed 14-page/8-API oracle, 50 static/theme hashes, reproducible sanitized captures, strict negative tests, 50-cell current-gap report; no production diff | `plans/closure/dashboard/001-status.md`, implementation `3f3d5de`, theme inventory `286b70a` |
 | Deployment and packaging M002 — installer transaction and collision corrective | closed — fresh `--force` refuses unowned files, config-seed failure rolls back executable, 46-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/002-status.md`, implementation `02ee2873` |
 | Deployment and packaging M001 — binary-first quick installer and ownership cleanup | closed — verified raw-binary fresh path, owner delegation, 42-case deterministic qualification, docs/validators green, zero Rust diff | `plans/closure/deployment-packaging/001-status.md`, implementation `05600504` |
 | Provider transport M005 — Eggfetch 0.2.1 / Eggress 1.0.11 refresh | closed — provider, consumer, workspace, dependency, tooling, hosted CI, and audit qualification passed | `plans/closure/provider-transport/005-status.md`, implementation `e08c0e25`, test portability correction `7715a448` |
@@ -241,27 +242,13 @@ baseline. Closure promotes no blocked work and unblocks no future plan.
 Provider-transport M002 remains independently blocked on the upstream Eggfetch
 typed classification interface. Routing-selection M002 stays evidence-gated (no
 affinity workload measured). Persistence has no eligible successor.
-Dashboard M001 remains the sole ready handoff (independent workstream).
+Dashboard M001-M006 are now closed with no successor registered.
 No deployment-packaging successor is registered; future hardening
 (attestations, system/root distribution, additional targets) requires new
 bounded plans.
 
 
-Dashboard parity planning audit (registered at research baseline
-`17e298f64fa21589f558c43592a24fa91b952ff7`): the final Python dashboard
-oracle is commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`. The current Rust
-static CSS/JS/Chart.js/favicon blobs remain byte-identical to that oracle, but
-the SSR DOM, dashboard-only JSON routes, and rich view-model surface were
-narrowed during migration. Historical Q012 intentionally compared a selected
-semantic subset and allowed richer Python diagnostics, so it is not sufficient
-as the restored parity gate. Dashboard M001 is therefore the sole ready
-handoff: freeze a complete sanitized oracle and strict comparator without
-production changes. M002-M006 remain blocked in dependency order; no ADR is
-required unless implementation discovers a genuinely new ownership/protocol
-decision rather than a compatibility restoration.
-
-
-Explicit user direction reopened request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`; M006 is now closed at `f05b18b7358d9a4125d1e20c491151eec265e403`. The work remains bounded to the extracted `eggpool-wire` API and does not reopen provider transport, routing, accounts, persistence, or public HTTP behavior. `eggpool-wire 0.1.0` is already on crates.io; this milestone neither released a new version nor changed versioning policy. The downstream CodeGG adoption dependency is satisfied and may proceed using the immutable pin. No future in-repository plan was registered as blocked on M006, so no other blocked row was promoted; provider transport and dashboard blockers remain independent.
+Explicit user direction reopened request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`; M006 is now closed at `f05b18b7358d9a4125d1e20c491151eec265e403`. The work remains bounded to the extracted `eggpool-wire` API and does not reopen provider transport, routing, accounts, persistence, or public HTTP behavior. `eggpool-wire 0.1.0` is already on crates.io; this milestone neither released a new version nor changed versioning policy. The downstream CodeGG adoption dependency is satisfied and may proceed using the immutable pin. No future in-repository plan was registered as blocked on M006, so no other blocked row was promoted; provider transport retains its independent upstream blocker and dashboard is closed.
 
 
 Explicit user direction opens the provider-profile metadata corrective at baseline `c17a55218b2810791fcf6f3136b8805becfa27c1`. Current first-party documentation reviewed on 2026-10-02 confirms that EggPool's Together template is stale (`api.together.ai` vs current `api.together.xyz`) while its OpenCode Go `/zen/go/v1` prefix is correct. The corrective therefore treats first-party provider documentation—not CodeGG or EggPool sibling state—as authority. M001 is dependency-ready and does not reopen provider transport, routing, request-admission/wire, persistence, or publication work.
@@ -275,7 +262,18 @@ applied and the regression surface locks the confirmed compositions
 instead. The roadmap's completion definition is met with no unresolved
 medium-or-higher finding and no registered successor. No blocked work in any
 subsystem depended on M001 (provider-transport M002 stays upstream-blocked,
-dashboard M002-M006 stay sequenced behind M001, routing-selection M002 stays
+ dashboard is closed with no successor, routing-selection M002 stays
 evidence-gated), so this closure promotes nothing and unblocks no future
 plan; the two low deferred discovery-probing items (Fireworks/Alibaba
 models paths) require new bounded plans with live verification if pursued.
+oracle is commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`. M001-M006 and
+corrective pass 007 are closed; the complete sanitized oracle, strict
+comparator, matched browser evidence, and closure/unblock audit are recorded in
+the dashboard closure records. M006 retains nine explicitly accepted
+source-backed differences and the strict report remains `gaps`, with zero M004
+differences. The 144-capture matched browser manifest, eight interaction runs,
+bounded shutdown/restart, and full local Rust/tooling verification are recorded
+in `plans/closure/dashboard/006-status.md`. No dashboard work is blocked on
+M006, no successor remains registered, and no plan is newly eligible from this
+closure. Provider Transport M002 and Routing Selection M002 retain their
+unrelated independent blockers/evidence gates.
