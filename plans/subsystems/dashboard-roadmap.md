@@ -349,6 +349,23 @@ Exit conditions: CLI/report/oracle/comparator semantics are unchanged;
 accepted difference groups are identical; strict/browser/shutdown-restart,
 Ruff/Pyright/tooling, full Rust default/no-default, and hosted-CI gates pass.
 
+### Milestone 011 — Hosted oracle history qualification
+
+Class: invariant
+
+Objective: make the pinned Python-oracle Git commit available to hosted CI so
+the frozen-manifest blob identity test can run without weakening its contract.
+
+Dependencies: M008 implementation committed; M008 closure awaits this hosted
+qualification corrective.
+
+Deliverable boundary: CI checkout history includes the pinned oracle commit;
+the focused manifest test and all hosted CI gates pass unchanged.
+
+Exit conditions: the pinned source asset blobs are available in hosted CI;
+the tooling manifest test passes; no oracle, production, or dashboard
+behavior changes occur.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -360,9 +377,10 @@ Ruff/Pyright/tooling, full Rust default/no-default, and hosted-CI gates pass.
 | 005 | closed | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | plans/closure/dashboard/005-status.md; additive resolution in plans/closure/dashboard/005-follow-up-006.md | Four source-truth dispositions accepted by M006; no further Runtime/Cache work |
 | 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; parity capability remains closed. |
 | 007 | closed | plans/implementation/dashboard/007-empty-recovery-summary-correction.md | plans/closure/dashboard/007-status.md | none |
-| 008 | ready | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | none |
+| 008 | blocked | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | M011 hosted CI qualification corrective |
 | 009 | blocked | plans/implementation/dashboard/009-production-module-decomposition.md | — | M008 |
 | 010 | blocked | plans/implementation/dashboard/010-parity-harness-decomposition.md | — | M009 |
+| 011 | ready | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | — | M008 implementation committed; M008 closure awaits hosted qualification |
 
 M001-M007 remain closed historical evidence. M008 reopens only the roadmap
 lifecycle for a post-merge strict-CI regression and planning-control

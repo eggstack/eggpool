@@ -44,14 +44,14 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M008 active — post-merge strict-CI and planning reconciliation corrective | M001-M007 closed; M008 has no hard blocker and restores current-head CI without reopening parity semantics. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M008 blocked — post-merge strict-CI and planning reconciliation corrective | Hosted CI reached tooling pytest but the shallow checkout omitted pinned oracle commit `c23a709`; M011 qualifies history availability before M008 closure. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
-| Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | active | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | M001-M007 closed; deterministic current-head Clippy failure; no hard blocker. |
+| Dashboard | M011 hosted oracle history qualification | ready | `plans/implementation/dashboard/011-hosted-oracle-history-qualification.md` | M008 implementation committed; hosted CI needs the pinned oracle commit available to its blob identity test. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
 
 ## Blocked work
@@ -60,6 +60,7 @@ pair is a known numbering accident.
 |---|---|---|
 | Dashboard | M009 production module decomposition and ownership cleanup | Hard-blocked on M008 strict-CI/planning corrective closure; preserve the current oracle harness unchanged while refactoring production. |
 | Dashboard | M010 parity qualification harness decomposition | Hard-blocked on M009 production decomposition closure; refactor the guard only after it has qualified M009. |
+| Dashboard | M008 strict-CI/planning corrective closure | Blocked pending M011 hosted oracle history qualification and complete hosted CI rerun. |
 
 ## Recently closed
 
