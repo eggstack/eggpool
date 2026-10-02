@@ -1,6 +1,6 @@
 # Provider Profile Metadata Milestone 001 — Provider Template Endpoint and Source Reconciliation
 
-Status: ready
+Status: closed (see `plans/closure/provider-profile-metadata/001-status.md`)
 
 Repository baseline: `c17a55218b2810791fcf6f3136b8805becfa27c1`
 

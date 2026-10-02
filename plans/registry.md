@@ -40,7 +40,7 @@ pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
-| Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 ready — provider template endpoint/source reconciliation | Current first-party evidence confirms Together template drift while OpenCode Go is already correct. Audit/correct all bundled endpoint/protocol/auth/discovery facts without runtime freshness checks or cross-repo authority. |
+| Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -50,7 +50,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider profile metadata corrective | M001 provider template endpoint/source reconciliation | ready | `plans/implementation/provider-profile-metadata/001-provider-template-endpoint-and-source-reconciliation.md` | No hard dependency. Correct known Together endpoint drift, retain/qualify OpenCode Go, audit every bundled provider against first-party documentation, and leave path-composition regressions. |
 | Dashboard | M001 Python oracle freeze and strict parity substrate | ready | `plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md` | Freeze final Python commit `c23a70961f4b7858fdb0264cfb27b7ea26a8a334`; tooling/fixture infrastructure only, no production parity claim. |
 
 ## Blocked work
@@ -68,6 +67,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider profile metadata corrective M001 — provider template endpoint/source reconciliation | closed — all 23 bundled templates dispositioned against first-party docs; Together retained on canonical `.ai` (plan's `.xyz` correction refuted), OpenCode Go retained on `/zen/go/v1`; 5 template regression tests + authority docs; zero template diff; 815 workspace tests green | `plans/closure/provider-profile-metadata/001-status.md`, implementation `805d6f70` |
 | Request admission and wire M006 — external semantic-producer consumer contract | closed — source-neutral canonical requests, surface encoding/options, bounded tool-call accumulation, isolated consumer compile, and EggPool regression gates pass; downstream pin available | `plans/closure/request-admission-wire/006-status.md`, implementation `f05b18b7358d9a4125d1e20c491151eec265e403` |
 | Deployment and packaging M003 — config publication ownership corrective | closed — transaction-owned staging + no-clobber publish, concurrent config preserved, final never deleted, 60-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/003-status.md`, implementation `292a1e3f` |
 | Deployment and packaging M002 — installer transaction and collision corrective | closed — fresh `--force` refuses unowned files, config-seed failure rolls back executable, 46-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/002-status.md`, implementation `02ee2873` |
@@ -265,3 +265,17 @@ Explicit user direction reopened request-admission-wire after M005 closure for M
 
 
 Explicit user direction opens the provider-profile metadata corrective at baseline `c17a55218b2810791fcf6f3136b8805becfa27c1`. Current first-party documentation reviewed on 2026-10-02 confirms that EggPool's Together template is stale (`api.together.ai` vs current `api.together.xyz`) while its OpenCode Go `/zen/go/v1` prefix is correct. The corrective therefore treats first-party provider documentation—not CodeGG or EggPool sibling state—as authority. M001 is dependency-ready and does not reopen provider transport, routing, request-admission/wire, persistence, or publication work.
+
+Unblock audit (provider-profile-metadata M001 closed, implementation
+`805d6f70`, `plans/closure/provider-profile-metadata/001-status.md`):
+execution-time review of canonical `docs.together.ai` refuted the Together
+drift premise — the bundled `api.together.ai/v1` is the current first-party
+value and the `.xyz` host is a legacy alias — so no template correction was
+applied and the regression surface locks the confirmed compositions
+instead. The roadmap's completion definition is met with no unresolved
+medium-or-higher finding and no registered successor. No blocked work in any
+subsystem depended on M001 (provider-transport M002 stays upstream-blocked,
+dashboard M002-M006 stay sequenced behind M001, routing-selection M002 stays
+evidence-gated), so this closure promotes nothing and unblocks no future
+plan; the two low deferred discovery-probing items (Fireworks/Alibaba
+models paths) require new bounded plans with live verification if pursued.
