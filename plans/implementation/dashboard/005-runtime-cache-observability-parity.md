@@ -1,6 +1,6 @@
 # Dashboard Milestone 005 — Runtime and Cache Observability Parity
 
-Status: conditionally closed
+Status: closed
 
 Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001-M002; M003/M004 interfaces stable and required closed before this milestone closes
 

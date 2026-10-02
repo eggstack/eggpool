@@ -63,7 +63,7 @@ pair is a known numbering accident.
 |---|---|---|
 | Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
-| Dashboard M005 — Runtime and Cache Observability Parity | conditionally closed | `plans/closure/dashboard/005-status.md`; 814 serial Rust tests, 149 tooling tests (one skipped), and a nine-cell strict report; M006 owns the named parity/browser/shutdown follow-up. |
+| Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
 | Dashboard M002 — shared shell, interaction, and dashboard API restoration | closed — exact shared-shell projection passed all 28 route/state cells; timeseries APIs matched empty/populated/private cases; eight paired desktop/mobile interaction runs and clean browser checks; 804 serial Rust tests passed | `plans/closure/dashboard/002-status.md`, implementation `da8183d`, paired viewport gate `00c69f5` |
 | Dashboard M001 — Python oracle freeze and strict parity substrate | closed — fixed 14-page/8-API oracle, 50 static/theme hashes, reproducible sanitized captures, strict negative tests, 50-cell current-gap report; no production diff | `plans/closure/dashboard/001-status.md`, implementation `3f3d5de`, theme inventory `286b70a` |
@@ -252,10 +252,9 @@ and both close. M006 remains blocked on M003–M005. No new hard dependency or A
 was found.
 
 Dashboard M005 closure audit (implementation commits `b068315a`, `3510590e`,
-`31e1a87`, `3cf7671`; `plans/closure/dashboard/005-status.md`): M005 is
-conditionally closed with explicit dispositions for the frozen Python 500,
-unknown-status undercount, Rust supervisor task inventory, and host load
-availability. The current strict report has nine cells: four M003-owned
-overview/account/model cells, three Runtime/Cache DOM cells, and two populated
-stats API cells. The closure audit promotes M006 from blocked to ready to
-complete matched browser, shutdown/restart, and full cross-milestone evidence.
+`31e1a87`, `3cf7671`; M006 additive resolution
+`plans/closure/dashboard/005-follow-up-006.md`): M005 is closed with accepted
+source-truth dispositions for the frozen Python 500, unknown-status undercount,
+Rust supervisor task inventory, and host load availability. M006 completed
+matched browser and shutdown/restart qualification; its nine strict cells are
+fully classified in `plans/closure/dashboard/006-status.md`.
