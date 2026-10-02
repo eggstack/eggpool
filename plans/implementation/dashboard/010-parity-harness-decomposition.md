@@ -1,6 +1,6 @@
 # Dashboard Milestone 010 — Parity qualification harness decomposition
 
-Status: active
+Status: closing
 
 Repository baseline: `deafb2c143cfa0992af7715e220fe8f574a23f9b`
 

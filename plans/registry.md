@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 active — parity qualification harness decomposition | M009 closed with exact strict-oracle parity; M008 and M011 are closed. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closing — parity qualification harness decomposition | Local strict/browser/lifecycle and full Rust/tooling gates passed; hosted CI in progress. |
 
 ## Dependency-ready implementation plans
 
@@ -57,7 +57,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Dashboard | M010 parity qualification harness decomposition | active | `plans/implementation/dashboard/010-parity-harness-decomposition.md` | Strict oracle and browser/lifecycle qualification in progress; no production changes. |
+| Dashboard | M010 parity qualification harness decomposition | closing | `plans/implementation/dashboard/010-parity-harness-decomposition.md` | Local strict/browser/lifecycle and full Rust/tooling gates passed; hosted CI in progress. |
 
 ## Blocked work
 
