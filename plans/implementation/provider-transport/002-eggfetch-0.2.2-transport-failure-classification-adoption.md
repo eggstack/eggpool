@@ -1,6 +1,6 @@
 # Provider Transport Milestone 002 — Eggfetch 0.2.2 Transport Failure Classification Adoption
 
-Status: ready
+Status: active
 
 Repository baseline: `8db2d16c73cb7bb832c23a2e037d5fe0823021f7`
 

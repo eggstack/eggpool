@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 ready — Eggfetch 0.2.2 transport failure classification adoption | Upstream blocker satisfied by published Eggfetch 0.2.2; implementation/qualification pending. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 active — Eggfetch 0.2.2 transport failure classification adoption | Published classifier API adoption and downstream qualification in progress. |
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Required paired physical Linux/aarch64 Pi/MMC qualification target is unavailable in this work environment. |
@@ -50,7 +50,12 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
+
+## Active implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Handoff note |
+|---|---|---|---|---|
+| Provider transport | M002 stable Eggfetch transport error taxonomy | active | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Dependency convergence, mapping cutover, and full transport qualification in progress. |
 
 ## Blocked work
 

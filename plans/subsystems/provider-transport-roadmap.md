@@ -564,7 +564,7 @@ is registered ready for bounded downstream adoption.
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — Eggfetch adapter contract hardening | closed | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | `plans/closure/provider-transport/001-status.md` | none |
-| 002 — Adopt stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | — | Eggfetch 0.2.2 classifier API published; downstream adoption pending |
+| 002 — Adopt stable Eggfetch transport error taxonomy | active | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | — | Eggfetch 0.2.2 classifier API published; dependency convergence and downstream qualification in progress |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
 | 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 later unblocked by published Eggfetch 0.2.2 |
