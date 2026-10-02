@@ -1,6 +1,6 @@
 # Dashboard Parity Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -84,6 +84,16 @@ The migration retained the old static frontend but narrowed its server-side cont
 - architecture/deep-dive-dashboard.md describes a stronger shared-layout/read-plane contract than several current renderer paths actually satisfy.
 
 The regression is therefore not an asset-copy problem. It is a server-rendered DOM, dashboard JSON, and view-model parity problem.
+
+M001-M007 subsequently restored and qualified the dashboard parity surface, and
+M006 closed the parity roadmap with the accepted source-truth differences
+recorded in its closure evidence. After the dashboard restoration branch was
+merged to `main` at `299a0b3657667af509742a184e658c14df22d406`, hosted CI
+run `37040025250` exposed two strict-Clippy `collapsible_if` findings in
+the Linux load-average projection in `rust/src/server/dashboard.rs`. The
+failure skipped all later CI gates. M008 is the bounded post-merge corrective
+for that current-head CI regression plus compact registry reconciliation; it
+does not reopen dashboard parity semantics.
 
 ## 5. Target architecture
 
@@ -271,6 +281,26 @@ Rust tests run serial with --test-threads=1. Browser dependencies stay out of Ca
 
 This roadmap closes only when the native Rust dashboard preserves the final Python dashboard's operator-visible structure and behavior across all 14 page routes and dashboard-only JSON APIs, the unchanged frontend assets execute without contract errors, runtime/cache/model information is data-backed from authoritative Rust owners, public/private and escaping invariants pass, matched browser evidence shows no unexplained material regression, and current docs describe the shipped implementation rather than the reduced migration intermediate.
 
+### Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
+
+Class: invariant
+
+Objective: restore strict current-head CI after the dashboard-parity merge by
+fixing the two behavior-neutral Clippy findings, execute every gate skipped by
+that failure, and reconcile stale compact registry state.
+
+Dependencies: M001-M007 hard and closed; no external dependency.
+
+Deliverable boundary: the smallest semantics-preserving
+`rust/src/server/dashboard.rs` conditional cleanup required by current stable
+Clippy, full default/no-default/tooling qualification, and roadmap/registry
+status reconciliation. No dashboard DOM/API/theme/runtime capability change.
+
+Exit conditions: default and no-default strict Clippy pass; full serial Rust
+and tooling gates pass; hosted CI completes with no skipped gate from an
+earlier failure; dashboard behavior is unchanged; registry/roadmap agree on
+the final closed/no-successor state.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -280,6 +310,12 @@ This roadmap closes only when the native Rust dashboard preserves the final Pyth
 | 003 | closed | plans/implementation/dashboard/003-overview-account-model-parity.md | plans/closure/dashboard/003-status.md | Four source-truth differences received final disposition in M006. |
 | 004 | closed | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | plans/closure/dashboard/004-status.md; additive resolution in plans/closure/dashboard/004-follow-up-007.md | none |
 | 005 | closed | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | plans/closure/dashboard/005-status.md; additive resolution in plans/closure/dashboard/005-follow-up-006.md | Four source-truth dispositions accepted by M006; no further Runtime/Cache work |
-| 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; no dashboard-owned corrective work remains. |
+| 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; parity capability remains closed. |
+| 007 | closed | plans/implementation/dashboard/007-empty-recovery-summary-correction.md | plans/closure/dashboard/007-status.md | none |
+| 008 | ready | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | none |
 
-Corrective pass 007 (`plans/implementation/dashboard/007-empty-recovery-summary-correction.md`) is closed in `plans/closure/dashboard/007-status.md`. Its additive follow-up resolves the conditional M004 finding; the oracle and comparator remain unchanged. M005 is closed by `plans/closure/dashboard/005-follow-up-006.md`. M006 and this roadmap are closed by `plans/closure/dashboard/006-status.md`: the strict comparator retains nine source-backed differences, all explicitly dispositioned; matched browser, interaction, shutdown, and restart qualification passed. The closure audit found no remaining dashboard corrective work or newly eligible dashboard successor.
+M001-M007 remain closed historical evidence. M008 reopens only the roadmap
+lifecycle for a post-merge strict-CI regression and planning-control
+reconciliation at baseline
+`299a0b3657667af509742a184e658c14df22d406`. It does not reopen the accepted
+dashboard parity dispositions.
