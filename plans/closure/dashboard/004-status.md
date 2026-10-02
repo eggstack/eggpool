@@ -1,6 +1,6 @@
 # Dashboard Milestone 004 — Closure Status
 
-Status: closing
+Status: conditionally closed
 
 Source implementation plan:
 
@@ -151,7 +151,7 @@ M006 remains blocked on M003-M005 closure.
 
 ## 12. Registry updates
 
-The roadmap and registry now place M004 in `closing`. M005 remains blocked
-until M004's closing disposition is recorded; M006 remains hard-blocked on
-M003-M005. The follow-up unblock audit will update M005 when M004 transitions
-to its final disposition.
+M004 is conditionally closed with the finding above. The M005 interfaces are
+stable, so M005 moves to `ready` for implementation under the agreed contract;
+it may not close until M004's summary parity finding is resolved. M006 remains
+hard-blocked on full M003-M005 closure.
