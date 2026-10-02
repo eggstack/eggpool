@@ -38,6 +38,21 @@ retains the historical `metric` parameter while ranking by request count. It
 does not expose request bodies or credentials. Operational
 diagnostics such as `/api/stats/runtime` remain separately authenticated.
 
+Runtime and Cache pages share bounded owner projections with these five
+dashboard-gated compatibility routes: `/api/stats/transcoding`,
+`/api/stats/cache-observability`,
+`/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`, and
+`/api/stats/request-shaping`. They read finalized request counters and
+segmentation/cache aggregates from `DashboardRepository`; process task,
+generation, reload, and metrics-write facts come from the process-owned
+`RuntimeDiagnosticsSnapshot`. Grouped request dimensions are capped at 100
+keys where grouped projections are available, and hash columns, opaque
+summaries, raw bodies, credentials, and cache keys are never read for these
+views. A provider cache-hit rate remains null
+because its eligible-input denominator is not persisted. Metrics not owned by
+the current runtime (such as outbound pool build/request counts) are rendered
+as not collected rather than as zero.
+
 The dashboard is observational: it does not alter routing, quota, health, or
 provider state. Authenticated operational endpoints return metadata-only
 responses, and rendering escapes operator/provider-controlled values. Runtime

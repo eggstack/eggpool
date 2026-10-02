@@ -1,6 +1,6 @@
-# Dashboard Corrective Pass 007 — Empty Startup Recovery Summary
+# Dashboard Corrective Pass 007 — Deterministic Recovery Summary Qualification
 
-Status: active
+Status: closing
 
 Repository baseline: `36e3a93f8ec45e9571abba579cb4c46112bc8659`
 
@@ -25,16 +25,17 @@ Primary class: invariant
 
 ## 1. Objective
 
-Make empty startup reconciliation produce the stable empty reliability projection expected by the frozen M001 oracle, while retaining durable audit events whenever startup actually repairs interrupted work.
+Make the M004 reliability comparison deterministic across Python cache warm-up and second-precision time-window boundaries by synchronizing qualification on a persisted startup recovery event that is strictly before the query window's upper bound.
 
 ## 2. Why this corrective pass is ready
 
-The M004 closure records one medium strict-DOM variance: zero-count `crash_recovery` events race the Python dashboard's cached empty operational summary. The failure is reproducible from the event ownership decision and can be corrected without changing request recovery behavior.
+The M004 closure records one medium strict-DOM variance: the Python summary query returns every event type, including zero-count `crash_recovery`, while the Rust query filters zero-count groups. Both services also use a second-precision exclusive upper bound; an event inserted in the current second can appear in the unbounded recent-events panel but be absent from the summary. Qualification therefore waits until both recovery rows are durable and strictly earlier than the current query-window upper bound before requesting Reliability.
 
 ## 3. Current implementation evidence
 
 - `rust/src/runtime_lifecycle/recovery.rs` persists `crash_recovery` after every successful reconciliation, including when all repair counts are zero.
-- `rust/src/db/repositories.rs` aggregates positive repair counts for the reliability summary.
+- `rust/src/db/repositories.rs` filters zero-count summary groups, unlike the historical Python repository query.
+- `scripts/qualification_dashboard_parity.py` must wait for startup recovery rows from both databases to fall strictly inside the summary query window before the first dashboard page read.
 - `rust/tests/runtime_lifecycle_r008.rs` verifies event persistence when 501 requests are repaired.
 - `scripts/qualification_dashboard_parity.py` compares the full reliability DOM against the immutable M001 oracle.
 
@@ -42,7 +43,7 @@ The M004 closure records one medium strict-DOM variance: zero-count `crash_recov
 
 - Recovery repair passes and convergence behavior remain unchanged.
 - Real interrupted requests, released reservations, or terminalized attempts retain the bounded scalar audit event.
-- Empty reconciliation does not fabricate a crash-recovery occurrence.
+- A persisted recovery event, including zero-count startup recovery, remains visible in both summary and recent-event panels.
 - The strict DOM comparator and frozen oracle remain unchanged.
 - No request content, credentials, or account identifiers enter the audit event.
 
@@ -50,9 +51,9 @@ The M004 closure records one medium strict-DOM variance: zero-count `crash_recov
 
 ### In scope
 
-- Omit the event when all repair counts are zero.
-- Add an idle-start regression test and retain the existing non-empty recovery assertion.
-- Re-run strict reliability empty/populated qualification.
+- Restore event-row semantics in the summary query.
+- Add a bounded, observable startup barrier for both databases before the first dashboard request.
+- Re-run strict reliability empty/populated qualification repeatedly.
 - Add an additive closure follow-up and update dashboard registry/roadmap status.
 
 ### Explicitly out of scope
@@ -62,38 +63,37 @@ The M004 closure records one medium strict-DOM variance: zero-count `crash_recov
 
 ## 6. Required production changes
 
-In `runtime_lifecycle::recovery`, persist the event only if requests were interrupted, reservations released, or attempts terminalized. Continue to publish `StartupRecoveryReport` for a converged zero-change run. Add a synchronized test that runs recovery against an empty migrated database and verifies that the report converges while no `crash_recovery` row is written.
+Keep recovery-event ownership unchanged. Make the dashboard summary include every persisted event type, including zero-count recovery events, matching the Python repository query. In the qualification runner, poll both isolated databases for the startup `crash_recovery` row and require `occurred_at < datetime('now')` with a bounded timeout before issuing any page request, then request Reliability before Overview. This ensures each first summary read observes durable startup state inside its second-precision time window. A missing row or timeout fails qualification.
 
 ## 7. Ordered work packages
 
-### Work package A — Suppress zero-change recovery event
+### Work package A — Synchronize the first cached summary read
 
-Intent: align the operational-event meaning with actual recovery work.
+Intent: ensure Python and Rust compare the same completed startup state.
 
 Required changes:
 
-- Guard the existing event transaction on nonzero repair counts.
-- Keep the existing nonzero recovery event transaction and payload unchanged.
-- Add an empty-startup test.
+- Remove the positive-count `HAVING` filter from the Rust summary projection.
+- Add a SQLite-backed readiness barrier for each implementation's recovery event to precede the window upper bound, then request `/reliability` before other pages in `_run_pair`.
 
 Acceptance evidence:
 
-- Empty recovery converges and writes zero events.
-- Non-empty recovery still writes exactly one event with the current scalar payload.
-- Strict M001 empty and populated `/reliability` projections pass repeatedly.
+- Empty and populated runtimes retain their current scalar recovery event behavior.
+- Each first summary read occurs only after that implementation's startup event is durable and strictly precedes the window upper bound.
+- Strict M001 empty and populated `/reliability` projections pass on repeated runs.
 
 ## 8. Failure, restart, and contention semantics
 
-Recovery failures and pass-limit behavior remain unchanged. A crash after successful zero-change reconciliation has no event to lose because no repair occurred. A crash after real repair retains the existing post-repair audit insert semantics.
+Recovery failure and pass-limit behavior remain unchanged. The qualification barrier observes SQLite state with bounded polling and fails rather than continuing with an inconsistent oracle snapshot.
 
 ## 9. Compatibility and migration
 
-No migration or API shape change. `crash_recovery` becomes an event for actual repaired work rather than each process start.
+No migration or recovery event semantics change. Dashboard summaries include persisted zero-count recovery events, as the historical Python query does.
 
 ## 10. Required tests
 
-- `runtime_lifecycle_r008` empty and non-empty startup recovery cases.
-- M001 qualification runner with pinned oracle source, covering empty and populated reliability pages and public/private access.
+- Existing `runtime_lifecycle_r008` zero-count/nonzero recovery event assertions.
+- M001 qualification runner with pinned oracle source, covering empty and populated reliability pages and public/private access on two consecutive runs.
 
 ## 11. Required verification commands
 
@@ -111,13 +111,13 @@ git diff --check
 
 ## 13. Acceptance criteria
 
-- Zero-change process startup does not create a crash-recovery event.
-- Actual repair continues to create a durable bounded event.
+- Oracle summary caching begins after the persisted recovery event is observable.
+- Python and Rust summary/recent-event views agree.
 - Empty and populated reliability oracle cells pass without comparator changes.
 
 ## 14. Stop conditions
 
-Stop if stable parity would require oracle changes, if recovery semantics must change beyond audit-event creation, or if any privacy-restricted data is required.
+Stop if the oracle runtime produces no observable startup event, if parity requires changing the frozen oracle/comparator, or if any privacy-restricted data is required.
 
 ## 15. Closure evidence required
 

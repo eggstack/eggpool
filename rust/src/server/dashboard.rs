@@ -374,6 +374,62 @@ pub(super) async fn summary(
     json_response(StatusCode::OK, summary_json(&summary, period))
 }
 
+async fn observability_api(state: AppState, period: Option<String>, route: &str) -> Response {
+    let period = match normalize_period(period.as_deref()) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let stats = match db::DashboardRepository::new(&state.database)
+        .observability_stats(period)
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => return degraded("dashboard data unavailable"),
+    };
+    let key = match route {
+        "transcoding" => "transcoding",
+        "cache-observability" => "cache_observability",
+        "canonical-request-segmentation" => "canonical_request_segmentation",
+        "cache-stability" => "cache_stability",
+        _ => "request_shaping",
+    };
+    json_response(
+        StatusCode::OK,
+        stats.get(key).cloned().unwrap_or(Value::Null),
+    )
+}
+
+pub(super) async fn stats_transcoding(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    observability_api(state, query.period, "transcoding").await
+}
+pub(super) async fn stats_cache_observability(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    observability_api(state, query.period, "cache-observability").await
+}
+pub(super) async fn stats_request_segmentation(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    observability_api(state, query.period, "canonical-request-segmentation").await
+}
+pub(super) async fn stats_cache_stability(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    observability_api(state, query.period, "cache-stability").await
+}
+pub(super) async fn stats_request_shaping(
+    State(state): State<AppState>,
+    Query(query): Query<PeriodQuery>,
+) -> Response {
+    observability_api(state, query.period, "request-shaping").await
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct TimeseriesQuery {
     period: Option<String>,
@@ -1014,6 +1070,25 @@ async fn dashboard_data_page_with_options(
             return degraded("dashboard data unavailable");
         }
     };
+    let observability = if matches!(active_nav, "runtime" | "cache") {
+        match db::DashboardRepository::new(&state.database)
+            .observability_stats(period)
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => return degraded("dashboard data unavailable"),
+        }
+    } else {
+        Value::Null
+    };
+    let runtime_diagnostics = if active_nav == "runtime" {
+        state
+            .process
+            .as_ref()
+            .map(|process| process.diagnostics(&state.runtime))
+    } else {
+        None
+    };
     let model_info = if active_nav == "models" {
         crate::operations::operator::list_model_info(&state.database, None)
             .await
@@ -1130,6 +1205,8 @@ async fn dashboard_data_page_with_options(
         theme,
         &data,
         &summary,
+        &observability,
+        runtime_diagnostics.as_ref(),
         &model_info,
         show_disabled,
         &model_filters,
@@ -1205,6 +1282,8 @@ pub(super) fn render_dashboard_page_body(
     theme: &str,
     data: &db::DashboardData,
     summary: &db::DashboardSummary,
+    observability: &Value,
+    runtime_diagnostics: Option<&crate::runtime_lifecycle::RuntimeDiagnosticsSnapshot>,
     model_info: &[Value],
     show_disabled: bool,
     model_filters: &ModelFilters,
@@ -1269,8 +1348,13 @@ pub(super) fn render_dashboard_page_body(
             theme,
             model_filters.trace_limit.unwrap_or(50).clamp(10, 500),
         )),
-        "runtime" => body.push_str(&render_runtime_page(data, summary)),
-        "cache" => body.push_str(&render_cache_page(data)),
+        "runtime" => body.push_str(&render_runtime_page(
+            data,
+            summary,
+            observability,
+            runtime_diagnostics,
+        )),
+        "cache" => body.push_str(&render_cache_page(data, observability)),
         _ => body.push_str(&dashboard_empty(title, "No data available.")),
     }
     body
@@ -2521,7 +2605,7 @@ pub(super) fn render_events_page(
                     html_escape(&row.account_name),
                     sanitize_class_name(&row.event_type),
                     html_escape(&row.event_type),
-                    html_escape(&row.details.chars().take(200).collect::<String>()),
+                    html_escape(row.details.chars().take(200).collect::<String>()),
                 )
             })
             .collect::<String>();
@@ -2822,7 +2906,7 @@ pub(super) fn render_reliability_page(
     } else {
         let rows = data.recent_operational_events.iter().map(|row| format!(
             "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td></tr>",
-            html_escape(&row.occurred_at), html_escape(&row.event_type), html_escape(&row.details.chars().take(200).collect::<String>()))).collect::<String>();
+            html_escape(&row.occurred_at), html_escape(&row.event_type), html_escape(row.details.chars().take(200).collect::<String>()))).collect::<String>();
         format!(
             "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
@@ -2947,7 +3031,7 @@ pub(super) fn render_routing_page(
                 row.avg_selected_tier,
                 row.avg_selected_score,
                 row.avg_eligible_count,
-                html_escape(&row.last_selected_at.chars().take(19).collect::<String>()),
+                html_escape(row.last_selected_at.chars().take(19).collect::<String>()),
             )
         })
         .collect::<String>();
@@ -3055,28 +3139,197 @@ pub(super) fn render_traces_page(
 }
 
 pub(super) fn render_runtime_page(
-    _data: &db::DashboardData,
+    data: &db::DashboardData,
     summary: &db::DashboardSummary,
+    observability: &Value,
+    diagnostics: Option<&crate::runtime_lifecycle::RuntimeDiagnosticsSnapshot>,
 ) -> String {
+    let diag = diagnostics
+        .map(serde_json::to_value)
+        .and_then(Result::ok)
+        .unwrap_or(Value::Null);
+    let metric = |path: &[&str]| -> String {
+        path.iter()
+            .fold(&diag, |value, key| &value[*key])
+            .as_i64()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "—".to_owned())
+    };
+    let state = |path: &[&str]| -> String {
+        path.iter()
+            .fold(&diag, |value, key| &value[*key])
+            .as_str()
+            .map(html_escape)
+            .unwrap_or_else(|| "not collected".to_owned())
+    };
+    let tasks = diagnostics
+        .map(|snapshot| {
+            snapshot
+                .tasks
+                .iter()
+                .take(64)
+                .map(|task| {
+                    format!(
+                        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                        html_escape(&task.name),
+                        if task.running {
+                            "running"
+                        } else if task.enabled {
+                            "stopped"
+                        } else {
+                            "disabled"
+                        },
+                        task.tick_count,
+                        task.last_outcome
+                            .as_deref()
+                            .map(html_escape)
+                            .unwrap_or_else(|| "—".to_owned())
+                    )
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+    let transcoded = observability["transcoding"]["transcoded_count"]
+        .as_i64()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "—".to_owned());
     format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Outbound builds</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Outbound requests</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Provider clients</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Runtime snapshot</h3><p class=\"status\">{} dashboard records are available without exposing request content.</p><p class=\"empty\">No loss warnings recorded in this period.</p><p class=\"empty\">No health state data.</p></section>",
-        summary.total_providers, summary.total_requests,
+        "<section class=\"cards\"><div class=\"card\"><h3>Configured providers</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Active generation</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Retiring generations</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Pending requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Active reservations</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Outbound builds</h3><p class=\"metric\">not collected</p></div><div class=\"card\"><h3>Outbound requests</h3><p class=\"metric\">not collected</p></div><div class=\"card\"><h3>Total requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Native requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Transcoded requests</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Reload outcomes</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Reload failures</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Runtime snapshot</h3><p class=\"status\">Lifecycle phase: {}</p><p class=\"status\">Reload phase: {}</p><p class=\"status\">Metrics received/flushed/dropped: {}/{}/{}</p><p class=\"status\">{} dashboard records in the selected period.</p></section><section class=\"panel\"><h3>Background tasks</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Task</th><th>Status</th><th>Ticks</th><th>Last outcome</th></tr></thead><tbody>{}</tbody></table></div></section><p class=\"empty\">No loss warnings recorded in this period.</p><p class=\"empty\">Health state detail is not collected by this view.</p>",
+        summary.total_providers,
+        metric(&["active_generation", "generation_id"]),
+        diagnostics
+            .map(|d| d.retiring_generations.len().to_string())
+            .unwrap_or_else(|| "not collected".to_owned()),
+        data.pending_requests,
+        data.active_reservations,
+        summary.total_requests,
+        summary.total_requests.saturating_sub(
+            observability["transcoding"]["transcoded_count"]
+                .as_i64()
+                .unwrap_or(0)
+        ),
+        transcoded,
+        metric(&["counters", "reload_attempts"]),
+        metric(&["counters", "reload_failures"]),
+        state(&["shutdown", "phase"]),
+        state(&["reload", "phase"]),
+        metric(&["metrics", "total_received"]),
+        metric(&["metrics", "total_flushed"]),
+        metric(&["metrics", "total_dropped"]),
+        summary.total_requests,
+        tasks
     )
 }
 
-pub(super) fn render_cache_page(data: &db::DashboardData) -> String {
-    let empty = "";
-    let provider_cache_counters = if data.requests.is_empty() {
-        "—"
-    } else {
-        "0.0%"
+pub(super) fn render_cache_page(data: &db::DashboardData, stats: &Value) -> String {
+    let num = |path: &[&str]| {
+        path.iter()
+            .fold(stats, |v, k| &v[*k])
+            .as_i64()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "—".to_owned())
     };
+    let rate = stats["cache_observability"]["cache_counter_coverage_rate"]
+        .as_f64()
+        .map(|v| format!("{:.1}%", v * 100.0))
+        .unwrap_or_else(|| "not collected".to_owned());
+    let values = [
+        ("Request changes", "not collected".to_owned()),
+        ("Provider cache counter coverage", rate),
+        (
+            "Rows with cache reads",
+            data.cache.rows_with_read.to_string(),
+        ),
+        (
+            "Rows with cache writes",
+            data.cache.rows_with_write.to_string(),
+        ),
+        (
+            "Rows without cache counters",
+            num(&["cache_observability", "cache_counter_not_reported_requests"]),
+        ),
+        (
+            "Unknown counter format",
+            num(&["cache_observability", "cache_counter_unknown_requests"]),
+        ),
+        (
+            "Cache read tokens",
+            num(&["cache_observability", "cache_read_tokens_canonical"]),
+        ),
+        (
+            "Cache write tokens",
+            num(&["cache_observability", "cache_write_tokens_canonical"]),
+        ),
+        ("Provider cache hit rate", "not collected".to_owned()),
+        (
+            "Cache write/warmup rate",
+            stats["cache_observability"]["cache_write_rate"]
+                .as_f64()
+                .map(|v| format!("{:.1}%", v * 100.0))
+                .unwrap_or_else(|| "not collected".to_owned()),
+        ),
+        (
+            "Transcoded requests",
+            num(&["transcoding", "transcoded_count"]),
+        ),
+        (
+            "Segmented requests",
+            num(&["canonical_request_segmentation", "by_status", "segmented"]),
+        ),
+        (
+            "Not collected",
+            num(&[
+                "canonical_request_segmentation",
+                "by_status",
+                "not_collected",
+            ]),
+        ),
+        (
+            "Empty request",
+            num(&[
+                "canonical_request_segmentation",
+                "by_status",
+                "empty_request",
+            ]),
+        ),
+        (
+            "Parse failure",
+            num(&[
+                "canonical_request_segmentation",
+                "by_status",
+                "parse_failure",
+            ]),
+        ),
+        (
+            "Protected prefix requests",
+            num(&["canonical_request_segmentation", "protected_requests"]),
+        ),
+        (
+            "Compression observations",
+            num(&["compression_summary", "observed_requests"]),
+        ),
+        (
+            "Compression candidates",
+            num(&["compression_summary", "candidate_count"]),
+        ),
+        ("Request shaping mode", "reporting_only".to_owned()),
+        ("Cache metrics in routing", "no".to_owned()),
+        ("Compression metrics in routing", "no".to_owned()),
+        ("Stable-prefix hash", "not collected".to_owned()),
+        ("Compression policy", "not collected".to_owned()),
+    ];
+    let cards = values
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p></div>",
+                html_escape(name),
+                html_escape(value)
+            )
+        })
+        .collect::<String>();
     format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Request changes</h3><p class=\"metric\">no changes</p></div><div class=\"card\"><h3>Provider cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Safety guardrail</h3><p class=\"metric\">Clean</p></div><div class=\"card\"><h3>Routing isolation</h3><p class=\"metric\">Isolated</p></div><div class=\"card\"><h3>Rows with cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Rows without cache counters</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Unrecognized payload shape</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Provider cache hit rate</h3><p class=\"metric\">—</p></div><div class=\"card\"><h3>Cache write/warmup rate</h3><p class=\"metric\">—</p></div><div class=\"card\"><h3>Transcoded requests</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Segmented</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Not collected</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Empty request</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Parse failure</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>With protected prefix</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>With volatile suffix</h3><p class=\"metric\">0</p></div><div class=\"card\"><h3>Mode</h3><p class=\"metric\">reporting_only</p></div><div class=\"card\"><h3>Cache metrics</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Compression metrics</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Stable-prefix hash</h3><p class=\"metric\">no</p></div><div class=\"card\"><h3>Compression policy</h3><p class=\"metric\">no</p></div></section><section class=\"panel\"><h3>Cache observations</h3>{}<p class=\"status\">Counters are aggregated from persisted request metadata.</p></section>",
-        provider_cache_counters,
-        data.cache.rows_with_read + data.cache.rows_with_write,
-        data.requests.len() as i64 - data.cache.rows_with_read - data.cache.rows_with_write,
-        empty,
+        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Request shaping and cache observations</h3><p class=\"status\">Routing mode: reporting_only; cache metrics, compression metrics, stable-prefix hashes, and compression policy are not routing inputs.</p><p class=\"status\">Source: persisted scalar request observations. Cache keys and request content are not read.</p></section>"
     )
 }
 
@@ -4759,6 +5012,64 @@ mod tests {
             .expect("dashboard view-model queries succeed");
         assert!(data.latency_percentiles.is_empty());
         assert!(data.routing_selection.is_empty());
+        let stats = crate::db::DashboardRepository::new(&database)
+            .observability_stats("24h")
+            .await
+            .expect("empty cache and runtime stats project");
+        assert_eq!(
+            stats["transcoding"],
+            serde_json::json!({
+                "native_count": 0, "per_direction": {}, "top_loss_warnings": [],
+                "total": 0, "transcoded_count": 0
+            })
+        );
+        assert_eq!(stats["cache_stability"]["transcoded_request_count"], 0);
+        assert_eq!(
+            stats["cache_observability"]["cache_counter_coverage_rate"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            stats["cache_observability"]["provider_cache_hit_rate"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            stats["cache_observability"],
+            serde_json::json!({
+                "by_status":{"not_reported":0,"reported":0,"unknown_format":0},
+                "cache_benefited_request_rate":null,"cache_benefited_requests":0,
+                "cache_counter_coverage_rate":null,"cache_counter_not_reported_requests":0,
+                "cache_counter_reported_requests":0,"cache_counter_unknown_requests":0,
+                "cache_eligible_input_tokens":0,"cache_eligible_requests":0,
+                "cache_hit_ratio_known_only":null,"cache_read_tokens_canonical":0,
+                "cache_write_rate":null,"cache_write_tokens_canonical":0,
+                "inconsistent_cache_counter_rows":0,"input_tokens_total":0,"output_tokens_total":0,
+                "per_account_status":{},"per_model_status":{},"per_protocol_status":{},
+                "provider_cache_hit_rate":null,"requests_total":0,
+                "total_cache_creation_input_tokens":0,"total_cache_read_input_tokens":0,
+                "total_cache_write_input_tokens":0,"total_cached_input_tokens":0,
+                "total_requests":0,"transcoded_requests":0
+            })
+        );
+        assert_eq!(
+            stats["canonical_request_segmentation"]["by_status"],
+            serde_json::json!({
+                "segmented": 0, "not_collected": 0, "parse_failure": 0, "empty_request": 0
+            })
+        );
+        assert_eq!(stats["request_shaping"]["period"], "24h");
+        assert_eq!(
+            stats["request_shaping"],
+            serde_json::json!({
+                "cache":{"cache_counter_known_rows":0,"cache_counter_reported_rate":null,
+                    "cache_counter_reported_rows":0,"cache_read_tokens":0,"cache_write_tokens":0,
+                    "cached_input_tokens":0,"native_cache_observed_requests":0},
+                "guardrails":{"routing_uses_cache_metrics":false,"routing_uses_stable_prefix_hash":false},
+                "mode":{"routing":"reporting_only"},"period":"24h",
+                "segmentation":{"compressible_candidate_requests":0,"protected_requests":0,
+                    "requests_empty_request":0,"requests_not_collected":0,"requests_parse_failure":0,
+                    "requests_segmented":0}
+            })
+        );
         database.close().await.expect("database closes");
     }
 

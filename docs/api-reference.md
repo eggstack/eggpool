@@ -66,12 +66,17 @@ metric label, or forwarded upstream. See [Model routing](model-routing.md).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/api/stats/summary` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Aggregate request stats (counts, tokens, cost, latency) |
+| `GET` | `/api/stats/transcoding` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Native/transcoded request counts and bounded loss-warning summary |
+| `GET` | `/api/stats/cache-observability` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Cache-counter coverage and known-only token ratios |
+| `GET` | `/api/stats/canonical-request-segmentation` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Segmentation status and scalar token/byte totals |
+| `GET` | `/api/stats/cache-stability` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Persisted transcoded request count; in-memory boundary detail is unavailable |
+| `GET` | `/api/stats/request-shaping` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Cache coverage, segmentation counts, and reporting-only routing guardrails |
 | `GET` | `/api/timeseries` | Dashboard-gated (`?period=1h\|24h\|7d\|30d`) | Bounded request/usage buckets for the dashboard chart |
 | `GET` | `/api/timeseries/grouped` | Dashboard-gated (`period`, `group_by=provider_model\|provider\|model\|account`, bounded `limit`; `metric` retained for compatibility) | Grouped request-count chart series and bucket totals |
 | `GET` | `/api/stats/runtime` | Always key | Runtime metrics, routing guardrails, background task summaries, stream diagnostics, and `finalization_supervisor` snapshot |
 | `GET` | `/api/stats/update` | Always key | Release update-check status |
 
-There are no other JSON backoff/model-info/network/event endpoints:
+Other backoff/model-info/network/event projections remain HTML-only:
 account backoffs, model-info detail, per-model/account roll-ups, latency and
 bandwidth breakdowns, and event views are rendered server-side into the
 dashboard HTML pages below, not served as JSON. `eggpool accounts status`,
@@ -83,8 +88,9 @@ CLI without HTTP.
 When `[dashboard].enabled = true`, a multi-page dashboard is served at `/`
 (overview, accounts, models, latency, events, timeseries, bandwidth, pings,
 reliability, routing, traces, runtime, cache). Pages render server-side HTML;
-the chart APIs are `/api/stats/summary`, `/api/timeseries`, and
-`/api/timeseries/grouped`. The dashboard is public
+chart APIs are `/api/stats/summary`, `/api/timeseries`, and
+`/api/timeseries/grouped`. Runtime/cache statistics are also available from
+the five dashboard-gated `/api/stats/{transcoding,cache-observability,canonical-request-segmentation,cache-stability,request-shaping}` routes. Ratios are null when their denominator is not measured; provider cache-hit rate remains unavailable because eligible-input denominators are not persisted. The dashboard is public
 and read-only by default (`[dashboard].public = true`): browsers render pages
 without an API key. Set `public = false` (or `eggpool dashboard public --off`)
 to require the key there too.

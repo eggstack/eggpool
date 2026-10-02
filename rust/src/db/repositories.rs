@@ -479,6 +479,60 @@ fn dashboard_sql(sql: &str) -> String {
     })
 }
 
+fn cache_status_breakdown(
+    connection: &mut tokio_rusqlite::rusqlite::Connection,
+    period: &str,
+    dimension: &str,
+) -> Result<Value, tokio_rusqlite::rusqlite::Error> {
+    let sql = format!(
+        "SELECT {dimension}, COALESCE(cache_counter_status,'not_reported'), COUNT(*), \
+         COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN COALESCE(cached_input_tokens,0) ELSE 0 END),0) \
+         FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') \
+         WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') \
+         ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending' \
+         GROUP BY {dimension}, cache_counter_status ORDER BY COUNT(*) DESC, {dimension} LIMIT 100"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let mut output = serde_json::Map::new();
+    for row in statement.query_map([period], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?
+                .unwrap_or_else(|| "unknown".to_owned()),
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })? {
+        let (key, raw_status, count, cached) = row?;
+        let status = match raw_status.as_str() {
+            "reported" | "not_reported" | "unknown_format" => raw_status,
+            _ => "unknown_format".to_owned(),
+        };
+        let key = key.chars().take(160).collect::<String>();
+        let entry = output.entry(key).or_insert_with(|| {
+            serde_json::json!({
+                "reported": 0, "not_reported": 0, "unknown_format": 0,
+                "total_requests": 0, "total_cached_input_tokens": 0
+            })
+        });
+        entry[&status] =
+            serde_json::json!(entry[&status].as_i64().unwrap_or(0).saturating_add(count));
+        entry["total_requests"] = serde_json::json!(
+            entry["total_requests"]
+                .as_i64()
+                .unwrap_or(0)
+                .saturating_add(count)
+        );
+        entry["total_cached_input_tokens"] = serde_json::json!(
+            entry["total_cached_input_tokens"]
+                .as_i64()
+                .unwrap_or(0)
+                .saturating_add(cached)
+        );
+    }
+    Ok(Value::Object(output))
+}
+
 impl DashboardRepository {
     pub fn new(database: &Database) -> Self {
         Self {
@@ -669,6 +723,52 @@ impl DashboardRepository {
                     .map(|rows| (rows, false))
             })
             .await
+    }
+
+    /// Bounded compatibility projections for the historical runtime/cache
+    /// stats endpoints. Raw request content and hashes are never selected.
+    pub async fn observability_stats(&self, period: &str) -> Result<Value, DatabaseError> {
+        let period = period.to_owned();
+        self.database.call(move |connection| {
+            let sql = "SELECT COUNT(*), COALESCE(SUM(transcoded),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_read_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN cache_write_tokens ELSE 0 END),0), COALESCE(SUM(CASE WHEN cache_counter_status='reported' THEN COALESCE(cached_input_tokens,0) ELSE 0 END),0), COALESCE(SUM(cache_counter_status='reported'),0), COALESCE(SUM(cache_counter_status='not_reported' OR cache_counter_status IS NULL),0), COALESCE(SUM(CASE WHEN cache_counter_status='unknown_format' OR (cache_counter_status IS NOT NULL AND cache_counter_status NOT IN ('reported','not_reported','unknown_format')) THEN 1 ELSE 0 END),0), COALESCE(SUM(segmentation_status='segmented'),0), COALESCE(SUM(segmentation_status='not_collected'),0), COALESCE(SUM(segmentation_status='parse_failure'),0), COALESCE(SUM(segmentation_status='empty_request'),0), COALESCE(SUM(CASE WHEN stable_prefix_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(COALESCE(stable_prefix_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(semi_stable_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(volatile_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(stable_prefix_bytes,0)),0), COALESCE(SUM(COALESCE(semi_stable_bytes,0)),0), COALESCE(SUM(COALESCE(volatile_bytes,0)),0), COALESCE(SUM(compression_status='observed'),0), COALESCE(SUM(compression_candidate_count),0), COALESCE(SUM(compression_eligible_candidate_count),0), COALESCE(SUM(compression_suppressed_candidate_count),0), COALESCE(SUM(CASE WHEN volatile_bytes>0 THEN 1 ELSE 0 END),0), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_counter_status='reported' AND transcoded=0),0), COALESCE(SUM(cache_read_tokens>0),0) FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending'";
+            let values = connection.query_row(sql, [&period], |row| (0..28).map(|index| row.get::<_, i64>(index)).collect::<Result<Vec<_>, _>>())?;
+            let total=values[0]; let transcoded=values[1]; let read=values[2]; let write=values[3]; let cached=values[4];
+            let reported=values[5]; let not_reported=values[6]; let unknown=values[7];
+            let known=reported+not_reported+unknown;
+            let ratio=|numerator:i64, denominator:i64| if denominator==0 { Value::Null } else { serde_json::json!(numerator as f64/denominator as f64) };
+            let per_account_status = cache_status_breakdown(connection, &period, "CAST(account_id AS TEXT)")?;
+            let per_model_cache_status = cache_status_breakdown(connection, &period, "model_id")?;
+            let per_protocol_status = cache_status_breakdown(connection, &period, "COALESCE(provider_id,'unknown') || '->' || COALESCE(upstream_protocol,'unknown')")?;
+            let cache=serde_json::json!({"by_status":{"not_reported":not_reported,"reported":reported,"unknown_format":unknown},"cache_benefited_request_rate":ratio(values[27],total),"cache_benefited_requests":values[27],"cache_counter_coverage_rate":ratio(reported,total),"cache_counter_not_reported_requests":not_reported,"cache_counter_reported_requests":reported,"cache_counter_unknown_requests":unknown,"cache_eligible_input_tokens":read+write+cached,"cache_eligible_requests":reported,"cache_hit_ratio_known_only":ratio(read,read+write),"cache_read_tokens_canonical":read,"cache_write_rate":ratio(write,read+write),"cache_write_tokens_canonical":write,"inconsistent_cache_counter_rows":0,"input_tokens_total":values[24],"output_tokens_total":values[25],"per_account_status":per_account_status,"per_model_status":per_model_cache_status,"per_protocol_status":per_protocol_status,"provider_cache_hit_rate":Value::Null,"requests_total":total,"total_cache_creation_input_tokens":write,"total_cache_read_input_tokens":read,"total_cache_write_input_tokens":write,"total_cached_input_tokens":cached,"total_requests":total,"transcoded_requests":transcoded});
+            let segmentation_statuses = ["segmented", "not_collected", "empty_request", "parse_failure"];
+            let empty_segmentation = || serde_json::json!({"segmented":0,"not_collected":0,"empty_request":0,"parse_failure":0});
+            let mut per_model = serde_json::Map::new();
+            let mut model_query = connection.prepare("SELECT model_id, COALESCE(segmentation_status,'empty_request'), COUNT(*), COALESCE(SUM(COALESCE(stable_prefix_estimated_tokens,0)),0), COALESCE(SUM(COALESCE(volatile_estimated_tokens,0)),0) FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending' GROUP BY model_id, segmentation_status ORDER BY COUNT(*) DESC, model_id LIMIT 100")?;
+            for row in model_query.query_map([&period], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)?,row.get::<_,i64>(3)?,row.get::<_,i64>(4)?)))? {
+                let (model,status,count,stable,volatile)=row?;
+                let status=if segmentation_statuses.contains(&status.as_str()) {status} else {"parse_failure".to_owned()};
+                let entry=per_model.entry(model.chars().take(128).collect::<String>()).or_insert_with(||serde_json::json!({"segmented":0,"not_collected":0,"empty_request":0,"parse_failure":0,"total_requests":0,"stable_prefix_estimated_tokens":0,"volatile_estimated_tokens":0}));
+                entry[status]=serde_json::json!(entry[&status].as_i64().unwrap_or(0).saturating_add(count));
+                entry["total_requests"]=serde_json::json!(entry["total_requests"].as_i64().unwrap_or(0).saturating_add(count));
+                entry["stable_prefix_estimated_tokens"]=serde_json::json!(entry["stable_prefix_estimated_tokens"].as_i64().unwrap_or(0).saturating_add(stable));
+                entry["volatile_estimated_tokens"]=serde_json::json!(entry["volatile_estimated_tokens"].as_i64().unwrap_or(0).saturating_add(volatile));
+            }
+            drop(model_query);
+            let mut per_provider = serde_json::Map::new();
+            let mut provider_query = connection.prepare("SELECT COALESCE(provider_id,'unknown'), COALESCE(upstream_protocol,'unknown'), COALESCE(segmentation_status,'empty_request'), COUNT(*) FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now','-1 hour') WHEN '7d' THEN datetime('now','-7 days') WHEN '30d' THEN datetime('now','-30 days') ELSE datetime('now','-24 hours') END AND started_at < datetime('now') AND status!='pending' GROUP BY provider_id, upstream_protocol, segmentation_status ORDER BY COUNT(*) DESC, provider_id, upstream_protocol LIMIT 100")?;
+            for row in provider_query.query_map([&period], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,i64>(3)?)))? {
+                let (provider,protocol,status,count)=row?;
+                let status=if segmentation_statuses.contains(&status.as_str()) {status} else {"parse_failure".to_owned()};
+                let key=format!("{}->{}",provider.chars().take(128).collect::<String>(),protocol.chars().take(32).collect::<String>());
+                let entry=per_provider.entry(key).or_insert_with(empty_segmentation);
+                entry[status]=serde_json::json!(entry[&status].as_i64().unwrap_or(0).saturating_add(count));
+            }
+            let segmentation=serde_json::json!({"total_requests":total,"by_status":{"segmented":values[8],"not_collected":values[9],"parse_failure":values[10],"empty_request":values[11]},"compressible_candidate_requests":values[23],"protected_requests":values[12],"byte_totals":{"all":values[16]+values[17]+values[18],"semi_stable":values[17],"stable_prefix":values[16],"volatile":values[18]},"token_totals":{"all":values[13]+values[14]+values[15],"semi_stable":values[14],"stable_prefix":values[13],"volatile":values[15]},"per_model_status":per_model,"per_provider_status":per_provider});
+            let transcoding=serde_json::json!({"native_count":total.saturating_sub(transcoded),"per_direction":{},"top_loss_warnings":[],"total":total,"transcoded_count":transcoded});
+            let stability=serde_json::json!({"notes":"Cache-stability tracking is per-request and in-memory on TranscodeContext.cache_boundary_tracker; durable summary counts are reported-only.","transcoded_request_count":transcoded});
+            let shaping=serde_json::json!({"cache":{"cache_counter_known_rows":known,"cache_counter_reported_rate":ratio(reported,total),"cache_counter_reported_rows":reported,"cache_read_tokens":read,"cache_write_tokens":write,"cached_input_tokens":cached,"native_cache_observed_requests":values[26]},"guardrails":{"routing_uses_cache_metrics":false,"routing_uses_stable_prefix_hash":false},"mode":{"routing":"reporting_only"},"period":period,"segmentation":{"compressible_candidate_requests":values[23],"protected_requests":values[12],"requests_empty_request":values[11],"requests_not_collected":values[9],"requests_parse_failure":values[10],"requests_segmented":values[8]}});
+            Ok(serde_json::json!({"transcoding":transcoding,"cache_observability":cache,"canonical_request_segmentation":segmentation,"cache_stability":stability,"request_shaping":shaping,"compression_summary":{"observed_requests":values[19],"candidate_count":values[20],"eligible_candidate_count":values[21],"suppressed_candidate_count":values[22]}}))
+        }).await
     }
 
     pub async fn load(&self, period: &str) -> Result<DashboardData, DatabaseError> {
@@ -908,10 +1008,7 @@ impl DashboardRepository {
                      FROM operational_events WHERE occurred_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
                        WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
                        ELSE datetime('now', '-24 hours') END\
-                     GROUP BY event_type HAVING SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.interrupted_requests') AS INTEGER), 0))\
-                       + SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.released_reservations') AS INTEGER), 0))\
-                       + SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.leaked_requests') AS INTEGER), 0)) > 0\
-                     ORDER BY COUNT(*) DESC, event_type LIMIT 25",
+                     GROUP BY event_type ORDER BY COUNT(*) DESC LIMIT 25",
                 ))?;
                 let operational_summary = operational_summary
                     .query_map([&period], |row| {

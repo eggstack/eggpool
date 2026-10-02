@@ -1015,6 +1015,36 @@ def _wait_for_tcp(port: int, process: subprocess.Popen[bytes], name: str) -> Non
     raise QualificationError(f"{name} on port {port} did not start: {diagnostic}")
 
 
+def _wait_for_operational_event(
+    database_path: Path, process: subprocess.Popen[bytes], event_type: str, name: str
+) -> None:
+    """Wait until startup recovery is in the completed one-second query window."""
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        if database_path.exists():
+            try:
+                with sqlite3.connect(database_path, timeout=0.2) as connection:
+                    row = connection.execute(
+                        "SELECT 1 FROM operational_events WHERE event_type=? "
+                        "AND occurred_at < datetime('now') LIMIT 1",
+                        (event_type,),
+                    ).fetchone()
+                if row is not None:
+                    return
+            except sqlite3.Error:
+                # Startup may still be applying migrations or opening SQLite.
+                pass
+        time.sleep(0.05)
+    diagnostic = ""
+    if process.poll() is not None and process.stderr is not None:
+        diagnostic = process.stderr.read().decode("utf-8", errors="replace")[-500:]
+    raise QualificationError(
+        f"{name} did not persist {event_type!r} before dashboard reads: {diagnostic}"
+    )
+
+
 def _write_config(
     root: Path,
     port: int,
@@ -1192,7 +1222,11 @@ def screenshot_metadata() -> dict[str, Any]:
     """Retain the historical Q004 metadata helper for its old unit tests."""
     entries: list[dict[str, Any]] = []
     for implementation in ("python", "rust"):
-        for route, _label in PAGE_ROUTES:
+        # Reliability owns a Python summary cache whose first fill must happen
+        # after the persisted startup recovery event. Exercise it before
+        # Overview can populate that cache during this process run.
+        route_order = sorted(PAGE_ROUTES, key=lambda item: item[0] != "/reliability")
+        for route, _label in route_order:
             page_name = (
                 "overview" if route == "/" else route.strip("/").replace("/", "-")
             )
@@ -1889,7 +1923,20 @@ def _run_pair(
     try:
         _wait_for_tcp(python_port, python, f"{state_name} Python dashboard")
         _wait_for_tcp(rust_port, rust, f"{state_name} Rust dashboard")
-        for route, _label in PAGE_ROUTES:
+        _wait_for_operational_event(
+            python_root / "dashboard.sqlite3",
+            python,
+            "crash_recovery",
+            f"{state_name} Python dashboard",
+        )
+        _wait_for_operational_event(
+            rust_root / "dashboard.sqlite3",
+            rust,
+            "crash_recovery",
+            f"{state_name} Rust dashboard",
+        )
+        route_order = sorted(PAGE_ROUTES, key=lambda item: item[0] != "/reliability")
+        for route, _label in route_order:
             query = "?period=24h&theme=Cyber%20Red"
             python_result = _fetch(f"http://127.0.0.1:{python_port}{route}{query}")
             rust_result = _fetch(f"http://127.0.0.1:{rust_port}{route}{query}")

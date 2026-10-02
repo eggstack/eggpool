@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 
 import pytest
 
@@ -13,6 +14,7 @@ from scripts.qualification_dashboard_parity import (
     PAGE_ROUTES,
     HttpResult,
     _route_filename,
+    _wait_for_operational_event,
     build_oracle_manifest,
     compare_api_response,
     compare_dom_projection,
@@ -20,6 +22,30 @@ from scripts.qualification_dashboard_parity import (
     compare_shared_shell_projection,
     project_html,
 )
+
+
+def test_oracle_operational_cache_barrier_requires_persisted_startup_event(tmp_path):
+    database = tmp_path / "dashboard.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE operational_events "
+            "(event_type TEXT NOT NULL, occurred_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO operational_events "
+            "VALUES ('crash_recovery', '2000-01-01 00:00:00')"
+        )
+
+    class RunningProcess:
+        stderr = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    _wait_for_operational_event(
+        database, RunningProcess(), "crash_recovery", "oracle fixture"
+    )
 
 
 @pytest.mark.parametrize(
