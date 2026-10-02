@@ -1,113 +1,189 @@
 {
-  "candidate_sha": "454b60c008cc6234d9c3db3b637402cfe8d2f1d8",
+  "candidate_sha": "3510590e",
   "dom_comparisons": [
     {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
       "mismatches": [
-        "complete DOM tree differs for / at $/#document[0]/html[0]/head[6] (attributes)"
+        "complete DOM tree differs for / at $/#document[0]/html[1]/body[2]/main[4]/section[1]/div[1]/p[0] (text lengths 3/1)"
       ],
       "route": "/",
       "state": "empty",
       "status": "mismatch"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /accounts at $/#document[0]/html[0] (child count)"
-      ],
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/accounts",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /models at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/models",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /models/example-model at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/models",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/models/example-model",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /latency at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/latency",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /events at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/latency",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/events",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /timeseries at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
+      "mismatches": [],
+      "route": "/events",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/timeseries",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /bandwidth at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/bandwidth",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /pings at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/pings",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /reliability at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
-      "route": "/reliability",
+      "mismatches": [],
+      "route": "/pings",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /routing at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/routing",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /traces at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/routing",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/traces",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
+    },
+    {
+      "mismatches": [],
+      "route": "/traces",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "empty",
+      "status": "pass"
     },
     {
       "mismatches": [
-        "complete DOM tree differs for /runtime at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[2]/section[0]/div[2]/p[0] (text lengths 39/24)"
       ],
       "route": "/runtime",
       "state": "empty",
       "status": "mismatch"
     },
     {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "empty",
+      "status": "pass"
+    },
+    {
       "mismatches": [
-        "complete DOM tree differs for /cache at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[2]/main[3]/div[0]/section[2]/section[0]/div[1]/p[0] (text lengths 10/13)"
       ],
       "route": "/cache",
       "state": "empty",
@@ -115,21 +191,17 @@
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/timeseries: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/timeseries/grouped: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries/grouped",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
@@ -140,156 +212,226 @@
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/transcoding: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/transcoding",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/cache-observability: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/cache-observability",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/canonical-request-segmentation: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/canonical-request-segmentation",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/cache-stability: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/cache-stability",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/request-shaping: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/request-shaping",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "mismatches": [],
+      "route": "/reliability",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/",
+      "state": "populated",
+      "status": "pass"
     },
     {
       "mismatches": [
-        "complete DOM tree differs for / at $/#document[0]/html[0]/head[6] (attributes)"
+        "complete DOM tree differs for / at $/#document[0]/html[1]/body[2]/main[4]/section[1]/div[1]/p[0] (text lengths 3/1)"
       ],
       "route": "/",
       "state": "populated",
       "status": "mismatch"
     },
     {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/accounts",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
       "mismatches": [
-        "complete DOM tree differs for /accounts at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /accounts at $/#document[0]/html[1]/body[2]/main[2]/section[0]/div[0]/table[1]/tbody[0]/tr[20] (attributes: class)"
       ],
       "route": "/accounts",
       "state": "populated",
       "status": "mismatch"
     },
     {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/models",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
       "mismatches": [
-        "complete DOM tree differs for /models at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /models at $/#document[0]/html[1]/body[2]/main[4]/section[0]/div[0]/table[1]/tbody[1]/tr[2]/td[0] (attributes: aria-label, class, data-tooltip)"
       ],
       "route": "/models",
       "state": "populated",
       "status": "mismatch"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /models/example-model at $/#document[0]/html[0] (child count)"
-      ],
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/models/example-model",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /latency at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/models/example-model",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/latency",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /events at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/latency",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/events",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /timeseries at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
+      "mismatches": [],
+      "route": "/events",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/timeseries",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /bandwidth at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/timeseries",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/bandwidth",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /pings at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/bandwidth",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/pings",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /reliability at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
-      "route": "/reliability",
+      "mismatches": [],
+      "route": "/pings",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /routing at $/#document[0]/html[1]/body[0]/svg[0] (attributes)"
-      ],
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/routing",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /traces at $/#document[0]/html[0] (child count)"
-      ],
+      "mismatches": [],
+      "route": "/routing",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
       "route": "/traces",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
+    },
+    {
+      "mismatches": [],
+      "route": "/traces",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/runtime",
+      "state": "populated",
+      "status": "pass"
     },
     {
       "mismatches": [
-        "complete DOM tree differs for /runtime at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[2]/section[0]/div[2]/p[0] (text lengths 39/24)"
       ],
       "route": "/runtime",
       "state": "populated",
       "status": "mismatch"
     },
     {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/cache",
+      "state": "populated",
+      "status": "pass"
+    },
+    {
       "mismatches": [
-        "complete DOM tree differs for /cache at $/#document[0]/html[0] (child count)"
+        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[2]/main[3]/div[0]/section[2]/section[0]/div[1]/p[0] (text lengths 10/13)"
       ],
       "route": "/cache",
       "state": "populated",
@@ -297,44 +439,36 @@
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/timeseries: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/timeseries/grouped: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries/grouped",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard JSON projection differs for /api/stats/summary"
-      ],
+      "mismatches": [],
       "route": "/api/stats/summary",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/transcoding: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/transcoding",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
       "mismatches": [
-        "dashboard API status differs for /api/stats/cache-observability: 500/404"
+        "dashboard API status differs for /api/stats/cache-observability: 500/200"
       ],
       "route": "/api/stats/cache-observability",
       "state": "populated",
@@ -342,30 +476,40 @@
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/canonical-request-segmentation: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/canonical-request-segmentation",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
-      "mismatches": [
-        "dashboard API status differs for /api/stats/cache-stability: 200/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/cache-stability",
       "state": "populated",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
       "mismatches": [
-        "dashboard API status differs for /api/stats/request-shaping: 200/404"
+        "dashboard JSON projection differs for /api/stats/request-shaping"
       ],
       "route": "/api/stats/request-shaping",
       "state": "populated",
       "status": "mismatch"
+    },
+    {
+      "kind": "shared-shell",
+      "mismatches": [],
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info",
+      "status": "pass"
+    },
+    {
+      "kind": "m003-model-info-detail",
+      "mismatches": [],
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info",
+      "status": "pass"
     },
     {
       "inventory": 54,
@@ -607,12 +751,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -625,12 +767,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/timeseries/grouped",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -659,12 +799,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/transcoding",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -677,12 +815,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/cache-observability",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -695,12 +831,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/canonical-request-segmentation",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -713,12 +847,10 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/cache-stability",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "implementation": "python",
@@ -731,15 +863,13 @@
     {
       "implementation": "rust",
       "kind": "auth",
-      "mismatches": [
-        "unauthorized/authorized 401/404"
-      ],
+      "mismatches": [],
       "route": "/api/stats/request-shaping",
       "state": "private",
-      "status": "mismatch"
+      "status": "pass"
     }
   ],
-  "duration_ms": 6240,
+  "duration_ms": 5968,
   "environment": {
     "browser": "isolated headless Chrome via Chrome DevTools Protocol",
     "os": "darwin",
@@ -768,6 +898,11 @@
       "state": "populated"
     },
     {
+      "database": "same secret-free fixture, model-info source work disabled",
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info"
+    },
+    {
       "classes": [
         "multiple providers",
         "multiple accounts",
@@ -787,12 +922,12 @@
       "state": "private"
     }
   ],
-  "mismatch_count": 50,
+  "mismatch_count": 10,
   "mismatch_groups": {
-    "overview-account-model": 8,
+    "overview-account-model": 4,
     "runtime-cache": 4,
-    "shared-shell-and-api": 22,
-    "telemetry-routing-trace": 16
+    "shared-shell-and-api": 2,
+    "telemetry-routing-trace": 0
   },
   "page_routes": [
     "/",
@@ -811,9 +946,9 @@
     "/cache"
   ],
   "parity_status": "gaps",
-  "plan": "Dashboard M001",
+  "plan": "Dashboard parity qualification",
   "python_identity": "python:eggpool:local",
-  "rust_identity": "rust:/private/tmp/eggpool-dashboard-oracle/rust/target/debug/eggpool",
+  "rust_identity": "rust:/Users/davidbowman/.codex/worktrees/9199/gorouter/rust/target/debug/eggpool",
   "schema_version": "dashboard-parity-current-gaps.v1",
   "screenshots": {
     "count": 0,
