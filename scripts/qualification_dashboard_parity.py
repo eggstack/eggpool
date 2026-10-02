@@ -1245,6 +1245,25 @@ def screenshot_plan(output_dir: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _chrome_command(chrome: Path, arguments: list[str]) -> list[str]:
+    """Launch universal Chrome natively on Apple Silicon, even from x64 Python."""
+    prefix: list[str] = []
+    if sys.platform == "darwin":
+        try:
+            arm64_host = subprocess.run(
+                ["sysctl", "-n", "hw.optional.arm64"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+            if arm64_host.returncode == 0 and arm64_host.stdout.strip() == "1":
+                prefix = ["arch", "-arm64"]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return [*prefix, str(chrome), *arguments]
+
+
 def _capture_browser_screenshot(
     url: str, artifact: Path, width: int, height: int
 ) -> None:
@@ -1298,17 +1317,19 @@ def _capture_browser_screenshot(
     profile = Path(tempfile.mkdtemp(prefix="eggpool-q012-chrome-"))
     try:
         result = subprocess.run(
-            [
-                str(chrome),
-                "--headless=new",
-                "--disable-gpu",
-                "--hide-scrollbars",
-                f"--window-size={width},{height}",
-                f"--screenshot={artifact}",
-                f"--user-data-dir={profile}",
-                "--virtual-time-budget=1000",
-                url,
-            ],
+            _chrome_command(
+                chrome,
+                [
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--hide-scrollbars",
+                    f"--window-size={width},{height}",
+                    f"--screenshot={artifact}",
+                    f"--user-data-dir={profile}",
+                    "--virtual-time-budget=1000",
+                    url,
+                ],
+            ),
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -1447,24 +1468,26 @@ class _HeadlessScreenshotSession:
         self.port = _port()
         self.profile = Path(tempfile.mkdtemp(prefix="eggpool-q012-cdp-"))
         self.process = subprocess.Popen(
-            [
-                str(chrome),
-                "--headless=new",
-                "--disable-gpu",
-                "--hide-scrollbars",
-                "--disable-background-networking",
-                "--disable-component-update",
-                "--disable-default-apps",
-                "--disable-sync",
-                "--disable-crash-reporter",
-                "--disable-breakpad",
-                "--no-first-run",
-                "--no-default-browser-check",
-                f"--remote-debugging-port={self.port}",
-                "--remote-debugging-address=127.0.0.1",
-                f"--user-data-dir={self.profile}",
-                "about:blank",
-            ],
+            _chrome_command(
+                chrome,
+                [
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--hide-scrollbars",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-default-apps",
+                    "--disable-sync",
+                    "--disable-crash-reporter",
+                    "--disable-breakpad",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    f"--remote-debugging-port={self.port}",
+                    "--remote-debugging-address=127.0.0.1",
+                    f"--user-data-dir={self.profile}",
+                    "about:blank",
+                ],
+            ),
             cwd=ROOT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
