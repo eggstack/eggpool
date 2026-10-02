@@ -205,15 +205,17 @@ coordinator to Eggress/Eggfetch internal error types.
   incremental DATA; M001 must preserve this interface.
 - Soft: wire/runtime tests verify that making provider trailers observable
   internally does not change downstream finite/SSE semantics.
-- Interface/blocker for future M002: a published, general-purpose Eggfetch
-  typed classification surface that replaces the remaining Hyper/Rustls
-  source-chain inspection without weakening error fidelity.
+- M002 interface dependency is satisfied: published Eggfetch 0.2.2 exposes
+  the general-purpose `TransportFailureKind` /
+  `Error::transport_failure_kind()` surface needed to replace remaining
+  provider-side Hyper/Rustls source-chain inspection without weakening the
+  stable EggPool `TransportError` boundary.
 - M003 hard dependencies: the closed Plan-243 Eggress outbound boundary and a published Eggress 1.0.10 family; both are satisfied and M003 is closed.
 - M003 coordination is resolved: M001 closed before the 1.0.10 requalification was accepted; no Eggress source adaptation was needed.
 - M003 interface dependencies: `eggfetch-core 0.2.0` custom `Dialer` contract and Eggress `OutboundConnector` typed detailed-connect surface.
 - M003 operational dependency: hosted CI/dependency-audit evidence is required for closure.
 - M004 hard dependencies: M001 and M003 closure, so diagnostics target the final qualified provider-body/error adapter and current Eggress baseline.
-- M004 does not depend on M002: it consumes EggPool's existing stable `TransportError` categories and does not replace Eggfetch source-chain classification.
+- M004 did not depend on M002: it closed against EggPool's stable `TransportError` categories while M002 was still blocked, and remains valid as M002 changes only the lower classification source.
 - M005 hard dependencies: M001, M003, and M004 are closed; `eggfetch-core 0.2.1`, `eggfetch-http-connect 0.2.1`, and the Eggress 1.0.11 family are published.
 - M005 was independent of M002 and closed on Eggfetch 0.2.1. Eggfetch 0.2.2 later published the required `TransportFailureKind` / `Error::transport_failure_kind()` surface, so M002 is now dependency-ready without changing Eggress 1.0.11.
 - M005 interface dependency: the existing `eggfetch-core` native HTTP/1/custom-`Dialer` contract plus Eggress `OutboundConnector::connect_tcp_detailed` typed route surface must remain semantically compatible.
@@ -263,7 +265,7 @@ Exit conditions:
 
 Deferred work:
 
-- replacing remaining Hyper/Rustls source-chain inspection requires M002.
+- replacing remaining Hyper/Rustls source-chain inspection is owned by M002.
 
 ### Milestone 002 — Adopt stable Eggfetch transport error taxonomy
 
@@ -371,7 +373,7 @@ changing coordinator retry/health policy.
 Dependencies:
 
 - Hard: M001 and M003 closed.
-- Independent of blocked M002; consumes `TransportError` rather than Eggfetch internals.
+- Historical dependency note: M004 was independent of M002 and consumes `TransportError` rather than Eggfetch internals; M002 is now ready and does not reopen M004.
 
 Deliverable boundary:
 
@@ -415,7 +417,7 @@ Dependencies:
 
 - Hard: M001, M003, and M004 closed.
 - Published registry artifacts for Eggfetch 0.2.1 and Eggress 1.0.11.
-- Independent of blocked M002; no new typed taxonomy is claimed by Eggfetch 0.2.1.
+- Historical dependency note: M005 was independent of then-blocked M002 and Eggfetch 0.2.1 added no typed taxonomy; Eggfetch 0.2.2 later satisfied M002's interface dependency.
 
 Deliverable boundary:
 
@@ -450,8 +452,8 @@ Exit conditions:
 
 Deferred work:
 
-- M002 typed Eggfetch taxonomy adoption remains blocked on a distinct upstream
-  API and is not satisfied by this version refresh;
+- M002 typed Eggfetch taxonomy adoption was not satisfied by M005's 0.2.1
+  refresh; it is now separately ready against published Eggfetch 0.2.2;
 - any future EggServe release requires its own server-transport qualification.
 
 ## 8. Cross-cutting requirements
@@ -502,7 +504,7 @@ Run the focused provider suite in default and `test-support` modes, then the
 coordinator boundary/finalization/publication/wire-runtime targets, the
 no-default surface, Cargo policy checks, and the serial workspace suite.
 
-M002, when unblocked, must additionally compare the old and new error mapping
+M002 must compare the old and new error mapping
 against synthetic typed Eggfetch errors and representative real-socket
 failures.
 
@@ -534,8 +536,8 @@ sufficient closure evidence.
   before implementation and choose an explicit discard contract instead.
 - If residual `Pool` errors can represent a legitimate runtime condition not
   identified by `is_physical_connection_admission_timeout()`, do not guess;
-  preserve behavior and move that classification into the upstream M002
-  prerequisite.
+  preserve the existing EggPool category. M002 must stop rather than stretch
+  `TransportFailureKind` beyond the upstream contract.
 - If trailer forwarding to downstream clients becomes a product requirement,
   that is a separate protocol/wire milestone and may cross the ADR threshold.
 - Eggress 1.0.10 changes pooled SSH/H2 and TLS-policy internals. M003 must qualify the EggPool account/client boundary rather than infer safety from compilation alone.
