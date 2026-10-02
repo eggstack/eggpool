@@ -52,6 +52,21 @@ async fn startup_recovery_converges_multiple_bounded_passes_without_provider_wor
     assert_eq!(report.requests_interrupted, 501);
     assert!(report.converged);
     assert_eq!(process.startup_recovery_report(), Some(report.clone()));
+    let recovery_events = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*), MAX(details_json) FROM operational_events WHERE event_type = 'crash_recovery'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+        })
+        .await
+        .expect("startup recovery audit event is queryable");
+    assert_eq!(recovery_events.0, 1);
+    assert_eq!(
+        recovery_events.1,
+        r#"{"interrupted_requests":501,"released_reservations":0,"affected_accounts":1}"#
+    );
 
     let second = eggpool::coordinator::CrashReconciler::new(database.clone())
         .reconcile_once()

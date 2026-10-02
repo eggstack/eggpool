@@ -80,6 +80,19 @@ def test_complete_dom_projection_ignores_attribute_order() -> None:
     compare_dom_projection(expected, actual, "/fixture")
 
 
+def test_complete_dom_projection_normalizes_documented_local_timestamps() -> None:
+    expected = project_html("<main><time>2026-10-02 03:40:15</time></main>")
+    actual = project_html("<main><time>2026-10-02 03:41:09</time></main>")
+    compare_dom_projection(expected, actual, "/fixture")
+
+    with pytest.raises(AssertionError, match="complete DOM tree differs"):
+        compare_dom_projection(
+            project_html("<main><time>2026-10-02 03:40</time></main>"),
+            actual,
+            "/fixture",
+        )
+
+
 def test_shared_shell_projection_ignores_page_body_and_rejects_shell_drift() -> None:
     expected = project_html(
         "<html><body><header class='topbar'><a href='/'>EggPool</a></header>"

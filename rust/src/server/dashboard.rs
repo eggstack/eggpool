@@ -71,6 +71,9 @@ pub(super) struct PeriodQuery {
     used: Option<String>,
     info_status: Option<String>,
     availability: Option<String>,
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +82,35 @@ pub(super) struct ModelFilters {
     used: Option<String>,
     info_status: Option<String>,
     availability: Option<String>,
+    event_type: Option<String>,
+    trace_limit: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RoutingTraceSnapshot {
+    mode: String,
+    sample_rate: f64,
+    status: String,
+    accepted: u64,
+    written: u64,
+    dropped: u64,
+    queue_depth: u64,
+    queue_capacity: u64,
+}
+
+impl Default for RoutingTraceSnapshot {
+    fn default() -> Self {
+        Self {
+            mode: "off".to_owned(),
+            sample_rate: 0.0,
+            status: "Off".to_owned(),
+            accepted: 0,
+            written: 0,
+            dropped: 0,
+            queue_depth: 0,
+            queue_capacity: 0,
+        }
+    }
 }
 
 /// Start the development server using the configured address and database.
@@ -170,6 +202,7 @@ pub(super) async fn models_page(
             used: query.used,
             info_status: query.info_status,
             availability: query.availability,
+            ..ModelFilters::default()
         },
     )
     .await
@@ -226,7 +259,19 @@ pub(super) async fn events_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_data_page(&state, "Events", "events", query.period, query.theme).await
+    dashboard_data_page_with_options(
+        &state,
+        "Events",
+        "events",
+        query.period,
+        query.theme,
+        false,
+        ModelFilters {
+            event_type: query.event_type,
+            ..ModelFilters::default()
+        },
+    )
+    .await
 }
 
 pub(super) async fn timeseries_page(
@@ -282,7 +327,19 @@ pub(super) async fn traces_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_data_page(&state, "Traces", "traces", query.period, query.theme).await
+    dashboard_data_page_with_options(
+        &state,
+        "Traces",
+        "traces",
+        query.period,
+        query.theme,
+        false,
+        ModelFilters {
+            trace_limit: query.limit,
+            ..ModelFilters::default()
+        },
+    )
+    .await
 }
 
 pub(super) async fn runtime_page(
@@ -606,6 +663,172 @@ fn grouped_timeseries_projection(
     json!({"bucket":bucket,"group_by":group_by,"metric":"requests","limit":limit,"source":if from_rollups {"rollup"} else {"raw"},"degraded_reason":"none","buckets":buckets,"series":series,"points":finished_points,"bucket_totals":total_rows})
 }
 
+fn ordered_json_object(value: &Value, fields: &[&str]) -> String {
+    let entries = fields
+        .iter()
+        .filter_map(|field| {
+            value.get(*field).map(|field_value| {
+                format!(
+                    "{}:{}",
+                    serde_json::to_string(field).unwrap_or_else(|_| "\"\"".to_owned()),
+                    serde_json::to_string(field_value).unwrap_or_else(|_| "null".to_owned()),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    format!("{{{}}}", entries.join(","))
+}
+
+fn grouped_timeseries_json(value: &Value) -> String {
+    const TOP: &[&str] = &[
+        "bucket",
+        "group_by",
+        "metric",
+        "limit",
+        "series",
+        "buckets",
+        "bucket_totals",
+        "points",
+        "source",
+        "degraded_reason",
+    ];
+    const SERIES: &[&str] = &[
+        "key",
+        "label",
+        "provider_id",
+        "model_id",
+        "account_name",
+        "is_other",
+        "total_requests",
+        "error_count",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "cost_microdollars",
+        "bytes_received",
+        "bytes_emitted",
+        "avg_latency_ms",
+        "avg_ttft_ms",
+    ];
+    const BUCKET_TOTAL: &[&str] = &[
+        "bucket",
+        "request_count",
+        "error_count",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "cost_microdollars",
+        "bytes_received",
+        "bytes_emitted",
+        "avg_latency_ms",
+        "avg_ttft_ms",
+    ];
+    const POINT: &[&str] = &[
+        "bucket",
+        "series_key",
+        "label",
+        "provider_id",
+        "model_id",
+        "account_name",
+        "is_other",
+        "request_count",
+        "error_count",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "cost_microdollars",
+        "bytes_received",
+        "bytes_emitted",
+        "avg_latency_ms",
+        "avg_ttft_ms",
+    ];
+    let fields = TOP
+        .iter()
+        .filter_map(|field| {
+            value.get(*field).map(|field_value| {
+                let rendered = match *field {
+                    "series" => field_value
+                        .as_array()
+                        .map(|items| {
+                            format!(
+                                "[{}]",
+                                items
+                                    .iter()
+                                    .map(|item| ordered_json_object(item, SERIES))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            )
+                        })
+                        .unwrap_or_else(|| "[]".to_owned()),
+                    "bucket_totals" => field_value
+                        .as_array()
+                        .map(|items| {
+                            format!(
+                                "[{}]",
+                                items
+                                    .iter()
+                                    .map(|item| ordered_json_object(item, BUCKET_TOTAL))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            )
+                        })
+                        .unwrap_or_else(|| "[]".to_owned()),
+                    "points" => field_value
+                        .as_array()
+                        .map(|items| {
+                            format!(
+                                "[{}]",
+                                items
+                                    .iter()
+                                    .map(|item| ordered_json_object(item, POINT))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            )
+                        })
+                        .unwrap_or_else(|| "[]".to_owned()),
+                    _ => serde_json::to_string(field_value).unwrap_or_else(|_| "null".to_owned()),
+                };
+                format!(
+                    "{}:{rendered}",
+                    serde_json::to_string(field).unwrap_or_else(|_| "\"\"".to_owned()),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    format!("{{{}}}", fields.join(","))
+}
+
+fn escape_script_end_tags(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    let mut offset = 0;
+    while offset < value.len() {
+        let remaining = &value[offset..];
+        if remaining
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("</script"))
+        {
+            escaped.push_str("\\u003c");
+            offset += 1;
+            continue;
+        }
+        let Some(character) = remaining.chars().next() else {
+            break;
+        };
+        escaped.push(character);
+        offset += character.len_utf8();
+    }
+    escaped
+}
+
 fn ranked_series_order(
     ranked: &[(String, i64)],
     selected: &std::collections::BTreeSet<String>,
@@ -834,6 +1057,72 @@ async fn dashboard_data_page_with_options(
     } else {
         std::collections::BTreeMap::new()
     };
+    let timeseries_projection = if active_nav == "timeseries" {
+        match db::DashboardRepository::new(&state.database)
+            .grouped_timeseries_json(
+                period.to_owned(),
+                "hour".to_owned(),
+                "provider_model".to_owned(),
+                None,
+                None,
+            )
+            .await
+        {
+            Ok((rows, _from_rollups)) if rows.is_empty() => Some(json!({
+                "bucket": "hour",
+                "group_by": "provider_model",
+                "metric": "requests",
+                "limit": 12,
+                "source": "empty",
+                "degraded_reason": "rollup_empty",
+                "buckets": [],
+                "series": [],
+                "points": [],
+                "bucket_totals": [],
+            })),
+            Ok((rows, from_rollups)) => Some(grouped_timeseries_projection(
+                &rows,
+                "hour",
+                "provider_model",
+                12,
+                from_rollups,
+            )),
+            Err(error) => {
+                eprintln!("dashboard timeseries read failed: {error}");
+                return degraded("dashboard data unavailable");
+            }
+        }
+    } else {
+        None
+    };
+    let routing_trace = if active_nav == "routing" {
+        state
+            .runtime
+            .acquire()
+            .await
+            .ok()
+            .map(|lease| {
+                let config = &lease.generation().config().routing.trace;
+                RoutingTraceSnapshot {
+                    mode: config.mode.clone(),
+                    sample_rate: config.sample_rate,
+                    status: if config.mode == "off" {
+                        "Off".to_owned()
+                    } else {
+                        "Unavailable".to_owned()
+                    },
+                    queue_capacity: if config.mode == "off" {
+                        0
+                    } else {
+                        u64::from(config.queue_capacity)
+                    },
+                    ..RoutingTraceSnapshot::default()
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        RoutingTraceSnapshot::default()
+    };
     let mut body = render_dashboard_page_body(
         title,
         active_nav,
@@ -846,6 +1135,8 @@ async fn dashboard_data_page_with_options(
         &model_filters,
         &health_snapshots,
         &provider_priorities,
+        timeseries_projection.as_ref(),
+        &routing_trace,
     );
     if active_nav == "timeseries" {
         body = body.replace(
@@ -890,6 +1181,14 @@ pub(super) fn dashboard_header(title: &str, period: &str, theme: &str) -> String
     )
 }
 
+fn dashboard_period_selector(period: &str, theme: &str) -> String {
+    format!(
+        "<form method=\"get\" class=\"period-selector\" data-period-selector aria-label=\"Period selector\"><label for=\"period\">Period: <select id=\"period\" name=\"period\">{}</select></label><input type=\"hidden\" name=\"theme\" value=\"{}\"></form>",
+        period_options(period),
+        html_escape(theme),
+    )
+}
+
 pub(super) fn dashboard_empty(title: &str, message: &str) -> String {
     format!(
         "<section class=\"panel\"><div class=\"panel-header\"><h2>{}</h2></div><p class=\"empty\" role=\"status\">{}</p></section>",
@@ -911,8 +1210,22 @@ pub(super) fn render_dashboard_page_body(
     model_filters: &ModelFilters,
     health_snapshots: &[crate::health::AccountHealthSnapshot],
     provider_priorities: &std::collections::BTreeMap<String, u32>,
+    timeseries_projection: Option<&Value>,
+    routing_trace: &RoutingTraceSnapshot,
 ) -> String {
-    let mut body = if matches!(active_nav, "accounts" | "models") {
+    let mut body = if matches!(
+        active_nav,
+        "accounts"
+            | "models"
+            | "latency"
+            | "events"
+            | "timeseries"
+            | "bandwidth"
+            | "pings"
+            | "reliability"
+            | "routing"
+            | "traces"
+    ) {
         String::new()
     } else {
         dashboard_header(title, period, theme)
@@ -933,14 +1246,29 @@ pub(super) fn render_dashboard_page_body(
             model_filters,
             provider_priorities,
         )),
-        "latency" => body.push_str(&render_latency_page(data)),
-        "events" => body.push_str(&render_events_page(data)),
-        "timeseries" => body.push_str(&render_timeseries_page(data, period)),
-        "bandwidth" => body.push_str(&render_bandwidth_page(data)),
-        "pings" => body.push_str(&render_pings_page(data)),
-        "reliability" => body.push_str(&render_reliability_page(data)),
-        "routing" => body.push_str(&render_routing_page(data)),
-        "traces" => body.push_str(&render_traces_page(data)),
+        "latency" => body.push_str(&render_latency_page(data, period, theme)),
+        "events" => body.push_str(&render_events_page(
+            data,
+            period,
+            theme,
+            model_filters.event_type.as_deref().unwrap_or_default(),
+        )),
+        "timeseries" => body.push_str(&render_timeseries_page(
+            data,
+            period,
+            theme,
+            timeseries_projection.unwrap_or(&Value::Null),
+        )),
+        "bandwidth" => body.push_str(&render_bandwidth_page(data, period, theme)),
+        "pings" => body.push_str(&render_pings_page(data, period, theme)),
+        "reliability" => body.push_str(&render_reliability_page(data, period, theme)),
+        "routing" => body.push_str(&render_routing_page(data, period, theme, routing_trace)),
+        "traces" => body.push_str(&render_traces_page(
+            data,
+            "recent",
+            theme,
+            model_filters.trace_limit.unwrap_or(50).clamp(10, 500),
+        )),
         "runtime" => body.push_str(&render_runtime_page(data, summary)),
         "cache" => body.push_str(&render_cache_page(data)),
         _ => body.push_str(&dashboard_empty(title, "No data available.")),
@@ -2081,9 +2409,15 @@ fn parse_dashboard_timestamp(value: &str) -> Option<i64> {
     Some(result)
 }
 
-pub(super) fn render_latency_page(data: &db::DashboardData) -> String {
+pub(super) fn render_latency_page(data: &db::DashboardData, period: &str, theme: &str) -> String {
+    let header = format!(
+        "<h2>Latency</h2>{}",
+        dashboard_period_selector(period, theme)
+    );
     if data.models.iter().all(|row| row.ttft_requests == 0) {
-        return "<p class=\"empty\">No TTFT data for this period.</p><section class=\"panel\"><h3>Per-model breakdown</h3><p class=\"empty\">No model data for this period.</p></section>".to_owned();
+        return format!(
+            "{header}<p class=\"empty\">No TTFT data for this period.</p><section class=\"panel\"><h3>Per-model breakdown</h3><p class=\"empty\">No model data for this period.</p></section>"
+        );
     }
     let mut provider_totals: Vec<(&str, f64, i64)> = Vec::new();
     for row in data.models.iter().filter(|row| row.ttft_requests > 0) {
@@ -2104,10 +2438,18 @@ pub(super) fn render_latency_page(data: &db::DashboardData) -> String {
     let cards = provider_totals
         .iter()
         .map(|(provider, total, requests)| {
+            let percentiles = data
+                .latency_percentiles
+                .iter()
+                .find(|row| row.provider_id == *provider && row.model_id.is_empty());
+            let p50 = percentiles.map_or(0.0, |row| row.p50_ttft_ms);
+            let p99 = percentiles.map_or(0.0, |row| row.p99_ttft_ms);
             format!(
-                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{} requests</p></div>",
+            "<div class=\"card\" data-tooltip=\"Provider TTFT summary. The metric is average time to first token; the subtext shows P50, P99, and request count.\" data-tooltip-pos=\"bottom\" aria-label=\"Provider TTFT summary. The metric is average time to first token; the subtext shows P50, P99, and request count.\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">P50 {} · P99 {} · {} reqs</p></div>",
                 html_escape(provider),
                 format_latency(total / *requests as f64),
+                format_latency(p50),
+                format_latency(p99),
                 requests,
             )
         })
@@ -2125,171 +2467,276 @@ pub(super) fn render_latency_page(data: &db::DashboardData) -> String {
     let rows = latency_models
         .iter()
         .map(|row| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            let tooltip = format!("Open model info for {}", row.model_id);
+            let model_link = format!(
+                "<a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"{}\" aria-label=\"{}\">{}</a>",
+                query_component(&row.model_id),
+                query_component(theme),
+                html_escape(&row.model_id),
                 html_escape(&row.provider_id),
                 html_escape(&row.model_id),
+                html_escape(&tooltip),
+                html_escape(&tooltip),
+                html_escape(&row.model_id),
+            );
+            let percentiles = data
+                .latency_percentiles
+                .iter()
+                .find(|item| item.provider_id == row.provider_id && item.model_id == row.model_id);
+            format!(
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{model_link}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">—</td></tr>",
+                html_escape(&row.provider_id),
                 row.ttft_requests,
                 format_latency(row.avg_ttft_ms),
+                format_latency(percentiles.map_or(0.0, |item| item.p50_ttft_ms)),
+                format_latency(percentiles.map_or(0.0, |item| item.p99_ttft_ms)),
             )
         })
         .collect::<String>();
     format!(
-        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Per-model breakdown</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Avg TTFT</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "{header}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Per-model breakdown</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Avg TTFT</th><th data-priority=\"2\">P50 TTFT</th><th data-priority=\"2\">P99 TTFT</th><th data-priority=\"3\">Phases ms (c/r/o)</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
     )
 }
 
-pub(super) fn render_events_page(data: &db::DashboardData) -> String {
-    if data.events.is_empty() {
-        return dashboard_empty("Events", "No events recorded.");
-    }
-    let rows = data
+pub(super) fn render_events_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    selected_type: &str,
+) -> String {
+    let visible_events = data
         .events
         .iter()
-        .map(|row| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&row.created_at),
-                html_escape(&row.account_name),
-                html_escape(&row.event_type),
-                html_escape(&row.details),
-            )
-        })
-        .collect::<String>();
-    format!(
-        "<section class=\"panel\"><h3>Recent events</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>When</th><th>Account</th><th>Type</th><th>Details</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
-    )
-}
-
-pub(super) fn render_timeseries_page(data: &db::DashboardData, period: &str) -> String {
-    let rows = data
-        .timeseries
-        .iter()
-        .map(|row| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&row.bucket),
-                html_escape(&row.series),
-                html_escape(&row.provider_id),
-                html_escape(&row.model_id),
-                row.requests,
-                format_microdollars(row.cost_microdollars),
-                row.errors,
-                format_tokens(row.total_tokens),
-            )
-        })
-        .collect::<String>();
-    let chart_data = data
-        .timeseries
-        .iter()
-        .map(|row| format!("[\"{}\",{}]", json_escape(&row.bucket), row.requests))
-        .collect::<Vec<_>>()
-        .join(",");
-    let empty = if data.timeseries.is_empty() {
-        "<p class=\"empty\" role=\"status\">No requests in this window.</p>"
-    } else {
-        ""
-    };
-    let grouped_rows = data
-        .timeseries
-        .iter()
-        .map(|row| {
-            json!({
-                "bucket": row.bucket,
-                "raw_series_key": format!("{}/{}", row.provider_id, row.model_id),
-                "raw_series_label": row.series,
-                "provider_id": row.provider_id,
-                "model_id": row.model_id,
-                "account_name": "",
-                "request_count": row.requests,
-                "error_count": row.errors,
-                "input_tokens": row.total_tokens,
-                "output_tokens": 0,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "reasoning_tokens": 0,
-                "total_tokens": row.total_tokens,
-                "cost_microdollars": row.cost_microdollars,
-                "bytes_received": 0,
-                "bytes_emitted": 0,
-                "avg_latency_ms": row.avg_latency_ms,
-                "avg_ttft_ms": 0
-            })
-        })
+        .filter(|row| selected_type.is_empty() || row.event_type == selected_type)
         .collect::<Vec<_>>();
-    let grouped = grouped_timeseries_projection(&grouped_rows, "hour", "provider_model", 12, false);
-    let grouped_json = serde_json::to_string(&grouped)
-        .unwrap_or_else(|_| "{}".to_owned())
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026");
-    let grouped_has_data = !data.timeseries.is_empty();
-    let chart_display = if grouped_has_data {
-        ""
+    let rows = if visible_events.is_empty() {
+        "<p class=\"empty\">No events recorded.</p>".to_owned()
     } else {
-        " style=\"display:none\""
+        let rows = visible_events
+            .iter()
+            .map(|row| {
+                format!(
+                    "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\"><span class=\"event-tag {}\">{}</span></td><td data-priority=\"2\">{}</td></tr>",
+                    html_escape(&row.created_at),
+                    html_escape(&row.account_name),
+                    sanitize_class_name(&row.event_type),
+                    html_escape(&row.event_type),
+                    html_escape(&row.details.chars().take(200).collect::<String>()),
+                )
+            })
+            .collect::<String>();
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        )
     };
-    let empty_display = if grouped_has_data {
-        " style=\"display:none\""
-    } else {
-        ""
-    };
+    let types = data
+        .events
+        .iter()
+        .map(|row| row.event_type.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let type_options = types
+        .into_iter()
+        .map(|event_type| {
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                html_escape(event_type),
+                if event_type == selected_type {
+                    " selected"
+                } else {
+                    ""
+                },
+                html_escape(event_type)
+            )
+        })
+        .collect::<String>();
     format!(
-        "<form method=\"get\" data-timeseries-controls aria-label=\"Timeseries controls\"><input type=\"hidden\" name=\"period\" value=\"{}\"><label>Bucket<select name=\"bucket\"><option value=\"auto\" selected>Automatic</option><option value=\"hour\">Hour</option><option value=\"day\">Day</option></select></label><label>Group by<select name=\"group_by\"><option value=\"provider_model\">Provider and model</option><option value=\"provider\">Provider</option><option value=\"model\">Model</option><option value=\"account\">Account</option></select></label><label>Metric<select name=\"metric\"><option value=\"tokens\">Tokens</option><option value=\"requests\">Requests</option><option value=\"errors\">Errors</option><option value=\"cost\">Cost</option><option value=\"bytes\">Bytes</option><option value=\"latency\">Latency</option><option value=\"ttft\">TTFT</option></select></label><label>Series limit<input type=\"number\" name=\"limit\" min=\"1\" max=\"25\" value=\"12\"></label><label>Account<input name=\"account\" value=\"\"></label><label>Model<input name=\"model\" value=\"\"></label></form><section class=\"panel timeseries-chart-panel\"><h3>Usage breakdown</h3><div class=\"chart-container\"{chart_display}><canvas class=\"grouped-timeseries-chart\" data-chart-id=\"grouped-timeseries-chart\" data-period=\"{}\" data-bucket=\"hour\" data-group-by=\"provider_model\" data-metric=\"tokens\" data-limit=\"12\" data-account=\"\" data-model=\"\"></canvas></div><p class=\"empty grouped-timeseries-empty\"{empty_display}>No requests in this window.</p><script type=\"application/json\" class=\"grouped-timeseries-data\" data-chart-id=\"grouped-timeseries-chart\">{grouped_json}</script><div class=\"chart-container\"><canvas id=\"timeseries-chart\" data-period=\"{}\"></canvas></div><script type=\"application/json\" id=\"timeseries-initial-data\" data-period=\"{}\">[{chart_data}]</script>{empty}<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Bucket</th><th>Series</th><th>Provider</th><th>Model</th><th>Requests</th><th>Cost</th><th>Errors</th><th>Total tokens</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Events</h2><form method=\"get\" class=\"filter-form\"><label>Type: <select name=\"type\" data-auto-submit=\"1\"><option value=\"\" selected>(all types)</option>{type_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><noscript><button type=\"submit\">Apply</button></noscript></form>{}<section class=\"panel\">{rows}</section>",
         html_escape(period),
-        html_escape(period),
-        html_escape(period),
-        html_escape(period)
+        html_escape(theme),
+        dashboard_period_selector(period, theme)
     )
 }
 
-pub(super) fn render_bandwidth_page(data: &db::DashboardData) -> String {
-    let detail = if data.cache.total_bytes_received == 0 && data.cache.total_bytes_emitted == 0 {
-        "<p class=\"empty\">No activity data available.</p>"
+pub(super) fn render_timeseries_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    grouped: &Value,
+) -> String {
+    let grouped_json = escape_script_end_tags(&grouped_timeseries_json(grouped));
+    let has_data = !grouped["points"].as_array().is_none_or(Vec::is_empty)
+        && !grouped["buckets"].as_array().is_none_or(Vec::is_empty);
+    let chart_display = if has_data {
+        ""
     } else {
-        "<p class=\"status\">Persisted transfer totals for the selected period.</p>"
+        " style=\"display: none;\""
+    };
+    let empty_display = if has_data {
+        " style=\"display: none;\""
+    } else {
+        ""
+    };
+    let account_options = data
+        .accounts
+        .iter()
+        .map(|row| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                html_escape(&row.name),
+                html_escape(&row.name)
+            )
+        })
+        .collect::<String>();
+    let model_options = data
+        .timeseries
+        .iter()
+        .map(|row| format!("{}/{}", row.model_id, row.provider_id))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|model| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                html_escape(&model),
+                html_escape(&model)
+            )
+        })
+        .collect::<String>();
+    let mut by_bucket = std::collections::BTreeMap::<String, [i64; 7]>::new();
+    for row in &data.timeseries {
+        let totals = by_bucket.entry(row.bucket.clone()).or_default();
+        totals[0] += row.requests;
+        totals[1] += row.cost_microdollars;
+        totals[2] += row.errors;
+        totals[3] += row.total_tokens;
+        totals[4] += row.input_tokens;
+        totals[5] += row.output_tokens;
+        totals[6] += row.bytes_received;
+    }
+    let aggregate_rows = by_bucket.iter().map(|(bucket, totals)| format!(
+        "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td></tr>",
+        html_escape(bucket), totals[0], format_microdollars(totals[1]), totals[2], format_tokens(totals[3]),
+        format_tokens(totals[4]), format_tokens(totals[5]), format_bytes(totals[6]),
+        format_bytes(data.timeseries.iter().filter(|row| row.bucket == *bucket).map(|row| row.bytes_emitted).sum::<i64>())
+    )).collect::<String>();
+    let aggregate_table = if aggregate_rows.is_empty() {
+        "<p class=\"empty\">No requests in this window.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th></tr></thead><tbody>{aggregate_rows}</tbody></table></div>"
+        )
+    };
+    let usage_rows = data.timeseries.iter().map(|row| {
+        let model_link = format!(
+            "<a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"Open model info for {}\" aria-label=\"Open model info for {}\">{}</a>",
+            query_component(&row.model_id), query_component(theme), html_escape(&row.model_id),
+            html_escape(&row.provider_id), html_escape(&row.model_id), html_escape(&row.model_id),
+            html_escape(&row.model_id), html_escape(&row.model_id));
+        format!(
+            "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{model_link}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td></tr>",
+            html_escape(&row.bucket), html_escape(&row.series), html_escape(&row.provider_id),
+            row.requests, format_microdollars(row.cost_microdollars), row.errors,
+            format_tokens(row.total_tokens), format_latency(row.avg_latency_ms),
+            format_tokens(row.input_tokens), format_tokens(row.output_tokens),
+            format_tokens(row.cache_read_tokens), format_tokens(row.cache_write_tokens),
+            format_tokens(row.reasoning_tokens), format_bytes(row.bytes_received),
+            format_bytes(row.bytes_emitted), format_latency(row.avg_ttft_ms))
+    }).collect::<String>();
+    let usage_table = if usage_rows.is_empty() {
+        "<p class=\"empty\">No requests in this window.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Series</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"2\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Cache read</th><th data-priority=\"3\">Cache write</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Avg TTFT</th></tr></thead><tbody>{usage_rows}</tbody></table></div>"
+        )
     };
     format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Total received</h3><p class=\"metric\">{}</p></div><div class=\"card\"><h3>Total emitted</h3><p class=\"metric\">{}</p></div></section><section class=\"panel\"><h3>Bandwidth by request</h3>{detail}</section>",
+        "<h2>Timeseries (hour buckets, group by provider_model)</h2>{}<form method=\"get\" class=\"filter-form timeseries-controls\" data-timeseries-controls aria-label=\"Timeseries filters\"><label>Bucket: <select name=\"bucket\"><option value=\"auto\" selected>Auto (period-aware)</option><option value=\"hour\">Hour</option><option value=\"day\">Day</option></select></label><label>Group by: <select name=\"group_by\"><option value=\"provider_model\" selected>Provider / model</option><option value=\"provider\">Provider</option><option value=\"model\">Model</option><option value=\"account\">Account</option></select></label><label>Metric: <select name=\"metric\"><option value=\"tokens\" selected>Tokens</option><option value=\"requests\">Requests</option><option value=\"cost\">Cost</option><option value=\"errors\">Errors</option><option value=\"bytes\">Bandwidth</option></select></label><label>Limit: <select name=\"limit\"><option value=\"6\">Top 6</option><option value=\"8\">Top 8</option><option value=\"12\" selected>Top 12</option><option value=\"16\">Top 16</option><option value=\"20\">Top 20</option><option value=\"25\">Top 25</option></select></label><label>Account: <select name=\"account\"><option value=\"\" selected>(any account)</option>{account_options}</select></label><label>Model: <select name=\"model\"><option value=\"\" selected>(any model)</option>{model_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><section class=\"panel timeseries-chart-panel\"><h3>Usage breakdown</h3><div class=\"chart-container\"{chart_display}><canvas class=\"grouped-timeseries-chart\" data-chart-id=\"grouped-timeseries-chart\" data-period=\"{}\" data-bucket=\"hour\" data-group-by=\"provider_model\" data-metric=\"tokens\" data-limit=\"12\" data-account=\"\" data-model=\"\"></canvas></div><p class=\"empty grouped-timeseries-empty\"{empty_display}>No requests in this window.</p><script type=\"application/json\" class=\"grouped-timeseries-data\" data-chart-id=\"grouped-timeseries-chart\">{grouped_json}</script></section><section class=\"panel\"><h3>Usage breakdown</h3>{usage_table}</section><section class=\"panel\"><h3>Aggregate per bucket</h3>{aggregate_table}</section>",
+        dashboard_period_selector(period, theme),
+        html_escape(period),
+        html_escape(theme),
+        html_escape(period),
+    )
+}
+
+pub(super) fn render_bandwidth_page(data: &db::DashboardData, period: &str, theme: &str) -> String {
+    let account_options = data
+        .accounts
+        .iter()
+        .map(|account| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                html_escape(&account.name),
+                html_escape(&account.name)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<h2>Bandwidth</h2><form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\" data-auto-submit=\"1\"><option value=\"\" selected>(all accounts)</option>{account_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"bucket\" value=\"hour\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><noscript><button type=\"submit\">Apply</button></noscript></form>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total bytes received from clients by EggPool in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes received from clients by EggPool in the selected period.\"><h3>Total received</h3><p class=\"metric\">{}</p><p class=\"sub\">client → proxy</p></div><div class=\"card\" data-tooltip=\"Total bytes emitted by EggPool toward clients in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes emitted by EggPool toward clients in the selected period.\"><h3>Total emitted</h3><p class=\"metric\">{}</p><p class=\"sub\">upstream → proxy</p></div></section><section class=\"panel\"><h3>Bandwidth activity (last 180 days)</h3>{}</section>",
+        html_escape(period),
+        html_escape(theme),
+        dashboard_period_selector(period, theme),
         format_bytes(data.cache.total_bytes_received),
         format_bytes(data.cache.total_bytes_emitted),
+        render_bandwidth_heatmap(&data.token_activity, theme),
     )
 }
 
-pub(super) fn render_pings_page(data: &db::DashboardData) -> String {
+pub(super) fn render_pings_page(data: &db::DashboardData, period: &str, theme: &str) -> String {
     if data.pings.is_empty() {
-        return "<section class=\"panel\"><div class=\"panel-header\"><h2>Provider Pings</h2></div><p class=\"empty\" role=\"status\">No ping data yet. Data appears after the first catalog refresh.</p><p class=\"empty\">No pings recorded yet.</p></section>".to_owned();
+        return format!(
+            "<h2>Provider Pings</h2>{}<p class=\"empty\">No ping data yet. Data appears after the first catalog refresh.</p><section class=\"panel\"><h3>Recent pings</h3><p class=\"empty\">No pings recorded yet.</p></section>",
+            dashboard_period_selector(period, theme)
+        );
     }
-    let mut provider_totals: Vec<(&str, f64, i64)> = Vec::new();
+    let mut provider_totals: Vec<(&str, f64, i64, i64)> = Vec::new();
     for row in &data.pings {
-        let latency = row.latency_ms.unwrap_or_default() as f64;
-        if let Some((_, total, count)) = provider_totals
+        let latency = row.latency_ms.map_or(0.0, |value| value as f64);
+        let success = i64::from(
+            row.status_code
+                .is_some_and(|code| (200..300).contains(&code)),
+        );
+        if let Some((_, total, count, successes)) = provider_totals
             .iter_mut()
-            .find(|(provider, _, _)| *provider == row.provider_id)
+            .find(|(provider, _, _, _)| *provider == row.provider_id)
         {
-            *total += latency;
-            *count += 1;
+            if row.latency_ms.is_some() {
+                *total += latency;
+                *count += 1;
+            }
+            *successes += success;
         } else {
-            provider_totals.push((&row.provider_id, latency, 1));
+            provider_totals.push((
+                &row.provider_id,
+                latency,
+                i64::from(row.latency_ms.is_some()),
+                success,
+            ));
         }
     }
     provider_totals.sort_by(|left, right| left.0.cmp(right.0));
     let cards = provider_totals
         .iter()
-        .map(|(provider, total, count)| {
+        .map(|(provider, total, count, successes)| {
+            let ping_count = data.pings.iter().filter(|row| row.provider_id == *provider).count();
+            let success_rate = if ping_count == 0 {
+                0.0
+            } else {
+                *successes as f64 * 100.0 / ping_count as f64
+            };
+            let status = if success_rate >= 90.0 {
+                "healthy"
+            } else {
+                "degraded"
+            };
             format!(
-                "<div class=\"card\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\">{} models · status {}</p></div>",
+                "<div class=\"card\" data-tooltip=\"Provider ping latency summary. The metric is average ping latency; the subtext shows health status, success rate, and last seen model count.\" data-tooltip-pos=\"bottom\" aria-label=\"Provider ping latency summary. The metric is average ping latency; the subtext shows health status, success rate, and last seen model count.\"><h3>{}</h3><p class=\"metric\">{}</p><p class=\"sub\"><span class=\"{}\">{}</span> &middot; {success_rate:.1}% success &middot; {} models</p></div>",
                 html_escape(provider),
-                format_latency(total / *count as f64),
+                format_latency(if *count == 0 { 0.0 } else { total / *count as f64 }),
+                status,
+                status,
                 data.pings
                     .iter()
                     .find(|row| row.provider_id == *provider)
                     .map_or(0, |row| row.model_count),
-                data.pings
-                    .iter()
-                    .find(|row| row.provider_id == *provider)
-                    .and_then(|row| row.status_code)
-                    .map_or_else(|| "—".to_owned(), |v| v.to_string()),
             )
         })
         .collect::<String>();
@@ -2298,7 +2745,7 @@ pub(super) fn render_pings_page(data: &db::DashboardData) -> String {
         .iter()
         .map(|row| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td></tr>",
                 html_escape(&row.provider_id),
                 html_escape(&row.probed_at),
                 format_latency(row.latency_ms.unwrap_or_default() as f64),
@@ -2306,15 +2753,21 @@ pub(super) fn render_pings_page(data: &db::DashboardData) -> String {
                     .map_or_else(|| "—".to_owned(), |v| v.to_string()),
                 html_escape(&row.account_name),
                 row.model_count,
+                html_escape(row.error.as_deref().unwrap_or_default()),
             )
         })
         .collect::<String>();
     format!(
-        "<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Recent pings</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Provider</th><th>Time</th><th>Latency</th><th>Status</th><th>Account</th><th>Models</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<h2>Provider Pings</h2>{}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Recent pings</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Time</th><th data-priority=\"1\">Latency</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Account</th><th data-priority=\"2\">Models</th><th data-priority=\"3\">Error</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        dashboard_period_selector(period, theme)
     )
 }
 
-pub(super) fn render_reliability_page(data: &db::DashboardData) -> String {
+pub(super) fn render_reliability_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+) -> String {
     let attempts: i64 = data.retries.iter().map(|row| row.attempts).sum();
     let failures: i64 = data.retries.iter().map(|row| row.failures).sum();
     let successes: i64 = data.retries.iter().map(|row| row.successes).sum();
@@ -2323,7 +2776,7 @@ pub(super) fn render_reliability_page(data: &db::DashboardData) -> String {
         .iter()
         .map(|row| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td></tr>",
                 html_escape(&row.category),
                 row.attempts,
                 row.retry_outcomes,
@@ -2334,19 +2787,71 @@ pub(super) fn render_reliability_page(data: &db::DashboardData) -> String {
         })
         .collect::<String>();
     let retry_attempts: i64 = data.retries.iter().map(|row| row.retry_outcomes).sum();
+    let first_attempt_rate = if attempts > 0 {
+        successes as f64 * 100.0 / attempts as f64
+    } else {
+        0.0
+    };
+    let retry_rate = if attempts > 0 {
+        retry_attempts as f64 * 100.0 / attempts as f64
+    } else {
+        0.0
+    };
+    let average_attempt_latency = if attempts > 0 {
+        data.retries
+            .iter()
+            .map(|row| row.avg_latency_ms * row.attempts as f64)
+            .sum::<f64>()
+            / attempts as f64
+    } else {
+        0.0
+    };
+    let operational_summary = if data.operational_summary.is_empty() {
+        "<p class=\"empty\">No operational events in this window.</p>".to_owned()
+    } else {
+        let rows = data.operational_summary.iter().map(|row| format!(
+            "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{}</td></tr>",
+            html_escape(&row.event_type), row.event_count, html_escape(&row.last_seen),
+            row.interrupted_requests, row.released_reservations)).collect::<String>();
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Event type</th><th data-priority=\"1\">Count</th><th data-priority=\"2\">Last seen</th><th data-priority=\"2\">Interrupted</th><th data-priority=\"3\">Released</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        )
+    };
+    let recent_operational_events = if data.recent_operational_events.is_empty() {
+        "<p class=\"empty\">No recent operational events.</p>".to_owned()
+    } else {
+        let rows = data.recent_operational_events.iter().map(|row| format!(
+            "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td></tr>",
+            html_escape(&row.occurred_at), html_escape(&row.event_type), html_escape(&row.details.chars().take(200).collect::<String>()))).collect::<String>();
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
+        )
+    };
+    let attempts_chart = format!(
+        "<div class=\"chart-wrap\" style=\"height: 280px;\"><canvas id=\"reliability-attempts-by-provider\"></canvas></div><script type=\"application/json\" class=\"static-chart-data\" data-chart-id=\"reliability-attempts-by-provider\">{{\"type\":\"bar\",\"labels\":[\"Success\",\"Retry\",\"Failed\"],\"datasets\":[{{\"label\":\"Attempts\",\"data\":[{successes},{retry_attempts},{failures}],\"backgroundColor\":[\"rgba(75, 192, 120, 0.7)\",\"rgba(255, 159, 64, 0.7)\",\"rgba(255, 99, 132, 0.7)\"]}}],\"options\":{{\"responsive\":true,\"maintainAspectRatio\":false,\"plugins\":{{\"legend\":{{\"display\":false}}}},\"scales\":{{\"y\":{{\"beginAtZero\":true,\"title\":{{\"display\":true,\"text\":\"Count\"}}}}}}}}}}</script>"
+    );
     let distribution = if retry_rows.is_empty() {
-        "<p class=\"empty\">No attempt data for this period.</p><p class=\"empty\">No operational events in this window.</p>".to_owned()
+        "<p class=\"empty\">No attempt data for this period.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Category</th><th>Attempts</th><th>Retry outcomes</th><th>Successes</th><th>Failures</th><th>Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Category</th><th data-priority=\"1\">Attempts</th><th data-priority=\"2\">Retry outcomes</th><th data-priority=\"2\">Successes</th><th data-priority=\"2\">Failures</th><th data-priority=\"3\">Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
         )
     };
     format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Total attempts</h3><p class=\"metric\">{attempts}</p></div><div class=\"card\"><h3>Success attempts</h3><p class=\"metric\">{successes}</p></div><div class=\"card\"><h3>Retry attempts</h3><p class=\"metric\">{retry_attempts}</p></div><div class=\"card\"><h3>Failed attempts</h3><p class=\"metric\">{failures}</p></div></section><section class=\"panel\"><h3>Retry distribution</h3>{distribution}</section>"
+        "<h2>Reliability</h2>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total upstream attempts in the selected period, including retries.\" data-tooltip-pos=\"bottom\" aria-label=\"Total upstream attempts in the selected period, including retries.\"><h3>Total attempts</h3><p class=\"metric\">{attempts}</p><p class=\"sub\">{period}</p></div><div class=\"card\" data-tooltip=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\"><h3>Success attempts</h3><p class=\"metric\">{successes}</p><p class=\"sub\">first-attempt success rate {first_attempt_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that were retries rather than initial tries.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that were retries rather than initial tries.\"><h3>Retry attempts</h3><p class=\"metric\">{retry_attempts}</p><p class=\"sub\">retry rate {retry_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that ended in failure. The subtext shows average attempt latency.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that ended in failure. The subtext shows average attempt latency.\"><h3>Failed attempts</h3><p class=\"metric\">{failures}</p><p class=\"sub\">avg attempt latency {average_attempt_latency:.1} ms</p></div></section><section class=\"panel\"><h3>Attempts by provider (aggregated)</h3>{attempts_chart}</section><section class=\"cards system-health\"><div class=\"card\" data-tooltip=\"Requests still in progress. Subtext shows the oldest pending age.\" data-tooltip-pos=\"bottom\" aria-label=\"Requests still in progress. Subtext shows the oldest pending age.\"><h3>Pending requests</h3><p class=\"metric\">{}</p><p class=\"sub\">oldest — · stale 0</p></div><div class=\"card\" data-tooltip=\"Active quota or spend reservations for in-flight work.\" data-tooltip-pos=\"bottom\" aria-label=\"Active quota or spend reservations for in-flight work.\"><h3>Active reservations</h3><p class=\"metric\">{}</p><p class=\"sub\">reserved {} · oldest —</p></div><div class=\"card\" data-tooltip=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\" data-tooltip-pos=\"bottom\" aria-label=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\"><h3>Pending window</h3><p class=\"sub\">stale &amp;gt; 15 minutes are flagged for cleanup</p><p class=\"sub\">snapshot is instantaneous; reload to refresh</p></div></section><section class=\"panel\"><h3>Retry distribution</h3>{distribution}</section><section class=\"panel\"><h3>Operational events (summary)</h3>{operational_summary}</section><section class=\"panel\"><h3>Operational events (recent)</h3>{recent_operational_events}</section>",
+        dashboard_period_selector(period, theme),
+        data.pending_requests,
+        data.active_reservations,
+        format_microdollars(data.active_reserved_microdollars),
     )
 }
 
-pub(super) fn render_routing_page(data: &db::DashboardData) -> String {
+pub(super) fn render_routing_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    trace: &RoutingTraceSnapshot,
+) -> String {
     let decisions: i64 = data.routing.iter().map(|row| row.decisions).sum();
     let avg_eligible = if data.routing.is_empty() {
         0.0
@@ -2362,37 +2867,140 @@ pub(super) fn render_routing_page(data: &db::DashboardData) -> String {
         .routing
         .iter()
         .map(|row| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{:.2}</td><td>{}</td></tr>",
+            let tooltip = format!("Open model info for {}", row.model_id);
+            let model_link = format!(
+                "<a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"{}\" aria-label=\"{}\">{}</a>",
+                query_component(&row.model_id),
+                query_component(theme),
                 html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                html_escape(&tooltip),
+                html_escape(&tooltip),
+                html_escape(&row.model_id),
+            );
+            format!(
+            "<tr><td data-priority=\"1\">{model_link}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{:.2}</td><td data-priority=\"2\">{:.2}</td><td data-priority=\"2\">{:.2}</td><td data-priority=\"3\">{:.3}</td><td data-priority=\"3\">{}</td></tr>",
                 html_escape(&row.provider_id),
                 row.decisions,
                 row.avg_eligible,
                 row.avg_scored,
                 row.avg_excluded,
+                row.avg_score,
                 row.distinct_accounts,
             )
         })
         .collect::<String>();
     let distribution = if rows.is_empty() {
-        "<p class=\"empty\">No routing decisions in this period.</p><p class=\"empty\">No selection data in this period.</p>".to_owned()
+        "<p class=\"empty\">No routing decisions in this period.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Model</th><th>Provider</th><th>Decisions</th><th>Avg eligible</th><th>Avg scored</th><th>Avg excluded</th><th>Distinct accounts</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Decisions</th><th data-priority=\"2\">Avg eligible</th><th data-priority=\"2\">Avg scored</th><th data-priority=\"2\">Avg excluded</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Distinct accounts</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
+    let mut selected_by_account = std::collections::BTreeMap::<&str, i64>::new();
+    for row in &data.routing_selection {
+        *selected_by_account.entry(&row.account_name).or_default() += row.selection_count;
+    }
+    let mut account_selections = selected_by_account.into_iter().collect::<Vec<_>>();
+    account_selections
+        .sort_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(left.0)));
+    let selection_total = account_selections
+        .iter()
+        .map(|(_, count)| count)
+        .sum::<i64>();
+    let selection_skew = if let (Some((least_name, least)), Some((most_name, most))) =
+        (account_selections.first(), account_selections.last())
+    {
+        if selection_total > 0 {
+            let ratio = if *least == 0 {
+                0.0
+            } else {
+                *most as f64 / *least as f64
+            };
+            let warning = ratio > 3.0 && selection_total > 10;
+            format!(
+                "<div class=\"card{}\" data-tooltip=\"Selection skew\" data-tooltip-pos=\"bottom\" aria-label=\"Selection skew\"><h3>Selection skew</h3><p class=\"metric\">{ratio:.1}x</p><p class=\"sub\">max/min ratio ({} / {})</p><p class=\"sub\">{} selections across {} accounts</p></div>",
+                if warning { " warning" } else { "" },
+                html_escape(most_name),
+                html_escape(least_name),
+                selection_total,
+                account_selections.len(),
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    let selection_rows = data
+        .routing_selection
+        .iter()
+        .map(|row| {
+            format!(
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\">{:.2}</td><td data-priority=\"3\">{:.3}</td><td data-priority=\"3\">{:.2}</td><td data-priority=\"3\">{}</td></tr>",
+                html_escape(&row.account_name),
+                html_escape(&row.provider_id),
+                row.selection_count,
+                row.last_selected_score.map_or_else(|| "—".to_owned(), |v| format!("{v:.3}")),
+                row.last_selected_tier.map_or_else(|| "—".to_owned(), |v| v.to_string()),
+                row.avg_selected_tier,
+                row.avg_selected_score,
+                row.avg_eligible_count,
+                html_escape(&row.last_selected_at.chars().take(19).collect::<String>()),
+            )
+        })
+        .collect::<String>();
+    let selection_table = if selection_rows.is_empty() {
+        "<p class=\"empty\">No selection data in this period.</p>".to_owned()
+    } else {
+        format!(
+            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Selections</th><th data-priority=\"2\">Last score</th><th data-priority=\"2\">Last tier</th><th data-priority=\"3\">Avg tier</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Avg eligible</th><th data-priority=\"3\">Last selected</th></tr></thead><tbody>{selection_rows}</tbody></table></div>"
+        )
+    };
+    let trace_status = format!(
+        "<div class=\"card\" data-tooltip=\"Trace status\" data-tooltip-pos=\"bottom\" aria-label=\"Trace status\"><h3>Trace status</h3><p class=\"metric\">{}</p><p class=\"sub\">{} accepted, {} written</p></div>",
+        html_escape(&trace.status),
+        trace.accepted,
+        trace.written,
+    );
+    let queue_warning =
+        trace.queue_capacity > 0 && trace.queue_depth as f64 / trace.queue_capacity as f64 > 0.8;
+    let trace_panel = format!(
+        "<section class=\"panel\"><h3>Routing trace observability</h3><p class=\"sub\">Diagnostic traces are written by a background writer off the request path. Queue overload or writer failure never delays dispatch.</p><section class=\"cards\"><div class=\"card\" data-tooltip=\"Trace mode\" data-tooltip-pos=\"bottom\" aria-label=\"Trace mode\"><h3>Trace mode</h3><p class=\"metric\">{}</p><p class=\"sub\">sample rate {:.1}%</p></div>{trace_status}<div class=\"card{}\" data-tooltip=\"Dropped traces\" data-tooltip-pos=\"bottom\" aria-label=\"Dropped traces\"><h3>Dropped traces</h3><p class=\"metric\">{}</p><p class=\"sub\">across all drop reasons</p></div><div class=\"card{}\" data-tooltip=\"Queue depth\" data-tooltip-pos=\"bottom\" aria-label=\"Queue depth\"><h3>Queue depth</h3><p class=\"metric\">{}/{}</p><p class=\"sub\">current / capacity</p></div></section></section>",
+        html_escape(&trace.mode),
+        trace.sample_rate * 100.0,
+        if trace.dropped > 0 { " warning" } else { "" },
+        trace.dropped,
+        if queue_warning { " warning" } else { "" },
+        trace.queue_depth,
+        trace.queue_capacity,
+    );
     format!(
-        "<section class=\"cards\"><div class=\"card\"><h3>Routing decisions</h3><p class=\"metric\">{decisions}</p></div><div class=\"card\"><h3>Avg eligible / decision</h3><p class=\"metric\">{avg_eligible:.2}</p></div><div class=\"card\"><h3>Distinct selected accounts</h3><p class=\"metric\">{distinct}</p></div></section><section class=\"panel\"><h3>Routing distribution</h3><p class=\"empty\">No exclusion data in this period.</p>{distribution}</section>"
+        "<h2>Routing</h2>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total routing decisions recorded in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total routing decisions recorded in the selected period.\"><h3>Routing decisions</h3><p class=\"metric\">{decisions}</p><p class=\"sub\">in selected period</p></div><div class=\"card\" data-tooltip=\"Average number of accounts that remained eligible for each routing decision.\" data-tooltip-pos=\"bottom\" aria-label=\"Average number of accounts that remained eligible for each routing decision.\"><h3>Avg eligible / decision</h3><p class=\"metric\">{avg_eligible:.2}</p><p class=\"sub\">candidate accounts per decision</p></div><div class=\"card\" data-tooltip=\"Count of different accounts chosen across routing decisions in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Count of different accounts chosen across routing decisions in the selected period.\"><h3>Distinct selected accounts</h3><p class=\"metric\">{distinct}</p><p class=\"sub\">across all (model, provider) groups</p></div>{selection_skew}</section>{trace_panel}<section class=\"panel\"><h3>Exclusion taxonomy</h3><p class=\"empty\">No exclusion data in this period.</p></section><section class=\"panel\"><h3>Routing distribution</h3>{distribution}</section><section class=\"panel\"><h3>Account selection breakdown</h3>{selection_table}</section><section class=\"panel\"><h3>Account exclusions</h3><p class=\"empty\">No exclusion data in this period.</p></section>",
+        dashboard_period_selector(period, theme),
     )
 }
 
-pub(super) fn render_traces_page(data: &db::DashboardData) -> String {
+pub(super) fn render_traces_page(
+    data: &db::DashboardData,
+    period: &str,
+    theme: &str,
+    limit: usize,
+) -> String {
     if data.requests.is_empty() {
-        return dashboard_empty("Traces", "No recent requests.");
+        return format!(
+            "<h2>Traces</h2><p class=\"sub\">Auth-gated; does not include error_detail or client_ip; for incident debugging only.</p><form method=\"get\" class=\"filter-form\"><label class=\"trace-limit\">Limit: <span class=\"number-stepper\" data-stepper-for=\"limit\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"dec\" aria-label=\"Decrease limit\">−</button><input type=\"number\" name=\"limit\" id=\"limit\" value=\"{}\" min=\"10\" max=\"500\" data-stepper-input=\"1\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"inc\" aria-label=\"Increase limit\">+</button></span></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form>{}<section class=\"panel\"><p class=\"empty\">No recent requests.</p></section>",
+            limit,
+            html_escape(period),
+            html_escape(theme),
+            dashboard_period_selector(period, theme)
+        );
     }
     let rows = data
         .requests
         .iter()
+        .take(limit)
         .map(|row| {
             let status = row.status_code.map_or_else(
                 || row.status.clone(),
@@ -2402,18 +3010,47 @@ pub(super) fn render_traces_page(data: &db::DashboardData) -> String {
                 .latency_ms
                 .filter(|value| *value > 0.0)
                 .map_or_else(|| "—".to_owned(), format_latency);
+            let model_tooltip = format!("Open model info for {}", row.model_id);
+            let model_link = format!(
+                "<a class=\"model-link\" href=\"/models/{}?theme={}\" data-model-id=\"{}\" data-provider-id=\"{}\" data-model-info-key=\"{}\" data-tooltip=\"{}\" aria-label=\"{}\">{}</a>",
+                query_component(&row.model_id),
+                query_component(theme),
+                html_escape(&row.model_id),
+                html_escape(&row.provider_id),
+                html_escape(&row.model_id),
+                html_escape(&model_tooltip),
+                html_escape(&model_tooltip),
+                html_escape(&row.model_id),
+            );
+            let request_id = row
+                .proxy_request_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .map_or_else(|| "—".to_owned(), |id| id.chars().take(8).collect());
+            let has_thinking = row.reasoning_tokens > 0 || row.thinking_characters > 0;
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{model_link}</td><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{}</td><td data-priority=\"3\" class=\"{}\">{}</td><td data-priority=\"3\">{}</td></tr>",
                 html_escape(&row.started_at),
                 html_escape(&row.account_name),
-                html_escape(&row.model_id),
                 html_escape(&status),
                 latency,
+                html_escape(&row.provider_id),
+                html_escape(&row.protocol),
+                html_escape(row.error_class.as_deref().unwrap_or("—")),
+                format_tokens(row.input_tokens),
+                format_tokens(row.output_tokens),
+                if has_thinking { "yes" } else { "no" },
+                if has_thinking { format_tokens(row.reasoning_tokens) } else { "—".to_owned() },
+                html_escape(&request_id),
             )
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h3>Recent requests</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th>Time</th><th>Account</th><th>Model</th><th>Status</th><th>Latency</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "<h2>Traces</h2><p class=\"sub\">Auth-gated; does not include error_detail or client_ip; for incident debugging only.</p><form method=\"get\" class=\"filter-form\"><label class=\"trace-limit\">Limit: <span class=\"number-stepper\" data-stepper-for=\"limit\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"dec\" aria-label=\"Decrease limit\">−</button><input type=\"number\" name=\"limit\" id=\"limit\" value=\"{}\" min=\"10\" max=\"500\" data-stepper-input=\"1\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"inc\" aria-label=\"Increase limit\">+</button></span></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form>{}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Time</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Status</th><th data-priority=\"1\">Latency</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Protocol</th><th data-priority=\"2\">Error class</th><th data-priority=\"2\">In</th><th data-priority=\"2\">Out</th><th data-priority=\"3\">Thinking</th><th data-priority=\"3\">ID</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        limit,
+        html_escape(period),
+        html_escape(theme),
+        dashboard_period_selector(period, theme)
     )
 }
 
@@ -2712,6 +3349,126 @@ fn render_token_heatmap(
     )
 }
 
+fn render_bandwidth_heatmap(
+    rows: &[crate::db::repositories::DashboardTokenActivityRow],
+    theme: &str,
+) -> String {
+    if rows.is_empty() {
+        return "<p class=\"empty\">No activity data available.</p>".to_owned();
+    }
+    let values = rows
+        .iter()
+        .map(|row| {
+            (
+                row.day.as_str(),
+                (row.bytes_received, row.bytes_emitted, row.requests),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let today = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        / 86_400;
+    let start = today - 179;
+    let grid_start = start - (start + 4).rem_euclid(7);
+    let weeks = (today - grid_start) / 7 + 1;
+    let step = 16_i64;
+    let cell = 13_i64;
+    let left = 36_i64;
+    let top = 20_i64;
+    let width = left + weeks * step + 10;
+    let height = top + 7 * step + 10;
+    let max_value = (0..180)
+        .map(|offset| {
+            let (year, month, day) = civil_date_from_days(start + offset);
+            let key = format!("{year:04}-{month:02}-{day:02}");
+            values
+                .get(key.as_str())
+                .map_or(0, |(received, emitted, _)| {
+                    received.saturating_add(*emitted)
+                })
+        })
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let colors = theme_heatmap_colors(theme);
+    let mut cells = String::new();
+    for (day, label) in [(1, "Mon"), (3, "Wed"), (5, "Fri")] {
+        cells.push_str(&format!(
+            "<text x=\"0\" y=\"{}\" class=\"heatmap-label\" text-anchor=\"start\" dominant-baseline=\"central\">{label}</text>",
+            top + day * step + cell / 2
+        ));
+    }
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut last_month = 0;
+    for week in 0..weeks {
+        let (_, month, _) = civil_date_from_days(grid_start + week * 7);
+        if month != last_month {
+            last_month = month;
+            cells.push_str(&format!(
+                "<text x=\"{}\" y=\"10\" class=\"heatmap-label\" text-anchor=\"start\">{}</text>",
+                left + week * step,
+                months[(month - 1) as usize]
+            ));
+        }
+    }
+    let mut hitboxes = String::new();
+    for week in 0..weeks {
+        for weekday_offset in 0..7 {
+            let day_number = grid_start + week * 7 + weekday_offset;
+            if day_number < start || day_number > today {
+                hitboxes.push_str("<div class=\"heatmap-hitbox\"></div>");
+                continue;
+            }
+            let (year, month, day) = civil_date_from_days(day_number);
+            let key = format!("{year:04}-{month:02}-{day:02}");
+            let (received, emitted, requests) =
+                values.get(key.as_str()).copied().unwrap_or((0, 0, 0));
+            let total = received.saturating_add(emitted);
+            let ratio = total as f64 / max_value as f64;
+            let level = if total == 0 {
+                0
+            } else if ratio < 0.25 {
+                1
+            } else if ratio < 0.5 {
+                2
+            } else if ratio < 0.75 {
+                3
+            } else {
+                4
+            };
+            let x = left + week * step;
+            let y = top + weekday_offset * step;
+            let pretty_day = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+                [(day_number + 4).rem_euclid(7) as usize];
+            let tooltip = format!(
+                "{pretty_day}, {} {day} {year}\n{} in · {} out · {} request{}",
+                months[(month - 1) as usize],
+                format_bytes(received),
+                format_bytes(emitted),
+                requests,
+                if requests == 1 { "" } else { "s" }
+            );
+            let title = format!("{key}: {}", tooltip.replace('\n', " — "));
+            cells.push_str(&format!(
+                "<rect x=\"{x}\" y=\"{y}\" width=\"{cell}\" height=\"{cell}\" rx=\"2\" fill=\"{}\" class=\"heatmap-cell\" pointer-events=\"none\"><title>{}</title></rect>",
+                colors[level],
+                html_escape(title)
+            ));
+            let tooltip = html_escape(tooltip);
+            hitboxes.push_str(&format!(
+                "<div class=\"heatmap-hitbox\" data-tooltip=\"{tooltip}\" aria-label=\"{tooltip}\"></div>"
+            ));
+        }
+    }
+    format!(
+        "<div class=\"heatmap\"><svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"Bandwidth activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
+    )
+}
+
 fn format_ratio_percent(value: Option<f64>) -> String {
     value
         .filter(|ratio| ratio.is_finite())
@@ -2734,29 +3491,6 @@ pub(super) fn format_bytes(value: i64) -> String {
         }
     }
     format!("{scaled:.1} {unit}")
-}
-
-pub(super) fn json_escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '<' => escaped.push_str("\\u003c"),
-            '>' => escaped.push_str("\\u003e"),
-            '&' => escaped.push_str("\\u0026"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            '\u{2028}' => escaped.push_str("\\u2028"),
-            '\u{2029}' => escaped.push_str("\\u2029"),
-            character if (character as u32) < 0x20 => {
-                escaped.push_str(&format!("\\u{:04x}", character as u32));
-            }
-            character => escaped.push(character),
-        }
-    }
-    escaped
 }
 
 pub(super) fn dashboard_page_with_body(
@@ -3802,12 +4536,29 @@ mod tests {
 
     #[test]
     fn timeseries_chart_contract_uses_a_canvas_even_without_rows() {
-        let html = super::render_timeseries_page(&crate::db::DashboardData::default(), "24h");
-        assert!(html.contains("<canvas id=\"timeseries-chart\" data-period=\"24h\"></canvas>"));
+        let empty = serde_json::json!({
+            "bucket": "hour",
+            "group_by": "provider_model",
+            "metric": "requests",
+            "limit": 12,
+            "source": "empty",
+            "degraded_reason": "rollup_empty",
+            "buckets": [],
+            "series": [],
+            "points": [],
+            "bucket_totals": [],
+        });
+        let html = super::render_timeseries_page(
+            &crate::db::DashboardData::default(),
+            "24h",
+            "default",
+            &empty,
+        );
         assert!(html.contains("class=\"chart-container\""));
         assert!(html.contains("data-timeseries-controls"));
-        assert!(html.contains("canvas class=\"grouped-timeseries-chart\""));
-        assert!(html.contains("id=\"timeseries-initial-data\""));
+        assert!(html.contains("class=\"grouped-timeseries-chart\""));
+        assert!(html.contains("class=\"grouped-timeseries-data\""));
+        assert!(html.contains("Aggregate per bucket"));
         assert!(!html.contains("<section class=\"panel\" id=\"timeseries-chart\""));
     }
 
@@ -3985,12 +4736,78 @@ mod tests {
         database.close().await.expect("database closes");
     }
 
+    #[tokio::test]
+    async fn dashboard_repository_loads_empty_telemetry_views() {
+        let directory = tempfile::tempdir().expect("temporary dashboard database");
+        let database = crate::db::Database::open(crate::db::DatabaseConfig {
+            path: directory
+                .path()
+                .join("dashboard.sqlite3")
+                .to_string_lossy()
+                .into_owned(),
+            ..crate::db::DatabaseConfig::default()
+        })
+        .await
+        .expect("database opens");
+        crate::db::MigrationRunner::new(&database)
+            .run()
+            .await
+            .expect("migrations run");
+        let data = crate::db::DashboardRepository::new(&database)
+            .load("24h")
+            .await
+            .expect("dashboard view-model queries succeed");
+        assert!(data.latency_percentiles.is_empty());
+        assert!(data.routing_selection.is_empty());
+        database.close().await.expect("database closes");
+    }
+
+    #[test]
+    fn trace_renderer_does_not_emit_prohibited_error_content() {
+        let mut data = crate::db::DashboardData::default();
+        data.requests
+            .push(crate::db::repositories::DashboardRequestRow {
+            started_at: "2026-10-02 00:00:00".into(),
+            account_name: "fixture-account".into(),
+            provider_id: "fixture-provider".into(),
+            model_id: "fixture-model".into(),
+            status: "error".into(),
+            status_code: Some(500),
+            latency_ms: Some(1.0),
+            input_tokens: 0,
+            output_tokens: 0,
+            error_class: Some("upstream_error".into()),
+            error_message: Some(
+                "PROMPT_SENTINEL BODY_SENTINEL TOOL_ARGS_SENTINEL CACHE_KEY_SENTINEL AUTH_SENTINEL"
+                    .into(),
+            ),
+            protocol: "openai".into(),
+            proxy_request_id: Some("safe-request-id".into()),
+            reasoning_tokens: 0,
+            thinking_characters: 0,
+        });
+        let html = super::render_traces_page(&data, "recent", "Nord", 50);
+        for sentinel in [
+            "PROMPT_SENTINEL",
+            "BODY_SENTINEL",
+            "TOOL_ARGS_SENTINEL",
+            "CACHE_KEY_SENTINEL",
+            "AUTH_SENTINEL",
+        ] {
+            assert!(!html.contains(sentinel), "trace page exposed {sentinel}");
+        }
+        assert!(html.contains("upstream_error"));
+        assert!(html.contains("safe-req"));
+    }
+
     #[test]
     fn token_heatmap_emits_bounded_theme_aware_calendar_markup() {
         let rows = [crate::db::repositories::DashboardTokenActivityRow {
             day: "2026-10-01".to_owned(),
             total_tokens: 1234,
             requests: 2,
+            bytes_received: 2048,
+            bytes_emitted: 4096,
         }];
         let html = super::render_token_heatmap(&rows, "Cyber Red");
         assert!(html.starts_with("<div class=\"heatmap\"><svg"));
@@ -3999,6 +4816,21 @@ mod tests {
         assert!(html.contains("data-tooltip=\""));
         let hitboxes = html.matches("class=\"heatmap-hitbox\"").count();
         assert!(matches!(hitboxes, 182 | 189));
+    }
+
+    #[test]
+    fn bandwidth_heatmap_uses_byte_totals_and_byte_tooltips() {
+        let rows = [crate::db::repositories::DashboardTokenActivityRow {
+            day: "2026-10-01".to_owned(),
+            total_tokens: 1234,
+            requests: 2,
+            bytes_received: 2048,
+            bytes_emitted: 4096,
+        }];
+        let html = super::render_bandwidth_heatmap(&rows, "Cyber Red");
+        assert!(html.contains("aria-label=\"Bandwidth activity (last 180 days)\""));
+        assert!(html.contains("2.0 KB in · 4.1 KB out · 2 requests"));
+        assert!(!html.contains("1234 tokens"));
     }
 
     #[test]

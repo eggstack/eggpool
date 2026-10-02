@@ -284,6 +284,16 @@ pub struct DashboardModelRow {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DashboardLatencyPercentileRow {
+    pub provider_id: String,
+    /// Empty means provider-level aggregate; otherwise this is the model ID.
+    pub model_id: String,
+    pub request_count: i64,
+    pub p50_ttft_ms: f64,
+    pub p99_ttft_ms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DashboardRequestRow {
     pub started_at: String,
     pub account_name: String,
@@ -296,12 +306,32 @@ pub struct DashboardRequestRow {
     pub output_tokens: i64,
     pub error_class: Option<String>,
     pub error_message: Option<String>,
+    pub protocol: String,
+    pub proxy_request_id: Option<String>,
+    pub reasoning_tokens: i64,
+    pub thinking_characters: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DashboardEventRow {
     pub created_at: String,
     pub account_name: String,
+    pub event_type: String,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardOperationalSummaryRow {
+    pub event_type: String,
+    pub event_count: i64,
+    pub last_seen: String,
+    pub interrupted_requests: i64,
+    pub released_reservations: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardOperationalEventRow {
+    pub occurred_at: String,
     pub event_type: String,
     pub details: String,
 }
@@ -324,7 +354,21 @@ pub struct DashboardRoutingRow {
     pub avg_eligible: f64,
     pub avg_scored: f64,
     pub avg_excluded: f64,
+    pub avg_score: f64,
     pub distinct_accounts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DashboardRoutingSelectionRow {
+    pub account_name: String,
+    pub provider_id: String,
+    pub selection_count: i64,
+    pub avg_selected_tier: f64,
+    pub avg_selected_score: f64,
+    pub avg_eligible_count: f64,
+    pub last_selected_score: Option<f64>,
+    pub last_selected_tier: Option<i64>,
+    pub last_selected_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,6 +382,14 @@ pub struct DashboardTimeseriesRow {
     pub errors: i64,
     pub total_tokens: i64,
     pub avg_latency_ms: f64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub bytes_received: i64,
+    pub bytes_emitted: i64,
+    pub avg_ttft_ms: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -357,6 +409,8 @@ pub struct DashboardTokenActivityRow {
     pub day: String,
     pub total_tokens: i64,
     pub requests: i64,
+    pub bytes_received: i64,
+    pub bytes_emitted: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -377,11 +431,15 @@ pub struct DashboardData {
     pub crash_recovery_24h: i64,
     pub accounts: Vec<DashboardAccountRow>,
     pub models: Vec<DashboardModelRow>,
+    pub latency_percentiles: Vec<DashboardLatencyPercentileRow>,
     pub requests: Vec<DashboardRequestRow>,
     pub events: Vec<DashboardEventRow>,
+    pub operational_summary: Vec<DashboardOperationalSummaryRow>,
+    pub recent_operational_events: Vec<DashboardOperationalEventRow>,
     pub pings: Vec<Ping>,
     pub retries: Vec<DashboardRetryRow>,
     pub routing: Vec<DashboardRoutingRow>,
+    pub routing_selection: Vec<DashboardRoutingSelectionRow>,
     pub timeseries: Vec<DashboardTimeseriesRow>,
     pub ip_stats: Vec<DashboardIpRow>,
     pub token_activity: Vec<DashboardTokenActivityRow>,
@@ -400,7 +458,9 @@ fn dashboard_sql(sql: &str) -> String {
     // Rust's continuation-string syntax removes newlines and indentation.
     // Keep the query text readable while restoring token boundaries before
     // handing it to SQLite.
-    let query = sql.replace("SELECT", "SELECT ");
+    let query = sql
+        .replace("SELECT", "SELECT ")
+        .replace("UNION ALL", " UNION ALL ");
     [
         "LEFT JOIN",
         "FROM",
@@ -747,11 +807,54 @@ impl DashboardRepository {
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let mut latency_percentiles = connection.prepare(&dashboard_sql(
+                    "WITH provider_ranked AS (\
+                       SELECT provider_id, first_byte_ms,\
+                         ROW_NUMBER() OVER (PARTITION BY provider_id ORDER BY first_byte_ms) AS rn,\
+                         COUNT(*) OVER (PARTITION BY provider_id) AS n\
+                       FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL\
+                         AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                           WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                           ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')\
+                     ), model_ranked AS (\
+                       SELECT provider_id, model_id, first_byte_ms,\
+                         ROW_NUMBER() OVER (PARTITION BY provider_id, model_id ORDER BY first_byte_ms) AS rn,\
+                         COUNT(*) OVER (PARTITION BY provider_id, model_id) AS n\
+                       FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL\
+                         AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                           WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                           ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')\
+                     )\
+                     SELECT provider_id, '', COUNT(*),\
+                       AVG(CASE WHEN rn IN ((n + 1) / 2, (n + 2) / 2) THEN first_byte_ms END),\
+                       MAX(CASE WHEN rn = (99 * n + 99) / 100 THEN first_byte_ms END)\
+                     FROM provider_ranked GROUP BY provider_id\
+                     UNION ALL\
+                     SELECT provider_id, model_id, COUNT(*),\
+                       AVG(CASE WHEN rn IN ((n + 1) / 2, (n + 2) / 2) THEN first_byte_ms END),\
+                       MAX(CASE WHEN rn = (99 * n + 99) / 100 THEN first_byte_ms END)\
+                     FROM model_ranked GROUP BY provider_id, model_id\
+                     ORDER BY 1, 2 LIMIT 400",
+                ))?;
+                let latency_percentiles = latency_percentiles
+                    .query_map([&period], |row| {
+                        Ok(DashboardLatencyPercentileRow {
+                            provider_id: row.get(0)?,
+                            model_id: row.get(1)?,
+                            request_count: row.get(2)?,
+                            p50_ttft_ms: row.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                            p99_ttft_ms: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let mut requests = connection.prepare(&dashboard_sql(
                     "SELECT r.started_at, COALESCE(a.name, ''), COALESCE(r.provider_id, a.provider_id),\
                      r.model_id, r.status, r.status_code, r.upstream_latency_ms,\
                      COALESCE(r.input_tokens, 0), COALESCE(r.output_tokens, 0),\
-                     r.error_class, r.error_message\
+                     r.error_class, r.error_message, COALESCE(r.protocol, 'openai'),\
+                     r.proxy_request_id, COALESCE(r.reasoning_tokens, 0),\
+                     COALESCE(r.thinking_characters, 0)\
                      FROM requests r LEFT JOIN accounts a ON a.id = r.account_id\
                      WHERE r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
                        WHEN '7d' THEN datetime('now', '-7 days')\
@@ -774,6 +877,10 @@ impl DashboardRepository {
                             output_tokens: row.get(8)?,
                             error_class: row.get(9)?,
                             error_message: row.get(10)?,
+                            protocol: row.get(11)?,
+                            proxy_request_id: row.get(12)?,
+                            reasoning_tokens: row.get(13)?,
+                            thinking_characters: row.get(14)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -791,6 +898,39 @@ impl DashboardRepository {
                             event_type: row.get(2)?,
                             details: row.get(3)?,
                         })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let mut operational_summary = connection.prepare(&dashboard_sql(
+                    "SELECT event_type, COUNT(*), MAX(occurred_at),\
+                     COALESCE(SUM(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.interrupted_requests') AS INTEGER)), 0),\
+                     COALESCE(SUM(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.released_reservations') AS INTEGER)), 0)\
+                     FROM operational_events WHERE occurred_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                       WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                       ELSE datetime('now', '-24 hours') END\
+                     GROUP BY event_type HAVING SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.interrupted_requests') AS INTEGER), 0))\
+                       + SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.released_reservations') AS INTEGER), 0))\
+                       + SUM(COALESCE(CAST(json_extract(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END, '$.leaked_requests') AS INTEGER), 0)) > 0\
+                     ORDER BY COUNT(*) DESC, event_type LIMIT 25",
+                ))?;
+                let operational_summary = operational_summary
+                    .query_map([&period], |row| {
+                        Ok(DashboardOperationalSummaryRow {
+                            event_type: row.get(0)?, event_count: row.get(1)?, last_seen: row.get(2)?,
+                            interrupted_requests: row.get(3)?, released_reservations: row.get(4)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut recent_operational_events = connection.prepare(&dashboard_sql(
+                    "SELECT occurred_at, event_type, details_json FROM operational_events\
+                     WHERE occurred_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                       WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                       ELSE datetime('now', '-24 hours') END\
+                     ORDER BY occurred_at DESC, id DESC LIMIT 25",
+                ))?;
+                let recent_operational_events = recent_operational_events
+                    .query_map([&period], |row| {
+                        Ok(DashboardOperationalEventRow { occurred_at: row.get(0)?, event_type: row.get(1)?, details: row.get(2)? })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -838,7 +978,7 @@ impl DashboardRepository {
                 let mut routing = connection.prepare(&dashboard_sql(
                     "SELECT model_id, COALESCE(provider_id, ''), COUNT(*),\
                      COALESCE(AVG(eligible_count), 0), COALESCE(AVG(scored_count), 0),\
-                     COALESCE(AVG(attempted_excluded_count), 0),\
+                     COALESCE(AVG(attempted_excluded_count), 0), COALESCE(AVG(selected_score), 0),\
                      COUNT(DISTINCT selected_account_name)\
                      FROM routing_decisions\
                      WHERE decision_made_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
@@ -856,7 +996,51 @@ impl DashboardRepository {
                             avg_eligible: row.get(3)?,
                             avg_scored: row.get(4)?,
                             avg_excluded: row.get(5)?,
-                            distinct_accounts: row.get(6)?,
+                            avg_score: row.get(6)?,
+                            distinct_accounts: row.get(7)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let mut routing_selection = connection.prepare(&dashboard_sql(
+                    "SELECT selected_account_name, COALESCE(provider_id, ''), COUNT(*),\
+                     COALESCE(AVG(selected_tier), 0), COALESCE(AVG(selected_score), 0),\
+                     COALESCE(AVG(eligible_count), 0),\
+                     (SELECT latest.selected_score FROM routing_decisions latest\
+                       WHERE latest.selected_account_name = routing_decisions.selected_account_name\
+                         AND COALESCE(latest.provider_id, '') = COALESCE(routing_decisions.provider_id, '')\
+                         AND latest.decision_made_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                           WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                           ELSE datetime('now', '-24 hours') END\
+                       ORDER BY latest.decision_made_at DESC, latest.id DESC LIMIT 1),\
+                     (SELECT latest.selected_tier FROM routing_decisions latest\
+                       WHERE latest.selected_account_name = routing_decisions.selected_account_name\
+                         AND COALESCE(latest.provider_id, '') = COALESCE(routing_decisions.provider_id, '')\
+                         AND latest.decision_made_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                           WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                           ELSE datetime('now', '-24 hours') END\
+                       ORDER BY latest.decision_made_at DESC, latest.id DESC LIMIT 1),\
+                     MAX(decision_made_at)\
+                     FROM routing_decisions\
+                     WHERE decision_made_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
+                       WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days')\
+                       ELSE datetime('now', '-24 hours') END\
+                       AND selected_account_name IS NOT NULL\
+                     GROUP BY selected_account_name, provider_id\
+                     ORDER BY COUNT(*) DESC, selected_account_name, provider_id LIMIT 100",
+                ))?;
+                let routing_selection = routing_selection
+                    .query_map([&period], |row| {
+                        Ok(DashboardRoutingSelectionRow {
+                            account_name: row.get(0)?,
+                            provider_id: row.get(1)?,
+                            selection_count: row.get(2)?,
+                            avg_selected_tier: row.get(3)?,
+                            avg_selected_score: row.get(4)?,
+                            avg_eligible_count: row.get(5)?,
+                            last_selected_score: row.get(6)?,
+                            last_selected_tier: row.get(7)?,
+                            last_selected_at: row.get(8)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -866,15 +1050,19 @@ impl DashboardRepository {
                      r.provider_id || ' / ' || r.model_id, r.provider_id, r.model_id, COUNT(*),\
                      COALESCE(SUM(r.cost_microdollars), 0),\
                      COALESCE(SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END), 0),\
-                     COALESCE(SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens), 0),\
-                     COALESCE(AVG(r.upstream_latency_ms), 0)\
+                     COALESCE(SUM(r.input_tokens + r.output_tokens), 0),\
+                     COALESCE(AVG(r.upstream_latency_ms), 0),\
+                     COALESCE(SUM(r.input_tokens), 0), COALESCE(SUM(r.output_tokens), 0),\
+                     COALESCE(SUM(r.cache_read_tokens), 0), COALESCE(SUM(r.cache_write_tokens), 0),\
+                     COALESCE(SUM(r.reasoning_tokens), 0), COALESCE(SUM(r.bytes_received), 0),\
+                     COALESCE(SUM(r.bytes_emitted), 0), COALESCE(AVG(CASE WHEN r.streamed = 1 THEN r.first_byte_ms END), 0)\
                      FROM requests r\
                      WHERE r.started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour')\
                        WHEN '7d' THEN datetime('now', '-7 days')\
                        WHEN '30d' THEN datetime('now', '-30 days')\
                        ELSE datetime('now', '-24 hours') END\
                        AND r.started_at < datetime('now')\
-                     GROUP BY 1, 2, 3, 4 ORDER BY 1 DESC, 2 LIMIT 200",
+                     GROUP BY 1, 2, 3, 4 ORDER BY 1 ASC, 2 LIMIT 200",
                 ))?;
                 let timeseries = timeseries
                     .query_map([&period], |row| {
@@ -888,6 +1076,14 @@ impl DashboardRepository {
                             errors: row.get(6)?,
                             total_tokens: row.get(7)?,
                             avg_latency_ms: row.get(8)?,
+                            input_tokens: row.get(9)?,
+                            output_tokens: row.get(10)?,
+                            cache_read_tokens: row.get(11)?,
+                            cache_write_tokens: row.get(12)?,
+                            reasoning_tokens: row.get(13)?,
+                            bytes_received: row.get(14)?,
+                            bytes_emitted: row.get(15)?,
+                            avg_ttft_ms: row.get(16)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -920,7 +1116,7 @@ impl DashboardRepository {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let mut token_activity = connection.prepare(
-                    "SELECT date(bucket_start), COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0), COALESCE(SUM(request_count), 0)\
+                    "SELECT date(bucket_start), COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0), COALESCE(SUM(request_count), 0), COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_emitted), 0)\
                      FROM usage_rollups WHERE bucket_start >= datetime('now', '-180 days')\
                      GROUP BY date(bucket_start) ORDER BY date(bucket_start) LIMIT 180",
                 )?;
@@ -930,6 +1126,8 @@ impl DashboardRepository {
                             day: row.get(0)?,
                             total_tokens: row.get(1)?,
                             requests: row.get(2)?,
+                            bytes_received: row.get(3)?,
+                            bytes_emitted: row.get(4)?,
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
@@ -984,11 +1182,15 @@ impl DashboardRepository {
                     crash_recovery_24h,
                     accounts,
                     models,
+                    latency_percentiles,
                     requests,
                     events,
+                    operational_summary,
+                    recent_operational_events,
                     pings,
                     retries,
                     routing,
+                    routing_selection,
                     timeseries,
                     ip_stats,
                     token_activity,

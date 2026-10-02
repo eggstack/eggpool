@@ -109,6 +109,33 @@ costs remain bounded on the shared SQLite gate. The work package, acceptance
 criteria, and evidence requirements are tracked in
 `plans/implementation/dashboard/003-overview-account-model-parity.md`.
 
+## Telemetry, Routing, Reliability, and Traces projections
+
+M004 telemetry pages are projections of persisted request attempts, requests,
+provider pings, routing decisions, usage rollups, and operational events.
+Their repository reads are bounded: dashboard request/event/ping tables cap
+at 100 rows, operational summaries at 25 event types, recent operational
+events at 25 rows, routing selections at 100 groups, latency percentile groups
+at 400, timeseries detail groups at 200, and bandwidth activity at 180 daily
+rollups. The routing page reads persisted decisions; it never repeats account
+selection or retry policy. The routing trace panel reports configured mode
+and rate; writer counters remain unavailable when the runtime has no
+authoritative writer snapshot.
+
+Startup recovery records one `crash_recovery` operational event from the
+runtime lifecycle recovery owner, with only interrupted-request,
+released-reservation, and distinct affected-account counts. The reliability
+page aggregates those safe JSON facts and caps recent event details at 200
+characters. Trace rows intentionally omit request bodies, prompts, tool
+arguments, raw error messages, client IPs, and cache keys; they expose only
+bounded request/attempt metadata already persisted in the dashboard model.
+Latency and timeseries values use persisted request/attempt observations;
+bandwidth uses byte totals from bounded rollups. Missing live/runtime facts
+remain unavailable rather than being inferred by page rendering.
+
+The milestone evidence and source-to-panel review are recorded in
+`plans/closure/dashboard/004-status.md`.
+
 ## Verification
 
 ```bash

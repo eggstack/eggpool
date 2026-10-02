@@ -363,7 +363,10 @@ class _ProjectionParser(html.parser.HTMLParser):
 
 
 def _collapse_text(value: str) -> str:
-    return " ".join(value.split())
+    collapsed = " ".join(value.split())
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", collapsed):
+        return "<volatile:local-timestamp>"
+    return collapsed
 
 
 def project_html(body: str) -> HtmlProjection:
