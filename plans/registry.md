@@ -43,13 +43,14 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 active — runtime/cache observability parity | M004's interfaces are stable; M005 may implement but cannot close until the M004 zero-count summary finding is resolved; M006 waits for M003-M005. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 active — runtime/cache parity; corrective pass 007 active | M005 may implement against stable M004 interfaces but cannot close until M007 resolves M004's empty recovery-summary finding; M006 waits for M003-M005 and M007. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
+| Dashboard | corrective pass 007 — empty startup recovery summary | active | `plans/implementation/dashboard/007-empty-recovery-summary-correction.md` | Resolves finding 1 in conditionally closed M004; preserve actual recovery audit rows and suppress zero-change startup noise. |
 
 ## Blocked work
 
@@ -62,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
-| Dashboard M004 — telemetry, routing, reliability, and trace parity | conditionally closed | `plans/closure/dashboard/004-status.md`; runtime/cache interfaces stable, one zero-count operational-summary strict-DOM variance deferred to M006. |
+| Dashboard M004 — telemetry, routing, reliability, and trace parity | conditionally closed | `plans/closure/dashboard/004-status.md`; runtime/cache interfaces stable, one zero-change startup-event variance assigned to corrective pass 007. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
 | Dashboard M002 — shared shell, interaction, and dashboard API restoration | closed — exact shared-shell projection passed all 28 route/state cells; timeseries APIs matched empty/populated/private cases; eight paired desktop/mobile interaction runs and clean browser checks; 804 serial Rust tests passed | `plans/closure/dashboard/002-status.md`, implementation `da8183d`, paired viewport gate `00c69f5` |
 | Dashboard M001 — Python oracle freeze and strict parity substrate | closed — fixed 14-page/8-API oracle, 50 static/theme hashes, reproducible sanitized captures, strict negative tests, 50-cell current-gap report; no production diff | `plans/closure/dashboard/001-status.md`, implementation `3f3d5de`, theme inventory `286b70a` |

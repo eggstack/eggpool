@@ -278,6 +278,8 @@ This roadmap closes only when the native Rust dashboard preserves the final Pyth
 | 001 | closed | plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md | plans/closure/dashboard/001-status.md | none |
 | 002 | closed | plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md | plans/closure/dashboard/002-status.md | none |
 | 003 | closed | plans/implementation/dashboard/003-overview-account-model-parity.md | plans/closure/dashboard/003-status.md | Four accepted source-truth projection differences remain documented for M006 disposition. |
-| 004 | conditionally closed | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | plans/closure/dashboard/004-status.md | M006 must resolve one zero-count operational-summary parity variance before final closure |
-| 005 | active | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | — | Interfaces are stable; M004 must fully close before M005 can close |
-| 006 | blocked | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | — | M003-M005 |
+| 004 | conditionally closed | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | plans/closure/dashboard/004-status.md | Corrective pass 007 resolves the no-op startup recovery event variance |
+| 005 | active | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | — | Runtime/cache implementation may proceed; closure waits for M004 corrective pass 007 |
+| 006 | blocked | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | — | M003-M005 and corrective pass 007 |
+
+Corrective pass 007 (`plans/implementation/dashboard/007-empty-recovery-summary-correction.md`) is active. It addresses M004 finding 1 without changing the M001 oracle or reliability comparator.
