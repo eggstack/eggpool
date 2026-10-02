@@ -1,6 +1,6 @@
 # Dashboard Milestone 011 — Hosted oracle history qualification
 
-Status: active
+Status: closed
 
 Repository baseline: `3c40e34f`
 

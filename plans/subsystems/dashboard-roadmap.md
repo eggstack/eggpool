@@ -380,7 +380,7 @@ behavior changes occur.
 | 008 | blocked | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | M011 hosted CI qualification corrective |
 | 009 | blocked | plans/implementation/dashboard/009-production-module-decomposition.md | — | M008 |
 | 010 | blocked | plans/implementation/dashboard/010-parity-harness-decomposition.md | — | M009 |
-| 011 | active | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | — | M008 implementation committed; M008 closure awaits hosted qualification |
+| 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
 
 M001-M007 remain closed historical evidence. M008 reopens only the roadmap
 lifecycle for a post-merge strict-CI regression and planning-control
