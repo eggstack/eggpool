@@ -47,6 +47,34 @@ pub struct QualificationDbSnapshot {
     pub records: Vec<QualificationTransactionRecord>,
     pub dropped_records: u64,
     pub checkpoint_maintenance: QualificationCheckpointMaintenance,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    pub dedicated_checkpointer: QualificationDedicatedCheckpointer,
+}
+
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QualificationDedicatedCheckpointer {
+    pub enabled: bool,
+    pub primary_wal_autocheckpoint_pages: u64,
+    pub dedicated_journal_mode: Option<String>,
+    pub dedicated_synchronous: Option<String>,
+    pub dedicated_wal_autocheckpoint_pages: Option<u64>,
+    pub event_wakes: u64,
+    pub noop_observations: u64,
+    pub passive_attempts: u64,
+    pub passive_progress: u64,
+    pub passive_completed: u64,
+    pub busy_or_incomplete: u64,
+    pub failures: u64,
+    pub max_log_frames: u64,
+    pub max_checkpointed_frames: u64,
+    pub last_log_frames: u64,
+    pub last_checkpointed_frames: u64,
+    pub elapsed_count: u64,
+    pub elapsed_max_us: u64,
+    pub elapsed_p95_upper_bound_us: Option<u64>,
+    pub close_result: Option<String>,
+    pub process_thread_count: Option<u64>,
 }
 
 /// Bounded, scalar-only maintenance checkpoint evidence (persistence M001).
@@ -155,6 +183,30 @@ impl QualificationCollector {
                 failures: 0,
                 last_log_frames: 0,
                 last_checkpointed_frames: 0,
+            },
+            #[cfg(feature = "qualification-dedicated-checkpointer")]
+            dedicated_checkpointer: QualificationDedicatedCheckpointer {
+                enabled: false,
+                primary_wal_autocheckpoint_pages: 0,
+                dedicated_journal_mode: None,
+                dedicated_synchronous: None,
+                dedicated_wal_autocheckpoint_pages: None,
+                event_wakes: 0,
+                noop_observations: 0,
+                passive_attempts: 0,
+                passive_progress: 0,
+                passive_completed: 0,
+                busy_or_incomplete: 0,
+                failures: 0,
+                max_log_frames: 0,
+                max_checkpointed_frames: 0,
+                last_log_frames: 0,
+                last_checkpointed_frames: 0,
+                elapsed_count: 0,
+                elapsed_max_us: 0,
+                elapsed_p95_upper_bound_us: None,
+                close_result: None,
+                process_thread_count: None,
             },
         })
     }

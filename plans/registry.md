@@ -43,7 +43,7 @@ pair is a known numbering accident.
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Qualification-only topology experiment; physical Pi/MMC evidence remains required for disposition. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 closing — dedicated checkpointer qualification experiment | Implementation and local gates passed; physical Pi/MMC evidence remains required for performance disposition. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closed — parity qualification harness decomposition | No registered successor became ready; new qualification work requires a bounded plan. |
 
@@ -57,7 +57,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Persistence | M007 dedicated checkpointer qualification experiment | active | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | Feature implementation and local qualification in progress; paired Pi/MMC performance disposition remains operational. |
+| Persistence | M007 dedicated checkpointer qualification experiment | closing | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | Implementation/local qualification complete; physical paired Pi/MMC runs remain the disposition gate. |
 | Provider transport | M002 stable Eggfetch transport error taxonomy | closing | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Local implementation gates pass; hosted CI and dependency audit are the remaining closure gates. |
 
 ## Blocked work

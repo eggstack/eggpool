@@ -72,6 +72,7 @@ QUALIFICATION_CHECKPOINT_INTERVAL_MIN_S = 1.0
 QUALIFICATION_CHECKPOINT_INTERVAL_MAX_S = 3600.0
 QUALIFICATION_CHECKPOINT_SOFT_MIN_FRAMES = 1
 QUALIFICATION_CHECKPOINT_SOFT_MAX_FRAMES = 1000
+M007_SOFT_WAL_FRAMES = 256
 DIAGNOSTIC_WARMUPS = 5
 DIRECT_CONTROL_WARMUPS = 5
 DIRECT_CONTROL_SAMPLES = 30
@@ -1465,6 +1466,90 @@ def _qualification_checkpoint_maintenance(
     return required
 
 
+_M007_COUNTERS = (
+    "event_wakes",
+    "noop_observations",
+    "passive_attempts",
+    "passive_progress",
+    "passive_completed",
+    "busy_or_incomplete",
+    "failures",
+    "elapsed_count",
+)
+
+
+def _qualification_dedicated_checkpointer(
+    value: Mapping[str, Any], *, enabled: bool
+) -> dict[str, Any]:
+    """Validate the feature-only M007 scalar projection."""
+    snapshot_value = value.get("database_qualification")
+    snapshot = (
+        cast("dict[str, Any]", snapshot_value)
+        if isinstance(snapshot_value, dict)
+        else None
+    )
+    dedicated_value = snapshot.get("dedicated_checkpointer") if snapshot else None
+    if not isinstance(dedicated_value, dict):
+        raise QualificationError("M007 dedicated-checkpointer evidence is missing")
+    dedicated = cast("dict[str, Any]", dedicated_value)
+    if dedicated.get("enabled") is not enabled:
+        raise QualificationError("M007 topology toggle did not match the requested run")
+    primary_auto = dedicated.get("primary_wal_autocheckpoint_pages")
+    if type(primary_auto) is not int or primary_auto != 1000:
+        raise QualificationError("M007 primary auto-checkpoint ceiling changed")
+    if enabled and (
+        dedicated.get("dedicated_journal_mode") != "wal"
+        or dedicated.get("dedicated_synchronous") != "NORMAL"
+        or dedicated.get("dedicated_wal_autocheckpoint_pages") != 0
+    ):
+        raise QualificationError("M007 dedicated connection pragmas are invalid")
+    result: dict[str, Any] = {
+        "enabled": enabled,
+        "primary_wal_autocheckpoint_pages": primary_auto,
+        "dedicated_journal_mode": dedicated.get("dedicated_journal_mode"),
+        "dedicated_synchronous": dedicated.get("dedicated_synchronous"),
+        "dedicated_wal_autocheckpoint_pages": dedicated.get(
+            "dedicated_wal_autocheckpoint_pages"
+        ),
+    }
+    for name in _M007_COUNTERS + (
+        "max_log_frames",
+        "max_checkpointed_frames",
+        "last_log_frames",
+        "last_checkpointed_frames",
+        "elapsed_max_us",
+    ):
+        counter = dedicated.get(name)
+        if type(counter) is not int or counter < 0:
+            raise QualificationError(f"M007 scalar {name} is invalid")
+        result[name] = counter
+    for name in ("elapsed_p95_upper_bound_us", "process_thread_count"):
+        item = dedicated.get(name)
+        if item is not None and (type(item) is not int or item < 0):
+            raise QualificationError(f"M007 scalar {name} is invalid")
+        result[name] = item
+    result["close_result"] = dedicated.get("close_result")
+    return result
+
+
+def _dedicated_checkpointer_deltas(
+    baseline: Mapping[str, Any], final: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Compare bounded cumulative M007 counters across one request batch."""
+    result: dict[str, Any] = {}
+    for name in _M007_COUNTERS:
+        result[name] = final[name] - baseline[name]
+    result["maximum_log_frames"] = final["max_log_frames"]
+    result["maximum_checkpointed_frames"] = final["max_checkpointed_frames"]
+    result["last_log_frames"] = final["last_log_frames"]
+    result["last_checkpointed_frames"] = final["last_checkpointed_frames"]
+    result["elapsed_max_us"] = final["elapsed_max_us"]
+    result["elapsed_p95_upper_bound_us"] = final["elapsed_p95_upper_bound_us"]
+    result["thread_count_before"] = baseline["process_thread_count"]
+    result["thread_count_after"] = final["process_thread_count"]
+    return result
+
+
 def _checkpoint_maintenance_deltas(
     baseline: Mapping[str, Any] | None, final: Mapping[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -2236,6 +2321,8 @@ def run_qualification(
     qualification_checkpoint_interval_s: float | None = None,
     qualification_checkpoint_soft_frames: int | None = None,
     diagnose_checkpoint_maintenance: bool = False,
+    qualification_dedicated_checkpointer_mode: str | None = None,
+    diagnose_dedicated_checkpointer_steady_state: bool = False,
     diagnostic_database_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
@@ -2295,6 +2382,27 @@ def run_qualification(
     if diagnose_checkpoint_maintenance and not diagnose_publication_phases:
         raise ValueError(
             "checkpoint maintenance diagnostics require Plan 239 phase diagnostics"
+        )
+    if qualification_dedicated_checkpointer_mode not in {
+        None,
+        "control",
+        "candidate",
+    }:
+        raise ValueError("M007 topology mode must be control or candidate")
+    if qualification_dedicated_checkpointer_mode is not None:
+        if not diagnose_publication_phases:
+            raise ValueError("M007 topology runs require publication phase diagnostics")
+        if qualification_wal_autocheckpoint_pages not in {None, 1000}:
+            raise ValueError(
+                "M007 topology runs require primary wal_autocheckpoint=1000"
+            )
+        if qualification_checkpoint_soft_frames not in {None, M007_SOFT_WAL_FRAMES}:
+            raise ValueError("M007 topology runs require a 256-frame threshold")
+    if diagnose_dedicated_checkpointer_steady_state and (
+        qualification_dedicated_checkpointer_mode != "candidate"
+    ):
+        raise ValueError(
+            "M007 steady-state mode requires the enabled candidate topology"
         )
     if diagnose_publication_storage is not None and benchmark_samples > 0:
         raise ValueError(
@@ -2402,6 +2510,10 @@ def run_qualification(
         if qualification_checkpoint_soft_frames is not None:
             env["EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES"] = str(
                 qualification_checkpoint_soft_frames
+            )
+        if qualification_dedicated_checkpointer_mode is not None:
+            env["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] = (
+                "1" if qualification_dedicated_checkpointer_mode == "candidate" else "0"
             )
         commands: list[CommandResult] = []
         samples: list[dict[str, Any]] = []
@@ -2610,13 +2722,31 @@ def run_qualification(
                     benchmark: dict[str, Any] = {
                         "sample_count": PUBLICATION_PHASE_SAMPLES,
                         "config_fixture": Path(config_fixture).name,
-                        "diagnostic_mode": "publication_commit_checkpoint_phase",
+                        "diagnostic_mode": (
+                            "persistence_m007_dedicated_checkpointer"
+                            if qualification_dedicated_checkpointer_mode is not None
+                            else "publication_commit_checkpoint_phase"
+                        ),
                         "wal_autocheckpoint_override_pages": (
                             qualification_wal_autocheckpoint_pages
                         ),
                         "cadence": benchmark_cadence_facts(content),
                         "runs": {},
                     }
+                    if qualification_dedicated_checkpointer_mode is not None:
+                        benchmark["dedicated_checkpointer_mode"] = (
+                            qualification_dedicated_checkpointer_mode
+                        )
+                        benchmark["paired_binary_sha256"] = candidate_hash
+                        benchmark["soft_threshold_frames"] = M007_SOFT_WAL_FRAMES
+                        concurrency = _concurrent_finite_benchmark(
+                            benchmark_process, port
+                        )
+                        if concurrency["status"] != "measured":
+                            raise QualificationError(
+                                "M007 concurrency-4 benchmark did not complete"
+                            )
+                        benchmark["runs"]["concurrency_4"] = concurrency
                     diagnostic_runtime_url = (
                         f"http://127.0.0.1:{port}/api/stats/runtime"
                     )
@@ -2649,6 +2779,16 @@ def run_qualification(
                     baseline_sequence = baseline_database["latest_record_seq"]
                     baseline_maintenance = _qualification_checkpoint_maintenance(
                         baseline_runtime
+                    )
+                    m007_enabled = (
+                        qualification_dedicated_checkpointer_mode == "candidate"
+                    )
+                    baseline_m007 = (
+                        _qualification_dedicated_checkpointer(
+                            baseline_runtime, enabled=m007_enabled
+                        )
+                        if qualification_dedicated_checkpointer_mode is not None
+                        else None
                     )
                     if diagnose_checkpoint_maintenance and baseline_maintenance is None:
                         raise QualificationError(
@@ -2700,6 +2840,13 @@ def run_qualification(
                     correlation = _correlate_transaction_phases(
                         phase_run, records, PUBLICATION_PHASE_SAMPLES
                     )
+                    final_m007 = (
+                        _qualification_dedicated_checkpointer(
+                            final_runtime, enabled=m007_enabled
+                        )
+                        if qualification_dedicated_checkpointer_mode is not None
+                        else None
+                    )
                     benchmark["effective"] = final_database["effective"]
                     benchmark["collector"] = {
                         "schema_version": final_database["schema_version"],
@@ -2712,6 +2859,183 @@ def run_qualification(
                         **phase_run,
                         **correlation,
                     }
+                    if baseline_m007 is not None and final_m007 is not None:
+                        m007_deltas = _dedicated_checkpointer_deltas(
+                            baseline_m007, final_m007
+                        )
+                        benchmark["dedicated_checkpointer"] = {
+                            "baseline": baseline_m007,
+                            "after_60_request_phase": final_m007,
+                            "deltas": m007_deltas,
+                        }
+                        if m007_enabled:
+                            publication = correlation["publication_phase_summary"]
+                            finalization = correlation["finalization_phase_summary"]
+                            max_gate_wait = max(
+                                publication["maximum_gate_wait_us"] or 0,
+                                finalization["maximum_gate_wait_us"] or 0,
+                            )
+                            gates = {
+                                "request_p95_below_100_ms": (
+                                    isinstance(phase_run.get("p95_elapsed_ms"), int)
+                                    and phase_run["p95_elapsed_ms"] < 100
+                                ),
+                                "request_max_below_500_ms": (
+                                    isinstance(phase_run.get("maximum_elapsed_ms"), int)
+                                    and phase_run["maximum_elapsed_ms"] < 500
+                                ),
+                                "publication_commit_max_below_50_ms": (
+                                    (publication["maximum_commit_us"] or 0) < 50_000
+                                ),
+                                "finalization_commit_max_below_50_ms": (
+                                    (finalization["maximum_commit_us"] or 0) < 50_000
+                                ),
+                                "foreground_gate_wait_max_below_50_ms": (
+                                    max_gate_wait < 50_000
+                                ),
+                                "passive_checkpoint_progress": (
+                                    m007_deltas["passive_progress"] > 0
+                                ),
+                                "checkpoint_failures_zero": (
+                                    m007_deltas["failures"] == 0
+                                ),
+                                "maximum_wal_frames_below_1000": (
+                                    m007_deltas["maximum_log_frames"] < 1000
+                                ),
+                            }
+                            benchmark["candidate_phase_gates"] = gates
+                            if not all(gates.values()):
+                                report["findings"].append(
+                                    "M007 60-request phase missed gates"
+                                )
+                        if diagnose_dedicated_checkpointer_steady_state:
+                            windows: list[dict[str, Any]] = [
+                                {
+                                    "window": 1,
+                                    "requests": PUBLICATION_PHASE_SAMPLES,
+                                    "summary": phase_run,
+                                    "dedicated": final_m007,
+                                    "wal": _wal_snapshot(database),
+                                }
+                            ]
+                            for window_number in range(2, 6):
+                                window = _diagnostic_finite_batch(
+                                    port,
+                                    provider,
+                                    PUBLICATION_PHASE_SAMPLES,
+                                    benchmark_process,
+                                    database,
+                                    warmup=False,
+                                )
+                                if (
+                                    window["completed_count"]
+                                    != PUBLICATION_PHASE_SAMPLES
+                                    or window["timeout_count"] != 0
+                                    or window["failed_count"] != 0
+                                ):
+                                    raise QualificationError(
+                                        "M007 300-request steady-state window did not "
+                                        "complete"
+                                    )
+                                window_runtime = _runtime_json(
+                                    diagnostic_runtime_url, "q008-server-key"
+                                )
+                                if window_runtime is None:
+                                    raise QualificationError(
+                                        "M007 runtime snapshot missing after a "
+                                        "steady-state window"
+                                    )
+                                window_m007 = _qualification_dedicated_checkpointer(
+                                    window_runtime, enabled=True
+                                )
+                                windows.append(
+                                    {
+                                        "window": window_number,
+                                        "requests": PUBLICATION_PHASE_SAMPLES,
+                                        "summary": window,
+                                        "dedicated": window_m007,
+                                        "wal": _wal_snapshot(database),
+                                    }
+                                )
+                            stabilized = resource_sample(
+                                "m007-after-300-request-stabilization",
+                                benchmark_process,
+                                database,
+                                diagnostic_runtime_url,
+                                duration=STABILIZATION_SECONDS,
+                                include_peak=True,
+                            )
+                            samples.append(stabilized)
+                            steady_runtime = _runtime_json(
+                                diagnostic_runtime_url, "q008-server-key"
+                            )
+                            if steady_runtime is None:
+                                raise QualificationError(
+                                    "M007 runtime snapshot missing after stabilization"
+                                )
+                            steady_m007 = _qualification_dedicated_checkpointer(
+                                steady_runtime, enabled=True
+                            )
+                            progress_windows = sum(
+                                window["dedicated"]["passive_progress"]
+                                > prior["passive_progress"]
+                                for prior, window in zip(
+                                    [final_m007]
+                                    + [item["dedicated"] for item in windows[1:-1]],
+                                    windows[1:],
+                                    strict=True,
+                                )
+                            )
+                            steady_gates = {
+                                "five_60_request_windows": len(windows) == 5,
+                                "all_requests_below_500_ms": all(
+                                    isinstance(
+                                        item["summary"].get("maximum_elapsed_ms"), int
+                                    )
+                                    and item["summary"]["maximum_elapsed_ms"] < 500
+                                    for item in windows
+                                ),
+                                "checkpoint_progress_in_multiple_windows": (
+                                    progress_windows >= 2
+                                ),
+                                "wal_frames_below_safety_ceiling": (
+                                    steady_m007["max_log_frames"] < 1000
+                                ),
+                                "checkpoint_caught_up_after_writes": (
+                                    steady_m007["last_checkpointed_frames"]
+                                    >= steady_m007["last_log_frames"]
+                                ),
+                                "requests_and_reservations_converged": (
+                                    stabilized["pending_requests"] in {0, None}
+                                    and stabilized["active_reservations"] in {0, None}
+                                ),
+                                "checkpoint_failures_zero": steady_m007["failures"]
+                                == 0,
+                            }
+                            benchmark["steady_state_300_requests"] = {
+                                "window_count": len(windows),
+                                "request_count": sum(
+                                    item["requests"] for item in windows
+                                ),
+                                "windows": windows,
+                                "final_dedicated": steady_m007,
+                                "passive_progress_windows": progress_windows,
+                                "stabilized_resources": {
+                                    "thread_count": stabilized["thread_count"],
+                                    "rss_bytes": stabilized["rss_bytes"],
+                                    "peak_rss_bytes": stabilized.get("peak_rss_bytes"),
+                                    "pending_requests": stabilized["pending_requests"],
+                                    "active_reservations": stabilized[
+                                        "active_reservations"
+                                    ],
+                                },
+                                "gates": steady_gates,
+                            }
+                            if not all(steady_gates.values()):
+                                report["findings"].append(
+                                    "M007 300-request steady-state corpus missed "
+                                    "one or more stated gates"
+                                )
                     if diagnose_checkpoint_maintenance:
                         benchmark["checkpoint_tuning"] = {
                             "poll_interval_s": qualification_checkpoint_interval_s,
@@ -2730,7 +3054,10 @@ def run_qualification(
                     # contamination: the per-record gate-wait phases already
                     # capture any foreground wait behind PASSIVE work.
                     exempt_tasks: set[str] = (
-                        {"checkpoint"} if diagnose_checkpoint_maintenance else set()
+                        {"checkpoint"}
+                        if diagnose_checkpoint_maintenance
+                        or qualification_dedicated_checkpointer_mode is not None
+                        else set()
                     )
                     benchmark["task_quiescence"] = {
                         "wait_timeout_s": DIAGNOSTIC_QUIESCENCE_TIMEOUT,
@@ -3195,6 +3522,29 @@ def run_qualification(
                 _stop(process, min(timeout, 5))
                 log_out.close()
                 log_err.close()
+            if qualification_dedicated_checkpointer_mode == "candidate":
+                log_lines = (
+                    (root / "stderr.log").read_text(encoding="utf-8").splitlines()
+                )
+                close_line = next(
+                    (
+                        line
+                        for line in log_lines
+                        if "M007 dedicated checkpointer close complete" in line
+                    ),
+                    None,
+                )
+                close_succeeded = (
+                    close_line is not None and "success=true" in close_line
+                )
+                report["dedicated_close_result"] = {
+                    "observed": close_line is not None,
+                    "success": close_succeeded,
+                }
+                if not close_succeeded:
+                    raise QualificationError(
+                        "M007 dedicated connection close did not report success"
+                    )
             environment["loopback_provider_requests"] = provider.requests
             if benchmark_mode:
                 environment["loopback_provider_path_counts"] = provider.path_counts()
@@ -3315,6 +3665,24 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--diagnose-dedicated-checkpointer",
+        choices=("control", "candidate"),
+        default=None,
+        help=(
+            "Run one M007 60-request same-binary topology phase; pair three "
+            "control and three candidate invocations with "
+            "--diagnose-publication-phases."
+        ),
+    )
+    parser.add_argument(
+        "--diagnose-dedicated-checkpointer-steady-state",
+        action="store_true",
+        help=(
+            "On an M007 candidate invocation, extend the first 60-request "
+            "phase to five bounded windows (300 requests total)."
+        ),
+    )
+    parser.add_argument(
         "--diagnostic-database-dir",
         type=Path,
         default=None,
@@ -3353,6 +3721,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.qualification_checkpoint_soft_frames
             ),
             diagnose_checkpoint_maintenance=args.diagnose_checkpoint_maintenance,
+            qualification_dedicated_checkpointer_mode=(
+                args.diagnose_dedicated_checkpointer
+            ),
+            diagnose_dedicated_checkpointer_steady_state=(
+                args.diagnose_dedicated_checkpointer_steady_state
+            ),
             diagnostic_database_dir=args.diagnostic_database_dir,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:

@@ -303,7 +303,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: ready
+Status: closing
 
 Objective:
 
@@ -386,4 +386,4 @@ This roadmap remains active while the foreground SQLite checkpoint tail is unres
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
-| 007 — dedicated checkpointer qualification experiment | active | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | — | Feature implementation and local qualification in progress; paired control/candidate and lifecycle disposition requires a physically attested Linux/aarch64 Raspberry Pi-class MMC target. |
+| 007 — dedicated checkpointer qualification experiment | closing | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | — | Feature implementation and local qualification passed; paired control/candidate performance disposition still requires a physically attested Linux/aarch64 Raspberry Pi-class MMC target. |

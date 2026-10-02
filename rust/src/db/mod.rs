@@ -13,6 +13,8 @@ pub use connection::{
     Database, DatabaseConfig, DatabaseError, DatabaseStats, DatabaseTransaction,
     RetentionCleanupPolicy, RetentionCleanupReport,
 };
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+pub use qualification::QualificationDedicatedCheckpointer;
 #[cfg(feature = "qualification-db-diagnostics")]
 pub use qualification::{
     QualificationCheckpointMaintenance, QualificationDbSnapshot, QualificationEffectivePragmas,

@@ -34,6 +34,7 @@ from scripts.qualification_sbc import (
     _checkpoint_maintenance_deltas,
     _combine_diagnostic_sample,
     _correlate_transaction_phases,
+    _dedicated_checkpointer_deltas,
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
@@ -44,6 +45,7 @@ from scripts.qualification_sbc import (
     _qualification_checkpoint_maintenance,
     _qualification_checkpoint_soft_frames,
     _qualification_database_snapshot,
+    _qualification_dedicated_checkpointer,
     _qualification_records_after,
     _qualification_wal_autocheckpoint_pages,
     _root_block_device,
@@ -698,6 +700,57 @@ def test_m001_checkpoint_tuning_bounds_and_maintenance_projection() -> None:
     assert deltas["last_checkpointed_frames"] == 290
     assert _checkpoint_maintenance_deltas(None, final) is None
     assert "sql" not in json.dumps(deltas).lower()
+
+
+def _m007_runtime(enabled: bool) -> dict[str, object]:
+    dedicated: dict[str, object] = {
+        "enabled": enabled,
+        "primary_wal_autocheckpoint_pages": 1000,
+        "dedicated_journal_mode": "wal" if enabled else None,
+        "dedicated_synchronous": "NORMAL" if enabled else None,
+        "dedicated_wal_autocheckpoint_pages": 0 if enabled else None,
+        "event_wakes": 10,
+        "noop_observations": 3,
+        "passive_attempts": 2,
+        "passive_progress": 2,
+        "passive_completed": 2,
+        "busy_or_incomplete": 0,
+        "failures": 0,
+        "max_log_frames": 512,
+        "max_checkpointed_frames": 512,
+        "last_log_frames": 32,
+        "last_checkpointed_frames": 32,
+        "elapsed_count": 3,
+        "elapsed_max_us": 500,
+        "elapsed_p95_upper_bound_us": 1000,
+        "close_result": None,
+        "process_thread_count": 8,
+    }
+    return {"database_qualification": {"dedicated_checkpointer": dedicated}}
+
+
+def test_m007_feature_projection_and_same_binary_mode_validation() -> None:
+    control = _qualification_dedicated_checkpointer(_m007_runtime(False), enabled=False)
+    candidate = _qualification_dedicated_checkpointer(_m007_runtime(True), enabled=True)
+    deltas = _dedicated_checkpointer_deltas(control, candidate)
+    assert deltas["passive_progress"] == 0
+    assert deltas["maximum_log_frames"] == 512
+    assert deltas["last_checkpointed_frames"] == 32
+    with pytest.raises(QualificationError, match="toggle"):
+        _qualification_dedicated_checkpointer(_m007_runtime(False), enabled=True)
+    with pytest.raises(ValueError, match="publication phase"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            qualification_dedicated_checkpointer_mode="control",
+        )
+    with pytest.raises(ValueError, match="candidate topology"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            config_fixture=BENCHMARK_FIXTURE,
+            diagnose_publication_phases=True,
+            qualification_dedicated_checkpointer_mode="control",
+            diagnose_dedicated_checkpointer_steady_state=True,
+        )
 
 
 def test_239_phase_records_correlate_exactly_and_remain_scalar_only() -> None:
