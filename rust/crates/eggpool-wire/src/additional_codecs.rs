@@ -284,7 +284,7 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                             error(
                                 CodecReasonCode::MalformedSourceRequest,
                                 Some("tool_search_output.tools"),
-                                Some(client_wire_surface(request.client_surface)),
+                                request.origin.source_surface(),
                                 Some(WireSurface::OpenaiResponses),
                             )
                         })?;
@@ -327,7 +327,7 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
                         error(
                             CodecReasonCode::MalformedSourceRequest,
                             Some("tool_search_call.arguments"),
-                            Some(client_wire_surface(request.client_surface)),
+                            request.origin.source_surface(),
                             Some(WireSurface::OpenaiResponses),
                         )
                     })?;
@@ -381,18 +381,18 @@ fn encode_responses_request(request: &CanonicalRequest) -> Result<CodecOutput<Va
         );
     }
     if !request.metadata.is_empty() {
-        if request.client_surface == ClientSurface::Responses {
+        if request.origin == crate::ir::RequestOrigin::ClientWire(ClientSurface::Responses) {
             return Err(error(
                 CodecReasonCode::UnsupportedSemanticFeature,
                 Some("metadata"),
-                Some(client_wire_surface(request.client_surface)),
+                request.origin.source_surface(),
                 Some(WireSurface::OpenaiResponses),
             ));
         }
         notices.push(notice(
             "metadata_not_representable",
             "metadata",
-            Some(client_wire_surface(request.client_surface)),
+            request.origin.source_surface(),
             Some(WireSurface::OpenaiResponses),
         ));
     }
@@ -829,7 +829,7 @@ fn validate_request_blocks(
                 return Err(error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("content"),
-                    Some(client_wire_surface(request.client_surface)),
+                    request.origin.source_surface(),
                     Some(target),
                 ));
             }
@@ -839,7 +839,7 @@ fn validate_request_blocks(
                 return Err(error(
                     CodecReasonCode::MalformedSourceRequest,
                     Some("tool_call"),
-                    Some(client_wire_surface(request.client_surface)),
+                    request.origin.source_surface(),
                     Some(target),
                 ));
             }

@@ -447,8 +447,12 @@ fn routing_request_facts_from_parts(
     let mut facts =
         RoutingRequestFacts::from_model_id(&canonical.model, &inputs.known_provider_ids);
     facts.requested_protocol = inputs.requested_protocol.clone();
-    facts.client_protocol = Some(canonical.client_surface.protocol().into());
-    facts.request_surface = canonical.client_surface.as_str().into();
+    let client_surface = canonical
+        .origin
+        .client_surface()
+        .expect("admission produces a client-wire origin");
+    facts.client_protocol = Some(client_surface.protocol().into());
+    facts.request_surface = client_surface.as_str().into();
     facts.transcode_protocols = inputs.transcode_protocols.clone();
     facts.projected_tokens = reservation_tokens.min(i64::MAX as u64) as i64;
     facts.catalog_stale_after_s = inputs.catalog_stale_after_s;
@@ -473,7 +477,14 @@ pub fn affinity_identity_input(
     explicit_session: Option<&str>,
 ) -> AffinityIdentityInput {
     if let Some(identity) = session_identity_from_header(explicit_session) {
-        return AffinityIdentityInput::explicit(request.client_surface.as_str(), identity);
+        return AffinityIdentityInput::explicit(
+            request
+                .origin
+                .client_surface()
+                .expect("admitted wire origin")
+                .as_str(),
+            identity,
+        );
     }
     let system_developer = request
         .conversation_prefix()
@@ -481,7 +492,11 @@ pub fn affinity_identity_input(
         .map(|(role, text)| ConversationTextFragment::new(role.as_str(), text))
         .collect();
     AffinityIdentityInput::automatic(
-        request.client_surface.as_str(),
+        request
+            .origin
+            .client_surface()
+            .expect("admitted wire origin")
+            .as_str(),
         ConversationPrefix::new(system_developer, request.first_user_text()),
     )
 }

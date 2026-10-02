@@ -24,6 +24,7 @@ const KERNEL_SOURCES: &[(&str, &str)] = &[
     ("fidelity", include_str!("../src/wire/fidelity.rs")),
     ("provenance", include_str!("../src/wire/provenance.rs")),
     ("conformance", include_str!("../src/wire/conformance.rs")),
+    ("tool_calls", include_str!("../src/wire/tool_calls.rs")),
 ];
 
 /// M003 single-source-of-truth locations. `registry.rs` moved to
@@ -72,6 +73,10 @@ const EXTRACTED_CRATE_SOURCES: &[(&str, &str)] = &[
     (
         "eggpool-wire/conformance",
         include_str!("../crates/eggpool-wire/src/conformance.rs"),
+    ),
+    (
+        "eggpool-wire/tool_calls",
+        include_str!("../crates/eggpool-wire/src/tool_calls.rs"),
     ),
 ];
 
@@ -162,6 +167,7 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
         ("fidelity", "eggpool_wire::fidelity"),
         ("provenance", "eggpool_wire::provenance"),
         ("conformance", "eggpool_wire::conformance"),
+        ("tool_calls", "eggpool_wire::tool_calls"),
     ];
     // Implementation markers that must live only in `eggpool-wire`. If any
     // root facade grows one of these, the single-source-of-truth invariant
@@ -200,6 +206,7 @@ fn root_kernel_modules_are_facades_without_duplicate_implementations() {
         "pub struct StreamConformanceVector",
         "pub fn stream_conformance_vectors",
         "pub fn sse_split_points",
+        "pub struct CanonicalToolCallAccumulator",
     ];
     for ((module, source), (_, facade_path)) in KERNEL_SOURCES.iter().zip(FACADE_CRATE.iter()) {
         assert!(

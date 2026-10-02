@@ -49,6 +49,17 @@ facades (`pub use eggpool_wire::...`) preserving the canonical `wire::ir` path; 
 `wire::runtime`, and `request::admission` remain EggPool-owned. Root integration tests stay authoritative and
 the crate runs its own package tests; no new binary or packaging artifact was introduced.
 
+The crate is also consumable by sibling semantic producers: `CanonicalRequest::from_canonical`
+marks canonical origin without inventing a source surface, while decoded requests retain
+their exact `RequestOrigin::ClientWire`. `encode_request_for_surface` selects the built-in
+codec without runtime path/priority metadata; `RequestEncodeOptions` keeps protocol
+serialization controls closed (currently OpenAI Chat streaming usage opt-in). The bounded
+`CanonicalToolCallAccumulator` consumes canonical events and owns no SSE parser or tool
+execution policy. EggPool remains the continuously qualified consumer and owns all HTTP,
+admission, profile selection, routing, and transport joins. Crates.io currently contains
+version 0.1.0; this milestone does not publish or promise a new semver contract, and the
+first sibling integration should pin an immutable EggPool revision.
+
 ## Codecs and the closed registry
 
 Five wire surfaces (`WireSurface`: `OpenaiChatCompletions`, `OpenaiResponses`, `AnthropicMessages`,

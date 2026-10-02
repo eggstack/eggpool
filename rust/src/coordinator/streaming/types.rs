@@ -116,7 +116,7 @@ impl StreamRequest {
         routing_facts: RoutingRequestFacts,
     ) -> Result<Self, StreamingCoordinatorError> {
         if !admitted.canonical.stream
-            || admitted.canonical.client_surface != client_surface
+            || admitted.canonical.origin.client_surface() != Some(client_surface)
             || admitted.canonical.model != routing_facts.canonical_model_id
             || routing_facts.request_surface != client_surface.as_str()
         {

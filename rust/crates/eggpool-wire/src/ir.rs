@@ -16,6 +16,36 @@ pub enum ClientSurface {
     Messages,
 }
 
+/// Provenance of a canonical request. Semantic producers use `Canonical`;
+/// decoders retain the exact client wire surface that supplied the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOrigin {
+    Canonical,
+    ClientWire(ClientSurface),
+}
+
+impl RequestOrigin {
+    pub const fn client_surface(self) -> Option<ClientSurface> {
+        match self {
+            Self::Canonical => None,
+            Self::ClientWire(surface) => Some(surface),
+        }
+    }
+
+    pub const fn source_surface(self) -> Option<crate::profile::WireSurface> {
+        match self {
+            Self::Canonical => None,
+            Self::ClientWire(surface) => Some(match surface {
+                ClientSurface::ChatCompletions => {
+                    crate::profile::WireSurface::OpenaiChatCompletions
+                }
+                ClientSurface::Responses => crate::profile::WireSurface::OpenaiResponses,
+                ClientSurface::Messages => crate::profile::WireSurface::AnthropicMessages,
+            }),
+        }
+    }
+}
+
 pub type CanonicalSurface = ClientSurface;
 
 impl ClientSurface {
@@ -536,7 +566,7 @@ fn presence_map_debug(presence: &Presence<Map<String, Value>>) -> String {
 #[derive(Clone, PartialEq)]
 pub struct CanonicalRequest {
     pub model: String,
-    pub client_surface: ClientSurface,
+    pub origin: RequestOrigin,
     pub messages: Vec<CanonicalMessage>,
     pub stream: bool,
     pub max_output_tokens: Option<u64>,
@@ -558,7 +588,7 @@ impl fmt::Debug for CanonicalRequest {
         formatter
             .debug_struct("CanonicalRequest")
             .field("model", &self.model)
-            .field("client_surface", &self.client_surface)
+            .field("origin", &self.origin)
             .field("messages", &self.messages)
             .field("stream", &self.stream)
             .field("max_output_tokens", &self.max_output_tokens)
@@ -581,6 +611,37 @@ impl fmt::Debug for CanonicalRequest {
 }
 
 impl CanonicalRequest {
+    /// Construct a request from already-canonical semantic data.
+    #[must_use]
+    pub fn from_canonical(model: impl Into<String>, messages: Vec<CanonicalMessage>) -> Self {
+        Self {
+            model: model.into(),
+            origin: RequestOrigin::Canonical,
+            messages,
+            stream: false,
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            tools: Vec::new(),
+            tool_choice: None,
+            response_format: None,
+            reasoning: ReasoningIntent::default(),
+            cache_control: None,
+            metadata: BTreeMap::new(),
+            parallel_tool_calls: None,
+            presence: RequestPresence {
+                stream: Presence::Missing,
+                max_output_tokens: Presence::Missing,
+                temperature: Presence::Missing,
+                top_p: Presence::Missing,
+                stop: Presence::Missing,
+                response_format: Presence::Missing,
+                parallel_tool_calls: Presence::Missing,
+            },
+        }
+    }
+
     pub fn first_user_text(&self) -> Option<String> {
         self.messages
             .iter()

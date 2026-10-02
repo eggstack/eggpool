@@ -117,7 +117,10 @@ fn responses_and_messages_keep_surface_specific_intent() {
         }),
         ClientSurface::Responses,
     );
-    assert_eq!(responses.canonical.client_surface, ClientSurface::Responses);
+    assert_eq!(
+        responses.canonical.origin.client_surface(),
+        Some(ClientSurface::Responses)
+    );
     assert_eq!(responses.canonical.messages[0].role, CanonicalRole::User);
     assert_eq!(responses.canonical.reasoning.effort.as_deref(), Some("low"));
     assert_eq!(

@@ -154,6 +154,14 @@ impl<T> CodecOutput<T> {
     }
 }
 
+/// Closed protocol-level controls for request serialization.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RequestEncodeOptions {
+    /// Ask OpenAI Chat streaming responses to include a final usage chunk.
+    /// Ignored by surfaces that do not define this protocol field.
+    pub include_stream_usage: bool,
+}
+
 /// A valid provider error envelope is evidence, not a codec parse failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedProviderPayload {
@@ -215,6 +223,15 @@ pub trait WireCodec {
         request: &CanonicalRequest,
         profile: &ConfiguredWireProfile,
     ) -> Result<CodecOutput<Value>, CodecError>;
+
+    fn encode_request_with_options(
+        &self,
+        request: &CanonicalRequest,
+        profile: &ConfiguredWireProfile,
+        _options: &RequestEncodeOptions,
+    ) -> Result<CodecOutput<Value>, CodecError> {
+        self.encode_request(request, profile)
+    }
 
     /// Apply the shared W006 loss policy to request adaptation notices.
     fn encode_request_with_policy(

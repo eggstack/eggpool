@@ -17,6 +17,7 @@ pub mod provenance;
 pub mod registry;
 pub mod runtime;
 pub mod stream;
+pub mod tool_calls;
 
 pub use adaptation::{
     AdaptationOutcome, AdaptationPolicy, CapabilityDisposition, LossPolicy, MAX_ADAPTATION_NOTICES,
@@ -36,8 +37,8 @@ pub use additional_codecs::{
 };
 pub use codec::{
     AdaptationCode, AdaptationNotice, BuiltinCodec, CodecError, CodecOutput, CodecReasonCode,
-    CompatibilityPath, DecodedProviderPayload, StreamAdapterKind, WireCodec, WireCodecId,
-    builtin_codec, compatibility_path,
+    CompatibilityPath, DecodedProviderPayload, RequestEncodeOptions, StreamAdapterKind, WireCodec,
+    WireCodecId, builtin_codec, compatibility_path,
 };
 pub use codecs::{AnthropicMessagesCodec, OpenAiChatCodec, builtin_codec_instance};
 pub use conformance::{StreamConformanceVector, sse_split_points, stream_conformance_vectors};
@@ -45,9 +46,11 @@ pub use decode::{
     DecodeError, DecodeLimits, MediaLimitError, canonical_request_from_object_with_limits,
     canonical_request_from_value_with_limits,
 };
+pub use eggpool_wire::encode_request_for_surface;
 pub use fidelity::{
     AdaptationEffect, AdaptationEffectClass, Fidelity, TranslationPlan, classify_notice,
-    effects_for_notices, fidelity_for_response_notices, plan_request_translation,
+    effects_for_notices, fidelity_for_response_notices, plan_canonical_request_translation,
+    plan_request_translation,
 };
 pub use provenance::{
     MAX_PROVENANCE_DEPTH, MAX_PROVENANCE_FRAGMENTS, MAX_PROVENANCE_NAME_BYTES,
@@ -70,4 +73,9 @@ pub use stream::{
     SseDecoder, SseFrame, StreamError, StreamEventDecoder, StreamForwardingMode,
     StreamTerminalOutcome, StreamTerminalSummary, TerminalEvidence, UsageProtocol,
     decode_stream_event, encode_client_event, normalize_usage,
+};
+pub use tool_calls::{
+    CanonicalToolCallAccumulator, CompletedToolCall, MAX_ACTIVE_CANONICAL_TOOL_CALLS,
+    MAX_CANONICAL_TOOL_CALL_ARGUMENT_BYTES, MAX_CANONICAL_TOOL_CALL_TOTAL_BYTES,
+    ToolCallAccumulatorError, ToolCallIdentity,
 };

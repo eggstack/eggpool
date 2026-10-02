@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 
 use crate::adaptation::{client_wire_surface, notice, request_notices};
 use crate::codec::{
-    CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload, StreamAdapterKind, WireCodec,
-    WireCodecId,
+    CodecError, CodecOutput, CodecReasonCode, DecodedProviderPayload, RequestEncodeOptions,
+    StreamAdapterKind, WireCodec, WireCodecId,
 };
 use crate::decode::{
     DecodeError, DecodeLimits, MAX_IMAGE_BYTES, MAX_MEDIA_URI_BYTES, MAX_PDF_BYTES,
@@ -84,6 +84,24 @@ impl WireCodec for OpenAiChatCodec {
     ) -> Result<CodecOutput<Value>, CodecError> {
         ensure_profile(profile, self.surface())?;
         encode_openai_request(request)
+    }
+
+    fn encode_request_with_options(
+        &self,
+        request: &CanonicalRequest,
+        profile: &ConfiguredWireProfile,
+        options: &RequestEncodeOptions,
+    ) -> Result<CodecOutput<Value>, CodecError> {
+        ensure_profile(profile, self.surface())?;
+        let mut output = encode_openai_request(request)?;
+        if options.include_stream_usage && request.stream {
+            output
+                .value
+                .as_object_mut()
+                .expect("codec emits object")
+                .insert("stream_options".into(), json!({"include_usage": true}));
+        }
+        Ok(output)
     }
 
     fn decode_response(
@@ -748,7 +766,7 @@ fn validate_request_blocks(
                 return Err(codec_error(
                     CodecReasonCode::UnsupportedSemanticFeature,
                     Some("content"),
-                    Some(client_wire_surface(request.client_surface)),
+                    request.origin.source_surface(),
                     Some(target),
                 ));
             }
@@ -757,7 +775,7 @@ fn validate_request_blocks(
                     return Err(codec_error(
                         CodecReasonCode::MalformedSourceRequest,
                         Some("tool_call"),
-                        Some(client_wire_surface(request.client_surface)),
+                        request.origin.source_surface(),
                         Some(target),
                     ));
                 }
@@ -768,7 +786,7 @@ fn validate_request_blocks(
                     return Err(codec_error(
                         CodecReasonCode::MalformedSourceRequest,
                         Some("tool_call.arguments"),
-                        Some(client_wire_surface(request.client_surface)),
+                        request.origin.source_surface(),
                         Some(target),
                     ));
                 }

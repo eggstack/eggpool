@@ -182,7 +182,7 @@ fn request_projection(request: &CanonicalRequest) -> Value {
         "tool_choice": tool_choice,
         "response_format": request.response_format,
         "reasoning": reasoning_projection(&request.reasoning),
-        "client_surface": request.client_surface.as_str(),
+        "client_surface": request.origin.client_surface().expect("decoded wire origin").as_str(),
         "metadata": metadata,
     })
 }

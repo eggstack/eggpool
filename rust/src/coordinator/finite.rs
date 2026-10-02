@@ -408,7 +408,7 @@ impl FiniteRequest {
         compact: crate::request::CompactAdmittedRequest,
         mut routing_facts: RoutingRequestFacts,
     ) -> Result<Self, FiniteCoordinatorError> {
-        if compact.canonical.client_surface != ClientSurface::Responses
+        if compact.canonical.origin.client_surface() != Some(ClientSurface::Responses)
             || compact.canonical.stream
             || routing_facts.canonical_model_id != compact.canonical.model
             || routing_facts.request_surface != ClientSurface::Responses.as_str()
@@ -448,7 +448,7 @@ impl FiniteRequest {
         admitted: AdmittedRequest,
         routing_facts: RoutingRequestFacts,
     ) -> Result<Self, FiniteCoordinatorError> {
-        if admitted.canonical.client_surface != client_surface
+        if admitted.canonical.origin.client_surface() != Some(client_surface)
             || admitted.canonical.model != routing_facts.canonical_model_id
             || routing_facts.request_surface != client_surface.as_str()
         {
@@ -584,7 +584,7 @@ impl FiniteCoordinator {
         let Some(canonical) = request.canonical() else {
             return Err(FiniteCoordinatorError::InvalidFacts);
         };
-        if canonical.client_surface != request.client_surface
+        if canonical.origin.client_surface() != Some(request.client_surface)
             || request.routing_facts.canonical_model_id != canonical.model
         {
             return Err(FiniteCoordinatorError::InvalidFacts);

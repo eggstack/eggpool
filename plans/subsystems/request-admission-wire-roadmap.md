@@ -1,6 +1,6 @@
 # Request Admission and Wire Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -234,7 +234,7 @@ Rust tests run serial with `--test-threads=1`. Full workspace and `--no-default-
 
 ## 11. Completion definition
 
-M001 is closed on its recorded body-admission evidence. M002–M005 are closed on the extraction, fidelity/provenance, and cleanup evidence recorded in their closure files. Explicit user direction reopens the roadmap for M006, the bounded external semantic-producer consumer contract. The roadmap closes again only after M006 preserves EggPool behavior while exposing a source-neutral canonical origin, consumer-oriented encode/options seam, bounded completed-tool-call accumulation, source-isolated consumer evidence, and an immutable downstream pin.
+M001 is closed on its recorded body-admission evidence. M002–M005 are closed on the extraction, fidelity/provenance, and cleanup evidence recorded in their closure files. Explicit user direction reopened the roadmap for M006, the bounded external semantic-producer consumer contract. M006 now preserves EggPool behavior while exposing a source-neutral canonical origin, consumer-oriented encode/options seam, bounded completed-tool-call accumulation, source-isolated consumer evidence, and immutable downstream pin `f05b18b7358d9a4125d1e20c491151eec265e403`; the roadmap is closed again.
 
 ## 12. Milestone status
 
@@ -245,7 +245,7 @@ M001 is closed on its recorded body-admission evidence. M002–M005 are closed o
 | 003 — sans-I/O wire-kernel extraction and EggPool cutover | closed | `plans/implementation/request-admission-wire/003-sans-io-wire-kernel-extraction-and-eggpool-cutover.md` | `plans/closure/request-admission-wire/003-status.md` | none |
 | 004 — fidelity, provenance, and conformance hardening | closed | `plans/implementation/request-admission-wire/004-fidelity-provenance-and-conformance-hardening.md` | `plans/closure/request-admission-wire/004-status.md` | none |
 | 005 — planning reconciliation and minor wire cleanup | closed | `plans/implementation/request-admission-wire/005-planning-reconciliation-and-minor-wire-cleanup.md` | `plans/closure/request-admission-wire/005-status.md` | none |
-| 006 — external semantic-producer consumer contract | ready | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | — | none |
+| 006 — external semantic-producer consumer contract | closed | `plans/implementation/request-admission-wire/006-codegg-external-wire-consumer-contract.md` | `plans/closure/request-admission-wire/006-status.md` | none |
 
 
 ## 13. Wire-kernel extraction extension
@@ -475,6 +475,7 @@ Deliverable boundary:
 - a bounded provider-neutral completed-tool-call accumulator over `CanonicalEvent`;
 - package/source-isolated consumer tests and documentation that prove the crate remains sans-I/O and application-neutral;
 - documentation reconciliation for the crate's actual publication/consumption status;
+- `eggpool-wire 0.1.0` is already published on crates.io; this milestone does not publish a new version or change versioning policy;
 - no provider transport, routing, account, config, persistence, or HTTP behavior change.
 
 User/developer value: CodeGG and other semantic producers can share the exact protocol codecs and streaming state machines EggPool already qualifies instead of maintaining parallel OpenAI/Anthropic/Gemini serializers and SSE parsers.
