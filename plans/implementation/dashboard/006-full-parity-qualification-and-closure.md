@@ -1,8 +1,8 @@
 # Dashboard Milestone 006 — Full Parity Qualification and Closure
 
-Status: blocked
+Status: ready
 
-Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001-M005
+Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus conditionally closed Dashboard M001-M005
 
 Source roadmap:
 
@@ -29,7 +29,7 @@ This milestone is a closure gate, not a venue for redesign.
 
 ## 2. Why this milestone is ready
 
-Blocked on Dashboard M005. M003 and M004 are closed. M001 must remain the unchanged oracle authority and M002 the closed common shell/API foundation.
+M005 is conditionally closed with explicit source-truth dispositions; M003 and M004 are closed. M001 remains the unchanged oracle authority and M002 the common shell/API foundation. M006 is ready to qualify the remaining strict gaps, matched browser behavior, and shutdown/restart boundary.
 
 When the prerequisite capability milestones close, M006 has no expected external runtime dependency. Browser tooling remains qualification-only.
 

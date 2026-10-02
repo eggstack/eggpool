@@ -211,7 +211,7 @@ def test_current_gap_report_is_bounded_and_diagnostic_only() -> None:
     report_path = ORACLE_DIR / "current-gap-report.json"
     report = json.loads(report_path.read_text())
     assert report["schema_version"] == "dashboard-parity-current-gaps.v1"
-    assert report["candidate_sha"] == "454b60c008cc6234d9c3db3b637402cfe8d2f1d8"
+    assert report["candidate_sha"] == "3cf7671"
     assert report["parity_status"] == "gaps"
     assert report["mismatch_count"] > 0
     assert sum(report["mismatch_groups"].values()) == report["mismatch_count"]

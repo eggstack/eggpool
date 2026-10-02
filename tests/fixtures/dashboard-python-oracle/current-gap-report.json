@@ -1,5 +1,5 @@
 {
-  "candidate_sha": "3510590e",
+  "candidate_sha": "3cf7671",
   "dom_comparisons": [
     {
       "kind": "shared-shell",
@@ -168,7 +168,7 @@
     },
     {
       "mismatches": [
-        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[2]/section[0]/div[2]/p[0] (text lengths 39/24)"
+        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[3]/section[3]/div[2]/p[0] (text lengths 24/24)"
       ],
       "route": "/runtime",
       "state": "empty",
@@ -182,12 +182,10 @@
       "status": "pass"
     },
     {
-      "mismatches": [
-        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[2]/main[3]/div[0]/section[2]/section[0]/div[1]/p[0] (text lengths 10/13)"
-      ],
+      "mismatches": [],
       "route": "/cache",
       "state": "empty",
-      "status": "mismatch"
+      "status": "pass"
     },
     {
       "kind": "api",
@@ -416,7 +414,7 @@
     },
     {
       "mismatches": [
-        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[2]/section[0]/div[2]/p[0] (text lengths 39/24)"
+        "complete DOM tree differs for /runtime at $/#document[0]/html[1]/body[2]/main[3]/section[3]/div[2]/p[0] (text lengths 24/24)"
       ],
       "route": "/runtime",
       "state": "populated",
@@ -431,7 +429,7 @@
     },
     {
       "mismatches": [
-        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[2]/main[3]/div[0]/section[2]/section[0]/div[1]/p[0] (text lengths 10/13)"
+        "complete DOM tree differs for /cache at $/#document[0]/html[1]/body[2]/main[3]/div[0]/section[2]/section[1]/div[2]/p[0] (text lengths 44/44)"
       ],
       "route": "/cache",
       "state": "populated",
@@ -869,7 +867,7 @@
       "status": "pass"
     }
   ],
-  "duration_ms": 5968,
+  "duration_ms": 6949,
   "environment": {
     "browser": "isolated headless Chrome via Chrome DevTools Protocol",
     "os": "darwin",
@@ -922,10 +920,10 @@
       "state": "private"
     }
   ],
-  "mismatch_count": 10,
+  "mismatch_count": 9,
   "mismatch_groups": {
     "overview-account-model": 4,
-    "runtime-cache": 4,
+    "runtime-cache": 3,
     "shared-shell-and-api": 2,
     "telemetry-routing-trace": 0
   },

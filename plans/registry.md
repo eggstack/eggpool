@@ -43,20 +43,20 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 active — runtime/cache parity; M004 and corrective pass 007 closed | M005 implements against closed M003/M004 interfaces; M006 remains blocked only on M005. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 conditionally closed; M006 ready — full parity qualification | M005 source-truth dispositions are recorded in its closure; M006 owns matched browser and shutdown/restart evidence. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
+| Dashboard | M006 full parity qualification and closure | ready | `plans/implementation/dashboard/006-full-parity-qualification-and-closure.md` | M005 is conditionally closed; audit the nine-cell report and complete matched browser/shutdown evidence. |
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
-| Dashboard | M006 full parity qualification and closure | Hard-blocked on M005; M003 and M004 are closed. |
 
 ## Recently closed
 
@@ -64,6 +64,7 @@ pair is a known numbering accident.
 |---|---|---|
 | Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
+| Dashboard M005 — Runtime and Cache Observability Parity | conditionally closed | `plans/closure/dashboard/005-status.md`; 814 serial Rust tests, 149 tooling tests (one skipped), and a nine-cell strict report; M006 owns the named parity/browser/shutdown follow-up. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
 | Dashboard M002 — shared shell, interaction, and dashboard API restoration | closed — exact shared-shell projection passed all 28 route/state cells; timeseries APIs matched empty/populated/private cases; eight paired desktop/mobile interaction runs and clean browser checks; 804 serial Rust tests passed | `plans/closure/dashboard/002-status.md`, implementation `da8183d`, paired viewport gate `00c69f5` |
 | Dashboard M001 — Python oracle freeze and strict parity substrate | closed — fixed 14-page/8-API oracle, 50 static/theme hashes, reproducible sanitized captures, strict negative tests, 50-cell current-gap report; no production diff | `plans/closure/dashboard/001-status.md`, implementation `3f3d5de`, theme inventory `286b70a` |
@@ -250,3 +251,12 @@ requested milestone; its M003 dependency is soft and renderer ownership is
 disjoint. M005 remains blocked until M003/M004 view-model interfaces stabilize
 and both close. M006 remains blocked on M003–M005. No new hard dependency or ADR
 was found.
+
+Dashboard M005 closure audit (implementation commits `b068315a`, `3510590e`,
+`31e1a87`, `3cf7671`; `plans/closure/dashboard/005-status.md`): M005 is
+conditionally closed with explicit dispositions for the frozen Python 500,
+unknown-status undercount, Rust supervisor task inventory, and host load
+availability. The current strict report has nine cells: four M003-owned
+overview/account/model cells, three Runtime/Cache DOM cells, and two populated
+stats API cells. The closure audit promotes M006 from blocked to ready to
+complete matched browser, shutdown/restart, and full cross-milestone evidence.

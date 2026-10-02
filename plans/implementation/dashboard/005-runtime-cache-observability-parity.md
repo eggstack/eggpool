@@ -1,6 +1,6 @@
 # Dashboard Milestone 005 — Runtime and Cache Observability Parity
 
-Status: active
+Status: conditionally closed
 
 Repository baseline: 17e298f64fa21589f558c43592a24fa91b952ff7 plus closed Dashboard M001-M002; M003/M004 interfaces stable and required closed before this milestone closes
 
@@ -51,14 +51,15 @@ At the research baseline:
 
 ### Current strict-qualification blockers
 
-The tracked strict report is `tests/fixtures/dashboard-python-oracle/current-gap-report.json`; local qualification against the frozen M002 source continues to own four Runtime/Cache cells. The latest reviewed report before the current source-only runtime label refinements recorded:
+The tracked strict report is `tests/fixtures/dashboard-python-oracle/current-gap-report.json` (candidate `3cf7671`; nine total gaps). It records three Runtime/Cache DOM cells and two M005 stats-API cells. Four additional overview/account/model DOM cells remain M003/M006-owned. The source-truth dispositions are:
 
 - Runtime task inventory differs in empty and populated states: the frozen Python snapshot lists `catalog_refresh` and `retention_cleanup`; Rust's supervisor also registers the live `checkpoint` and `metrics_flush` tasks. Keep the authoritative Rust inventory visible rather than hiding registered tasks to match the fixture.
 - Runtime host load average differs on macOS because the Rust page reports it as unavailable rather than spawning a utility or adding an unsafe host API solely for a dashboard request. Linux reads the bounded `/proc/loadavg` snapshot.
 - Populated `/api/stats/cache-observability` returns HTTP 500 in the frozen Python oracle while Rust returns HTTP 200 with its bounded response. Preserve Rust's successful response; this is an oracle defect requiring an explicit closure disposition.
 - Populated `/api/stats/request-shaping` differs because the Python projection reports one known cache-status row after collapsing multiple distinct unknown raw statuses, while Rust counts each unknown row. Keep Rust's raw-row count; accepting an undercount requires an explicit semantic disposition.
 - Cache empty-state advanced segmentation and routing-guardrail structure now matches the frozen source; its populated page retains the intentional unknown-status row-count difference described above.
-- The full report also has four M003 DOM findings reserved for M006 disposition. M005 owns its Runtime/Cache DOM and two populated stats API findings.
+- Runtime's two strict DOM cells (empty/populated) expose host load unavailable on macOS; the same snapshots also register `checkpoint` and `metrics_flush`, which the frozen Python supervisor lacks. M005 accepts current Rust ownership and reports host load unavailable without a safe source.
+- The full report retains four M003 DOM findings plus these M005 exceptions for M006's final full-contract disposition. M005 owns its Runtime/Cache DOM and two populated stats API findings.
 
 Runtime projection now includes process parent/daemon hints, process uptime, host platform, safe load-average text where `/proc/loadavg` is available, and source-matched metric labels. Cache rendering now restores the frozen segmentation totals table and six-card grouping, restores the allowed scorer-input summary, and keeps cache/routing flags tied to current scorer behavior. Focused unit coverage verifies runtime age formatting, platform labels, and bounded load-average behavior. These changes improve the source-backed surface but do not erase the strict mismatches listed above.
 
