@@ -58,6 +58,8 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
+| Dashboard | M009 production module decomposition and ownership cleanup | Hard-blocked on M008 strict-CI/planning corrective closure; preserve the current oracle harness unchanged while refactoring production. |
+| Dashboard | M010 parity qualification harness decomposition | Hard-blocked on M009 production decomposition closure; refactor the guard only after it has qualified M009. |
 
 ## Recently closed
 

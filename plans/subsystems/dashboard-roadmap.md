@@ -301,6 +301,54 @@ and tooling gates pass; hosted CI completes with no skipped gate from an
 earlier failure; dashboard behavior is unchanged; registry/roadmap agree on
 the final closed/no-successor state.
 
+
+### Milestone 009 — Production module decomposition and ownership cleanup
+
+Class: polish
+
+Objective: decompose the approximately 5.8k-line production dashboard module
+into explicit route/API/assets/shared-render/page-render boundaries while
+preserving the frozen oracle, the accepted M006 source differences, static
+assets, auth, and all current runtime/data ownership.
+
+Dependencies: M008 hard and closed before implementation.
+
+Deliverable boundary: internal `rust/src/server/dashboard/` module
+decomposition, localized tests, stable facade to `server/mod.rs`, strict
+pre/post oracle/API difference equivalence, unchanged asset hashes, and
+architecture/development documentation reconciliation.
+
+User or operator value: no intended UI change; lowers review/merge risk and
+makes future dashboard maintenance bounded without weakening parity evidence.
+
+Exit conditions: no new DOM/API/theme/auth mismatch; the pre/post accepted
+difference set is identical; render modules do not acquire runtime/database
+authority; focused/full default/no-default/tooling/hosted-CI gates pass.
+
+### Milestone 010 — Parity qualification harness decomposition
+
+Class: polish
+
+Objective: after M009 closes, decompose the approximately 2.9k-line dashboard
+qualification script into a thin stable CLI plus projection, oracle/fixture,
+process, browser, and reporting modules without changing comparator
+strictness, report schema, oracle data, CLI behavior, or production code.
+
+Dependencies: M009 hard and closed before implementation.
+
+Deliverable boundary: tooling-only module split, stable
+`scripts/qualification_dashboard_parity.py` command surface, focused
+negative/golden tests, real strict/browser/lifecycle qualification, and
+tooling documentation reconciliation.
+
+User or operator value: no intended runtime/UI change; reduces the risk that
+future browser/oracle maintenance accidentally changes the definition of
+parity.
+
+Exit conditions: CLI/report/oracle/comparator semantics are unchanged;
+accepted difference groups are identical; strict/browser/shutdown-restart,
+Ruff/Pyright/tooling, full Rust default/no-default, and hosted-CI gates pass.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -313,9 +361,14 @@ the final closed/no-successor state.
 | 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; parity capability remains closed. |
 | 007 | closed | plans/implementation/dashboard/007-empty-recovery-summary-correction.md | plans/closure/dashboard/007-status.md | none |
 | 008 | ready | plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md | — | none |
+| 009 | blocked | plans/implementation/dashboard/009-production-module-decomposition.md | — | M008 |
+| 010 | blocked | plans/implementation/dashboard/010-parity-harness-decomposition.md | — | M009 |
 
 M001-M007 remain closed historical evidence. M008 reopens only the roadmap
 lifecycle for a post-merge strict-CI regression and planning-control
 reconciliation at baseline
 `299a0b3657667af509742a184e658c14df22d406`. It does not reopen the accepted
-dashboard parity dispositions.
+dashboard parity dispositions. M009 and M010 are bounded polish successors:
+M009 is hard-blocked on M008 so the current qualification harness can guard
+the production decomposition unchanged; M010 is hard-blocked on M009 so the
+guard itself is refactored only after the production split has closed.
