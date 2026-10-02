@@ -261,3 +261,316 @@ fn account_matching_is_secret_safe_and_apply_outcome_is_typed() {
         ApplyOutcome::ControlUnavailable
     );
 }
+
+// Provider-profile metadata M001 (reviewed 2026-10-02): bundled templates are
+// bootstrap facts whose authority is current first-party provider
+// documentation, never a sibling repository. Together stays on the canonical
+// `https://api.together.ai/v1` (`docs.together.ai`); `api.together.xyz/v1`
+// is a legacy alias from the old migration page. OpenCode Go stays on
+// `https://opencode.ai/zen/go/v1`.
+
+const BUNDLED_TEMPLATES_TEXT: &str = include_str!("../assets/providers/_templates.toml");
+
+fn bundled_provider_table(id: &str) -> toml::map::Map<String, toml::Value> {
+    let root: toml::Value = BUNDLED_TEMPLATES_TEXT.parse().expect("templates parse");
+    root.get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(id))
+        .and_then(toml::Value::as_table)
+        .unwrap_or_else(|| panic!("bundled template present for {id}"))
+        .clone()
+}
+
+fn template_str(table: &toml::map::Map<String, toml::Value>, key: &str) -> String {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .unwrap_or_else(|| panic!("template key present: {key}"))
+        .to_owned()
+}
+
+/// Join a configured base URL and path the way provider dispatch does: one
+/// separator, no version-segment duplication, no missing prefix.
+fn compose_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+#[test]
+fn bundled_templates_parse_with_stable_ids_and_well_formed_endpoints() {
+    let templates = config_mutation::load_provider_templates(None).expect("bundled templates");
+    for id in [
+        "opencode-go",
+        "minimax",
+        "minimax-cn",
+        "openrouter",
+        "ollama-local",
+        "lmstudio-local",
+        "llamacpp-local",
+        "vllm-local",
+        "localai-local",
+        "custom-compatible",
+        "openai",
+        "anthropic",
+        "groq",
+        "deepinfra",
+        "gemini",
+        "gemini-native",
+        "xai",
+        "mistral",
+        "siliconflow",
+        "deepseek",
+        "together",
+        "fireworks",
+        "alibaba",
+    ] {
+        let template = templates
+            .get(id)
+            .unwrap_or_else(|| panic!("bundled template present for {id}"));
+        assert_eq!(template.id, id);
+        assert!(
+            template.url.starts_with("http://") || template.url.starts_with("https://"),
+            "{id} carries an absolute http(s) base URL"
+        );
+        assert!(
+            !template.url.ends_with('/'),
+            "{id} base URL carries no trailing slash"
+        );
+    }
+
+    // Every bundled entry declares a known auth shape; unknown modes fail
+    // closed here instead of at first provider contact.
+    let root: toml::Value = BUNDLED_TEMPLATES_TEXT.parse().expect("templates parse");
+    let providers = root
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .expect("providers table");
+    for (id, raw) in providers {
+        let table = raw.as_table().unwrap_or_else(|| panic!("{id} is a table"));
+        let mode = table
+            .get("auth")
+            .and_then(toml::Value::as_table)
+            .and_then(|auth| auth.get("mode"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or("bearer");
+        assert!(
+            matches!(mode, "bearer" | "api_key" | "none"),
+            "{id} declares a known auth mode"
+        );
+        assert!(
+            table
+                .get("protocols")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|protocols| !protocols.is_empty()),
+            "{id} declares at least one protocol"
+        );
+    }
+}
+
+#[test]
+fn together_template_retains_first_party_ai_endpoint() {
+    let templates = config_mutation::load_provider_templates(None).expect("bundled templates");
+    let template = templates.get("together").expect("together template");
+    assert_eq!(template.id, "together");
+    // Canonical first-party value per docs.together.ai (reviewed 2026-10-02).
+    // The api.together.xyz host is a legacy alias, not the correction target.
+    assert_eq!(template.url, "https://api.together.ai/v1");
+
+    let table = bundled_provider_table("together");
+    assert_eq!(
+        template_str(&table, "base_url"),
+        "https://api.together.ai/v1"
+    );
+    let auth = table
+        .get("auth")
+        .and_then(toml::Value::as_table)
+        .expect("together auth");
+    assert_eq!(
+        auth.get("mode").and_then(toml::Value::as_str),
+        Some("bearer")
+    );
+
+    // Default OpenAI-compatible surfaces compose without duplicating `/v1`.
+    let chat = compose_url(&template.url, "/chat/completions");
+    let models = compose_url(&template.url, "/models");
+    assert_eq!(chat, "https://api.together.ai/v1/chat/completions");
+    assert_eq!(models, "https://api.together.ai/v1/models");
+    assert!(!chat.contains("/v1/v1"));
+    assert!(!models.contains("/v1/v1"));
+    assert!(!template.url.contains("together.xyz"));
+}
+
+#[test]
+fn opencode_go_template_retains_zen_go_prefix_and_wire_surfaces() {
+    let templates = config_mutation::load_provider_templates(None).expect("bundled templates");
+    let template = templates.get("opencode-go").expect("opencode-go template");
+    // Current first-party value per opencode.ai/docs/go (reviewed 2026-10-02).
+    assert_eq!(template.url, "https://opencode.ai/zen/go/v1");
+
+    let table = bundled_provider_table("opencode-go");
+    let surfaces = table
+        .get("wire_surfaces")
+        .and_then(toml::Value::as_table)
+        .expect("opencode-go wire surfaces");
+    let surface_path = |surface: &str| {
+        surfaces
+            .get(surface)
+            .and_then(toml::Value::as_table)
+            .and_then(|entry| entry.get("path_template"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("{surface} path template"))
+            .to_owned()
+    };
+    assert_eq!(surface_path("openai_chat_completions"), "/chat/completions");
+    assert_eq!(surface_path("openai_responses"), "/responses");
+    assert_eq!(surface_path("anthropic_messages"), "/messages");
+
+    // Every configured surface composes under the /zen/go/v1 prefix.
+    for (surface, expected) in [
+        (
+            "openai_chat_completions",
+            "https://opencode.ai/zen/go/v1/chat/completions",
+        ),
+        (
+            "openai_responses",
+            "https://opencode.ai/zen/go/v1/responses",
+        ),
+        (
+            "anthropic_messages",
+            "https://opencode.ai/zen/go/v1/messages",
+        ),
+    ] {
+        let composed = compose_url(&template.url, &surface_path(surface));
+        assert_eq!(composed, expected);
+        assert!(composed.contains("/zen/go/v1/"));
+    }
+    // Model discovery uses the default OpenAI-shape path under the prefix.
+    assert_eq!(
+        compose_url(&template.url, "/models"),
+        "https://opencode.ai/zen/go/v1/models"
+    );
+}
+
+#[test]
+fn touched_provider_configs_construct_and_validate() {
+    use std::path::Path;
+    // Build minimal configs from the reviewed template facts so template
+    // drift breaks here before it can reach provider dispatch.
+    let together = concat!(
+        "[providers.together]\n",
+        "id = \"together\"\n",
+        "base_url = \"https://api.together.ai/v1\"\n",
+        "protocols = [\"openai\"]\n",
+        "[providers.together.auth]\n",
+        "mode = \"bearer\"\n",
+        "[providers.together.verify]\n",
+        "probe_model = \"meta-llama/Llama-3.3-70B-Instruct-Turbo\"\n",
+        "probe_protocol = \"openai\"\n",
+        "require_models = true\n",
+    );
+    let config = Config::from_toml_bytes(Path::new("together.toml"), together.as_bytes())
+        .expect("together config parses");
+    let provider = config.providers.get("together").expect("together provider");
+    assert_eq!(provider.base_url, "https://api.together.ai/v1");
+    assert_eq!(provider.auth.mode, "bearer");
+
+    let opencode_go = concat!(
+        "[providers.opencode-go]\n",
+        "id = \"opencode-go\"\n",
+        "base_url = \"https://opencode.ai/zen/go/v1\"\n",
+        "protocols = [\"openai\", \"anthropic\"]\n",
+        "[providers.opencode-go.auth]\n",
+        "mode = \"bearer\"\n",
+        "[providers.opencode-go.wire_surfaces.openai_chat_completions]\n",
+        "path_template = \"/chat/completions\"\n",
+        "priority = 100\n",
+        "[providers.opencode-go.wire_surfaces.openai_responses]\n",
+        "path_template = \"/responses\"\n",
+        "priority = 90\n",
+        "[providers.opencode-go.wire_surfaces.anthropic_messages]\n",
+        "path_template = \"/messages\"\n",
+        "priority = 100\n",
+        "[providers.opencode-go.verify]\n",
+        "probe_model = \"gpt-5.5-mini\"\n",
+        "probe_protocol = \"openai\"\n",
+        "require_models = true\n",
+    );
+    let config = Config::from_toml_bytes(Path::new("opencode-go.toml"), opencode_go.as_bytes())
+        .expect("opencode-go config parses");
+    let provider = config
+        .providers
+        .get("opencode-go")
+        .expect("opencode-go provider");
+    assert_eq!(provider.base_url, "https://opencode.ai/zen/go/v1");
+    assert_eq!(
+        provider
+            .wire_surfaces
+            .get("openai_chat_completions")
+            .expect("chat surface")
+            .path_template,
+        "/chat/completions"
+    );
+    assert_eq!(
+        provider
+            .wire_surfaces
+            .get("openai_responses")
+            .expect("responses surface")
+            .path_template,
+        "/responses"
+    );
+    assert_eq!(
+        provider
+            .wire_surfaces
+            .get("anthropic_messages")
+            .expect("messages surface")
+            .path_template,
+        "/messages"
+    );
+}
+
+#[test]
+fn representative_template_path_compositions_stay_exact() {
+    // Guards the composition shapes most likely to hide drift: DeepSeek's
+    // `/v1`-less base, MiniMax's Anthropic subpath base, and Alibaba's
+    // compatible-mode prefix.
+    let cases = [
+        (
+            "deepseek",
+            "https://api.deepseek.com",
+            "/chat/completions",
+            "https://api.deepseek.com/chat/completions",
+        ),
+        (
+            "deepseek",
+            "https://api.deepseek.com",
+            "/models",
+            "https://api.deepseek.com/models",
+        ),
+        (
+            "minimax",
+            "https://api.minimax.io/anthropic",
+            "/v1/messages",
+            "https://api.minimax.io/anthropic/v1/messages",
+        ),
+        (
+            "minimax",
+            "https://api.minimax.io/anthropic",
+            "/v1/models",
+            "https://api.minimax.io/anthropic/v1/models",
+        ),
+        (
+            "alibaba",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "/chat/completions",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        ),
+    ];
+    for (id, base, path, expected) in cases {
+        let table = bundled_provider_table(id);
+        assert_eq!(template_str(&table, "base_url"), base);
+        assert_eq!(compose_url(base, path), expected);
+    }
+}

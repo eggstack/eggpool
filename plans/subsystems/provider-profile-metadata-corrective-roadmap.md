@@ -105,7 +105,7 @@ No runtime web dependency is introduced.
 
 ### Milestone 001 — Provider template endpoint and source reconciliation
 
-Status: ready.
+Status: closed (`plans/closure/provider-profile-metadata/001-status.md`).
 
 Class: invariant / polish.
 
@@ -170,4 +170,4 @@ The roadmap closes after M001 records an evidence-backed disposition for every b
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — provider template endpoint and source reconciliation | ready | `plans/implementation/provider-profile-metadata/001-provider-template-endpoint-and-source-reconciliation.md` | — | none |
+| 001 — provider template endpoint and source reconciliation | closed | `plans/implementation/provider-profile-metadata/001-provider-template-endpoint-and-source-reconciliation.md` | `plans/closure/provider-profile-metadata/001-status.md` | none |

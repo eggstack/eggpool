@@ -80,6 +80,16 @@ only. Pricing never affects eligibility, scoring, fairness, or claim acquisition
 `RoutingRouter::catalog_model_ids` into `{object: list, data: [{id, object: model,
 owned_by: eggpool, name}]}` with no refresh, probe, or health mutation.
 
+## Discovery bootstrap
+
+Model discovery starts from the bundled provider templates
+(`rust/assets/providers/_templates.toml`), whose review authority is current
+first-party provider documentation — see "Bundled provider-template
+authority" in [Providers and Outbound Clients](deep-dive-providers.md). The
+template's base URL plus its model-discovery path is the initial discovery
+target; live responses remain the source of truth afterward and refresh
+failures never erase usable catalog state.
+
 ## Invariants
 
 - Refresh failures never erase usable catalog state; malformed input is non-destructive.
