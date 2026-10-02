@@ -41,6 +41,7 @@ pair is a known numbering accident.
 |---|---|---|---|---|
 | Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 ready — Eggfetch 0.2.2 transport failure classification adoption | Upstream blocker satisfied by published Eggfetch 0.2.2; implementation/qualification pending. |
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
+| Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -50,6 +51,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
 | Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | ready | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | M001-M007 closed; deterministic current-head Clippy failure; no hard blocker. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
@@ -285,3 +287,6 @@ in `plans/closure/dashboard/006-status.md`. No dashboard work is blocked on
 M006, no successor remains registered, and no plan is newly eligible from this
 closure. Provider Transport M002 and Routing Selection M002 retain their
 unrelated independent blockers/evidence gates.
+
+
+Explicit user direction opens a documentation-only provider-profile metadata reconciliation at baseline `43c987ea458bd563d5108fd8051ad31185704bb0`. The accepted technical outcome remains M001 closure `805d6f70`: canonical Together `api.together.ai/v1` retained, OpenCode Go `/zen/go/v1` retained, zero template diff, two low discovery uncertainties deferred. C001 exists only to reconcile the predecessor roadmap's stale top-level `active` state, the registry's active/no-successor contradiction, and planning-time Together `.xyz` wording that was superseded by execution-time first-party evidence. No provider/template/runtime work is reopened.
