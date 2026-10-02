@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M005 closed — Eggfetch 0.2.1 / Eggress 1.0.11 refresh; M002 blocked | M002 remains independently blocked on a published upstream typed classification interface. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 ready — Eggfetch 0.2.2 transport failure classification adoption | Upstream blocker satisfied by published Eggfetch 0.2.2; implementation/qualification pending. |
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
@@ -50,6 +50,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
 | Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | ready | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | M001-M007 closed; deterministic current-head Clippy failure; no hard blocker. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
 
@@ -57,7 +58,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Provider transport | M002 stable Eggfetch transport error taxonomy | Upstream Eggfetch does not yet expose/publish a general-purpose typed classification surface sufficient to replace the remaining Hyper/Rustls source-chain inspection; requires separate upstream planning. |
 | Dashboard | M009 production module decomposition and ownership cleanup | Hard-blocked on M008 strict-CI/planning corrective closure; preserve the current oracle harness unchanged while refactoring production. |
 | Dashboard | M010 parity qualification harness decomposition | Hard-blocked on M009 production decomposition closure; refactor the guard only after it has qualified M009. |
 
@@ -98,6 +98,14 @@ pair is a known numbering accident.
 | Request admission and wire M005 — planning reconciliation and minor wire cleanup | closed | `plans/closure/request-admission-wire/005-status.md`, implementation `4a1315a1` |
 
 ## Unblock audit
+
+Provider-transport M002 is unblocked by the coordinated Eggfetch 0.2.2
+release published on 2026-10-02. Upstream now exposes the general native
+`TransportFailureKind` / `Error::transport_failure_kind()` seam required by
+the roadmap, while admission/timeouts/custom-dialer facts remain on their
+existing typed APIs. M002 is registered `ready` at baseline `8db2d16c73cb7bb832c23a2e037d5fe0823021f7`;
+Eggress stays 1.0.11 and no separate upstream work remains before downstream
+implementation.
 
 Dashboard M008 is registered `ready` against baseline
 `299a0b3657667af509742a184e658c14df22d406` after hosted CI run

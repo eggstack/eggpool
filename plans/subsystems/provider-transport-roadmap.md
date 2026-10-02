@@ -215,7 +215,7 @@ coordinator to Eggress/Eggfetch internal error types.
 - M004 hard dependencies: M001 and M003 closure, so diagnostics target the final qualified provider-body/error adapter and current Eggress baseline.
 - M004 does not depend on M002: it consumes EggPool's existing stable `TransportError` categories and does not replace Eggfetch source-chain classification.
 - M005 hard dependencies: M001, M003, and M004 are closed; `eggfetch-core 0.2.1`, `eggfetch-http-connect 0.2.1`, and the Eggress 1.0.11 family are published.
-- M005 is independent of blocked M002: Eggfetch 0.2.1 intentionally does not add the missing general-purpose typed transport taxonomy, so M002 remains blocked after the patch refresh.
+- M005 was independent of M002 and closed on Eggfetch 0.2.1. Eggfetch 0.2.2 later published the required `TransportFailureKind` / `Error::transport_failure_kind()` surface, so M002 is now dependency-ready without changing Eggress 1.0.11.
 - M005 interface dependency: the existing `eggfetch-core` native HTTP/1/custom-`Dialer` contract plus Eggress `OutboundConnector::connect_tcp_detailed` typed route surface must remain semantically compatible.
 - M005 operational dependency: hosted CI and dependency-audit evidence passed; see `plans/closure/provider-transport/005-status.md`.
 - Deferred upstream simplification: an additive Eggress pproxy constructor accepting caller executor/TLS options could later eliminate the private test-root chain-executor seam. No EggPool-local replacement is authorized without that upstream contract.
@@ -267,7 +267,11 @@ Deferred work:
 
 ### Milestone 002 — Adopt stable Eggfetch transport error taxonomy
 
-Class: infrastructure
+Class: infrastructure. Status: ready.
+
+Implementation plan:
+
+- `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md`
 
 Objective:
 
@@ -277,10 +281,11 @@ Eggfetch-owned classification API while preserving EggPool's
 
 Dependencies:
 
-- Interface blocker: upstream Eggfetch must expose and publish a
-  general-purpose typed classification/helper surface sufficient to
-  distinguish cancellation, protocol/framing, TLS, admission/pool, and ordinary
-  connection failures without `Display` parsing.
+- Satisfied: Eggfetch v0.2.2 publishes
+  `TransportFailureKind::{Connect,Tls,Protocol,Cancelled}` and
+  `Error::transport_failure_kind()` for native dispatch/body errors. Existing
+  typed admission, timeout, and custom-dialer facts remain separate and are
+  already consumed by EggPool.
 
 Deliverable boundary:
 
@@ -544,21 +549,20 @@ sufficient closure evidence.
 
 This roadmap is not complete when M001 or M003 lands. It remains active until
 all registered provider-transport sustaining milestones are closed or
-explicitly deferred/superseded. M001 closure must leave runtime behavior
-unchanged while making the response-frame/error boundary explicit. M002 may
-remain blocked on its upstream interface without preventing other milestones.
-M003 must leave the Eggress ownership/feature contract unchanged while moving
-to the then-current qualified upstream family. M004 and M005 are closed. M005
-refreshed the published Eggfetch/Eggress patch lines without changing transport
-ownership or policy. The roadmap remains active while M002 is blocked on its
-upstream typed classification interface.
+explicitly deferred/superseded. M001 closure left runtime behavior unchanged
+while making the response-frame/error boundary explicit. M003 left the Eggress
+ownership/feature contract unchanged while moving to the then-current qualified
+upstream family. M004 and M005 are closed. M005 refreshed the published
+Eggfetch/Eggress patch lines without changing transport ownership or policy.
+Eggfetch 0.2.2 now satisfies M002's former upstream interface blocker, and M002
+is registered ready for bounded downstream adoption.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — Eggfetch adapter contract hardening | closed | `plans/implementation/provider-transport/001-eggfetch-adapter-contract-hardening.md` | `plans/closure/provider-transport/001-status.md` | none |
-| 002 — Adopt stable Eggfetch transport error taxonomy | blocked | — | — | upstream Eggfetch typed classification API not yet available/published |
+| 002 — Adopt stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | — | Eggfetch 0.2.2 classifier API published; downstream adoption pending |
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
-| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 remains independently blocked |
+| 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 later unblocked by published Eggfetch 0.2.2 |
