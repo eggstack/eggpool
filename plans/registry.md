@@ -51,7 +51,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
-| Dashboard | M011 hosted oracle history qualification | ready | `plans/implementation/dashboard/011-hosted-oracle-history-qualification.md` | M008 implementation committed; hosted CI needs the pinned oracle commit available to its blob identity test. |
+| Dashboard | M011 hosted oracle history qualification | active | `plans/implementation/dashboard/011-hosted-oracle-history-qualification.md` | M008 implementation committed; hosted CI needs the pinned oracle commit available to its blob identity test. |
 | Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
 
 ## Blocked work
