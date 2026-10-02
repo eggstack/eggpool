@@ -236,11 +236,14 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
-The provider transport currently requires exact `eggfetch-core =0.2.1` with
+The provider transport currently requires exact `eggfetch-core =0.2.2` with
 `native-http1,tls-rustls` (not the high-level `http1` alias or
 `standard-http1`). Dependency/profile changes must run both provider transport
 targets and the C008/C009/C011 plus boundary/finalization/publication suites
-before the full workspace checks.
+before the full workspace checks. Eggfetch's typed
+`TransportFailureKind` is consumed after EggPool's more-specific pool,
+timeout, request, proxy, and custom-dialer mappings; no provider-side
+Hyper/Rustls source-chain inspection is needed.
 
 The Eggress SSH capability is intentionally optional. Feature changes affecting
 provider transport must also qualify the reduced surface:

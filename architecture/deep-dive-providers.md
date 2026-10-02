@@ -61,7 +61,7 @@ request, and successful client reuse rather than an incidental handshake count.
 
 ## Native dependency boundaries
 
-Direct provider transport uses exact-pinned `eggfetch-core =0.2.1` with
+Direct provider transport uses exact-pinned `eggfetch-core =0.2.2` with
 `native-http1` + `tls-rustls` through the native
 `Client::execute_http_body` API. `native-http1` expands to
 `transport-http1`, `standard-route`, and `advanced-routing`: it supplies the
@@ -75,7 +75,11 @@ Eggfetch-to-`TransportError` translation boundary. EggPool keeps
 provider/account selection, request shaping, body bounds, pool identity,
 Eggress selection, and stable `TransportError` classification; Eggfetch owns
 HTTP/1.1 framing, origin TLS, pooling, admission, I/O guards, and streaming
-body leases.
+body leases. Eggfetch's `Error::transport_failure_kind()` supplies generic
+connect, TLS, protocol, and cancellation facts. EggPool consumes those only
+after its more-specific physical-admission, timeout, request/target, proxy,
+and custom Eggress dialer mappings; `DialErrorKind::Connection` remains
+`ProxyConnect`.
 
 Do not replace `native-http1` with Eggfetch's `http1` compatibility alias:
 that alias also enables `high-level-url`, logical retry, redirects, and
@@ -86,7 +90,7 @@ native roots, JSON, cookies, and multipart features disabled. Eggpool does not
 configure Eggfetch `Timeout.total`; connect and established read/write
 inactivity remain the separate Eggpool-owned timeout layers described below.
 
-Eggfetch 0.2.1 derives native origin facts directly from Eggpool's parsed
+Eggfetch 0.2.2 derives native origin facts directly from Eggpool's parsed
 `http::Uri`; the provider path does not serialize through `url::Url` or add
 IDNA conversion. `join_provider_target()` remains the boundary that validates
 the configured authority and rejects unsafe absolute or authority-form
@@ -148,9 +152,9 @@ and the bespoke Hyper/Rustls connector/admission/timer machinery is gone.
 The `hyper`, `hyper-util`, `hyper-rustls`, `rustls`, and `webpki-roots`
 direct dependencies remain for their live owners outside provider transport:
 the `operations/update.rs` self-update release client (bounded Hyper/Rustls
-metadata/artifact fetch with WebPKI roots), typed `hyper::Error` /
-`rustls::Error` source inspection in the Eggfetch-to-`TransportError`
-boundary, and the `test-support` Eggress route-TLS seam. SQLite's bundled
+metadata/artifact fetch with WebPKI roots) and the `test-support` Eggress
+route-TLS seam. Provider classification no longer inspects Hyper/Rustls
+source chains. SQLite's bundled
 and backup features likewise belong to the database and lifecycle
 contracts. Review the resolved graph with `cargo tree -e features` before
 changing any of these boundaries. Run the repository policy gate as part of
@@ -220,8 +224,11 @@ The candidate graph resolves `native-http1`, `transport-http1`,
 queries for `url`, `idna`, `icu_provider`, `icu_normalizer`,
 `icu_properties`, and `dashmap` report no package, so the former Eggfetch
 URL/IDNA/ICU and DashMap closures are absent from the resolved Eggpool graph.
-The candidate still retains direct Hyper/Rustls dependencies for the updater,
-error-boundary inspection, and test-support owners documented above.
+The candidate still retains direct Hyper/Rustls dependencies for the updater
+and test-support owners documented above. Eggfetch 0.2.2's typed
+`TransportFailureKind` now owns generic provider connect/TLS/protocol/cancel
+classification; EggPool retains precedence for its proxy, timeout, request,
+and custom-dialer categories.
 
 ## Eggfetch 0.2.0 adoption measurement (2026-09-22)
 

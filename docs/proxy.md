@@ -41,3 +41,7 @@ eggpool --config config.toml accounts status
 
 Proxy connection, TLS, timeout, and protocol failures are classified by the
 provider transport and surfaced through the ordinary health/retry policy.
+Eggfetch 0.2.2 supplies typed generic transport-failure facts; EggPool keeps
+proxy endpoint, authentication, target refusal, and timeout categories ahead
+of those broad facts, so route failures remain distinct from origin TLS and
+direct connection failures.

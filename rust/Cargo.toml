@@ -66,7 +66,7 @@ eggress-server = { version = "=1.0.11", default-features = false, optional = tru
     "extended",
 ] }
 eggress-uri = { version = "=1.0.11", optional = true }
-eggfetch-core = { version = "=0.2.1", default-features = false, features = [
+eggfetch-core = { version = "=0.2.2", default-features = false, features = [
     "native-http1",
     "tls-rustls",
 ] }
