@@ -1,6 +1,6 @@
 # Dashboard Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
 
-Status: ready
+Status: active
 
 Repository baseline: `299a0b3657667af509742a184e658c14df22d406`
 
