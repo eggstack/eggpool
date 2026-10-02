@@ -43,13 +43,12 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M004 conditionally closed; M005 ready — runtime/cache parity | M005 interfaces are stable but its closure depends on resolving M004's zero-count summary parity finding; M006 waits for M003-M005. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M005 active — runtime/cache observability parity | M004's interfaces are stable; M005 may implement but cannot close until the M004 zero-count summary finding is resolved; M006 waits for M003-M005. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Dashboard | M005 runtime/cache observability parity | ready | `plans/implementation/dashboard/005-runtime-cache-observability-parity.md` | M002/M003 are closed and M004's interfaces are stable; M005 may implement against them but cannot close until the M004 finding is resolved. |
 | Deployment and packaging | M003 config publication ownership corrective | ready | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | Corrective to closed M002; use transaction-owned config staging + true no-clobber publication; no hard blocker. |
 
 ## Blocked work
