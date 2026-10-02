@@ -1,6 +1,6 @@
 # Persistence Milestone 007 — Dedicated Checkpointer Qualification Experiment
 
-Status: ready
+Status: active
 
 Repository baseline: `3270f4b71b2a7dd5115d9b8e1666a789ac292676`
 

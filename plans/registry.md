@@ -52,12 +52,12 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
-| Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; production adoption requires separate decision. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Persistence | M007 dedicated checkpointer qualification experiment | active | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | Feature implementation and local qualification in progress; paired Pi/MMC performance disposition remains operational. |
 | Provider transport | M002 stable Eggfetch transport error taxonomy | closing | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Local implementation gates pass; hosted CI and dependency audit are the remaining closure gates. |
 
 ## Blocked work
