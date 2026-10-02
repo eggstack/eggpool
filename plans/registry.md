@@ -43,7 +43,6 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M006 active — full parity qualification | Audit the nine-cell report and complete matched browser and shutdown/restart evidence. |
 
 ## Dependency-ready implementation plans
 
@@ -61,6 +60,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Dashboard M006 — Full parity qualification and closure | closed — strict report retains nine explicitly accepted source-backed differences; 144 matched captures, eight interaction runs, lifecycle shutdown/restart, and full local Rust/tooling gates passed | `plans/closure/dashboard/006-status.md`, browser manifest `plans/closure/dashboard/006-browser-manifest.json`; implementation `6bfa1781`, `5bb3aba1` |
 | Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
 | Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
@@ -258,3 +258,14 @@ source-truth dispositions for the frozen Python 500, unknown-status undercount,
 Rust supervisor task inventory, and host load availability. M006 completed
 matched browser and shutdown/restart qualification; its nine strict cells are
 fully classified in `plans/closure/dashboard/006-status.md`.
+
+Dashboard M006 closure/unblock audit (implementation candidate
+`5bb3aba1df84077df3367bf315011d671fe46dbe`): all nine strict differences are
+explicitly accepted under M003/M005 current-source dispositions; the strict
+report remains `gaps`, with zero M004 differences. The 144-capture matched
+browser manifest, eight interaction runs, bounded shutdown/restart, and full
+local Rust/tooling verification are recorded in
+`plans/closure/dashboard/006-status.md`. The Dashboard roadmap is closed; no
+dashboard work is blocked on M006, no successor remains registered, and no
+plan is newly eligible from this closure. Provider Transport M002 and Routing
+Selection M002 retain their unrelated independent blockers/evidence gates.

@@ -1,0 +1,4784 @@
+{
+  "asset_disposition": [
+    {
+      "candidate_sha256": "f5ad894d0e78d54434d291f6558b59203f4e14c22fe1e749fa16295f73afad51",
+      "oracle_sha256": "3f399629eb182de5689cb475b02f60dc468969d5e8fead059a6ebda82222ac6d",
+      "path": "static/dashboard.css",
+      "reason": "bound mobile panel intrinsic width within its table scroll wrapper"
+    }
+  ],
+  "automated_only_capture_count": 122,
+  "candidate_sha": "5bb3aba1df84077df3367bf315011d671fe46dbe",
+  "capture_count": 144,
+  "capture_manifest_sha256": "1506ce0ed51c0ebe232436647e356683787b6f49ac0bb65f00190ad44dfa917b",
+  "entries": [
+    {
+      "artifact": "python/overview--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 119222,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/",
+      "sha256": "6d5e9e0e72dd94f0bb36825302a56efd1b47c50818f4c1f6eaea8f076f2b3299",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/overview--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 118111,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/",
+      "sha256": "77c5ce42f8206397eb260211343d74dfae15598944af8e2effde2d27f5ff9a7f",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/overview--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 141661,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "8906a74571f40019f5f9948594d8cf17a56b0b82ca174d869f1ce9a4d6c2c420",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/overview--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 139869,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "8965bee1b4e1ab4b43f29f93bfa6f55779c246929099f5f273820424b7ce681f",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/overview--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 139716,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "1594a0fc5e6fcaa8bc537e8d838df250347055e54c2a61d728dedf345da85fa5",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/overview--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 138051,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "a9f70489e8d09a8af02b9b459d0c00bb3a1ab5d1d62c30606e5649b79729c157",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/overview--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 143918,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "c4f5d677be0ddc15747fa935a4b4bcc931ab2d0675e362a6b278662bc768e219",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/overview--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 142098,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "a7b3e43be574abbef1620d99cd5440adf7197737d796e5ad6fcd8bc30efdac12",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/overview--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 38842,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/",
+      "sha256": "9359c43f9d28724985aef9f359168dc4df53baf393564a1b4d82f253157d2644",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/overview--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 39109,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/",
+      "sha256": "fa1a86266f17626a6782d72385b789e36c4246c47117097c45011720f084c280",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/overview--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 48388,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "11c1eebe4ce7a1fedaed19509357baccf4f3029a59be11342085d83ced2cdf59",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/overview--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 47989,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "573bc3e2be7ece3c63e9f31dd3cdfc7f6a888a1532c833cd822711a76890b14b",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/overview--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 47631,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "e3e51d2ec030b506cf1b2eadf92810ca34540866ab72036ca2af02e96b4ceb4e",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/overview--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 47066,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "02ab8056e819a32fd3060c44dd3b90619190a7d4c92951303476f506c53a663a",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/overview--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 49528,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "7b16b75c6efce11ec0ac655f1e94e37a24231275acc478fabd1cae2183d61be3",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/overview--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 49307,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/",
+      "sha256": "8c4139434a5ddcfaebf6bcd5e8d952f1fefbc1cf969a38770290e14b80483934",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/accounts--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 82117,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "7d5808a89d2cb20a4fe2a70f9534f0956c4f920822b1227c3ee6f463fcf38f50",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/accounts--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 82519,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "45062a9882782a61accf00519a5cd0adbeb23704850b9a57e235f75b4314f38b",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/accounts--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 106949,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "c1952b8475a46347783a39c254f08e4e79bfdcaa3f751c23a643190a4d5161ba",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/accounts--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 106395,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "4a5c94917901112cdb6e18ba34acf22f71494700e51dbe7d32bb08c71c892ff3",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/accounts--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 109202,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "ec15b413e533c012489e08eaf24d55c25d510801b0c52ff9aa7bcbd2a57d492a",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/accounts--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 108637,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "7b65195d8f68445eaf6915cd6e279b24824a883fc174a27778760d8815401bb3",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/accounts--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 104166,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "7720ebfc5781d1928ed0ce277742bca6593613665d3a0698eb2361de16d255b6",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/accounts--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 103838,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "b337db5596593ddc30502975a99d31fb3791071434b12db692dc6fb934197e06",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/accounts--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 31258,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "b386841e8894bab98d0b8893add336d023ca5e328f07f4f6f03ddea8f4882d12",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/accounts--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 31258,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "b386841e8894bab98d0b8893add336d023ca5e328f07f4f6f03ddea8f4882d12",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/accounts--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 47635,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "53f25c49195f7bbe4f4aa7bf2b5da282caaf1d276789b8ff1d10dfa8df4fff86",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/accounts--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 47635,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "53f25c49195f7bbe4f4aa7bf2b5da282caaf1d276789b8ff1d10dfa8df4fff86",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/accounts--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 48712,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "f8a52fd7cd4b53821ab6e33760231fb52e687e8acd45e99cc933de7e50660097",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/accounts--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 48712,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "f8a52fd7cd4b53821ab6e33760231fb52e687e8acd45e99cc933de7e50660097",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/accounts--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 46947,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "4b11d31e01c3b7191a06b0ffb4aaa9c355dbbf898fe5a10fa120f97fbd491205",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/accounts--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 46947,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/accounts",
+      "sha256": "4b11d31e01c3b7191a06b0ffb4aaa9c355dbbf898fe5a10fa120f97fbd491205",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 88772,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "9119298be85db22637e8926db5c3cbe299f6e004c140326a405e3439b34aa2b0",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 89452,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "ea1acb47d34d0732be64c81a37d8c94bef46e7fbc9fabf0fa9712788cfb3fde5",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 122392,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "716414f41b18ada1f7d991d6bd7a0869c15f983de3a66bb6e82133f68dcc8a7f",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 123420,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "edcb8d6beb8f0d9d68df9c011b4731eabc6d5ebab3200db3a3086f7c8627c52d",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 121746,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "0e5a8fcf6679b3dcec159e8f8f247d1f0237a832b3ac3ad239b93703c6603b04",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 122676,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "0dbf54036673381f24f901a15dc0c07996c46da7015a4836b7c45893bc1c6cc1",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 120798,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "3d2c09d66feb285e5a7e80074459c4678e2816a4ab58a9360f251046310c9434",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 121638,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "9cf64c61d503a42c2824b7a8f88067783430579a555777411ffaef01e2a747d7",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 45467,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "60fd573817f70202c3e307118a328b509f23422d7cb76f2306b0be676f668084",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 45502,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "7844ee4657d27ae41b4e50e8e2f5948533e823e142e9afcd13539e38a0e98a80",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 66817,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "72d612a031c36149fe19310440b64e13fe5a7c85fea0d45eecd4e8565d7dea46",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 66864,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "e2e7ed701a7a051eb5ed613f15be360839f52dda9da6fbc908c8facf4c3ecbb6",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 64698,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "8a6c88f0b142e611fe77dbf1a1a84afff04e71c20864c1b280bdc6ed16ba26da",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 64817,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "a9da5172ffc0182342eedb3f0335af605273f9b92213aec9e582f9324c4d140d",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 65923,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "224cc11c0633c49826fe36f1465ba56d5df89a18af04b23de5dea2c2137acd35",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 65959,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models",
+      "sha256": "c40ae4409e06525b46e506e14e57197e266f6329c583d0ba8bd73ab02c7afe3a",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/latency--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 70993,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/latency",
+      "sha256": "9be12ca9824e1a7346f953d4dbc3bef042bddb66f855d4bee092d57d5e770f7a",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/latency--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 70993,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/latency",
+      "sha256": "9be12ca9824e1a7346f953d4dbc3bef042bddb66f855d4bee092d57d5e770f7a",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/latency--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 33091,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/latency",
+      "sha256": "45bb2e1f0893a32c85bf3c861b99cb969f45e7e9102094c25c045bf62769f14e",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/latency--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 33091,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/latency",
+      "sha256": "45bb2e1f0893a32c85bf3c861b99cb969f45e7e9102094c25c045bf62769f14e",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/events--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 64184,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/events",
+      "sha256": "fbeb1a49d2b32cc589c5bf5e9c4bbf3e3045e4763a80adb5083edb3ca8110875",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/events--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 64357,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/events",
+      "sha256": "28182da6bf7e5d15d71ab6534ec1b3d3663e30c4ff19768d064ec9857e2092a2",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/events--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 26861,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/events",
+      "sha256": "d362128afde99973ea8b6ac46633459f9f149981b7ec73ec609550b2135950b1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/events--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 26861,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/events",
+      "sha256": "d362128afde99973ea8b6ac46633459f9f149981b7ec73ec609550b2135950b1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/timeseries--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 100949,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "2ed91a9889af93095fade5ffabb8edc6c3862e6fb21a3047feb49355d7cd01e6",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/timeseries--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 100541,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "daba584d690f2a77a0b7076546ca8f6c81a0798b2908858cf440a7983059ce2c",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/timeseries--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 113639,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "edb352512506ae39f7aa665c235d2146fdd931de9400975792683b87474082c2",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/timeseries--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 113575,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "598dcfb64b9713376f3e4fc4ef5d4633565c09ed0364147d0f3e25a7a3cd8174",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/timeseries--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 113380,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "e179751049edae7b52ce6d459c8249c6a08a7e01349364c94439aaf8094e97b5",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/timeseries--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 113606,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "c2049612b0a7a230679b55dbf8a11efcce7936325e2c7d56238e444e8a67a140",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/timeseries--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 112460,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "03915d5a79f48b4d9bdfd332c3e67dc18b487ea7cc0a3a9261b18671fe08f931",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/timeseries--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 112362,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "e9c3113fd63c990a4b627e804b09b01eb7e74b8b71a6823fba48f81bee562777",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/timeseries--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 52852,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "8a9953bb697c2c2b2f3451f48cbae2ff4df410c92a0a09be8d930ad2bdc6c705",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/timeseries--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 52820,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "5de0647a8969adec83d1867f937f33f5e87f8e9d8095fafe8206c0a44cd936ed",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/timeseries--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 69718,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "4ef2b8cbf8586f6938cacd0372e5ac7c6ad8e69f7c8d483f91cfaad51656c046",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/timeseries--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 69755,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "3e4f70fa10798c4f798259b5ad50cc87067db25ed7f94f5c73ec325c05f21e3e",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/timeseries--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 70544,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "738840f1ebb2bf2f642dc17cbd3df52145e6e0ededd0e45552ecf9af5863081e",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/timeseries--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 70550,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "b98eadcaadf8a3b55463e0ed9d9ae242f1a139cdb5533d6bb5d511e2c58ed2c9",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/timeseries--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 69803,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "6fad4b7b4cd3bc7ccc88f79dcc7a53a7215ca12af6ef0edca98e5b6f78e22c58",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/timeseries--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 69804,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/timeseries",
+      "sha256": "f07699565f678d018812f351866dffbbb867e475d65b99a3367606e777d09404",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/bandwidth--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 62789,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/bandwidth",
+      "sha256": "5865478f5fd2965be357e631edbefd49264d4586d92ee9cd517532e4225b1285",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/bandwidth--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 62987,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/bandwidth",
+      "sha256": "78d4533bdd168de17fcf30afe0295a9dc0426be52a3138609043d590d096aa55",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/bandwidth--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 44258,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/bandwidth",
+      "sha256": "114f10d6513a4c70b609e53378d20faffc37e441fbc75b6eceb3e40f5468092c",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/bandwidth--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 44258,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/bandwidth",
+      "sha256": "114f10d6513a4c70b609e53378d20faffc37e441fbc75b6eceb3e40f5468092c",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/pings--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 83327,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/pings",
+      "sha256": "fdb90c5a528816df98174dd95630640129f65a69534b944fb3a3c48d99db2914",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/pings--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 83327,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/pings",
+      "sha256": "fdb90c5a528816df98174dd95630640129f65a69534b944fb3a3c48d99db2914",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/pings--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 41887,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/pings",
+      "sha256": "a4d8a0f1cc5fa258a03514e4c39258a7c69c7894fdebee05cf8169b2e104fe26",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/pings--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 41887,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/pings",
+      "sha256": "a4d8a0f1cc5fa258a03514e4c39258a7c69c7894fdebee05cf8169b2e104fe26",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/reliability--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 82437,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/reliability",
+      "sha256": "27c358bb05a01af5753097e1c074930a9be0cb1b0cab59e6ed343864ec6007e7",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/reliability--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 82437,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/reliability",
+      "sha256": "27c358bb05a01af5753097e1c074930a9be0cb1b0cab59e6ed343864ec6007e7",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/reliability--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 36662,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/reliability",
+      "sha256": "bba6e128b7963d268acb769223c4b43b2af3ed6d47cfd041de04925b691dad86",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/reliability--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 36662,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/reliability",
+      "sha256": "bba6e128b7963d268acb769223c4b43b2af3ed6d47cfd041de04925b691dad86",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/routing--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 100831,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/routing",
+      "sha256": "a49e3adb108daa40967acf8fa044ad1de9dc26303c5147e2d27d7eafffe439d1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/routing--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 100831,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/routing",
+      "sha256": "a49e3adb108daa40967acf8fa044ad1de9dc26303c5147e2d27d7eafffe439d1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/routing--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 54163,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/routing",
+      "sha256": "0c0fc9c490a6eb85a4aacd44d903889aeecee4530819f0cc0ee43ae053828972",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/routing--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 54163,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/routing",
+      "sha256": "0c0fc9c490a6eb85a4aacd44d903889aeecee4530819f0cc0ee43ae053828972",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/traces--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 106795,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/traces",
+      "sha256": "78e3563e972c88f23b3203ffa59cec76879c97372415574d42d0730ccc51843e",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/traces--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 106712,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/traces",
+      "sha256": "a8c30e85f0f6f5738c0c7324b6a589c27f2d509eb28be78277332fd653b9266f",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/traces--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 43293,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/traces",
+      "sha256": "ae8964aa8ab4452b78968972450a83607831bb9f10479c699b64970ecd527be1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/traces--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 43293,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/traces",
+      "sha256": "ae8964aa8ab4452b78968972450a83607831bb9f10479c699b64970ecd527be1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/runtime--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 119443,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "c9cea4b91adaefc4729fc13282eaeda6e48b2e733f3817710321128fc014dd77",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/runtime--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 106544,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "226ad9c41854bad3204cf6c7941fb581f9a6df1b9629381a9ba3b315b28a519a",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/runtime--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 136168,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "36dfed5056465cffdf0bbbcf766c0b634a6171a05675d04e7ea18b2341ebd624",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/runtime--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 123693,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "ca2bf6ec5f8f7ddf45f8fe784fe5a307ffd9ec169c9d5e98a30bab7e3fe654ae",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/runtime--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 135511,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "cdc4d4fa653104af6fbf210982d3a9e52f4a46ece4e40712b2f5518c87d7af0a",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/runtime--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 124446,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "fa7d470353029a2958ac0c1379165b12620b2663b32a150644395edc7574b92f",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/runtime--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 135888,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "68cbf9f80c5c37aa59f1f508e15ee07c2d42ccfd3cc03c4734cae77e765e3602",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/runtime--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 123976,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "042a9e684e4afdbd8397b7d066aef82192182379529387a57ddef0387a55cadc",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/runtime--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 38105,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "d2975bf836603936bdf88c998048494a118ebbfc13ae5ba177d487a3d4baa809",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/runtime--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 42106,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "8995fbc4e8fbeb25803f557d07615ca69257b13fd8bfce4ab9361ad7f4351cd3",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/runtime--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 50379,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "825939168c6516ff6219ec41b0321b0225013c2aab71be076a9ec50b62eae616",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/runtime--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 55497,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "5462ec954f945170cfe7784dda375cc601a45f83727f86c660ecad22ade75cc4",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/runtime--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 48318,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "e612176e9486e178bfc6ce59123cf608b601fec2e0ff588f833c82422dbb79a2",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/runtime--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 54142,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "f6ff48e1e6923dc08d6ea27de446ead2be35867b09e9b315616f8c6eabac68d1",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/runtime--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 50939,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "9e5f5f237196c9a3d545ec4bb927ab47a19c9b06e29a14638f741ca9f48c19c4",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/runtime--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 55476,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/runtime",
+      "sha256": "afce2553b95848f7e712c8f3acab3c94f38bf4343806de1a03b55f5b741f9bf3",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/cache--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 139142,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "02c8f2d2a883c60ef53c0dd27e751daf5caf9f923946dabb5c321e6b558b8fa5",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/cache--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 139456,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "d2760f0051b2cfb49929d3cab95cd4007079c00d00640e3217d45fe36d4bb22b",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/cache--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 144854,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "58185923c5d34a3fe8719471e05d771e39e2945750814a845764e45336f66e05",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/cache--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 145121,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "91d93f2f0be7121c5e612ebe13ea52cef227cbce848202d15d0c571b99ab3396",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/cache--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 143983,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "f15fb5e9cac946db44f090ee15deaa053c64c19b9caf8478ec517ffb0e015de2",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/cache--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 144219,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "3784d925d765072f786d07f2ee5d7e8f20d0647bfc77fb4263853e7066947256",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/cache--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 142684,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "852d69114feaa404b5f3d1bb7e51c63c15b0b43d102bf7bab614bdd008e041bc",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/cache--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 142925,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "2d0b4bc2d1361faf9a83886bd8b9b84bbef930acf74d3f8f237e4252d8edcca1",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/cache--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 60024,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "c6a4d10ed895d18fec05df490f7b5183538531d3e02213f418fd16375cc8e07c",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/cache--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 60081,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "c30993871d447ed322190c48862c712692e9b3d7020291e5349ea11072112dc1",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/cache--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 75874,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "3e9b75c00f8b8b19ee4e954c62ef6dda75a31bd4275ef49b9fd21f2cfd81f092",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/cache--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 75942,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "f15f6d432be68c3a1338f9d5a9a22737f19e30f97c7963857950895ecc61a222",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/cache--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 73292,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "e12166ff641df42f7f60916f445ec8cbaffa49640d04d52e5e698682998e003c",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/cache--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 73342,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "fbc27d698311eb844b5ada8541b23185c2c713bda501785307bbedec6c551f48",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/cache--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 74421,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "c7afe8e92a557eab5c4267b3359df5830d746d3f98c739370dc84dfca22d355b",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/cache--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 74506,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/cache",
+      "sha256": "be79c36c1a079b9e7ba08e1beb106c9fd8f6a79b1f9c765e28033230295d31ed",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models-q012-chat-model--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 43503,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "3b5b0c46055223db90f73540d2e21c42543acf92576089dd71573164f9da6217",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--desktop--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 43503,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 26,
+          "padding": "4px 8px",
+          "width": 323
+        },
+        "topbarHeight": 161.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "3b5b0c46055223db90f73540d2e21c42543acf92576089dd71573164f9da6217",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models-q012-chat-model--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 74368,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "04997085fcfe1e5a62d5b4851adcb32460c8813382fd82915d3e477176db05b6",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--desktop--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 74368,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "04997085fcfe1e5a62d5b4851adcb32460c8813382fd82915d3e477176db05b6",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models-q012-chat-model--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 76379,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "d349b928bf1f901b49cc493e2cbcc1f7128e042e9330714bb5fed1205de73c2e",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--desktop--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 76379,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "d349b928bf1f901b49cc493e2cbcc1f7128e042e9330714bb5fed1205de73c2e",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models-q012-chat-model--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 73841,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "7f50e2eac6226fed139ee522ff9ef1fedb7eb38886984a92dcffc1ffd87bdd37",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--desktop--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 73841,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "7f50e2eac6226fed139ee522ff9ef1fedb7eb38886984a92dcffc1ffd87bdd37",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "python/models-q012-chat-model--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 18835,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "c36daf15f88be2f17c3d8d6266db7cbfd9966737da2a77a98b1b81c77be501e3",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--mobile--default.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 18835,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "0px none",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 63.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "c36daf15f88be2f17c3d8d6266db7cbfd9966737da2a77a98b1b81c77be501e3",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models-q012-chat-model--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 35645,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "9d2ca05180b7b2032da0d55ccb21594ddd00bc271014f7d5c69b90994813ac43",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--mobile--cyber-red.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 35645,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "9d2ca05180b7b2032da0d55ccb21594ddd00bc271014f7d5c69b90994813ac43",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models-q012-chat-model--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 36162,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "daaf8eafddb73a87d97eaa8c3be9230de3b23cdd617b76577251daa5efcbdb45",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--mobile--catppuccin-latte.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 36162,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(220, 224, 232)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "daaf8eafddb73a87d97eaa8c3be9230de3b23cdd617b76577251daa5efcbdb45",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "python/models-q012-chat-model--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 35769,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "543fe35eb2236622506dbbb940a868021f91b143c348b38fa8ce38f9ea650c2e",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "rust/models-q012-chat-model--mobile--cyberpunk.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 35769,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 14, 20)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "543fe35eb2236622506dbbb940a868021f91b143c348b38fa8ce38f9ea650c2e",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "model-info-detail/python-desktop.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 105435,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "910de672af392e283ed92bf9d1d86565f498460a245d931734a768fd91828a8b",
+      "state": "populated-model-info",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "model-info-detail/python-mobile.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 52368,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "python",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "4f5b6aac694a0c4ea4c07a4350702e5c2d2bc613263785492035f3a20ab5da35",
+      "state": "populated-model-info",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    },
+    {
+      "artifact": "model-info-detail/rust-desktop.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 105435,
+      "dimensions": {
+        "height": 900,
+        "width": 1440
+      },
+      "height": 900,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 28,
+          "padding": "4px 8px",
+          "width": 325
+        },
+        "topbarHeight": 166.5625
+      },
+      "manual_disposition": "automated only: matched dimensions and browser/DOM checks passed; image hash retained; not individually inspected",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "910de672af392e283ed92bf9d1d86565f498460a245d931734a768fd91828a8b",
+      "state": "populated-model-info",
+      "theme": "Cyber Red",
+      "viewport": "desktop",
+      "width": 1440
+    },
+    {
+      "artifact": "model-info-detail/rust-mobile.png",
+      "browser_checks": "passed: no JS exception, console error, failed same-origin load, or same-origin HTTP error; unique IDs, valid chart targets, and no body overflow",
+      "bytes": 52368,
+      "dimensions": {
+        "height": 844,
+        "width": 390
+      },
+      "height": 844,
+      "implementation": "rust",
+      "layout_audit": {
+        "bodyOverflow": false,
+        "duplicateIds": [],
+        "invalidCharts": 0,
+        "themeSelect": {
+          "background": "rgb(10, 0, 0)",
+          "border": "1px solid",
+          "height": 0,
+          "padding": "4px 8px",
+          "width": 0
+        },
+        "topbarHeight": 64.1875
+      },
+      "manual_disposition": "manual paired review: layout and controls align; remaining content differences are covered by the M003/M005 source dispositions",
+      "result": "captured",
+      "route": "/models/q012-chat-model",
+      "sha256": "4f5b6aac694a0c4ea4c07a4350702e5c2d2bc613263785492035f3a20ab5da35",
+      "state": "populated-model-info",
+      "theme": "Cyber Red",
+      "viewport": "mobile",
+      "width": 390
+    }
+  ],
+  "environment": {
+    "browser": "isolated headless Chrome via Chrome DevTools Protocol",
+    "os": "darwin",
+    "python": "3.12.13"
+  },
+  "interaction_checks": [
+    {
+      "implementation": "python",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/",
+      "viewport": "desktop"
+    },
+    {
+      "implementation": "python",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/timeseries",
+      "viewport": "desktop"
+    },
+    {
+      "implementation": "python",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/",
+      "viewport": "mobile"
+    },
+    {
+      "implementation": "python",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/timeseries",
+      "viewport": "mobile"
+    },
+    {
+      "implementation": "rust",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/",
+      "viewport": "desktop"
+    },
+    {
+      "implementation": "rust",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/timeseries",
+      "viewport": "desktop"
+    },
+    {
+      "implementation": "rust",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/",
+      "viewport": "mobile"
+    },
+    {
+      "implementation": "rust",
+      "result": "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow",
+      "route": "/timeseries",
+      "viewport": "mobile"
+    }
+  ],
+  "manual_review_pairs": [
+    {
+      "route": "/",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop"
+    },
+    {
+      "route": "/",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/accounts",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "desktop"
+    },
+    {
+      "route": "/cache",
+      "state": "populated",
+      "theme": "Catppuccin Latte",
+      "viewport": "desktop"
+    },
+    {
+      "route": "/models",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/models/q012-chat-model",
+      "state": "populated",
+      "theme": "Cyber Red",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/models/q012-chat-model",
+      "state": "populated-model-info",
+      "theme": "Cyber Red",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/runtime",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop"
+    },
+    {
+      "route": "/runtime",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/timeseries",
+      "state": "populated",
+      "theme": "Cyberpunk",
+      "viewport": "mobile"
+    },
+    {
+      "route": "/timeseries",
+      "state": "populated",
+      "theme": "default",
+      "viewport": "desktop"
+    }
+  ],
+  "matched_pair_count": 72,
+  "oracle_commit": "c23a70961f4b7858fdb0264cfb27b7ea26a8a334",
+  "records_sha256": "8fc659ac8df4bcb4706aedc23bc1d0cddc7557dc488902f51a68f1057656c5ce",
+  "schema_version": "dashboard-browser-pair-manifest.v1",
+  "shutdown_restart": {
+    "browser_capture": "passed",
+    "browser_interactions": [
+      "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh, unique IDs, valid chart targets, no body overflow"
+    ],
+    "restart": {
+      "deadline_seconds": 15,
+      "duration_ms": 8,
+      "exit_code": 0,
+      "page_status": 200,
+      "ready": true,
+      "signal": "SIGTERM"
+    },
+    "result": "passed",
+    "shutdown": {
+      "concurrent_summary_responses": 2,
+      "deadline_seconds": 15,
+      "duration_ms": 8,
+      "exit_code": 0,
+      "requests_after_listener_close": 1,
+      "signal": "SIGTERM"
+    }
+  },
+  "strict_projection": {
+    "mismatch_count": 9,
+    "mismatch_groups": {
+      "overview-account-model": 4,
+      "runtime-cache": 3,
+      "shared-shell-and-api": 2,
+      "telemetry-routing-trace": 0
+    },
+    "status": "gaps"
+  }
+}

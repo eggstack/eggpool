@@ -1,6 +1,6 @@
 # Dashboard Parity Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -277,9 +277,9 @@ This roadmap closes only when the native Rust dashboard preserves the final Pyth
 |---|---|---|---|---|
 | 001 | closed | plans/implementation/dashboard/001-python-oracle-and-parity-substrate.md | plans/closure/dashboard/001-status.md | none |
 | 002 | closed | plans/implementation/dashboard/002-shared-shell-and-dashboard-api-restoration.md | plans/closure/dashboard/002-status.md | none |
-| 003 | closed | plans/implementation/dashboard/003-overview-account-model-parity.md | plans/closure/dashboard/003-status.md | Four accepted source-truth projection differences remain documented for M006 disposition. |
+| 003 | closed | plans/implementation/dashboard/003-overview-account-model-parity.md | plans/closure/dashboard/003-status.md | Four source-truth differences received final disposition in M006. |
 | 004 | closed | plans/implementation/dashboard/004-telemetry-routing-trace-parity.md | plans/closure/dashboard/004-status.md; additive resolution in plans/closure/dashboard/004-follow-up-007.md | none |
 | 005 | closed | plans/implementation/dashboard/005-runtime-cache-observability-parity.md | plans/closure/dashboard/005-status.md; additive resolution in plans/closure/dashboard/005-follow-up-006.md | Four source-truth dispositions accepted by M006; no further Runtime/Cache work |
-| 006 | active | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | — | M005 closure audit promoted it; complete matched browser and shutdown/restart evidence |
+| 006 | closed | plans/implementation/dashboard/006-full-parity-qualification-and-closure.md | plans/closure/dashboard/006-status.md | Nine source-backed compatibility differences accepted; no dashboard-owned corrective work remains. |
 
-Corrective pass 007 (`plans/implementation/dashboard/007-empty-recovery-summary-correction.md`) is closed in `plans/closure/dashboard/007-status.md`. Its additive follow-up resolves the conditional M004 finding; the oracle and comparator remain unchanged. M005 is closed by `plans/closure/dashboard/005-follow-up-006.md`, which accepts its documented source-truth dispositions after M006 qualification. M006 remains active for the final full-roadmap closure.
+Corrective pass 007 (`plans/implementation/dashboard/007-empty-recovery-summary-correction.md`) is closed in `plans/closure/dashboard/007-status.md`. Its additive follow-up resolves the conditional M004 finding; the oracle and comparator remain unchanged. M005 is closed by `plans/closure/dashboard/005-follow-up-006.md`. M006 and this roadmap are closed by `plans/closure/dashboard/006-status.md`: the strict comparator retains nine source-backed differences, all explicitly dispositioned; matched browser, interaction, shutdown, and restart qualification passed. The closure audit found no remaining dashboard corrective work or newly eligible dashboard successor.
