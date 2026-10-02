@@ -43,7 +43,7 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 ready — config publication ownership corrective | M001/M002 closed; M003 has no hard blocker and corrects the remaining config-path ownership race. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M003 closing — Overview, Accounts, Models, and Model Detail parity | M004 remains ready (soft M003 dependency); M005 waits for M003/M004 interfaces; M006 waits for M003-M005. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M004 ready — telemetry, routing, reliability, and trace parity | M004 is next in the requested sequence; M005 waits for M003/M004 interfaces; M006 waits for M003-M005. |
 
 ## Dependency-ready implementation plans
 
@@ -64,6 +64,7 @@ pair is a known numbering accident.
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
 | Dashboard M002 — shared shell, interaction, and dashboard API restoration | closed — exact shared-shell projection passed all 28 route/state cells; timeseries APIs matched empty/populated/private cases; eight paired desktop/mobile interaction runs and clean browser checks; 804 serial Rust tests passed | `plans/closure/dashboard/002-status.md`, implementation `da8183d`, paired viewport gate `00c69f5` |
 | Dashboard M001 — Python oracle freeze and strict parity substrate | closed — fixed 14-page/8-API oracle, 50 static/theme hashes, reproducible sanitized captures, strict negative tests, 50-cell current-gap report; no production diff | `plans/closure/dashboard/001-status.md`, implementation `3f3d5de`, theme inventory `286b70a` |
 | Deployment and packaging M002 — installer transaction and collision corrective | closed — fresh `--force` refuses unowned files, config-seed failure rolls back executable, 46-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/002-status.md`, implementation `02ee2873` |
@@ -239,3 +240,13 @@ complete sanitized oracle, strict comparator, and current candidate gap report
 M005 remains blocked on M002 and the M003/M004 interfaces; M006 remains blocked
 on M003-M005. No ADR is required unless implementation discovers a genuinely
 new ownership/protocol decision rather than a compatibility restoration.
+
+Dashboard M003 closure audit (implementation commits `03b4988`, `2ad7e09`,
+`8261e5a`; `plans/closure/dashboard/003-status.md`): M003 is closed after the
+full canonical Model-Info route passed exact oracle comparison, 32 browser
+captures including populated desktop/mobile metadata views, 808 serial Rust
+tests, and 146 tooling tests (one skipped). M004 remains ready and is the next
+requested milestone; its M003 dependency is soft and renderer ownership is
+disjoint. M005 remains blocked until M003/M004 view-model interfaces stabilize
+and both close. M006 remains blocked on M003–M005. No new hard dependency or ADR
+was found.
