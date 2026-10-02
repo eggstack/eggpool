@@ -44,12 +44,13 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M003 closed — event-driven candidate rejected; runtime changes reverted | No eligible successor; any further checkpoint redesign requires a new bounded plan. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M006 closed — full parity qualification | No dashboard corrective work remains; future UI features require new bounded plans. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M008 ready — post-merge strict-CI and planning reconciliation corrective | M001-M007 closed; M008 has no hard blocker and restores current-head CI without reopening parity semantics. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | ready | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | M001-M007 closed; deterministic current-head Clippy failure; no hard blocker. |
 
 ## Blocked work
 
@@ -95,19 +96,15 @@ pair is a known numbering accident.
 
 ## Unblock audit
 
-Post-M002 review found one remaining deployment-packaging invariant gap:
-config rollback treats a final regular config as installer-owned when the path
-was merely absent at preflight. A concurrent process can create that path
-during `init-config`, allowing rollback to delete unrelated operator state.
-M002 remains immutable and closed as historical evidence. Deployment-packaging
-M003 is registered `ready` at baseline
-`ad38b85fa3945d22c9fac1a02b14bdc6f27e6c28` to replace direct-final config
-generation/heuristic cleanup with transaction-owned staging and true
-no-clobber publication, plus concurrent-config regression coverage. ADR-0001
-already supplies the ownership invariant; no new ADR or external dependency is
-required. Provider-transport M002 remains independently blocked and
-routing-selection M002 remains evidence-gated.
-
+Dashboard M008 is registered `ready` against baseline
+`299a0b3657667af509742a184e658c14df22d406` after hosted CI run
+`37040025250` failed on two strict-Clippy `collapsible_if` diagnostics in
+the Linux load-average dashboard projection and skipped all subsequent CI
+gates. M001-M007 remain closed historical evidence; M008 does not reopen
+dashboard parity semantics. Deployment/Packaging M003 remains closed.
+Provider-transport M002 remains independently blocked on the upstream Eggfetch
+typed-classification interface, and Routing-selection M002 remains
+evidence-gated.
 
 Post-closure review of deployment-packaging M001 found two concrete invariant
 gaps not exercised by its 42-case qualification: fresh `--force` can replace
