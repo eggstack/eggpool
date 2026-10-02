@@ -43,6 +43,14 @@ Historical Q012 cannot serve as final evidence because:
 - its browser evidence used Python desktop/default and Rust mobile/Catppuccin combinations rather than matched pairs;
 - screenshot artifacts were external and not a complete enduring parity contract.
 
+M006's matched browser audit identified a narrow mobile overflow correction:
+the frozen CSS allowed a panel's intrinsic minimum width to expand around its
+max-content table despite the historical `.table-scroll` wrapper. Rust sets
+`.panel { min-width: 0; }`, preserving the wrapper's horizontal scroll and
+preventing root-page horizontal scrolling. This is a single, hashed CSS rule
+change with an explicit oracle/candidate asset disposition; all other
+dashboard CSS, JavaScript, and Chart.js bytes remain frozen.
+
 M006 must use the stricter M001 oracle and matched-pair methodology.
 
 ## 4. Invariants that must not regress

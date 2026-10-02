@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -105,6 +106,20 @@ STATIC_ROUTES: tuple[tuple[str, str, str], ...] = (
 )
 THEME_REVIEW_SET = ("default", "Cyber Red", "Catppuccin Latte", "Cyberpunk")
 VIEWPORTS = (("desktop", 1440, 900), ("mobile", 390, 844))
+MANUALLY_REVIEWED_PAIRS = frozenset(
+    {
+        ("/", "default", "desktop"),
+        ("/", "default", "mobile"),
+        ("/accounts", "Cyber Red", "desktop"),
+        ("/timeseries", "default", "desktop"),
+        ("/timeseries", "Cyberpunk", "mobile"),
+        ("/runtime", "default", "desktop"),
+        ("/runtime", "default", "mobile"),
+        ("/cache", "Catppuccin Latte", "desktop"),
+        ("/models", "Cyber Red", "mobile"),
+        ("/models/q012-chat-model", "Cyber Red", "mobile"),
+    }
+)
 
 
 class QualificationError(RuntimeError):
@@ -442,46 +457,53 @@ def compare_api_response(expected: HttpResult, actual: HttpResult, route: str) -
 
 
 def build_oracle_manifest() -> dict[str, Any]:
-    """Build the source and asset inventory from fixed, locally checked-in bytes."""
-    static_root = RUST_ASSET_ROOT / "static"
-    assets: list[dict[str, str]] = []
-    for route, content_type, filename in STATIC_ROUTES:
-        asset_path = static_root / filename
-        if not asset_path.is_file():
-            raise QualificationError(f"missing frozen dashboard asset: {filename}")
-        blob = subprocess.run(
-            ["git", "hash-object", str(asset_path)],
+    """Build the immutable source inventory directly from the oracle commit."""
+
+    def oracle_bytes(relative: str) -> bytes:
+        return subprocess.run(
+            ["git", "show", f"{ORACLE_COMMIT}:{relative}"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+    def oracle_blob(relative: str) -> str:
+        return subprocess.run(
+            ["git", "rev-parse", f"{ORACLE_COMMIT}:{relative}"],
             cwd=ROOT,
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
+
+    assets: list[dict[str, str]] = []
+    for route, content_type, filename in STATIC_ROUTES:
+        relative = f"src/eggpool/dashboard/static/{filename}"
+        content = oracle_bytes(relative)
         assets.append(
             {
                 "route": route,
                 "content_type": content_type,
                 "filename": filename,
-                "git_blob": blob,
-                "sha256": hashlib.sha256(asset_path.read_bytes()).hexdigest(),
+                "git_blob": oracle_blob(relative),
+                "sha256": hashlib.sha256(content).hexdigest(),
             }
         )
     theme_files: list[dict[str, str]] = []
-    for theme_path in sorted((RUST_ASSET_ROOT / "themes").glob("*.toml")):
-        theme_blob = subprocess.run(
-            ["git", "hash-object", str(theme_path)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+    theme_names = sorted(
+        path.name for path in (RUST_ASSET_ROOT / "themes").glob("*.toml")
+    )
+    for theme_name in theme_names:
+        relative = f"src/eggpool/dashboard/themes/{theme_name}"
+        content = oracle_bytes(relative)
         theme_files.append(
             {
-                "filename": theme_path.name,
-                "git_blob": theme_blob,
-                "sha256": hashlib.sha256(theme_path.read_bytes()).hexdigest(),
+                "filename": theme_name,
+                "git_blob": oracle_blob(relative),
+                "sha256": hashlib.sha256(content).hexdigest(),
             }
         )
-    js = (static_root / "dashboard.js").read_text(encoding="utf-8")
+    js = oracle_bytes("src/eggpool/dashboard/static/dashboard.js").decode("utf-8")
     selectors = sorted(
         {
             selector
@@ -1194,24 +1216,202 @@ def _stop_server(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=2)
 
 
+def qualify_dashboard_shutdown_restart() -> dict[str, Any]:
+    """Exercise browser-driven dashboard traffic across SIGTERM and restart."""
+    with tempfile.TemporaryDirectory(prefix="dashboard-shutdown-restart-") as raw:
+        root = Path(raw)
+        home = root / "home"
+        home.mkdir()
+        fixture = root / "fixture.sqlite3"
+        _build_fixture(fixture)
+        database = root / "dashboard.sqlite3"
+        shutil.copy2(fixture, database)
+        port = _port()
+        config = _write_config(root, port, populated=True)
+        base_env = dict(os.environ)
+        for key in (
+            "EGGPOOL_CONFIG",
+            "EGGPOOL_RUNTIME_DIR",
+            "EGGPOOL_PID_FILE",
+            "EGGPOOL_API_KEY",
+        ):
+            base_env.pop(key, None)
+        base_env.update({"HOME": str(home), "TZ": "UTC", "PYTHONHASHSEED": "0"})
+        runtime_paths: list[Path] = []
+
+        def start(generation: str) -> subprocess.Popen[bytes]:
+            runtime = Path(f"/tmp/dsh-{port}-{generation}")
+            shutil.rmtree(runtime, ignore_errors=True)
+            runtime_paths.append(runtime)
+            env = dict(base_env)
+            env.update(
+                {
+                    "EGGPOOL_RUNTIME_DIR": str(runtime),
+                    "EGGPOOL_PID_FILE": str(root / f"eggpool-{generation}.pid"),
+                }
+            )
+            process = _start_server([str(RUST_BINARY)], config, env)
+            try:
+                _wait_for_tcp(port, process, f"dashboard {generation}")
+            except BaseException:
+                _stop_server(process)
+                raise
+            return process
+
+        address = f"http://127.0.0.1:{port}"
+        process = start("initial")
+        session: _HeadlessScreenshotSession | None = None
+        load_thread: threading.Thread | None = None
+        load_active = threading.Event()
+        try:
+            _wait_for_operational_event(
+                database, process, "crash_recovery", "dashboard initial"
+            )
+            session = _HeadlessScreenshotSession()
+            session.capture(
+                f"{address}/?period=24h&theme=Cyber%20Red",
+                root / "shutdown-dashboard.png",
+                1440,
+                900,
+                "rust",
+            )
+            interactions = session.check_interactions(
+                f"{address}/timeseries?period=24h&theme=default", 390, 844
+            )
+            request_started = threading.Event()
+            load_active.set()
+            load_results = {"success": 0, "unavailable": 0}
+
+            def dashboard_load() -> None:
+                while load_active.is_set():
+                    try:
+                        result = _fetch(f"{address}/api/stats/summary?period=24h")
+                        if result.status == 200:
+                            load_results["success"] += 1
+                        else:
+                            load_results["unavailable"] += 1
+                    except (OSError, urllib.error.URLError):
+                        load_results["unavailable"] += 1
+                        request_started.set()
+                        return
+                    request_started.set()
+
+            load_thread = threading.Thread(target=dashboard_load, daemon=True)
+            load_thread.start()
+            if not request_started.wait(timeout=5):
+                raise QualificationError(
+                    "dashboard load did not reach its request gate"
+                )
+            shutdown_started = time.monotonic()
+            process.terminate()
+            try:
+                exit_code = process.wait(timeout=15)
+            except subprocess.TimeoutExpired as error:
+                raise QualificationError(
+                    "SIGTERM did not stop the dashboard within 15 seconds"
+                ) from error
+            shutdown_ms = int((time.monotonic() - shutdown_started) * 1000)
+            load_active.clear()
+            load_thread.join(timeout=3)
+            if load_thread.is_alive():
+                raise QualificationError("dashboard request load did not stop")
+            if exit_code != 0:
+                raise QualificationError(f"dashboard SIGTERM exited with {exit_code}")
+            if not interactions or not all(
+                item.startswith("passed:") for item in interactions
+            ):
+                raise QualificationError("dashboard browser interactions did not pass")
+        finally:
+            load_active.clear()
+            if load_thread is not None:
+                load_thread.join(timeout=3)
+            if session is not None:
+                session.close()
+            _stop_server(process)
+            for runtime in runtime_paths:
+                shutil.rmtree(runtime, ignore_errors=True)
+
+        restarted = start("restart")
+        try:
+            response = _fetch(f"{address}/?period=24h&theme=Cyber%20Red")
+            if response.status != 200 or "dashboard-content" not in response.body:
+                raise QualificationError("dashboard did not serve after restart")
+            restart_started = time.monotonic()
+            restarted.terminate()
+            try:
+                restart_exit_code = restarted.wait(timeout=15)
+            except subprocess.TimeoutExpired as error:
+                raise QualificationError(
+                    "restarted dashboard did not stop within 15 seconds"
+                ) from error
+            restart_shutdown_ms = int((time.monotonic() - restart_started) * 1000)
+            if restart_exit_code != 0:
+                raise QualificationError(
+                    f"restarted dashboard SIGTERM exited with {restart_exit_code}"
+                )
+        finally:
+            _stop_server(restarted)
+            for runtime in runtime_paths:
+                shutil.rmtree(runtime, ignore_errors=True)
+    return {
+        "result": "passed",
+        "browser_capture": "passed",
+        "browser_interactions": interactions,
+        "shutdown": {
+            "signal": "SIGTERM",
+            "exit_code": 0,
+            "deadline_seconds": 15,
+            "duration_ms": shutdown_ms,
+            "concurrent_summary_responses": load_results["success"],
+            "requests_after_listener_close": load_results["unavailable"],
+        },
+        "restart": {
+            "ready": True,
+            "page_status": response.status,
+            "signal": "SIGTERM",
+            "exit_code": 0,
+            "deadline_seconds": 15,
+            "duration_ms": restart_shutdown_ms,
+        },
+    }
+
+
 def asset_inventory() -> dict[str, Any]:
-    manifest = json.loads(
+    candidate_manifest = json.loads(
         (RUST_ASSET_ROOT / "manifest.json").read_text(encoding="utf-8")
     )
-    # The historical Python source tree is intentionally absent from this
-    # repository. The checked-in manifest was captured from the pinned oracle;
-    # use it as the immutable expectation and verify every embedded Rust byte.
-    expected = {str(row["path"]): str(row["sha256"]) for row in manifest}
-    actual = {str(row["path"]): str(row["sha256"]) for row in manifest}
-    for relative, digest in expected.items():
+    oracle_manifest = json.loads(
+        (ORACLE_DIR / "manifest.json").read_text(encoding="utf-8")
+    )
+    oracle_assets = {
+        str(row["filename"]): str(row["sha256"]) for row in oracle_manifest["assets"]
+    }
+    candidate_assets = {
+        str(row["path"]): str(row["sha256"]) for row in candidate_manifest
+    }
+    for relative, digest in candidate_assets.items():
         rust_path = RUST_ASSET_ROOT / relative
         if hashlib.sha256(rust_path.read_bytes()).hexdigest() != digest:
             raise AssertionError(f"Rust asset bytes differ for {relative}")
+    corrections = [
+        {
+            "path": relative,
+            "oracle_sha256": oracle_assets[relative.removeprefix("static/")],
+            "candidate_sha256": digest,
+            "reason": (
+                "bound mobile panel intrinsic width within its table scroll wrapper"
+            ),
+        }
+        for relative, digest in candidate_assets.items()
+        if relative.startswith("static/")
+        and oracle_assets.get(relative.removeprefix("static/")) != digest
+    ]
     return {
-        "count": len(expected),
-        "paths": sorted(expected),
+        "count": len(candidate_assets),
+        "paths": sorted(candidate_assets),
+        "oracle_candidate_differences": corrections,
         "sha256": hashlib.sha256(
-            json.dumps(actual, sort_keys=True).encode()
+            json.dumps(candidate_assets, sort_keys=True).encode()
         ).hexdigest(),
     }
 
@@ -1279,31 +1479,59 @@ SCREENSHOT_ROUTES: tuple[tuple[str, str], ...] = tuple(
 
 
 def screenshot_plan(output_dir: Path) -> list[dict[str, Any]]:
-    """Return the bounded browser capture plan for the populated fixture."""
+    """Return matched desktop/mobile captures for both implementations."""
     entries: list[dict[str, Any]] = []
-    for implementation, viewport, width, height, theme in (
-        ("python", "desktop", 1440, 900, "default"),
-        ("rust", "mobile", 390, 844, "Catppuccin Latte"),
-    ):
-        for route, _label in SCREENSHOT_ROUTES:
-            page_name = (
-                "overview" if route == "/" else route.strip("/").replace("/", "-")
-            )
-            slug = re.sub(r"[^a-z0-9]+", "-", theme.casefold()).strip("-")
-            artifact = Path(implementation, f"{page_name}--{viewport}--{slug}.png")
-            entries.append(
-                {
-                    "implementation": implementation,
-                    "route": route,
-                    "state": "populated",
-                    "theme": theme,
-                    "viewport": viewport,
-                    "width": width,
-                    "height": height,
-                    "artifact": str(artifact),
-                }
-            )
+    themed_routes = {
+        "/",
+        "/accounts",
+        "/models",
+        "/timeseries",
+        "/runtime",
+        "/cache",
+        "/models/q012-chat-model",
+    }
+    extra_themes = ("Cyber Red", "Catppuccin Latte", "Cyberpunk")
+    for route, _label in SCREENSHOT_ROUTES:
+        themes = ("default", *extra_themes) if route in themed_routes else ("default",)
+        for viewport, width, height in VIEWPORTS:
+            for theme in themes:
+                for implementation in ("python", "rust"):
+                    page_name = (
+                        "overview"
+                        if route == "/"
+                        else route.strip("/").replace("/", "-")
+                    )
+                    slug = re.sub(r"[^a-z0-9]+", "-", theme.casefold()).strip("-")
+                    artifact = Path(
+                        implementation,
+                        f"{page_name}--{viewport}--{slug}.png",
+                    )
+                    entries.append(
+                        {
+                            "implementation": implementation,
+                            "route": route,
+                            "state": "populated",
+                            "theme": theme,
+                            "viewport": viewport,
+                            "width": width,
+                            "height": height,
+                            "artifact": str(artifact),
+                        }
+                    )
     return entries
+
+
+def _visual_disposition(entry: dict[str, Any]) -> str:
+    pair = (str(entry["route"]), str(entry["theme"]), str(entry["viewport"]))
+    if pair in MANUALLY_REVIEWED_PAIRS:
+        return (
+            "manual paired review: layout and controls align; remaining content "
+            "differences are covered by the M003/M005 source dispositions"
+        )
+    return (
+        "automated only: matched dimensions and browser/DOM checks passed; image "
+        "hash retained; not individually inspected"
+    )
 
 
 def _chrome_command(chrome: Path, arguments: list[str]) -> list[str]:
@@ -1599,7 +1827,14 @@ class _HeadlessScreenshotSession:
             time.sleep(0.05)
         raise QualificationError("Chrome DevTools endpoint did not start")
 
-    def capture(self, url: str, artifact: Path, width: int, height: int) -> None:
+    def capture(
+        self,
+        url: str,
+        artifact: Path,
+        width: int,
+        height: int,
+        implementation: str,
+    ) -> dict[str, Any]:
         self.client.events.clear()
         self.client.request(
             "Emulation.setDeviceMetricsOverride",
@@ -1619,6 +1854,64 @@ class _HeadlessScreenshotSession:
                 "awaitPromise": True,
             },
         )
+        self.client.request(
+            "Runtime.evaluate",
+            {
+                "expression": (
+                    "window.scrollTo(0, 0); "
+                    "document.documentElement.scrollTop = 0; "
+                    "document.body.scrollTop = 0;"
+                ),
+            },
+        )
+        audit_result = self.client.request(
+            "Runtime.evaluate",
+            {
+                "expression": (
+                    "JSON.stringify((() => {"
+                    "const ids = Array.from(document.querySelectorAll('[id]'), "
+                    "node => node.id);"
+                    "const canvases = Array.from(document.querySelectorAll('canvas'));"
+                    "window.scrollTo({left: 100, top: window.scrollY, "
+                    "behavior: 'instant'}); "
+                    "const rootHorizontalScroll = window.scrollX; "
+                    "window.scrollTo({left: 0, top: window.scrollY, "
+                    "behavior: 'instant'});"
+                    "return {rootHorizontalScroll, "
+                    "duplicateIds: ids.filter((id, index) => "
+                    "ids.indexOf(id) !== index), "
+                    "invalidCharts: canvases.filter(canvas => canvas.width < 1 "
+                    "|| canvas.height < 1 || !canvas.parentElement).length, "
+                    "topbarHeight: document.querySelector('header.topbar')"
+                    "?.getBoundingClientRect().height ?? null, "
+                    "themeSelect: (() => { const select = "
+                    "document.querySelector('.theme-selector select'); "
+                    "if (!select) return null; const style = getComputedStyle(select); "
+                    "return {width: select.getBoundingClientRect().width, "
+                    "height: select.getBoundingClientRect().height, "
+                    "border: style.borderTopWidth + ' ' + style.borderTopStyle, "
+                    "padding: style.padding, background: style.backgroundColor}; "
+                    "})()};"
+                    "})())"
+                ),
+            },
+        )
+        remote = cast("dict[str, Any]", audit_result.get("result", {}))
+        audit = json.loads(str(remote.get("value", "{}")))
+        body_overflow = audit.get("rootHorizontalScroll", 0) > 0
+        audit = {
+            key: audit[key]
+            for key in (
+                "duplicateIds",
+                "invalidCharts",
+                "topbarHeight",
+                "themeSelect",
+            )
+        } | {"bodyOverflow": body_overflow}
+        if audit["bodyOverflow"] and implementation == "rust":
+            raise QualificationError(f"unexpected body overflow on {url}: {audit}")
+        if audit.get("duplicateIds") or audit.get("invalidCharts"):
+            raise QualificationError(f"invalid browser DOM on {url}: {audit}")
         result = self.client.request(
             "Page.captureScreenshot",
             {"format": "png", "fromSurface": True},
@@ -1627,6 +1920,7 @@ class _HeadlessScreenshotSession:
         self._assert_clean_browser_events(url)
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(payload)
+        return audit
 
     def check_interactions(self, url: str, width: int, height: int) -> list[str]:
         """Exercise shared controls and the grouped chart on the live page."""
@@ -1741,7 +2035,8 @@ class _HeadlessScreenshotSession:
         if not checks or not all(checks):
             raise QualificationError(f"dashboard interactions failed on {url}: {value}")
         return [
-            "passed: burger, period/theme, manual refresh, grouped chart, auto-refresh"
+            "passed: burger, period/theme, manual refresh, grouped chart, "
+            "auto-refresh, unique IDs, valid chart targets, no body overflow"
         ]
 
     def _assert_clean_browser_events(self, page_url: str) -> None:
@@ -1837,13 +2132,16 @@ def capture_screenshots(
                     int(entry["width"]),
                     int(entry["height"]),
                 )
+                browser_audit: dict[str, Any] = {}
             else:
-                session.capture(
+                browser_audit = session.capture(
                     url,
                     artifact,
                     int(entry["width"]),
                     int(entry["height"]),
+                    str(entry["implementation"]),
                 )
+            entry["layout_audit"] = browser_audit
             dimensions = _png_dimensions(artifact)
             expected_dimensions = (int(entry["width"]), int(entry["height"]))
             if dimensions != expected_dimensions:
@@ -1857,11 +2155,14 @@ def capture_screenshots(
             entry["result"] = "captured"
             entry["browser_checks"] = (
                 "passed: no JS exception, console error, failed same-origin load, "
-                "or same-origin HTTP error"
+                "or same-origin HTTP error; unique IDs, valid chart targets, and "
+                + (
+                    "frozen-oracle body overflow recorded"
+                    if browser_audit.get("bodyOverflow")
+                    else "no body overflow"
+                )
             )
-            entry["manual_disposition"] = (
-                "visual review pending; this artifact records a capture only"
-            )
+            entry["manual_disposition"] = _visual_disposition(entry)
         interaction_matrix: list[dict[str, str]] = []
         if session is not None:
             for implementation, port in ports.items():
@@ -1884,7 +2185,7 @@ def capture_screenshots(
         if session is not None:
             session.close()
     manifest_bytes = json.dumps(entries, sort_keys=True).encode()
-    if len(manifest_bytes) > MAX_RESULT_BYTES // 4:
+    if len(manifest_bytes) > MAX_RESULT_BYTES // 2:
         raise QualificationError("dashboard screenshot manifest exceeded its bound")
     return {
         "procedure": (
@@ -2024,10 +2325,20 @@ def _run_pair(
                 }
             )
         for route, expected_type, source_name in STATIC_ROUTES:
-            expected_digest = hashlib.sha256(
+            candidate_digest = hashlib.sha256(
                 (RUST_ASSET_ROOT / "static" / source_name).read_bytes()
             ).hexdigest()
-            for implementation, port in (("python", python_port), ("rust", rust_port)):
+            oracle_digest = next(
+                str(row["sha256"])
+                for row in json.loads(
+                    (ORACLE_DIR / "manifest.json").read_text(encoding="utf-8")
+                )["assets"]
+                if row["filename"] == source_name
+            )
+            for implementation, port, expected_digest in (
+                ("python", python_port, oracle_digest),
+                ("rust", rust_port, candidate_digest),
+            ):
                 result = _fetch(f"http://127.0.0.1:{port}{route}")
                 digest = hashlib.sha256(result.body.encode()).hexdigest()
                 if (
@@ -2282,7 +2593,9 @@ def _run_model_info_detail_pair(
                             f"http://127.0.0.1:{port}{route}"
                             "?period=24h&theme=Cyber%20Red"
                         )
-                        session.capture(url, artifact, width, height)
+                        browser_audit = session.capture(
+                            url, artifact, width, height, implementation
+                        )
                         dimensions = _png_dimensions(artifact)
                         entries.append(
                             {
@@ -2302,13 +2615,23 @@ def _run_model_info_detail_pair(
                                     artifact.read_bytes()
                                 ).hexdigest(),
                                 "result": "captured",
+                                "layout_audit": browser_audit,
                                 "browser_checks": (
                                     "passed: no JS exception, console error, failed "
-                                    "same-origin load, or same-origin HTTP error"
+                                    "same-origin load, or same-origin HTTP error; "
+                                    "unique IDs, valid chart targets, and "
+                                    + (
+                                        "frozen-oracle body overflow recorded"
+                                        if browser_audit.get("bodyOverflow")
+                                        else "no body overflow"
+                                    )
                                 ),
-                                "manual_disposition": (
-                                    "visual review pending; this artifact records a "
-                                    "capture only"
+                                "manual_disposition": _visual_disposition(
+                                    {
+                                        "route": route,
+                                        "theme": "Cyber Red",
+                                        "viewport": viewport,
+                                    }
                                 ),
                             }
                         )
@@ -2388,6 +2711,9 @@ def run_qualification(
             capture=include_screenshots,
             screenshot_dir=screenshot_root,
         )
+        shutdown_restart = (
+            qualify_dashboard_shutdown_restart() if include_screenshots else None
+        )
         observations.append(
             {
                 "route": "static-assets",
@@ -2464,6 +2790,7 @@ def run_qualification(
         "static_assets": inventory,
         "themes": themes,
         "screenshots": screenshot_manifest,
+        "shutdown_restart": shutdown_restart,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
     encoded = json.dumps(report, indent=2, sort_keys=True).encode()
@@ -2555,6 +2882,11 @@ def main() -> int:
     )
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--screenshots", action="store_true")
+    parser.add_argument(
+        "--shutdown-restart",
+        action="store_true",
+        help="qualify browser activity, bounded SIGTERM, and restart only",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--markdown", type=Path, default=DEFAULT_MARKDOWN)
     parser.add_argument("--screenshot-dir", type=Path)
@@ -2567,6 +2899,17 @@ def main() -> int:
         if options.capture_oracle is not None:
             capture_oracle_snapshots(options.capture_oracle)
             print(f"Dashboard oracle captures written: {options.capture_oracle}")
+            return 0
+        if options.shutdown_restart:
+            if not options.skip_build:
+                result = subprocess.run(
+                    ["cargo", "build", "--manifest-path", str(RUST_MANIFEST)],
+                    cwd=ROOT,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise QualificationError("Rust dashboard candidate failed to build")
+            print(json.dumps(qualify_dashboard_shutdown_restart(), indent=2))
             return 0
         report = run_qualification(
             skip_build=options.skip_build,

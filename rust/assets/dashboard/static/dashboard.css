@@ -359,6 +359,7 @@ h3 {
   border-radius: 2px;
   padding: 1rem 1.25rem;
   margin-bottom: 1.5rem;
+  min-width: 0;
   overflow: visible;
 }
 

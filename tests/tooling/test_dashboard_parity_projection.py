@@ -12,16 +12,81 @@ from scripts.qualification_dashboard_parity import (
     ORACLE_COMMIT,
     ORACLE_DIR,
     PAGE_ROUTES,
+    VIEWPORTS,
     HttpResult,
     _route_filename,
+    _visual_disposition,
     _wait_for_operational_event,
+    asset_inventory,
     build_oracle_manifest,
     compare_api_response,
     compare_dom_projection,
     compare_json_projection,
     compare_shared_shell_projection,
     project_html,
+    screenshot_plan,
 )
+
+
+def test_browser_screenshot_plan_pairs_routes_themes_and_viewports(tmp_path) -> None:
+    entries = screenshot_plan(tmp_path)
+    pair_keys = {
+        (
+            entry["route"],
+            entry["state"],
+            entry["theme"],
+            entry["viewport"],
+            entry["width"],
+            entry["height"],
+        )
+        for entry in entries
+        if entry["implementation"] == "python"
+    }
+    assert pair_keys == {
+        (
+            entry["route"],
+            entry["state"],
+            entry["theme"],
+            entry["viewport"],
+            entry["width"],
+            entry["height"],
+        )
+        for entry in entries
+        if entry["implementation"] == "rust"
+    }
+    assert {entry["route"] for entry in entries} == {
+        route for route, _label in PAGE_ROUTES if route != "/models/example-model"
+    } | {"/models/q012-chat-model"}
+    assert {entry["viewport"] for entry in entries} == {
+        viewport for viewport, _width, _height in VIEWPORTS
+    }
+    assert {entry["theme"] for entry in entries} == {
+        "default",
+        "Cyber Red",
+        "Catppuccin Latte",
+        "Cyberpunk",
+    }
+
+
+def test_asset_inventory_records_the_bounded_dashboard_css_correction() -> None:
+    inventory = asset_inventory()
+    assert inventory["count"] == 54
+    differences = inventory["oracle_candidate_differences"]
+    assert [difference["path"] for difference in differences] == [
+        "static/dashboard.css"
+    ]
+    assert "table scroll wrapper" in differences[0]["reason"]
+
+
+def test_browser_visual_dispositions_distinguish_review_from_automation() -> None:
+    reviewed = {
+        "route": "/cache",
+        "theme": "Catppuccin Latte",
+        "viewport": "desktop",
+    }
+    automated = {**reviewed, "route": "/events"}
+    assert _visual_disposition(reviewed).startswith("manual paired review:")
+    assert "not individually inspected" in _visual_disposition(automated)
 
 
 def test_oracle_operational_cache_barrier_requires_persisted_startup_event(tmp_path):

@@ -16,6 +16,13 @@ from `rust/assets/dashboard/themes/`. `rust/src/operations/metrics.rs` and the d
 repositories provide bounded, redacted snapshots for request, usage, model,
 runtime, health, and routing views.
 
+The dashboard stylesheet sets `min-width: 0` on panels so max-content tables
+stay within their `.table-scroll` wrapper on narrow screens. This is the sole
+intentional difference from the frozen Python CSS; the Rust asset manifest
+pins its corrected bytes. Theme CSS translates the embedded Halloy palette to
+the complete 46-variable dashboard contract, including derived chip, tag,
+button, link, and heatmap colors.
+
 ## Pages and API routes
 
 When `[dashboard].enabled`, the router serves `/`, `/accounts`, `/models`,
@@ -162,4 +169,7 @@ The milestone evidence and source-to-panel review are recorded in
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
+uv run python scripts/qualification_dashboard_parity.py --screenshots
+uv run python scripts/qualification_dashboard_parity.py --shutdown-restart
 ```

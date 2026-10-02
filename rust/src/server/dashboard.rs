@@ -3737,13 +3737,105 @@ fn civil_date_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
 
 fn parse_theme_rgb(color: &str) -> Option<(f64, f64, f64)> {
     let color = color.strip_prefix('#')?;
-    if color.len() != 6 {
+    let color = if color.len() == 8 {
+        &color[..6]
+    } else if color.len() == 6 {
+        color
+    } else {
         return None;
-    }
+    };
     Some((
         u8::from_str_radix(&color[0..2], 16).ok()? as f64 / 255.0,
         u8::from_str_radix(&color[2..4], 16).ok()? as f64 / 255.0,
         u8::from_str_radix(&color[4..6], 16).ok()? as f64 / 255.0,
+    ))
+}
+
+fn theme_lightness(color: &str) -> Option<f64> {
+    let (red, green, blue) = parse_theme_rgb(color)?;
+    Some((red.max(green).max(blue) + red.min(green).min(blue)) / 2.0)
+}
+
+fn mix_theme_colors(base: &str, target: &str, ratio: f64) -> Option<String> {
+    let channels = |color: &str| -> Option<(i32, i32, i32)> {
+        let color = color.strip_prefix('#')?;
+        let color = if color.len() == 8 { &color[..6] } else { color };
+        if color.len() != 6 {
+            return None;
+        }
+        Some((
+            i32::from_str_radix(&color[0..2], 16).ok()?,
+            i32::from_str_radix(&color[2..4], 16).ok()?,
+            i32::from_str_radix(&color[4..6], 16).ok()?,
+        ))
+    };
+    let (base_red, base_green, base_blue) = channels(base)?;
+    let (target_red, target_green, target_blue) = channels(target)?;
+    let channel = |base: i32, target: i32| (base as f64 + (target - base) as f64 * ratio) as u8;
+    Some(format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(base_red, target_red),
+        channel(base_green, target_green),
+        channel(base_blue, target_blue),
+    ))
+}
+
+fn adjust_theme_lightness(color: &str, factor: f64) -> Option<String> {
+    let (red, green, blue) = parse_theme_rgb(color)?;
+    let max = red.max(green).max(blue);
+    let min = red.min(green).min(blue);
+    let lightness = (max + min) / 2.0;
+    let delta = max - min;
+    if delta == 0.0 {
+        let channel = (lightness * factor).clamp(0.0, 1.0);
+        return Some(format!(
+            "#{:02x}{:02x}{:02x}",
+            (channel * 255.0) as u8,
+            (channel * 255.0) as u8,
+            (channel * 255.0) as u8,
+        ));
+    }
+
+    let saturation = if lightness <= 0.5 {
+        delta / (max + min)
+    } else {
+        delta / (2.0 - max - min)
+    };
+    let hue = if max == red {
+        ((green - blue) / delta + if green < blue { 6.0 } else { 0.0 }) / 6.0
+    } else if max == green {
+        ((blue - red) / delta + 2.0) / 6.0
+    } else {
+        ((red - green) / delta + 4.0) / 6.0
+    };
+    let lightness = (lightness * factor).clamp(0.0, 1.0);
+    let q = if lightness < 0.5 {
+        lightness * (1.0 + saturation)
+    } else {
+        lightness + saturation - lightness * saturation
+    };
+    let p = 2.0 * lightness - q;
+    let hue_to_rgb = |mut hue: f64| {
+        if hue < 0.0 {
+            hue += 1.0;
+        } else if hue > 1.0 {
+            hue -= 1.0;
+        }
+        if hue < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * hue
+        } else if hue < 0.5 {
+            q
+        } else if hue < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - hue) * 6.0
+        } else {
+            p
+        }
+    };
+    Some(format!(
+        "#{:02x}{:02x}{:02x}",
+        (hue_to_rgb(hue + 1.0 / 3.0) * 255.0) as u8,
+        (hue_to_rgb(hue) * 255.0) as u8,
+        (hue_to_rgb(hue - 1.0 / 3.0) * 255.0) as u8,
     ))
 }
 
@@ -5019,32 +5111,172 @@ pub(super) fn summary_json(summary: &db::DashboardSummary, period: &str) -> Valu
 }
 
 pub(super) fn theme_variables(name: &str) -> String {
-    let fallback = "#1e1e2e";
     let Some(bytes) = theme_bytes(name) else {
-        return ":root {\n  --page-bg: #1e1e2e;\n  --page-text: #cdd6f4;\n  --topbar-bg: #1e1e2e;\n  --card-bg: #1e1e2e;\n  --card-border: #45475a;\n  --link-color: #89b4fa;\n  --color-success: #a6e3a1;\n  --color-error: #f38ba8;\n  --color-warning: #fab387;\n}\n".to_owned();
+        return String::new();
     };
     let value = std::str::from_utf8(bytes)
         .unwrap_or("")
         .parse::<toml::Value>()
         .unwrap_or_else(|_| toml::Value::Table(Default::default()));
-    let background = theme_value(&value, &["general", "background"], fallback);
-    let primary = theme_value(&value, &["text", "primary"], "#cdd6f4");
-    let border = theme_value(&value, &["general", "border"], "#45475a");
-    let success = theme_value(&value, &["text", "success"], "#a6e3a1");
-    let error = theme_value(&value, &["text", "error"], "#f38ba8");
-    format!(
-        ":root {{\n  --page-bg: {};\n  --page-text: {};\n  --topbar-bg: {};\n  --topbar-text: {};\n  --card-bg: {};\n  --card-border: {};\n  --link-color: {};\n  --color-success: {};\n  --color-error: {};\n  --color-warning: {};\n}}\n",
-        background,
-        primary,
-        background,
-        primary,
-        background,
-        border,
-        theme_value(&value, &["buffer", "url"], "#89b4fa"),
-        success,
-        error,
-        theme_value(&value, &["buffer", "action"], "#fab387")
-    )
+    let get = |path: &[&str], fallback: &'static str| theme_value(&value, path, fallback);
+    let general_background = get(&["general", "background"], "#1e1e2e");
+    let text_primary = get(&["text", "primary"], "#cdd6f4");
+    let text_secondary = get(&["text", "secondary"], "#a6adc8");
+    let text_success = get(&["text", "success"], "#a6e3a1");
+    let text_error = get(&["text", "error"], "#f38ba8");
+    let buffer_background = get(&["buffer", "background"], "#1e1e2e");
+    let buffer_title = get(&["buffer", "background_title_bar"], "#181825");
+    let buffer_url = get(&["buffer", "url"], "#89b4fa");
+    let buffer_action = get(&["buffer", "action"], "#fab387");
+    let page_background = if theme_lightness(general_background).is_some_and(|value| value < 0.5) {
+        buffer_background.to_owned()
+    } else {
+        general_background.to_owned()
+    };
+    let info = buffer_url;
+    let warning = buffer_action;
+    let primary_button = get(&["buttons", "primary", "background_selected"], "#313244");
+    let primary_button = if primary_button.is_empty() {
+        get(&["buffer", "background_title_bar"], "#181825")
+    } else {
+        primary_button
+    };
+    let muted = {
+        let topic = get(&["buffer", "topic"], "#7f849c");
+        if topic == text_primary {
+            text_secondary
+        } else {
+            topic
+        }
+    };
+    let page_border = get(&["general", "border"], "#45475a");
+    let card_background = buffer_background;
+    let button_primary_background = {
+        let selected = get(&["buttons", "primary", "background_selected"], "");
+        if !selected.is_empty() {
+            selected
+        } else {
+            let background = get(&["buttons", "primary", "background"], "");
+            if background.is_empty() {
+                general_background
+            } else {
+                background
+            }
+        }
+    };
+    let values = [
+        ("--page-bg", page_background.to_owned()),
+        ("--page-text", text_primary.to_owned()),
+        ("--page-border", page_border.to_owned()),
+        ("--topbar-bg", general_background.to_owned()),
+        ("--topbar-text", text_primary.to_owned()),
+        ("--topbar-border", page_border.to_owned()),
+        ("--nav-text", text_secondary.to_owned()),
+        (
+            "--nav-hover-bg",
+            get(&["buffer", "highlight"], "#45475a").to_owned(),
+        ),
+        ("--nav-active-bg", primary_button.to_owned()),
+        ("--nav-active-text", text_primary.to_owned()),
+        ("--card-bg", card_background.to_owned()),
+        ("--card-border", page_border.to_owned()),
+        ("--table-header-bg", buffer_title.to_owned()),
+        ("--table-header-text", text_secondary.to_owned()),
+        (
+            "--table-border",
+            get(&["general", "horizontal_rule"], "#313244").to_owned(),
+        ),
+        ("--text-muted", muted.to_owned()),
+        ("--text-secondary", text_secondary.to_owned()),
+        ("--color-success", text_success.to_owned()),
+        ("--color-error", text_error.to_owned()),
+        ("--color-warning", warning.to_owned()),
+        ("--color-info", info.to_owned()),
+        ("--button-primary-bg", button_primary_background.to_owned()),
+        ("--button-primary-text", text_primary.to_owned()),
+        (
+            "--chip-bg",
+            mix_theme_colors(&page_background, text_primary, 0.06)
+                .unwrap_or_else(|| "#313244".to_owned()),
+        ),
+        (
+            "--chip-border",
+            mix_theme_colors(&page_background, text_primary, 0.14)
+                .unwrap_or_else(|| "#45475a".to_owned()),
+        ),
+        ("--button-bg", card_background.to_owned()),
+        (
+            "--button-border",
+            mix_theme_colors(card_background, text_primary, 0.18)
+                .unwrap_or_else(|| page_border.to_owned()),
+        ),
+        (
+            "--button-bg-hover",
+            mix_theme_colors(card_background, text_primary, 0.08)
+                .unwrap_or_else(|| card_background.to_owned()),
+        ),
+        (
+            "--button-bg-active",
+            mix_theme_colors(card_background, info, 0.20)
+                .unwrap_or_else(|| card_background.to_owned()),
+        ),
+        ("--link-color", info.to_owned()),
+        (
+            "--link-color-hover",
+            adjust_theme_lightness(info, 0.85).unwrap_or_else(|| info.to_owned()),
+        ),
+        ("--accent-color", info.to_owned()),
+        (
+            "--tag-default-bg",
+            mix_theme_colors(&page_background, info, 0.15)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        ("--tag-default-text", info.to_owned()),
+        (
+            "--tag-success-bg",
+            mix_theme_colors(&page_background, text_success, 0.15)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        ("--tag-success-text", text_success.to_owned()),
+        (
+            "--tag-warning-bg",
+            mix_theme_colors(&page_background, warning, 0.15)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        ("--tag-warning-text", warning.to_owned()),
+        (
+            "--tag-error-bg",
+            mix_theme_colors(&page_background, text_error, 0.15)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        ("--tag-error-text", text_error.to_owned()),
+        (
+            "--heatmap-0",
+            mix_theme_colors(&page_background, text_primary, 0.06)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        (
+            "--heatmap-1",
+            mix_theme_colors(&page_background, text_success, 0.35)
+                .unwrap_or_else(|| page_background.to_owned()),
+        ),
+        ("--heatmap-2", text_success.to_owned()),
+        (
+            "--heatmap-3",
+            adjust_theme_lightness(text_success, 0.7).unwrap_or_else(|| text_success.to_owned()),
+        ),
+        (
+            "--heatmap-4",
+            adjust_theme_lightness(text_success, 0.45).unwrap_or_else(|| text_success.to_owned()),
+        ),
+        ("--heatmap-label-text", muted.to_owned()),
+    ];
+    let declarations = values
+        .iter()
+        .map(|(property, color)| format!("  {property}: {color};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(":root {{\n{declarations}\n}}")
 }
 
 pub(super) fn theme_bytes(name: &str) -> Option<&'static [u8]> {
@@ -5170,6 +5402,23 @@ mod tests {
         assert_eq!(summary, "load average unavailable");
         #[cfg(target_os = "linux")]
         assert!(summary == "load average unavailable" || summary.ends_with(" CPUs"));
+    }
+
+    #[test]
+    fn theme_variables_match_dashboard_translation_contract() {
+        let css = super::theme_variables("Catppuccin Latte");
+        for declaration in [
+            "--page-bg: #DCE0E8;",
+            "--topbar-border: #9CA0B0;",
+            "--nav-text: #6C6F85;",
+            "--button-border: #cacdd6;",
+            "--link-color-hover: #0951df;",
+            "--tag-success-bg: #c4d6cb;",
+            "--heatmap-3: #2c6f1e;",
+        ] {
+            assert!(css.contains(declaration), "missing {declaration}");
+        }
+        assert_eq!(css.matches("--").count(), 46);
     }
 
     #[test]
