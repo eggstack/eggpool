@@ -1,6 +1,6 @@
 # Dashboard Milestone 012 — Lifecycle closure and documentation polish
 
-Status: ready
+Status: active
 
 Repository baseline: `9eb46571a2e65aabe531197945f4656fe22caa79`
 
