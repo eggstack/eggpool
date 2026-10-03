@@ -18,6 +18,7 @@ from scripts.qualification_sbc import (
     DIAGNOSTIC_MAX_SAMPLES,
     DIAGNOSTIC_MIN_SAMPLES,
     DIRECT_CONTROL_SAMPLES,
+    MEASUREMENT_HTTP_TIMEOUT,
     NATIVE_FINITE_CASE,
     NATIVE_STREAMING_CASE,
     PUBLICATION_PHASE_SAMPLES,
@@ -52,6 +53,7 @@ from scripts.qualification_sbc import (
     _runtime_task_snapshot,
     _storage_device_class,
     _task_tick_deltas,
+    _timed_http,
     _timing_summary,
     _wal_snapshot,
     benchmark_cadence_facts,
@@ -925,3 +927,38 @@ def test_238_diagnostic_summary_retains_wal_scalars_without_p99() -> None:
     payload = json.dumps(summary, sort_keys=True)
     assert "p99" not in payload
     assert "usage.sqlite3" not in payload
+
+
+def test_measurement_http_timeout_preserves_long_latency_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, float] = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int = -1) -> bytes:
+            if not getattr(self, "_read_once", False):
+                self._read_once = True
+                return b"o"
+            return b"k"
+
+    def fake_urlopen(_request: object, *, timeout: float) -> Response:
+        observed["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(
+        "scripts.qualification_sbc.urllib.request.urlopen", fake_urlopen
+    )
+    status, body, _elapsed_ms, _ttft_ms = _timed_http("http://127.0.0.1/test")
+
+    assert status == 200
+    assert body == b"ok"
+    assert observed["timeout"] == MEASUREMENT_HTTP_TIMEOUT
+    assert MEASUREMENT_HTTP_TIMEOUT > 5.0

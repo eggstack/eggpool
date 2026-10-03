@@ -54,6 +54,9 @@ MANIFEST_VERSION = "runtime-q001.v1"
 MAX_REASON_BYTES = 768
 MAX_HTTP_BODY_BYTES = 128 * 1024
 COMMAND_TIMEOUT = 45.0
+# Keep measurement requests alive long enough to record multi-second storage
+# stalls as latency evidence instead of aborting the run before phase capture.
+MEASUREMENT_HTTP_TIMEOUT = 120.0
 SAMPLE_SECONDS = 0.20
 BENCHMARK_MAX_SAMPLES = 100
 BENCHMARK_WARMUPS = 5
@@ -635,7 +638,7 @@ def _timed_http(
     method: str = "GET",
     body: bytes | None = None,
     headers: Mapping[str, str] | None = None,
-    timeout: float = 5.0,
+    timeout: float = MEASUREMENT_HTTP_TIMEOUT,
 ) -> tuple[int, bytes, int, int | None]:
     """Return a bounded response plus total and first-byte timings."""
     request = urllib.request.Request(
