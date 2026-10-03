@@ -2,6 +2,8 @@
 
 Status: closed (see `plans/closure/provider-profile-metadata/001-status.md`)
 
+> **Post-closure source truth:** The planning-time Together statements below are historical and were superseded by execution-time first-party review. `plans/closure/provider-profile-metadata/001-status.md` is authoritative: `https://api.together.ai/v1` was retained as canonical, `.xyz` is a legacy alias, and no endpoint correction landed.
+
 Repository baseline: `c17a55218b2810791fcf6f3136b8805becfa27c1`
 
 Source roadmap:
