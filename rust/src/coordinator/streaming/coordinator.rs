@@ -412,7 +412,7 @@ impl StreamingCoordinator {
             let identity = published.identity.clone();
             let attempt_input = AttemptPreparation {
                 identity: &identity,
-                provider: &provider,
+                provider,
                 account_api_key: self.credentials.get(&identity.account_name),
                 incoming_headers: &request.incoming_headers,
                 request_id: request.request_id.as_deref(),
@@ -585,7 +585,7 @@ impl StreamingCoordinator {
                     request.client_surface,
                     candidate.profile.clone(),
                     &identity,
-                    &provider,
+                    provider,
                 );
                 let decoded = self.wire.decode_finite_response_for_request(
                     &body,
@@ -931,7 +931,7 @@ impl StreamingCoordinator {
                 request.client_surface,
                 candidate.profile.clone(),
                 &identity,
-                &provider,
+                provider,
             );
             let wire_stream = match self
                 .wire
