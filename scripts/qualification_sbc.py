@@ -3405,9 +3405,22 @@ def run_qualification(
                         include_peak=benchmark_mode,
                     )
                 )
-                _stop(process, min(timeout, 10))
+                result = _command(
+                    "stop-before-recovery",
+                    binary,
+                    config,
+                    env,
+                    ("stop", "--timeout", "30"),
+                    timeout,
+                )
+                commands.append(result)
+                if result.status != "pass":
+                    raise QualificationError(f"stop-before-recovery: {result.reason}")
                 if process.poll() is None:
                     raise QualificationError("candidate did not stop before recovery")
+                report["functional"].append(
+                    {"id": "graceful-stop-before-recovery", "status": "pass"}
+                )
                 process = None
                 recovery_config = recovery_root / "config.toml"
                 recovery_database = recovery_root / "usage.sqlite3"
