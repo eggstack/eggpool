@@ -257,6 +257,6 @@ resolved.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — provider/wire-resolver hot-path ownership and cache cleanup | ready | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | not yet | none |
+| 001 — provider/wire-resolver hot-path ownership and cache cleanup | closed | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | `plans/closure/runtime-efficiency/001-status.md` | none; M002/M003 remain independently ready |
 | 002 — catalog refresh projection and lock-tenure cleanup | ready | `plans/implementation/runtime-efficiency/002-catalog-refresh-projection-lock-tenure-cleanup.md` | not yet | none |
 | 003 — dashboard TTFT percentile query qualification and bounded rewrite | ready | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | not yet | none |
