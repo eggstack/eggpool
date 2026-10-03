@@ -1,8 +1,8 @@
 # Routing Selection M003 — Bounded Exact Affinity LRU
 
-Status: ready
+Status: active
 
-Repository baseline: `9de6def0`
+Repository baseline: `31e9a6aa`
 
 Source roadmap:
 

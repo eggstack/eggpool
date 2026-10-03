@@ -52,13 +52,14 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Routing selection | M003 — bounded exact affinity LRU | ready | `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` | M002 physical Pi 5 qualification closed; exact bounded follow-up justified |
+
 
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Routing selection | M003 — bounded exact affinity LRU | active | `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` | Pi 5 before/after qualification required |
 
 ## Blocked work
 
