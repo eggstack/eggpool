@@ -534,39 +534,22 @@ Source: `rust/src/operations/integrations.rs`
 
 ## 10. Observability
 
-### In-Memory Counters
+Thinking usage is recorded as durable aggregate facts, not per-request
+traces. `reasoning_tokens` and `thinking_characters` accumulate in the
+`usage_rollups` table and surface in the dashboard metrics API
+(`rust/src/operations/metrics.rs`, `rust/src/server/dashboard/api.rs`).
+There is no `GET /api/stats/thinking` endpoint and no in-memory
+thinking counter: thinking decisions are classified at request time by the
+wire adaptation layer (`rust/src/wire/`) and capability-aware routing
+(`rust/src/routing/eligibility.rs`), with loss/drop reasons reported through
+the standard bounded adaptation warnings (e.g. `reasoning_content_dropped`,
+`thinking_signature_dropped`, `budget_clamped`, `budget_rejected`).
 
-`ThinkingMetricsCounter` (`rust/src/operations/metrics.rs`) tracks per-request thinking decisions using pipe-delimited label keys:
+The `requests` table carries a `thinking_trace_json` column (migration
+`0039_thinking_observability.sql`) reserved for future diagnostic use; no
+runtime path currently populates it, so do not query it expecting data.
 
-| Counter Category | Key Format | Example |
-|---|---|---|
-| `requested` | `requested\|{client_protocol}` | `requested\|openai` |
-| `transcoded` | `transcoded\|{client}\|{upstream}\|{provider}` | `transcoded\|openai\|anthropic\|anthropic-prod` |
-| `dropped` | `dropped\|{client}\|{upstream}\|{reason}` | `dropped\|anthropic\|openai\|reasoning_content_dropped` |
-| `rejected` | `rejected\|{client}\|{capability_status}` | `rejected\|openai\|unsupported` |
-| `unknown_capability` | `unknown_capability\|{client}` | `unknown_capability\|openai` |
-| `unsupported_capability` | `unsupported_capability\|{client}` | `unsupported_capability\|openai` |
-| `budget_clamped` | `budget_clamped\|{client}\|{provider}` | `budget_clamped\|openai\|anthropic-prod` |
-
-Counters are **in-memory only** and reset on restart. They complement the durable `usage_rollups` table.
-
-### Per-Request Trace
-
-Every request that involves thinking decisions stores a `thinking_trace_json` column on the `requests` table (migration `0039`). This contains the structured `ThinkingMetricEvent` for diagnostic inspection.
-
-### Endpoints
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/stats/thinking` | Returns in-memory counter snapshot with per-decision breakdown |
-| `GET /api/stats/recent/{id}` | Includes `thinking_trace_json` in the request trace |
-| `GET /api/stats/runtime` | Includes `thinking_metrics` in the runtime metrics block |
-
-### Dashboard
-
-The overview page shows a **Thinking/Reasoning** stat card when counters are non-zero. It displays total thinking requests with a breakdown: requested, transcoded, dropped, rejected, unknown-cap, unsupported-cap, and budget-clamped counts.
-
-Source: `rust/src/operations/metrics.rs`, `rust/src/server/dashboard/`, `rust/src/server/health.rs`
+Source: `rust/src/operations/metrics.rs`, `rust/src/server/dashboard/`
 
 ## 11. Troubleshooting
 
@@ -660,7 +643,15 @@ native_protocols = ["anthropic"]
 
 ## 12. Closing-Pass Hardening
 
-This section documents the semantic hardening applied to thinking/reasoning handling in the **closing pass** (Phase A–G).
+This section records the semantic hardening decisions for
+thinking/reasoning handling (Phase A–G). The phase narrative below uses the
+names of the retired Python implementation in which the hardening was first
+made (`RequestCoordinator.*` helpers, `CapabilityError`/`BudgetResolutionError`
+classes, `thinking_trace` fields); the current Rust runtime implements the
+same semantics in `rust/src/catalog/cache.rs`, `rust/src/wire/`,
+`rust/src/routing/eligibility.rs`, and `rust/src/coordinator/`. Read the
+phase text for intended behavior, and the Rust modules for the current
+implementation — do not treat the Python method names as callable code.
 
 ### Phase A — Missing Capability Metadata Is `unknown`
 

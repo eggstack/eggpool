@@ -69,11 +69,8 @@ or well-known local runtimes.
 # List available providers
 eggpool connect list
 
-# Connect to a provider interactively
+# Connect to a provider (interactive; walks through credentials and validation)
 eggpool connect
-
-# Connect to a specific provider
-eggpool connect groq
 ```
 
 ### Manual Configuration
@@ -440,13 +437,9 @@ deployments that used the unsuffixed `minimax-m2.7` ID should either:
 - Set `collapse_models = true` to keep the old single-ID exposure, or
 - Rewrite the client to use the suffixed `minimax-m2.7/<provider>` IDs.
 
-Either change currently requires a service restart.  `eggpool rehash`
-validates the new config against the same contract as `eggpool
-check-config` (see `docs/live-config-rehash.md`) and reports whether the
-running process can pick up the change without a restart — but the live
-control plane is not yet available, so operators should run `eggpool
-restart` (or `systemctl restart eggpool`) to apply these field-level
-changes.
+Either change is live-reloadable: provider blocks are `Live` under
+`config_reload_policy.rs`, so run `eggpool rehash` to apply them without a
+restart (see `docs/live-config-rehash.md`).
 
 ### Rebalancing providers
 
@@ -454,7 +447,8 @@ changes.
 block. The value is left untouched on existing blocks, so adding more accounts
 to an already-configured provider does not disturb the operator's tier choice.
 Operators can rebalance later by editing a single number in
-`[providers.<id>].routing_priority` and restarting the service.
+`[providers.<id>].routing_priority` and running `eggpool rehash` (provider
+blocks are live-reloadable).
 
 ## Verification
 
@@ -550,9 +544,11 @@ These require adapter support that EggPool does not currently implement.
 
 ## High-Concurrency HTTP Client Profiles
 
-The ordinary provider connection limits (`max_connections=16`,
-`max_keepalive=4`, `read_timeout_s=300`, `pool_timeout_s=30`) are
-calibrated for low-power SBC/Raspberry Pi deployments. The runtime
+The ordinary connection limits are calibrated for low-power SBC/Raspberry Pi
+deployments. Note the two pool scopes: `[upstream]` defaults to
+`max_connections = 16`, while each `[providers.<id>]` block defaults to
+`max_connections = 32` and `max_keepalive = 8` (`read_timeout_s = 300`,
+`pool_timeout_s = 30`). The runtime
 settings split into three independent axes that are easy to confuse:
 
 | Setting | Scope | Effect |

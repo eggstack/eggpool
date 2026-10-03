@@ -84,9 +84,12 @@ For translated requests, tool-schema allowance is included in the context
 estimate mathematically. It is not appended to the encoded provider body, so
 the upstream payload remains unchanged.
 
-## Restart Requirements
+## Reload behavior
 
-Configuration changes to model limits require a service restart. Live reload is not supported for model limit policy.
+`model_capabilities` and `model_overrides` are live-reloadable: edit the
+config and run `eggpool rehash` to apply new limits without a restart
+(see `docs/live-config-rehash.md`). A restart is only needed when the same
+edit also touches restart-required fields.
 
 ## Dashboard Visibility
 

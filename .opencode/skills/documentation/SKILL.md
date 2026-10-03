@@ -97,8 +97,8 @@ description: Documentation maintenance for the native Rust EggPool runtime and i
   output as secret-free and read-only, and `GET /api/integrations/v1/profile`
   as the authenticated versioned projection. Document `eggpool-connect`
   `plan`/`install`/`verify`/`backups`/`restore`/`remove` with byte-exact
-  backups, atomic writes, automatic rollback, and the helper state layout in
-  `docs/filesystem-layout.md`. Document the version-pinned desktop bootstrap
+backups, atomic writes, automatic rollback, and the helper state layout in
+`docs/filesystem-layout.md` (“Desktop helper state (`eggpool-connect`)”). Document the version-pinned desktop bootstrap
   (`eggpool configremote --shell posix|powershell`, `packaging/connect/`
   scripts, SHA-256 against the release SHA256SUMS, `docs/releasing.md`
   helper assets) and always state that a Windows helper does not imply

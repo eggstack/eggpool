@@ -16,7 +16,7 @@ database deletion, salvage, vacuum, or in-place repair.
 
 ```bash
 systemctl restart eggpool
-curl -sS http://localhost:PORT/readyz
+curl -sS http://localhost:11300/readyz
 ```
 
 During startup, `/readyz` remains unavailable. A healthy process returns a

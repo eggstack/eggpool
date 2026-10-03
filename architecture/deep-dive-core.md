@@ -8,7 +8,7 @@ Back to [Architecture](README.md). See also the review index in
 The native executable is bootstrapped by `rust/src/main.rs` and
 `rust/src/cli.rs`. `rust/src/main.rs:3` runs Tokio's `current_thread` runtime
 and maps `AppError` to `ExitCode` via `AppError::exit_code`.
-`rust/src/lib.rs:6-29` declares the module tree (`accounts`, `catalog`, `cli`,
+`rust/src/lib.rs:8-29` declares the module tree (`accounts`, `catalog`, `cli`,
 `config`, `config_reload_policy`, `coordinator`, `db`, `error`, `health`,
 `model_router`, `operations`, `providers`, `quota`, `reload`, `request`,
 `routing`, `runtime`, `runtime_lifecycle`, `server`, `task_supervisor`,

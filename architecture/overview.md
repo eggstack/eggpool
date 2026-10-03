@@ -79,7 +79,7 @@ command tree (34 commands: `serve`, `connect`, `logout`, `check-config`, `edit`,
 `newkey`, `configsetup`, `configremote`, `deploy`, `accounts`, `dashboard`, `db`, `models`,
 `modelinfo`, `stats`, `onboard`, `croncheck`, `ensure-running`, `migrate`,
 `stop`, `restart`, `init-config`, `help`, `recover`, `uninstall`, `update`,
-`install-provenance`, `set`, `rehash`, `status`, `runtime-status`, `backup`, `version`).
+`install-provenance`, `set`, `rehash`, `runtime-status`, `status`, `backup`, `version`).
 `rust/src/runtime.rs` adapts each command to `operations/*`, `config`, and
 `db` without touching coordinator/server internals. The separate
 `eggpool-connect` desktop binary (`rust/crates/eggpool-connect/`) owns the
@@ -227,7 +227,8 @@ only compiled codec IDs;
 stateful `ClientStreamEncoder`), and terminal summaries; `adaptation.rs`
 owns reasoning/tool/capability and loss policy; `decode.rs` owns the pure
 structural decoder with `DecodeLimits`, `fidelity.rs`/`provenance.rs`/
-`conformance.rs` own source-native residue and conformance facts, and
+`conformance.rs` own source-native residue and conformance facts,
+`tool_calls.rs` owns the neutral tool-call accumulator, and
 `adapters.rs` is the EggPool-owned extraction seam (maps catalog/request/
 routing/config facts into neutral kernel types — explicitly not kernel).
 The neutral kernel itself lives in `rust/crates/eggpool-wire/`. Two bounded Responses paths:
@@ -466,10 +467,10 @@ observational only.
 `rust/Cargo.toml` authority: Tokio, Hyper/Hyper-util/Hyper-Rustls/Rustls,
 Eggfetch (`eggfetch-core` 0.2.2 `native-http1` + `tls-rustls`, provider
 transport),
-Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, Base64 (portable `epc1` tokens),
-`tokio-rusqlite` (bundled/backup), Nix, Zip, Tracing, Eggress 1.0.11
-(optional SSH capability), plus the path crates `eggpool-model-routing`,
-`eggpool-client-config`, and the `eggpool-connect` desktop binary (narrow
+Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, `tokio-rusqlite` (bundled/backup),
+Nix, Zip, Tracing, Eggress 1.0.11 (optional SSH capability), plus the path
+crates `eggpool-model-routing`, `eggpool-client-config` (which owns Base64
+for portable `epc1` tokens), and the `eggpool-connect` desktop binary (narrow
 Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `ssh`
 supports SSH upstreams through the listener-free outbound connector;
 `--no-default-features` still
@@ -505,12 +506,12 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 
 | Module / concern | Authority paths | Deep dive |
 |---|---|---|
-| Entry, CLI, errors | `rust/src/main.rs`, `lib.rs`, `cli.rs`, `runtime.rs`, `error.rs`, `version.rs` | [Core](deep-dive-core.md) |
-| Config, reload policy, reload | `rust/src/config.rs`, `config_reload_policy.rs`, `reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
+| Entry, CLI, errors | `rust/src/main.rs`, `rust/src/lib.rs`, `rust/src/cli.rs`, `rust/src/runtime.rs`, `rust/src/error.rs`, `rust/src/version.rs` | [Core](deep-dive-core.md) |
+| Config, reload policy, reload | `rust/src/config.rs`, `rust/src/config_reload_policy.rs`, `rust/src/reload.rs`, `rust/build.rs`, `rust/build_support.rs` | [Core](deep-dive-core.md), [Control](deep-dive-control.md), [Runtime](deep-dive-runtime.md) |
 | HTTP adapters | `rust/src/server/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md) |
 | Admission | `rust/src/request/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Transcoder](deep-dive-transcoder.md) |
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
-| Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `finalization.rs`, `failure.rs`, `attempt.rs`, `wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
+| Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, `rust/src/coordinator/failure.rs`, `rust/src/coordinator/attempt.rs`, `rust/src/coordinator/wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Wire/transcoding | `rust/src/wire/` (facades + `adapters.rs` seam + `runtime.rs` join), `rust/crates/eggpool-wire/` (neutral kernel) | [Transcoder](deep-dive-transcoder.md) |
 | Providers/transport | `rust/src/providers/` | [Providers](deep-dive-providers.md) |
 | Routing/quota/health/accounts | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/`, `rust/src/accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
@@ -519,10 +520,10 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs`, `rust/crates/eggpool-connect/` | [Integrations](deep-dive-integrations.md) |
 | Persistence | `rust/src/db/`, `rust/assets/db/migrations/` | [Database](deep-dive-database.md) |
 | Generations/lifecycle | `rust/src/runtime_lifecycle/`, `rust/src/task_supervisor.rs` | [Runtime](deep-dive-runtime.md), [Background](deep-dive-background.md) |
-| Operations control/lifecycle | `operations/control.rs`, `lifecycle.rs`, `process.rs`, `paths.rs`, `config_mutation.rs`, `terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
-| Deploy/backup/update | `operations/deploy.rs`, `backup.rs`, `update.rs`, `catalog.rs`, `provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
-| Operator/status/metrics/integrations | `operations/operator.rs`, `status.rs`, `metrics.rs`, `integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
-| Observability/security | `operations/metrics.rs`, `operations/status.rs`, `server/dashboard/`, `server/health.rs`, `runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
+| Operations control/lifecycle | `rust/src/operations/control.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/operations/process.rs`, `rust/src/operations/paths.rs`, `rust/src/operations/config_mutation.rs`, `rust/src/operations/terminal.rs` | [Control](deep-dive-control.md), [Deployment](deep-dive-deployment.md) |
+| Deploy/backup/update | `rust/src/operations/deploy.rs`, `rust/src/operations/backup.rs`, `rust/src/operations/update.rs`, `rust/src/operations/catalog.rs`, `rust/src/operations/provenance.rs` | [Deployment](deep-dive-deployment.md), [Lifecycle](deep-dive-lifecycle.md) |
+| Operator/status/metrics/integrations | `rust/src/operations/operator.rs`, `rust/src/operations/status.rs`, `rust/src/operations/metrics.rs`, `rust/src/operations/integrations.rs` (+ portable `eggpool-client-config`) | [Metrics](deep-dive-metrics.md), [Integrations](deep-dive-integrations.md) |
+| Observability/security | `rust/src/operations/metrics.rs`, `rust/src/operations/status.rs`, `rust/src/server/dashboard/`, `rust/src/server/health.rs`, `rust/src/runtime_lifecycle/diagnostics.rs` | [Observability](deep-dive-observability.md), [Metrics](deep-dive-metrics.md), [Dashboard](deep-dive-dashboard.md), [Security](deep-dive-security.md) |
 | Tooling/tests | `scripts/`, `tests/tooling/`, `rust/tests/`, `packaging/` | [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md) |
 
 ## Source-development flow

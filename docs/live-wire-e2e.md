@@ -24,13 +24,13 @@ Re-check the [official Go endpoint table](https://dev.opencode.ai/docs/go/)
 before a release verification because the model list and endpoint assignments
 can change.
 
-Set the test-only credential variable in the shell that runs pytest:
-
-```bash
-export EGGPOOL_E2E_OPENCODE_GO_API_KEY='sk-your-opencode-go-key'
-uv run pytest tests/live/test_opencode_go_wire_live.py \
-  -m live_opencode_go -v
-```
+Set the test-only credential variable in the shell that runs the live
+qualification runner below. (The historical pytest suites
+`tests/live/test_opencode_go_wire_live.py` and
+`tests/integration/test_wire_negotiation_e2e.py` were retired with the
+Python application tooling; wire negotiation is now covered by the native
+`rust/tests/` targets such as `wire_qualification`, `wire_runtime`, and
+`coordinator_boundaries`. Do not treat those pytest paths as runnable.)
 
 The suite covers non-streaming path selection and learned steady state,
 Responses/Chat/Messages streaming terminal evidence, a public
@@ -94,13 +94,9 @@ secret-free evidence.
 
 ## Deterministic wire compatibility acceptance
 
-The mandatory stale-profile check uses an in-process fake upstream:
-
-```bash
-uv run pytest tests/integration/test_wire_negotiation_e2e.py -q
-```
-
-It first accepts Responses, then changes to a safe Responses rejection with
+The mandatory stale-profile check (historically
+`tests/integration/test_wire_negotiation_e2e.py`, now covered natively)
+uses an in-process fake upstream. It first accepts Responses, then changes to a safe Responses rejection with
 Chat acceptance. The same account succeeds after an in-process alternate-wire
 retry, the Chat preference is learned, and the next request uses Chat without
 a restart or database reset. The test also verifies that the outbound hook

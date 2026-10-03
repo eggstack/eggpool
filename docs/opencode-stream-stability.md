@@ -122,6 +122,24 @@ connection budget per upstream IP and is not supported.
 
 ## Closure validation
 
+Dispatch-stability quick checks use the same telemetry (no mandatory soak
+runner or JSON evidence format):
+
+```bash
+eggpool runtime-status --json | python3 -m json.tool
+cargo test --manifest-path rust/Cargo.toml --test coordinator_c008 -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test wire_stream -- --test-threads=1
+```
+
+Compare `local_pre_upstream` with upstream connect/TTFT to separate EggPool
+work from provider latency. Inspect `stream_diagnostics` for provider-bound
+connect, read, write, protocol, and timeout outcomes. After a failure or
+cancellation, verify that active requests and reservations return to zero.
+Streaming tests distinguish canonical terminal evidence (`[DONE]` or
+`message_stop`) from premature EOF; a timeout is a separate upstream outcome.
+Runtime metrics are operational signals — do not convert them into fixed CI
+percentile or duration gates.
+
 After deploying stream-stability changes, run the native runtime tests and
 inspect the bounded diagnostics:
 

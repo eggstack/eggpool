@@ -23,10 +23,18 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
 
 ## Layout
 
-- Runtime (authority): `rust/src/` (`main.rs`/`cli.rs`/`lib.rs` entry, `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` + `coordinator/streaming/` request lifecycle, `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` + `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity, `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` + `task_supervisor.rs`, `operations/` local lifecycle, `db/` + `rust/assets/db/migrations/` v1–v54 immutable).
+- Runtime (authority): `rust/src/` — `main.rs`/`cli.rs`/`lib.rs` entry,
+  `runtime.rs` CLI adapter, `server/` thin HTTP adapters, `coordinator/` +
+  `coordinator/streaming/` (`coordinator.rs`, `execution.rs`, `terminal.rs`,
+  `timeout.rs`, `types.rs`, `diagnostics.rs` behind `mod.rs`) request lifecycle,
+  `request/` admission, `wire/` protocol codecs, `routing/` + `accounts/` +
+  `catalog/` + `quota/` + `health/` selection, `model_router.rs` affinity,
+  `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` +
+  `task_supervisor.rs`, `operations/` local lifecycle, `db/` +
+  `rust/assets/db/migrations/` v1–v54 immutable.
 - Reusable policy crates: `rust/crates/eggpool-model-routing/` (neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`), `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, V1/V2 renderers, TOML/JSONC-preserving mutation; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`), `rust/crates/eggpool-wire/` (neutral sans-I/O wire kernel; execution stays in `rust/src/`), `rust/crates/eggpool-connect/` (narrow `eggpool-connect` binary: plan/install/verify/backups/restore/remove with byte-exact backups, atomic writes, automatic rollback; no Axum/SQLite/Eggress, no proxy/agent/daemon).
 - Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. `scripts/qualification_sbc.py` is the sole physical-SBC runner (loopback-only, aggregate-only, non-CI). Native tests live in `rust/tests/` (serial; there is no `coordinator_c012`; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
-- Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`; API keys from environment/`.env`, never committed. Examples: `rust/config.example.toml`, `rust/config.sbc.example.toml`.
+- Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. Provider/upstream keys come from environment/`.env`, never committed; the server key lives under `[server]` (`api_key` via `eggpool newkey`, or `api_key_env`). Examples: `rust/config.example.toml`, `rust/config.sbc.example.toml`.
 - Plans: `plans/` is append-only (`plans/README.md`, `plans/registry.md` is the control surface; pre-251 flat `001-*`…`250-*` are immutable history). See the `plan` skill before adding one. Past plan numbers in this file go stale — link the registry, never paste plan history here.
 
 ## Commands (run from repo root)
@@ -60,13 +68,21 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
-Notes: Rust tests must run serial (`--test-threads=1`). CI runs no-default
-only for `check`/`clippy`, never `test` — keep the full
-`--workspace --all-targets -- --test-threads=1` shape when running no-default
-tests locally. `uv sync --dev` for local
-tooling work, `uv sync --frozen` for CI parity. Ruff covers `scripts/` +
+Notes: Rust tests must run serial (`--test-threads=1`). Strict Clippy
+(`-D warnings`) is an invariant — no baseline allowlist, narrow justified
+allows only. CI runs no-default only for `check`/`clippy`, never `test` —
+keep the full `--workspace --all-targets -- --test-threads=1` shape when
+running no-default tests locally. `uv sync --dev` for local tooling work,
+`uv sync --frozen` for CI parity. Ruff covers `scripts/` +
 `tests/tooling/`; pyright strict covers `scripts/` only. CI skips docs-only
 changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`, `AGENTS.md`).
+
+Docs changes: `scripts/validate_release_docs.py` enforces README phrases,
+target matrix, and local-link integrity for `README.md` + release docs —
+run `uv run python scripts/validate_release_docs.py` for any of those files.
+Verify CLI/endpoint examples against a real binary with an isolated home:
+`HOME=$TMP EGGPOOL_CONFIG=$TMP/config.toml` + `newkey`, pre-create the data
+dir, then `serve` (it daemonizes), curl, `stop`.
 
 ## Conventions agents miss
 
@@ -88,6 +104,12 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
 - No Python runtime fallbacks; no new restart/reload key lists; no buffering
   arbitrary native streams. Credentials, prompts, raw bodies, cache keys stay
   out of persistence/logs/diagnostics.
+- Routing is deterministic and load-based, never cost-based. Selector
+  (virtual-model) decisions run before provider/account routing and cannot pin
+  an account, bypass health/quota, or reselect after submission.
+- Wire changes preserve canonical intent and never chain translated payloads.
+  Build complete immutable generation candidates before publication; fail
+  closed on commit or ownership ambiguity.
 - Inference admission is owned by `coordinator/endpoints.rs`: one endpoint
   execution call, one parsed body reused for finite/streaming selection, depth
   validation, model mutation, and `from_admitted` construction. Native

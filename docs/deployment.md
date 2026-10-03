@@ -223,8 +223,12 @@ eggpool deploy backup-cron --install
 
 This writes `/usr/local/bin/eggpool-backup` (a thin wrapper that execs
 `eggpool backup`, which produces the same staged atomic ZIP archives as the
-in-process task) and a `0 2 * * *` crontab entry. Backups land in
-`~/backups/eggpool/` and retain 30 days of archives.
+in-process task) and a `0 2 * * *` crontab entry. The wrapper targets the
+production backup dir (`/var/backups/eggpool`); the in-process `eggpool
+backup` default is `/var/lib/eggpool/backups` when that dir exists, else
+`~/backups/eggpool` (overridable with `[backup].directory`). Archive
+pruning (default keep 14, `[backup].retain_count`) runs in the in-process
+automatic backup task — the cron wrapper itself does not prune.
 
 ### 7. Verify
 
@@ -541,8 +545,9 @@ sudo chmod 750 /var/lib/eggpool /var/log/eggpool
 sudo chmod 755 /etc/eggpool
 
 # 2. Install the native wheel through the system-owned pipx authority
+# (pin the version you qualified; see docs/rust-release-deployment.md)
 sudo env PIPX_HOME=/var/lib/eggpool/pipx PIPX_BIN_DIR=/usr/local/bin \
-  pipx install --force eggpool
+  pipx install --force 'eggpool==0.8.1'
 
 # 3. Configure
 sudo /usr/local/bin/eggpool init-config /etc/eggpool/config.toml

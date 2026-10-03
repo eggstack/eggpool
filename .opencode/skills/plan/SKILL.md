@@ -52,11 +52,15 @@ invariants override both.
 
 ## Lifecycle and status vocabulary
 
-Post-251 documents use: `proposed` → `ready` → `active` → `closing` →
-`closed`, with `blocked`, `conditionally closed`, `superseded`, `archived`
-as needed. Keep the status line in every plan/roadmap/closure header.
-Legacy flat headers (`draft`, `ready for implementation`, `implementation
-handoff`, `complete`, `closure`) MUST NOT be used for new hierarchy docs.
+Status vocabularies differ per document kind — use the one from the matching
+template, and keep the status line in every header. Legacy flat headers
+(`draft`, `ready for implementation`, `implementation handoff`, `complete`,
+`closure`) MUST NOT be used for new hierarchy docs.
+
+- Subsystem roadmaps (`plans/subsystems/README.md`): `proposed | active | closing | closed | superseded`
+- Implementation plans (`plans/implementation/README.md`): `ready | active | blocked | closing | implemented | superseded`
+- Closure records (`plans/closure/README.md`): `closed | conditionally closed | corrective pass required | blocked`
+- ADRs (`plans/adrs/README.md`): `proposed → accepted → deprecated/superseded`, or `rejected`
 
 - Numbering: canonical `000–003` fixed; ADRs `ADR-NNNN` global
   (monotonic, never reused); implementation/closure `NNN` local to the
@@ -140,10 +144,8 @@ Path: `plans/adrs/ADR-NNNN-short-title.md`. Template + threshold:
 `plans/adrs/README.md`. Required for reload/restart boundary changes,
 durable dependency selection, auth semantics, generation/lease/fencing
 semantics, new protocols, public compat contracts. Accepted ADRs are
-immutable — supersede, don’t rewrite. No ADRs have been written yet
-(`plans/adrs/` holds only its README) — writing the first one also means
-establishing the lived convention, so keep it minimal and follow the
-template exactly.
+immutable — supersede, don’t rewrite. `ADR-0001` (binary-first quick-install
+authority) is accepted; follow `plans/adrs/README.md` exactly for new ones.
 
 ## Archive workflow
 

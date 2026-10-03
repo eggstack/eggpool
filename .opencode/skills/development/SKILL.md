@@ -59,7 +59,7 @@ health aggregation, `/api/status`, CLI offline behavior). Also present:
 `build_manifest`, `model_router`, `routing_selection_efficiency`,
 `catalog_refresh`, `canonical_request`, `database_compatibility`,
 `server_transport`, `provider_transport`, `codex_responses_compat`,
-`codex_compaction_compat`.
+`codex_compaction_compat`, `health`, `cli_contract`.
 
 For `configsetup`/`configremote`/integration-profile/`eggpool-connect`
 changes, run the portable crate and helper plus the focused O005 contract
@@ -300,8 +300,8 @@ For dashboard rendering, API, asset, or qualification changes, use the focused
 Rust renderer suite and the frozen Python oracle runner. The stable command
 facade is `scripts/qualification_dashboard_parity.py`; its internal tooling
 owners live in `scripts/dashboard_parity/` (`projection.py`, `oracle.py`,
-`process.py`, `fixtures.py`, `browser.py`, `report.py`, `runner.py`, and
-`cli.py`). The oracle source is provided by the M001 pinned worktree through
+`process.py`, `fixtures.py`, `browser.py`, `report.py`, `runner.py`, `cli.py`,
+plus `_shared.py` for shared env/helpers). The oracle source is provided by the M001 pinned worktree through
 these environment variables:
 
 Production dashboard ownership is under `rust/src/server/dashboard/`:

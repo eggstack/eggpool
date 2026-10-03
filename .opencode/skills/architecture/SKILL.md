@@ -53,8 +53,9 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   authority. Keep direct crates and non-default features tied to a live source,
   build, test, packaging, or documented compatibility owner.
 - Provider transport uses exact-pinned `eggfetch-core =0.2.2` with
-  `native-http1,tls-rustls`: retain `advanced-routing` for the custom Eggress
-  dialer, and do not enable the `http1` compatibility alias, high-level URL,
+  `native-http1,tls-rustls` (that profile transitively supplies
+  `advanced-routing` for the custom Eggress dialer — do not add it as a
+  direct feature), and do not enable the `http1` compatibility alias, high-level URL,
   logical retry, redirects, Basic auth, built-in proxy, HTTP/2/3, or unrelated
   policy features. Map Eggfetch's typed transport failure fact after EggPool's
   more-specific timeout, request, proxy, and custom-dialer categories. The
@@ -115,7 +116,7 @@ runtime behavior. The repository-root `pyproject.toml`, `scripts/`, and
   `rust/src/operations/integrations.rs`
   (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop
   helper: plan/install/verify/backups/restore/remove)
-- Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`, `decode.rs`, `fidelity.rs`, `provenance.rs`, `conformance.rs`, `adapters.rs` — EggPool-owned seam, explicitly not extractable kernel)
+- Providers/wire: `rust/src/providers/` (`transport.rs`, `client_pool.rs`), `rust/src/wire/` (`ir.rs`, `codec.rs`, `codecs.rs`, `additional_codecs.rs`, `registry.rs`, `runtime.rs`, `stream.rs`, `adaptation.rs`, `decode.rs`, `fidelity.rs`, `provenance.rs`, `conformance.rs`, `tool_calls.rs`, `adapters.rs` — EggPool-owned seam, explicitly not extractable kernel)
 - Wire kernel: `rust/crates/eggpool-wire/` (neutral sans-I/O kernel: IR, decoder, adaptation, codecs, registry, streaming machines; no credentials/env/fs/net/clock/rng/async/DB/log side effects). `rust/src/wire/adapters.rs` maps EggPool catalog/request/routing/config facts into neutral kernel types so kernel modules never import runtime state; the `wire_extraction_contract` + `wire_kernel_boundary` test targets guard the seam
 - Runtime/reload: `rust/src/runtime_lifecycle/` (process, generation, lease, manager, recovery, diagnostics), `rust/src/reload.rs`, `rust/src/config_reload_policy.rs`, `rust/src/operations/lifecycle.rs`, `rust/src/task_supervisor.rs`
 - HTTP adapters: `rust/src/server/mod.rs`, `rust/src/server/middleware.rs`, `rust/src/server/health.rs`, `rust/src/server/inference.rs`, `rust/src/server/dashboard/` (`mod.rs`, `routes.rs`, `api.rs`, `assets.rs`, `theme.rs`, `response.rs`, `format.rs`, `tests.rs`, and the pure `render/` page-family modules)
