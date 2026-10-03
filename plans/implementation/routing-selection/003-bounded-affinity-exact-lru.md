@@ -1,6 +1,6 @@
 # Routing Selection M003 — Bounded Exact Affinity LRU
 
-Status: closing
+Status: closed
 
 Repository baseline: `31e9a6aa`
 

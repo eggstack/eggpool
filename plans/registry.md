@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Persistence M007 (Pi 5/MMC candidate rejected on WAL
-progress and convergence gates; `plans/closure/persistence/007-pi5-qualification.md`).
+Most recently closed: Routing Selection M003 (bounded exact affinity LRU; Pi 5
+qualification passed; `plans/closure/routing-selection/003-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -42,7 +42,7 @@ pair is a known numbering accident.
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
-| Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M003 closing — bounded exact affinity LRU | M001/M002 closed; M003 implementation and Pi 5 qualification landed; closure audit in progress. |
+| Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 closed — dedicated checkpointer candidate rejected | Pi 5/MMC candidate failed WAL progress/convergence gates; no successor registered; production topology remains unchanged. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -59,7 +59,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Routing selection | M003 — bounded exact affinity LRU | closing | `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` | Implementation `dc6ea713`; closure evidence and unblock audit in progress |
+
 
 ## Blocked work
 
@@ -73,7 +73,8 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
-| Routing selection M002 — semantic-affinity exact-LRU cost qualification | closed — Pi 5 evidence shows O(n) hit cost reaches 92.056 μs p95 at 4,096 entries; bounded exact-LRU M003 registered ready | `plans/closure/routing-selection/002-affinity-lru-qualification.md`
+| Routing selection M003 — bounded exact affinity LRU | closed — slot-indexed exact LRU preserves behavior; 4,096-entry Pi 5 p95 improved about 90×; full default/no-default, strict Clippy, and fmt pass | `plans/closure/routing-selection/003-status.md`, implementation `dc6ea713`
+| Routing selection M002 — semantic-affinity exact-LRU cost qualification | closed — Pi 5 evidence showed O(n) hit cost reaches 92.056 μs p95 at 4,096 entries; M003 follow-up qualified and closed | `plans/closure/routing-selection/002-affinity-lru-qualification.md`
 | Persistence M007 — dedicated checkpointer qualification experiment | closed — rejected on Pi 5/MMC WAL progress and convergence gates; production topology unchanged | `plans/closure/persistence/007-pi5-qualification.md`, binary `6f0cfd53`, runner corrections `a7ee7a4a`/`6c068681`/`ed3a01a7`/`79f678f5` |
 | Provider profile metadata planning/documentation reconciliation C001 — closed-roadmap and source-truth reconciliation | closed — predecessor roadmap terminal; Together canonical `.ai` and legacy `.xyz` source truth prominent; no production/template changes | `plans/closure/provider-profile-metadata-planning-reconciliation/001-status.md`, status transition `a30ddf3d` |
 | Runtime Efficiency M003 — dashboard TTFT percentile query qualification | closed — adaptive grouped-frequency/window query for histories >=50k eligible TTFT rows; exact legacy parity; 10k p50 near baseline and 100k summary/writer p50 improved about 37%; default/no-default and release/tooling gates passed | `plans/closure/runtime-efficiency/003-status.md`, implementation `6401ad84`, closure transition `2cad7eba` |
@@ -314,4 +315,14 @@ unrelated independent blockers/evidence gates.
 
 Explicit user direction opens a documentation-only provider-profile metadata reconciliation at baseline `43c987ea458bd563d5108fd8051ad31185704bb0`. The accepted technical outcome remains M001 closure `805d6f70`: canonical Together `api.together.ai/v1` retained, OpenCode Go `/zen/go/v1` retained, zero template diff, two low discovery uncertainties deferred. C001 exists only to reconcile the predecessor roadmap's stale top-level `active` state, the registry's active/no-successor contradiction, and planning-time Together `.xyz` wording that was superseded by execution-time first-party evidence. No provider/template/runtime work is reopened.
 
-Unblock audit (dashboard M012 closed, documentation `bdd22aef`, `plans/closure/dashboard/012-status.md`): At that audit point M012 was a terminal planning/documentation pass with no hard dependency beyond the already-closed M001–M011. It promoted nothing and unblocks nothing. Dashboard M001–M012 are closed, the dashboard roadmap is closed, and no dashboard plan remains in the dependency-ready, active, or blocked tables. Persistence M007 stays blocked for the same independent reason: paired physical aarch64 Pi-class MMC control/candidate evidence is an operational requirement no planning change can satisfy. Routing-selection M002 was subsequently measured on the current Pi 5; the resulting M003 bounded exact-LRU implementation plan is ready. Provider Transport M002 stays closed and its upstream blocker is historical. The only remaining ready row is the independent provider-profile-metadata planning/documentation reconciliation C001, which M012 does not affect. M012's closure record carries three out-of-scope documentation findings, none of them a dashboard defect: one medium (`docs/thinking.md` still describes Python-era thinking counters, `GET /api/stats/thinking`, and coordinator/health Python members that have no Rust owner) and two low (`docs/rust-dashboard-qualification.md` does not mention the frozen Python oracle runner; `tests/tooling/test_release_docs.py` invokes `uv run` without `--frozen` and so rewrites the committed `uv.lock` `requires-python`). Each requires a new bounded plan outside this subsystem.
+Unblock audit (dashboard M012 closed, documentation `bdd22aef`, `plans/closure/dashboard/012-status.md`): At that audit point M012 was a terminal planning/documentation pass with no hard dependency beyond the already-closed M001–M011. It promoted nothing and unblocks nothing. Dashboard M001–M012 are closed, the dashboard roadmap is closed, and no dashboard plan remains in the dependency-ready, active, or blocked tables. Persistence M007 stays blocked for the same independent reason: paired physical aarch64 Pi-class MMC control/candidate evidence is an operational requirement no planning change can satisfy. Routing-selection M002 was subsequently measured on the current Pi 5, promoting M003; M003 is now closed after exact-LRU implementation and Pi 5 qualification. Provider Transport M002 stays closed and its upstream blocker is historical. The only remaining ready row is the independent provider-profile-metadata planning/documentation reconciliation C001, which M012 does not affect. M012's closure record carries three out-of-scope documentation findings, none of them a dashboard defect: one medium (`docs/thinking.md` still describes Python-era thinking counters, `GET /api/stats/thinking`, and coordinator/health Python members that have no Rust owner) and two low (`docs/rust-dashboard-qualification.md` does not mention the frozen Python oracle runner; `tests/tooling/test_release_docs.py` invokes `uv run` without `--frozen` and so rewrites the committed `uv.lock` `requires-python`). Each requires a new bounded plan outside this subsystem.
+
+
+Unblock audit (routing-selection M003 closed, implementation `dc6ea713`,
+`plans/closure/routing-selection/003-status.md`): M003 had no downstream
+blocked implementation dependency. The active implementation-plan inventory is
+empty; dependency-ready and blocked-work tables are empty. Persistence remains an
+active roadmap because its checkpoint tail is unresolved, with M007 rejected on
+Pi 5 WAL progress/convergence evidence and no successor registered. Deployment
+and packaging has no ready successor. Provider profile metadata C001 and Runtime
+Efficiency M001–M003 are closed. No additional existing plan became eligible.

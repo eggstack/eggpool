@@ -116,7 +116,7 @@ Seven scalar qualification reports and a physical attestation are retained under
 
 ## 11. Roadmap disposition
 
-M007 is closed rejected, not a production adoption. The optional 512-frame follow-up is not authorized: the observed gap is stalled progress and WAL convergence, not a narrow foreground latency miss that a higher threshold is expected to resolve. No M007-dependent implementation plan was registered, so this closure unblocks none. Routing-selection M002's separate evidence gate has now been measured and is being assessed for a bounded exact-LRU follow-up.
+M007 is closed rejected, not a production adoption. The optional 512-frame follow-up is not authorized: the observed gap is stalled progress and WAL convergence, not a narrow foreground latency miss that a higher threshold is expected to resolve. No M007-dependent implementation plan was registered, so this closure unblocks none. At the time of this closure, routing-selection M002's separate evidence gate had been measured and its follow-up was under assessment. That assessment registered M003, which is now closed with a bounded exact-LRU implementation; see `plans/closure/routing-selection/003-status.md`.
 
 ## 12. Registry updates
 
