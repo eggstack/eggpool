@@ -43,7 +43,7 @@ pair is a known numbering accident.
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Runtime efficiency | active | `plans/subsystems/runtime-efficiency-roadmap.md` | M001/M002 closed; M003 closing — adaptive TTFT percentile query qualified at 10k/100k | No hard blockers. Persistence M007 remains a separate operationally blocked higher-priority storage-tail line. |
+| Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 remains independently blocked on physical Pi/MMC evidence. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
@@ -53,7 +53,6 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
-| Runtime efficiency | M003 dashboard TTFT percentile query qualification | closing | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | Adaptive query-only rewrite implemented and qualified; closure gates passed. No migration, second connection, or persistence-topology change. |
 
 ## Active implementation plans
 
@@ -72,6 +71,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Runtime Efficiency M003 — dashboard TTFT percentile query qualification | closed — adaptive grouped-frequency/window query for histories >=50k eligible TTFT rows; exact legacy parity; 10k p50 near baseline and 100k summary/writer p50 improved about 37%; default/no-default and release/tooling gates passed | `plans/closure/runtime-efficiency/003-status.md`, implementation `6401ad84`, closure transition `2cad7eba` |
 | Runtime Efficiency M002 — catalog refresh projection and lock-tenure cleanup | closed — direct narrow diff/persistence projections, schema-54 parity, forced persistence failure/retry retention, large 600-model fixture, default/no-default full suites and locked release pass; M003 remains ready | `plans/closure/runtime-efficiency/002-status.md`, implementation `93f0a157`, closure transition `5adf6d3f` |
 | Runtime Efficiency M001 — provider/wire-resolver hot-path ownership and cache cleanup | closed — borrowed synchronous preparation, equivalent fingerprinting, bounded indexed LRU; default/no-default suites, strict Clippy/fmt, locked release build pass; M002/M003 remain ready | `plans/closure/runtime-efficiency/001-status.md`, implementation `77664694`, correction `c5c33b69` |
 | Dashboard M012 — lifecycle closure and documentation polish | closed — terminal planning/docs reconciliation; M001–M012 closed, no registered successor; three stale dashboard ownership paths corrected; zero Rust/Cargo/asset/oracle diff; merge-head CI and dependency audit green | `plans/closure/dashboard/012-status.md`, documentation `bdd22aef`, hosted CI `37090882257`, dependency audit `37090882237` |
