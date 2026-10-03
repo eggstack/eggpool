@@ -43,7 +43,7 @@ pair is a known numbering accident.
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Runtime efficiency | active | `plans/subsystems/runtime-efficiency-roadmap.md` | M001/M002 closed; M003 active — corrected in-window fixture shows repeated-sort cost needs query-only evaluation | No hard blockers for M002/M003. Persistence M007 remains a separate operationally blocked higher-priority storage-tail line. |
+| Runtime efficiency | active | `plans/subsystems/runtime-efficiency-roadmap.md` | M001/M002 closed; M003 closing — adaptive TTFT percentile query qualified at 10k/100k | No hard blockers. Persistence M007 remains a separate operationally blocked higher-priority storage-tail line. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
@@ -53,7 +53,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
-| Runtime efficiency | M003 dashboard TTFT percentile query qualification | active | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | No hard dependency. Measurement first; query-only rewrite conditional on evidence. No migration, second connection, or persistence-topology change. |
+| Runtime efficiency | M003 dashboard TTFT percentile query qualification | closing | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | Adaptive query-only rewrite implemented and qualified; closure gates passed. No migration, second connection, or persistence-topology change. |
 
 ## Active implementation plans
 

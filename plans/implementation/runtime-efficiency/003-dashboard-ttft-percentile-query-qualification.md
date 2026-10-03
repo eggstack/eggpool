@@ -1,6 +1,6 @@
 # Runtime Efficiency Milestone 003 — Dashboard TTFT Percentile Query Qualification
 
-Status: active
+Status: closing
 
 Repository baseline: `5f028625` (M002 closure; original query baseline `6489aa75aa276a12ff14c35a07b46f2eba01e2b8`)
 
