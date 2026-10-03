@@ -165,12 +165,12 @@ criteria, and evidence requirements are tracked in
 `plans/implementation/dashboard/003-overview-account-model-parity.md`.
 
 The basic dashboard summary computes streamed TTFT p50/p99 on the existing
-serialized database worker. For ordinary or high-cardinality populations it
-keeps the ordered-offset query path. For at least 50,000 eligible rows where
-distinct TTFT values are no more than one quarter of the population, it uses a
-grouped frequency/window query so repeated offsets do not sort every row.
-Both paths use the same time bounds and percentile ranks; this remains a
-query-only optimization with no additional database connection or index.
+serialized database worker. Below 50,000 eligible TTFT rows it keeps the
+ordered-offset query path. At 50,000 or more eligible rows it uses a grouped
+frequency/window query so the three percentile lookups do not each sort the
+full eligible population. Both paths use the same time bounds and percentile
+ranks; this remains a query-only optimization with no additional database
+connection, distinct-cardinality selector, or index.
 
 ## Telemetry, Routing, Reliability, and Traces projections
 

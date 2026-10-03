@@ -13,7 +13,7 @@ Related historical evidence:
 
 - Legacy Plans 225–229 — native request-path allocation and contention campaign.
 - Legacy Plans 230–236 — residual runtime/SBC efficiency and physical Raspberry Pi qualification.
-- `plans/subsystems/persistence-roadmap.md` — persistence M007 remains the sole active checkpoint-topology experiment and is operationally blocked on paired physical Pi/MMC evidence.
+- `plans/subsystems/persistence-roadmap.md` — persistence M007 was physically qualified on Raspberry Pi 5/MMC and rejected on WAL progress/convergence gates; production topology remains unchanged and the persistence roadmap remains active for any separately planned successor design.
 
 Related ADRs:
 
@@ -58,9 +58,9 @@ must not change capability or public behavior.
   handoff, retains the routing selection lock, and retains the ordinary
   single SQLite gate unless a separate evidence-backed plan explicitly changes
   one of those boundaries.
-- Persistence M007 remains independent. These milestones must not alter its
-  feature-private checkpointer experiment, acceptance gates, or operational
-  blocker.
+- Persistence M007 remains independent. Its feature-private experiment was
+  physically qualified and rejected; these milestones do not alter that
+  evidence or authorize a production checkpoint-topology change.
 
 ## 4. Current state
 
@@ -103,10 +103,11 @@ work and all reads occupy the serialized database worker/gate.
 - M003 has no hard dependency. It consumes the current dashboard API contract
   and bundled SQLite baseline. Production query changes are evidence-gated.
 - M001, M002, and M003 are mutually independent and may execute in parallel.
-- Persistence M007 is an **operationally blocked parallel line**, not a
-  dependency. Its physical target evidence remains higher authority for the
-  known multi-second finite tail. None of M001–M003 may claim to solve that
-  storage tail.
+- Persistence M007 is a **closed rejected parallel line**, not a dependency.
+  Its physical Pi 5/MMC evidence remains higher authority for the known
+  multi-second finite tail: the dedicated candidate improved foreground
+  latency but failed WAL progress/convergence gates. None of M001–M003 claims
+  to solve that storage tail.
 - A future active-request snapshot/claim-book optimization remains deferred:
   changing that boundary can alter lock tenure/order and requires dedicated
   contention evidence.
@@ -117,7 +118,7 @@ work and all reads occupy the serialized database worker/gate.
 
 ### Milestone 001 — Provider/wire-resolver hot-path ownership and cache cleanup
 
-Class: polish. Status: active.
+Class: polish. Status: closed.
 
 Implementation plan:
 
@@ -145,7 +146,7 @@ Exit conditions:
 
 ### Milestone 002 — Catalog refresh projection and lock-tenure cleanup
 
-Class: polish. Status: closing.
+Class: polish. Status: closed.
 
 Implementation plan:
 
@@ -173,7 +174,7 @@ Exit conditions:
 
 ### Milestone 003 — Dashboard TTFT percentile query qualification and bounded rewrite
 
-Class: polish. Status: closing.
+Class: polish. Status: closed.
 
 Implementation plan:
 
@@ -248,10 +249,11 @@ change is expected.
 
 ## 10. Completion definition
 
-This roadmap closes when M001–M003 each have accepted closure records. Closing
-this roadmap does not close persistence M007. The known Pi/MMC finite tail
-remains owned by the persistence roadmap until its separate evidence gate is
-resolved.
+This roadmap is closed: M001–M003 each have accepted closure records. Closing
+this roadmap did not close or modify persistence M007. M007 subsequently
+completed its separate Pi 5/MMC evidence gate and was rejected; the known
+foreground SQLite checkpoint tail therefore remains owned by the active
+persistence roadmap and requires a new bounded successor design.
 
 ## 11. Milestone status
 
