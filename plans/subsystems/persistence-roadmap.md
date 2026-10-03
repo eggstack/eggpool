@@ -10,8 +10,8 @@ Long-term references:
 
 Related ADRs:
 
-- None required for the current milestones. These are reversible internal optimizations that preserve the single-connection/gate contract and public compatibility surface.
-- Stop and require a new ADR or explicit architecture decision if implementation needs a second SQLite connection/writer, a public checkpoint configuration surface, altered durability semantics, or a new process-lifecycle authority.
+- M008 itself requires no ADR because PERSIST/EXTRA exists only in a repository-only qualification build against isolated benchmark databases; default/release storage remains WAL/NORMAL on one connection/gate/worker.
+- A positive M008 result does not authorize production adoption. Shipping a different journal/durability mode, adding a second SQLite authority, introducing a control/outbox/analytics split, exposing a public storage-tuning surface, or changing process-lifecycle authority requires a new ADR or explicit architecture decision.
 
 ## 1. Purpose and ownership boundary
 
@@ -24,7 +24,7 @@ The roadmap is deliberately narrow. It improves where checkpoint work executes a
 ### Invariants
 
 - Keep one SQLite connection, one serialized database gate, and one tokio-rusqlite worker.
-- Keep WAL mode and synchronous = NORMAL unless a separately reviewed durability decision supersedes this roadmap.
+- Production keeps WAL mode and synchronous = NORMAL unless a separately reviewed durability decision supersedes it. M008 is a qualification-only exception using PERSIST/EXTRA on runner-owned isolated databases.
 - Preserve publication/finalization transaction atomicity, idempotency, compensation, and startup reconciliation.
 - Commit/rollback ambiguity continues to fail closed.
 - Backup, restore, reload, shutdown, and recovery remain bounded and coherent with WAL state.
@@ -50,7 +50,7 @@ No new user-facing capability is planned. Existing inference, statistics, backup
 ## 3. Non-goals
 
 - No second SQLite connection, read pool, writer pool, or checkpoint-only connection.
-- No synchronous = OFF, journal-mode change, relaxed transaction durability, or early finite-response delivery.
+- No production journal-mode or durability change, synchronous = OFF, relaxed transaction durability, or early finite-response delivery. M008 may set PERSIST/EXTRA only under its non-default qualification feature on runner-owned isolated databases.
 - No public wal_autocheckpoint/checkpoint tuning key in Config, CLI, environment documentation, or example config.
 - No schema migration solely for performance.
 - No replacement of tokio-rusqlite.
@@ -92,7 +92,10 @@ Request publication/finalization continue to own their current transactions. Det
 - M004 Pi/MMC target → operational evidence dependency for M001 production-default acceptance (now satisfied by M004 rejection evidence; the landed M001 mechanism is retained as additive-safe and its performance claim is unfulfilled).
 - Current publication/finalization ownership contract → interface dependency for M002; already stable.
 - M001 and M002 are otherwise independent and may be implemented in either order.
-- M003's evidence, architecture, and M006 engine dependencies were met. The implementation plan is now closed rejected after paired target qualification; its runtime changes were reverted. No successor is currently eligible. A future checkpoint redesign needs a new bounded plan with a design that does not transfer storage stalls to foreground gate wait.
+- M003's evidence, architecture, and M006 engine dependencies were met. Its implementation is closed rejected and reverted.
+- M007 is closed rejected after Pi 5/MMC qualification: its second PASSIVE worker removed foreground latency but failed WAL progress/convergence. This is the hard evidence dependency for M008.
+- M008 has no remaining hard dependency. It preserves one connection/gate/worker and tests a different SQLite journal architecture under a non-default qualification feature. Physical Linux/aarch64 Pi 5-class ext4/MMC evidence is an operational closure dependency, not an implementation blocker.
+- A positive M008 result may justify a separate production journal-mode ADR/adoption plan. A rejected M008 result may justify separately planning control/outbox/analytics persistence research; neither successor is pre-authorized.
 
 ## 7. Milestones
 
@@ -303,7 +306,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: blocked
+Status: closed — rejected by Pi 5/MMC WAL progress/convergence gates; no production adoption
 
 Objective:
 
@@ -330,6 +333,44 @@ Exit conditions:
 - Three paired control/candidate target runs plus fixed 300-request candidate convergence evidence are recorded.
 - Candidate either clears the existing latency/integrity gates or is rejected truthfully.
 - Positive evidence may justify proposing a separate ADR; it does not authorize a production second connection.
+
+### Milestone 008 — Rollback-journal PERSIST qualification and write-amplification attribution
+
+Class: infrastructure
+
+Status: ready
+
+Implementation plan:
+
+- `plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md`
+
+Objective:
+
+Test whether the existing one-connection/gate/worker persistence authority can eliminate the target-class WAL checkpoint tail by using SQLite rollback-journal PERSIST + synchronous=EXTRA strictly in isolated qualification, while separately measuring kernel-attributed SQLite-worker write volume by named transaction class.
+
+Dependencies:
+
+- Hard: M007 closed rejected with physical Pi 5/MMC evidence showing foreground latency improves when checkpoint work leaves COMMIT but a separate PASSIVE worker cannot sustain WAL progress. **Satisfied.**
+- Hard: M006 SQLite 3.53.2 safety baseline. **Satisfied.**
+- Interface: existing named transaction instrumentation and SBC qualification runner. **Stable.**
+- Operational: physical Linux/aarch64 Pi 5-class ext4/MMC target required for closure.
+
+Deliverable boundary:
+
+- New non-default `qualification-persist-journal` feature layered on `qualification-db-diagnostics`.
+- Same-binary WAL/NORMAL control versus PERSIST/EXTRA candidate, each on fresh runner-owned isolated databases.
+- No second SQLite connection/worker and no production storage-mode change.
+- Existing checkpoint task remains lifecycle-owned but performs no WAL checkpoint operation in the PERSIST candidate.
+- Separate Linux `/proc/thread-self/io` worker-write attribution cohort, excluded from latency acceptance.
+- Three paired 60-request runs, one 300-request candidate convergence/lifecycle run, and one attribution run per mode.
+- No journal-mode tuning matrix, WAL2, journal-size rescue tuning, index/schema rewrite, or two-database implementation.
+
+Exit conditions:
+
+- Candidate either clears the plan's request/COMMIT/lifecycle/integrity/bounded-journal gates or is rejected truthfully.
+- Closure records worker-write attribution without claiming it is physical NAND amplification.
+- Positive evidence does not alter production; it may justify a separate ADR/adoption plan.
+- Rejection does not directly authorize a storage split; it may justify a separately bounded control/outbox/analytics architecture research plan.
 
 ## 8. Cross-cutting requirements
 
@@ -369,12 +410,12 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 - Disabling automatic checkpointing would remove SQLite's existing growth safety. That is intentionally outside M001 unless a later reviewed design supplies an equally strong bound.
 - Metrics flush failure rebuffering is correctness behavior, not expendable analytics polish.
 - Moving publication serialization outside the transaction must preserve its existing observable error category and fault-injection stages.
-- M007 is the only authorized exception for experimenting with a second SQLite worker, and only behind its new non-default qualification feature. Production remains one connection/gate/worker.
+- M007 was the only authorized second-SQLite-worker experiment and is closed rejected; its qualification-only feature is not a production precedent. M008 returns to one connection/gate/worker and changes journal mode only inside isolated qualification. Production remains one connection/gate/worker on WAL/NORMAL.
 - If a clean routing/persistence optimization requires a public API break, new dependency, or durable production concurrency owner, stop and re-plan.
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture. M007 has now been physically qualified on a Raspberry Pi 5/MMC and rejected: the dedicated candidate failed WAL progress and convergence gates. No production change was made. The workstream remains active because the foreground SQLite checkpoint tail is unresolved; any alternative requires a new bounded plan and must not transfer the tail to foreground gate/I/O wait.
+This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M007 rejected a separate PASSIVE worker because WAL progress/convergence failed despite excellent foreground latency. M006 remains the retained SQLite safety baseline. M008 is now the dependency-ready qualification of a different journaling architecture: one connection/gate/worker with PERSIST/EXTRA on isolated Pi/MMC benchmark databases. No production storage mode changes in M008. Positive qualification requires a separate ADR/adoption milestone; rejection may motivate separately planned control/outbox/analytics persistence research.
 
 ## 12. Milestone status
 
@@ -386,4 +427,5 @@ This roadmap remains active while the foreground SQLite checkpoint tail is unres
 | 004 — physical checkpoint qualification and final disposition | closed — periodic strategy insufficient on target; evidence narration corrected by M005 | plans/implementation/persistence/004-physical-checkpoint-qualification-and-final-disposition.md | plans/closure/persistence/004-status.md | none — historical closure remains immutable |
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
-| 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; no successor registered — any alternative checkpoint/storage design requires a new bounded plan |
+| 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
+| 008 — rollback-journal PERSIST qualification and write-amplification attribution | ready | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | — | hard evidence dependencies satisfied; physical Pi 5/MMC target required for closure |

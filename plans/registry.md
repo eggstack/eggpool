@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 closed — dedicated checkpointer candidate rejected | Pi 5/MMC candidate failed WAL progress/convergence gates; no successor registered; production topology remains unchanged. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M008 ready — PERSIST/EXTRA journal qualification + worker-I/O attribution | M007 rejection and M006 engine baseline satisfy hard dependencies; physical Pi 5/MMC target is required for closure. Production remains WAL/NORMAL. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -52,6 +52,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Persistence | M008 — rollback-journal PERSIST qualification and write-amplification attribution | ready | `plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md` | Hard: M006 + M007 closed. Operational: physical Pi 5/MMC target required for closure. Same-binary isolated qualification only; no production journal-mode change. |
 
 
 
@@ -326,3 +327,6 @@ active roadmap because its checkpoint tail is unresolved, with M007 rejected on
 Pi 5 WAL progress/convergence evidence and no successor registered. Deployment
 and packaging has no ready successor. Provider profile metadata C001 and Runtime
 Efficiency M001–M003 are closed. No additional existing plan became eligible.
+
+
+Explicit user direction opens Persistence M008 at baseline `849dfd5fd26afc027fc1f00316dea70d62973a52`. M007's Pi 5/MMC rejection is the hard evidence dependency: the dedicated PASSIVE candidate removed foreground latency but failed WAL progress/convergence. M008 therefore tests a different journaling architecture rather than another checkpoint schedule. The ready plan keeps one connection/gate/worker, compares WAL/NORMAL control with isolated PERSIST/EXTRA candidate databases, and gathers separate Linux worker-write attribution evidence without contaminating the latency corpus. Production remains WAL/NORMAL; positive evidence requires a later ADR/adoption plan, while rejection may justify separately bounded control/outbox/analytics persistence research.
