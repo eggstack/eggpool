@@ -40,8 +40,8 @@ pair is a known numbering accident.
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
-| Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
-| Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
+| Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
+| Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 remains independently blocked on physical Pi/MMC evidence. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
@@ -58,7 +58,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | active | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | Markdown/planning only; M001 closure and provider templates remain immutable. |
+| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | closing | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | Closure evidence assembled; no production/template changes. |
 
 ## Blocked work
 
@@ -72,6 +72,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider profile metadata planning/documentation reconciliation C001 — closed-roadmap and source-truth reconciliation | closed — predecessor roadmap terminal; Together canonical `.ai` and legacy `.xyz` source truth prominent; no production/template changes | `plans/closure/provider-profile-metadata-planning-reconciliation/001-status.md`, status transition `a30ddf3d` |
 | Runtime Efficiency M003 — dashboard TTFT percentile query qualification | closed — adaptive grouped-frequency/window query for histories >=50k eligible TTFT rows; exact legacy parity; 10k p50 near baseline and 100k summary/writer p50 improved about 37%; default/no-default and release/tooling gates passed | `plans/closure/runtime-efficiency/003-status.md`, implementation `6401ad84`, closure transition `2cad7eba` |
 | Runtime Efficiency M002 — catalog refresh projection and lock-tenure cleanup | closed — direct narrow diff/persistence projections, schema-54 parity, forced persistence failure/retry retention, large 600-model fixture, default/no-default full suites and locked release pass; M003 remains ready | `plans/closure/runtime-efficiency/002-status.md`, implementation `93f0a157`, closure transition `5adf6d3f` |
 | Runtime Efficiency M001 — provider/wire-resolver hot-path ownership and cache cleanup | closed — borrowed synchronous preparation, equivalent fingerprinting, bounded indexed LRU; default/no-default suites, strict Clippy/fmt, locked release build pass; M002/M003 remain ready | `plans/closure/runtime-efficiency/001-status.md`, implementation `77664694`, correction `c5c33b69` |
@@ -280,7 +281,7 @@ bounded plans.
 Explicit user direction reopened request-admission-wire after M005 closure for M006 at baseline `8067ad3d1eef5a40ae6e300923d8be3b75437d26`; M006 is now closed at `f05b18b7358d9a4125d1e20c491151eec265e403`. The work remains bounded to the extracted `eggpool-wire` API and does not reopen provider transport, routing, accounts, persistence, or public HTTP behavior. `eggpool-wire 0.1.0` is already on crates.io; this milestone neither released a new version nor changed versioning policy. The downstream CodeGG adoption dependency is satisfied and may proceed using the immutable pin. No future in-repository plan was registered as blocked on M006, so no other blocked row was promoted; provider transport retains its independent upstream blocker and dashboard is closed.
 
 
-Explicit user direction opens the provider-profile metadata corrective at baseline `c17a55218b2810791fcf6f3136b8805becfa27c1`. Current first-party documentation reviewed on 2026-10-02 confirms that EggPool's Together template is stale (`api.together.ai` vs current `api.together.xyz`) while its OpenCode Go `/zen/go/v1` prefix is correct. The corrective therefore treats first-party provider documentation—not CodeGG or EggPool sibling state—as authority. M001 is dependency-ready and does not reopen provider transport, routing, request-admission/wire, persistence, or publication work.
+Explicit user direction opened the provider-profile metadata corrective at baseline `c17a55218b2810791fcf6f3136b8805becfa27c1`. Its planning-time Together drift premise (`api.together.ai` versus `.xyz`) was refuted at M001 closure: `.ai` is canonical and `.xyz` is a legacy alias. OpenCode Go `/zen/go/v1` was retained. This historical premise is superseded; the immutable closure is authoritative. M001 is closed and did not reopen provider transport, routing, request-admission/wire, persistence, or publication work.
 
 Unblock audit (provider-profile-metadata M001 closed, implementation
 `805d6f70`, `plans/closure/provider-profile-metadata/001-status.md`):
