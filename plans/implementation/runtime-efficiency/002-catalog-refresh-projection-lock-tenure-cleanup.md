@@ -1,8 +1,8 @@
 # Runtime Efficiency Milestone 002 — Catalog Refresh Projection and Lock-Tenure Cleanup
 
-Status: active
+Status: closing
 
-Repository baseline: `df3d6539` (M001 closure; M002 interfaces reviewed at original plan baseline `6489aa75aa276a12ff14c35a07b46f2eba01e2b8`)
+Repository baseline: `05a5ecaa` (M002 activated after M001 closure; original interface review baseline `6489aa75aa276a12ff14c35a07b46f2eba01e2b8`)
 
 Source roadmap:
 
