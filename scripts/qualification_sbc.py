@@ -1556,19 +1556,22 @@ def _dedicated_checkpointer_deltas(
 def _m007_candidate_gates_pass(benchmark: Mapping[str, Any]) -> bool:
     """Require every evaluated candidate phase and convergence gate to pass."""
     phase_gates = benchmark.get("candidate_phase_gates")
-    if not isinstance(phase_gates, dict) or not all(
-        value is True for value in phase_gates.values()
-    ):
+    if not isinstance(phase_gates, dict):
+        return False
+    typed_phase_gates = cast("dict[str, object]", phase_gates)
+    if not all(value is True for value in typed_phase_gates.values()):
         return False
     steady_state = benchmark.get("steady_state_300_requests")
     if steady_state is None:
         return True
     if not isinstance(steady_state, dict):
         return False
-    steady_gates = steady_state.get("gates")
-    return isinstance(steady_gates, dict) and all(
-        value is True for value in steady_gates.values()
-    )
+    typed_steady_state = cast("dict[str, object]", steady_state)
+    steady_gates = typed_steady_state.get("gates")
+    if not isinstance(steady_gates, dict):
+        return False
+    typed_steady_gates = cast("dict[str, object]", steady_gates)
+    return all(value is True for value in typed_steady_gates.values())
 
 
 def _checkpoint_maintenance_deltas(
