@@ -35,7 +35,9 @@ from scripts.qualification_sbc import (
     _checkpoint_maintenance_deltas,
     _combine_diagnostic_sample,
     _correlate_transaction_phases,
+    _dedicated_checkpointer_close_succeeded,
     _dedicated_checkpointer_deltas,
+    _dedicated_checkpointer_server_environment,
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
@@ -962,3 +964,26 @@ def test_measurement_http_timeout_preserves_long_latency_observations(
     assert body == b"ok"
     assert observed["timeout"] == MEASUREMENT_HTTP_TIMEOUT
     assert MEASUREMENT_HTTP_TIMEOUT > 5.0
+
+
+def test_m007_toggle_is_scoped_to_server_environment() -> None:
+    base = {"PATH": "/usr/bin"}
+
+    control = _dedicated_checkpointer_server_environment(base, "control")
+    candidate = _dedicated_checkpointer_server_environment(base, "candidate")
+    ordinary = _dedicated_checkpointer_server_environment(base, None)
+
+    assert control["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] == "0"
+    assert candidate["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] == "1"
+    assert "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER" not in ordinary
+    assert "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER" not in base
+
+
+def test_m007_close_marker_is_found_in_server_output_stream() -> None:
+    marker = "INFO M007 dedicated checkpointer close complete success=true"
+
+    assert _dedicated_checkpointer_close_succeeded(marker)
+    assert not _dedicated_checkpointer_close_succeeded(
+        "INFO M007 dedicated checkpointer close complete success=false"
+    )
+    assert not _dedicated_checkpointer_close_succeeded("server stopped")
