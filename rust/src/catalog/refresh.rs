@@ -25,16 +25,12 @@ use crate::{
         AccountCatalogOutcome, AccountCatalogUpdateResult, ModelCatalogCache, ModelInput,
         ProtocolResolutionStatus,
     },
-    db::{
-        CatalogModelWrite, CatalogPersistenceBatch, CatalogPingWrite, CatalogRefreshWrite,
-        CatalogRepository, Database, DatabaseError, ProviderModelWrite,
-    },
+    db::{CatalogPingWrite, CatalogRefreshWrite, CatalogRepository, Database, DatabaseError},
     providers::{ProviderClientPool, ProviderClientPoolError, ProviderHttpClient, TransportError},
 };
 
 const MAX_CATALOG_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 const SUPPORTED_PROTOCOLS: [&str; 2] = ["openai", "anthropic"];
-const DEPRECATED_MODEL_ID: &str = "__deprecated__";
 
 /// Stable result names used by refresh diagnostics and durable state.
 pub type RefreshOutcome = AccountCatalogOutcome;
@@ -246,7 +242,11 @@ impl CatalogService {
         only_account: Option<&str>,
     ) -> Result<CatalogRefreshResult, CatalogRefreshError> {
         self.ensure_hydrated().await?;
-        let before = self.cache_snapshot().await;
+        let before = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .diff_projection();
         self.seed_static_models(only_account).await?;
 
         let identities: Vec<AccountIdentity> = self
@@ -330,26 +330,27 @@ impl CatalogService {
         }
 
         self.persist().await?;
-        let after = self.cache_snapshot().await;
-        let live_model_ids: BTreeSet<String> = after.model_ids.iter().cloned().collect();
-        let before_model_ids: BTreeSet<String> = before.model_ids.iter().cloned().collect();
-        let before_provider_keys: BTreeSet<(String, String)> =
-            before.provider_model_keys.iter().cloned().collect();
-        let after_provider_keys: BTreeSet<(String, String)> =
-            after.provider_model_keys.iter().cloned().collect();
+        let after = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .diff_projection();
+        let live_model_ids = after.model_ids;
         let refreshed_at = unix_now();
         Ok(CatalogRefreshResult {
             live_model_ids: live_model_ids.iter().cloned().collect(),
             new_model_ids: live_model_ids
-                .difference(&before_model_ids)
+                .difference(&before.model_ids)
                 .cloned()
                 .collect(),
-            withdrawn_model_ids: before_model_ids
+            withdrawn_model_ids: before
+                .model_ids
                 .difference(&live_model_ids)
                 .cloned()
                 .collect(),
-            changed_provider_keys: before_provider_keys
-                .symmetric_difference(&after_provider_keys)
+            changed_provider_keys: before
+                .provider_model_keys
+                .symmetric_difference(&after.provider_model_keys)
                 .cloned()
                 .collect(),
             outcomes,
@@ -360,8 +361,7 @@ impl CatalogService {
     }
 
     async fn ensure_hydrated(&self) -> Result<(), CatalogRefreshError> {
-        let mut state = self.state.lock().await;
-        if state.cache_loaded {
+        if self.state.lock().await.cache_loaded {
             return Ok(());
         }
         let mut hydrated = self
@@ -370,6 +370,10 @@ impl CatalogService {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         hydrated.hydrate_from_db(&self.database).await?;
+        let mut state = self.state.lock().await;
+        if state.cache_loaded {
+            return Ok(());
+        }
         *self
             .catalog
             .lock()
@@ -480,27 +484,38 @@ impl CatalogService {
     }
 
     async fn persist(&self) -> Result<(), CatalogRefreshError> {
-        let (cache, pending_refresh, pings, account_ids) = {
+        let (pending_refresh, pings, account_ids) = {
             let state = self.state.lock().await;
             let accounts = self
                 .registry
                 .all()
                 .map(|identity| (identity.account_name.clone(), identity.account_id));
             (
-                self.catalog
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .clone(),
                 state.pending_refresh.clone(),
                 state.pending_pings.clone(),
                 accounts.collect::<BTreeMap<_, _>>(),
             )
         };
-        let repository = CatalogRepository::new(&self.database);
-        let existing_models = repository.list_models().await?;
-        let existing_provider_models = repository.list_provider_models().await?;
-        let existing_support = repository.list_account_model_support().await?;
-        let mut batch = desired_rows(&cache, &account_ids, &pending_refresh);
+        let mut batch = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .persistence_projection(&account_ids);
+        batch.refresh = pending_refresh
+            .iter()
+            .filter_map(|(account, pending)| {
+                account_ids
+                    .get(account)
+                    .copied()
+                    .map(|account_id| CatalogRefreshWrite {
+                        account_id,
+                        provider_id: pending.provider_id.clone(),
+                        refreshed_at: pending.refreshed_at,
+                        outcome: pending.outcome.as_str().into(),
+                        model_count: pending.model_count as i64,
+                    })
+            })
+            .collect();
         batch.pings = pings
             .into_iter()
             .map(|ping| CatalogPingWrite {
@@ -512,6 +527,10 @@ impl CatalogService {
                 model_count: ping.model_count as i64,
             })
             .collect();
+        let repository = CatalogRepository::new(&self.database);
+        let existing_models = repository.list_models().await?;
+        let existing_provider_models = repository.list_provider_models().await?;
+        let existing_support = repository.list_account_model_support().await?;
         repository
             .apply_persistence_batch(
                 existing_models,
@@ -1284,92 +1303,6 @@ fn emit_model_events(
     }
 }
 
-fn desired_rows(
-    cache: &ModelCatalogCache,
-    account_ids: &BTreeMap<String, i64>,
-    pending: &BTreeMap<String, PendingRefresh>,
-) -> CatalogPersistenceBatch {
-    let mut models = Vec::new();
-    let mut persisted_ids = BTreeSet::new();
-    for model in cache.get_all_models() {
-        if model.model_id == DEPRECATED_MODEL_ID || model.protocol.is_none() {
-            continue;
-        }
-        persisted_ids.insert(model.model_id.clone());
-        models.push(CatalogModelWrite {
-            model_id: model.model_id.clone(),
-            display_name: model.display_name.clone(),
-            protocol: model.protocol.clone().unwrap_or_default(),
-            capabilities: serde_json::to_value(&model.capabilities)
-                .unwrap_or_else(|_| Value::Object(Map::new())),
-            source_metadata: model.source_metadata.clone(),
-            first_seen_at: model.first_seen_at,
-            last_seen_at: model.last_seen_at,
-            protocol_source: model.protocol_source.clone(),
-        });
-    }
-    let provider_models = cache
-        .get_provider_model_entries()
-        .into_iter()
-        .filter(|row| persisted_ids.contains(&row.model_id))
-        .map(|row| ProviderModelWrite {
-            model_id: row.model_id.clone(),
-            provider_id: row.provider_id.clone(),
-            display_name: row.display_name.clone(),
-            protocol: row.protocol.clone(),
-            capabilities: serde_json::to_value(&row.capabilities)
-                .unwrap_or_else(|_| Value::Object(Map::new())),
-            source_metadata: row.source_metadata.clone(),
-            protocol_source: row.protocol_source.clone(),
-            first_seen_at: row.first_seen_at,
-            last_seen_at: row.last_seen_at,
-            resolution_status: if row.protocol.is_some() {
-                "resolved"
-            } else {
-                "unresolved"
-            }
-            .into(),
-        })
-        .collect();
-    let support = cache
-        .get_all_models()
-        .into_iter()
-        .filter(|model| persisted_ids.contains(&model.model_id))
-        .flat_map(|model| {
-            cache
-                .supporting_accounts(&model.model_id)
-                .into_iter()
-                .filter_map(move |account| {
-                    account_ids
-                        .get(account)
-                        .copied()
-                        .map(|id| (id, model.model_id.clone()))
-                })
-        })
-        .collect();
-    let refresh = pending
-        .iter()
-        .filter_map(|(account, pending)| {
-            account_ids
-                .get(account)
-                .copied()
-                .map(|id| CatalogRefreshWrite {
-                    account_id: id,
-                    provider_id: pending.provider_id.clone(),
-                    refreshed_at: pending.refreshed_at,
-                    outcome: pending.outcome.as_str().into(),
-                    model_count: pending.model_count as i64,
-                })
-        })
-        .collect();
-    CatalogPersistenceBatch {
-        models,
-        provider_models,
-        support,
-        refresh,
-        pings: Vec::new(),
-    }
-}
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

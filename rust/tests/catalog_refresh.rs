@@ -233,6 +233,68 @@ async fn post_contract_normalizes_and_persists_semantic_rows() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn persistence_failure_retains_refresh_and_ping_facts_for_retry() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server = FixtureServer::start_sequence(
+        vec![
+            (
+                200,
+                r#"{"data":[{"id":"retry-model","name":"Retry","context_window":8192}]}"#,
+            ),
+            (503, r#"{"error":"fixture retry failure"}"#),
+        ],
+        requests,
+    )
+    .await;
+    let (database, _directory) = database().await;
+    let service = service(
+        config(server.address.clone()),
+        &database,
+        CredentialStore::default(),
+    )
+    .await;
+    database
+        .call(|connection| {
+            connection.execute_batch(
+                "CREATE TRIGGER reject_catalog_write BEFORE INSERT ON catalog_refresh_state BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;",
+            )
+        })
+        .await
+        .expect("install failure trigger");
+
+    assert!(service.refresh().await.is_err());
+    assert_eq!(
+        service.cache_snapshot().await.model_ids,
+        vec!["retry-model"]
+    );
+    database
+        .call(|connection| connection.execute_batch("DROP TRIGGER reject_catalog_write"))
+        .await
+        .expect("remove failure trigger");
+
+    let retry = service.refresh().await.expect("retry persistence");
+    assert_eq!(retry.live_model_ids, vec!["retry-model"]);
+    assert_eq!(retry.outcomes["account-a"], RefreshOutcome::Failed);
+    let models = eggpool::db::CatalogRepository::new(&database)
+        .list_models()
+        .await
+        .expect("persisted models");
+    assert_eq!(models.len(), 1);
+    let refresh_state = eggpool::db::CatalogRepository::new(&database)
+        .list_refresh_state()
+        .await
+        .expect("persisted refresh state");
+    assert_eq!(refresh_state.len(), 1);
+    assert_eq!(refresh_state[0].last_outcome, "success_partial");
+    let pings = eggpool::db::PingRepository::new(&database)
+        .recent(None, 10)
+        .await
+        .expect("persisted pings");
+    assert_eq!(pings.len(), 2);
+    server.finish().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn malformed_and_empty_responses_preserve_prior_support() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let server =

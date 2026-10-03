@@ -29,7 +29,7 @@ use eggpool::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    time::sleep,
+    sync::Notify,
 };
 
 #[cfg(unix)]
@@ -278,11 +278,18 @@ async fn control_disconnect_does_not_cancel_retained_handler() {
     let path = root.path().join("eggpool.sock");
     let completed = Arc::new(AtomicUsize::new(0));
     let marker = Arc::clone(&completed);
+    let release = Arc::new(Notify::new());
+    let handler_release = Arc::clone(&release);
+    let finished = Arc::new(Notify::new());
+    let handler_finished = Arc::clone(&finished);
     let server: ControlServerHandle = start(&path, move |request| {
         let marker = Arc::clone(&marker);
+        let release = Arc::clone(&handler_release);
+        let finished = Arc::clone(&handler_finished);
         async move {
-            sleep(Duration::from_millis(20)).await;
+            release.notified().await;
             marker.fetch_add(1, Ordering::SeqCst);
+            finished.notify_one();
             ControlResponse::error(request.request_id, "test", "done")
         }
     })
@@ -296,7 +303,11 @@ async fn control_disconnect_does_not_cancel_retained_handler() {
         .await
         .expect("request writes");
     drop(stream);
-    sleep(Duration::from_millis(80)).await;
+    let completion = finished.notified();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("retained handler finishes after disconnect");
     assert_eq!(completed.load(Ordering::SeqCst), 1);
     server.close().await.expect("listener closes");
 }
@@ -365,11 +376,18 @@ async fn client_timeout_is_bounded_and_handler_survives_disconnect() {
     let path = root.path().join("eggpool.sock");
     let completed = Arc::new(AtomicUsize::new(0));
     let marker = Arc::clone(&completed);
+    let release = Arc::new(Notify::new());
+    let handler_release = Arc::clone(&release);
+    let finished = Arc::new(Notify::new());
+    let handler_finished = Arc::clone(&finished);
     let server = start(&path, move |request| {
         let marker = Arc::clone(&marker);
+        let release = Arc::clone(&handler_release);
+        let finished = Arc::clone(&handler_finished);
         async move {
-            sleep(Duration::from_millis(30)).await;
+            release.notified().await;
             marker.fetch_add(1, Ordering::SeqCst);
+            finished.notify_one();
             ControlResponse::error(request.request_id, "test", "done")
         }
     })
@@ -384,7 +402,11 @@ async fn client_timeout_is_bounded_and_handler_survives_disconnect() {
         result,
         Err(eggpool::operations::control::ControlClientError::Timeout)
     ));
-    sleep(Duration::from_millis(60)).await;
+    let completion = finished.notified();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("retained handler finishes after client timeout");
     assert_eq!(completed.load(Ordering::SeqCst), 1);
     server.close().await.expect("listener closes");
 }
