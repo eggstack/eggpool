@@ -137,7 +137,11 @@ async fn qualify_dashboard_ttft_query_plans_and_serialized_write_delay() {
                         let streamed = i64::from(index % 5 != 0);
                         let has_ttft = streamed == 1 && index % 7 != 0;
                         let ttft = has_ttft.then_some((index * 7919) % 5000);
-                        let age = if index % 10 == 0 { "-45 days" } else { "-1 day" };
+                        let age = if index % 10 == 0 {
+                            "-45 days"
+                        } else {
+                            "-12 hours"
+                        };
                         insert.execute(params![streamed, ttft, age])?;
                     }
                 }

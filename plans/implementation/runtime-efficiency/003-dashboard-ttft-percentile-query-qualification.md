@@ -359,27 +359,32 @@ ordered TTFT queries. COUNT is a covering-index range scan. Each
 three such ordered statements (lower median, upper median, and p99). Despite
 that repeated sort, complete `dashboard_summary_basic("24h")` timings were:
 
-| Rows | Run | p50 ms | p95 ms | max ms | Main DB bytes |
-|---:|---:|---:|---:|---:|---:|
-| 10,000 | 1 | 0.678 | 0.734 | 0.868 | 9,068,544 |
-| 10,000 | 2 | 0.770 | 0.834 | 0.963 | 9,048,064 |
-| 100,000 | 1 | 0.687 | 0.808 | 0.944 | 86,962,176 |
-| 100,000 | 2 | 0.688 | 0.749 | 0.849 | 86,978,560 |
+The first measurement attempt used rows timestamped exactly 24 hours earlier.
+Because seeding and query execution occur at different times, those rows could
+fall outside the 24-hour predicate. Those initial timing samples are discarded.
+The fixture was corrected to put 90% of rows 12 hours inside the 24-hour query
+window before collecting the accepted runs below.
 
-Ten paired summary/write attempts reported median writer waits around 1.1–1.3
-ms. Maximums were noisy and non-monotonic (about 49–52 ms at 10k, about
-6.3 ms at 100k), so they do not establish a repeated-sort contention cost.
-These are host-local descriptive measurements, not an SBC latency claim.
+| Rows | Run | p50 ms | p95 ms | max ms | Writer p50 ms | Writer max ms | Main DB bytes |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 1 | 52.959 | 53.133 | 56.819 | 53.756 | 58.867 | 9,052,160 |
+| 10,000 | 2 | 53.078 | 53.893 | 57.152 | 54.036 | 69.346 | 9,052,160 |
+| 100,000 | 1 | 755.840 | 759.517 | 761.531 | 756.729 | 792.494 | 86,970,368 |
+| 100,000 | 2 | 754.329 | 756.802 | 757.766 | 756.218 | 757.354 | 86,982,656 |
 
-Decision: **keep the current production query**. The planner does repeat an
-ordering step, but two runs show sub-millisecond summary p50/p95 values with
-nearly flat 10k-to-100k behavior, and the concurrent writer measurement does
-not attribute a stable delay to that sort. A window query would add SQL
-complexity without demonstrated material benefit. No production repository,
-index, schema, connection, or persistence-topology change is justified.
+The write attempts are queued alongside each summary call on the same serialized
+database worker; their elapsed time tracks the summary duration, with some
+additional host scheduling noise. These are host-local descriptive measurements,
+not an SBC latency claim.
 
-The new semantic test locks empty/single/odd/even/duplicate/null/non-streamed
-and out-of-window behavior. The expensive seeded harness is ignored by normal
+Decision: **implement the query-only bounded rewrite**. The corrected fixture
+shows a repeatable roughly 14x summary slowdown for 10x in-window history, and
+writer waits rise with it. The three ordered TTFT statements each create a
+temporary B-tree. A single ordered window relation is justified; no new index,
+schema, connection, or persistence-topology change is authorized.
+
+The semantic test locks empty/single/odd/even/duplicate/null/non-streamed and
+out-of-window behavior. The expensive seeded harness is ignored by normal
 workspace test runs and can be explicitly invoked with the command recorded
 in the closure record.
 
