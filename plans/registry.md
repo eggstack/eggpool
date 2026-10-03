@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 remains independently blocked on physical Pi/MMC evidence. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 active — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi 5/MMC evidence is being collected. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 closing — dedicated checkpointer qualification experiment | Pi 5/MMC candidate failed WAL progress/convergence gates; production topology remains unchanged. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -58,7 +58,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Persistence | M007 dedicated checkpointer qualification experiment | active | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | Physical Raspberry Pi 5/MMC corpus in progress; implementation/local qualification complete. |
+| Persistence | M007 dedicated checkpointer qualification experiment | closing | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | Pi 5/MMC evidence gathered; candidate rejected on WAL progress/convergence gates. |
 
 ## Blocked work
 
