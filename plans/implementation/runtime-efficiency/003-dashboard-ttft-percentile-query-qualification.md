@@ -239,6 +239,7 @@ No migration is authorized.
 
 No HTTP/JSON/CLI/config/Rust public API change.
 
+
 A query rewrite is internal and must produce the same `DashboardSummary`
 values for every fixture.
 
@@ -342,7 +343,46 @@ Record:
 - explicit statement that no migration, second connection, checkpoint change,
   or target-class performance claim was introduced.
 
-## 16. Handoff notes
+## 16. Execution findings — 2026-10-03
+
+The opt-in file-backed qualification is implemented in
+`rust/tests/dashboard_ttft_qualification.rs` and was run twice with the pinned
+bundled SQLite 3.53.2 engine. Each run seeds independent schema-54 files with
+10,000 and 100,000 deterministic request rows (80% streamed, 68.6% of all
+rows with TTFT, and 10% outside 30 days). The printed file size is the main
+database file only; the WAL sidecar is not included.
+
+Both runs selected `idx_requests_streamed_started_ttft` for the count and
+ordered TTFT queries. COUNT is a covering-index range scan. Each
+`ORDER BY first_byte_ms` plan uses a temporary B-tree; the implementation has
+three such ordered statements (lower median, upper median, and p99). Despite
+that repeated sort, complete `dashboard_summary_basic("24h")` timings were:
+
+| Rows | Run | p50 ms | p95 ms | max ms | Main DB bytes |
+|---:|---:|---:|---:|---:|---:|
+| 10,000 | 1 | 0.678 | 0.734 | 0.868 | 9,068,544 |
+| 10,000 | 2 | 0.770 | 0.834 | 0.963 | 9,048,064 |
+| 100,000 | 1 | 0.687 | 0.808 | 0.944 | 86,962,176 |
+| 100,000 | 2 | 0.688 | 0.749 | 0.849 | 86,978,560 |
+
+Ten paired summary/write attempts reported median writer waits around 1.1–1.3
+ms. Maximums were noisy and non-monotonic (about 49–52 ms at 10k, about
+6.3 ms at 100k), so they do not establish a repeated-sort contention cost.
+These are host-local descriptive measurements, not an SBC latency claim.
+
+Decision: **keep the current production query**. The planner does repeat an
+ordering step, but two runs show sub-millisecond summary p50/p95 values with
+nearly flat 10k-to-100k behavior, and the concurrent writer measurement does
+not attribute a stable delay to that sort. A window query would add SQL
+complexity without demonstrated material benefit. No production repository,
+index, schema, connection, or persistence-topology change is justified.
+
+The new semantic test locks empty/single/odd/even/duplicate/null/non-streamed
+and out-of-window behavior. The expensive seeded harness is ignored by normal
+workspace test runs and can be explicitly invoked with the command recorded
+in the closure record.
+
+## 17. Handoff notes
 
 This is deliberately a measurement-gated plan. A zero-production-diff closure
 is successful when the current implementation is already cheap enough.
