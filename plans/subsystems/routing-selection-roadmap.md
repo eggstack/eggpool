@@ -114,7 +114,7 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - Legacy Plan 231 → historical evidence and explicit deferred-work source for M001.
 - Current quota/routing public contracts → stable interface dependency; already satisfied.
 - M001 has no external hard dependency.
-- M002 affinity LRU is soft/evidence-gated and should be reconsidered only after M001 closure and a representative sticky-alias workload.
+- M002 affinity LRU qualification is closed; the representative Pi 5 workload justifies the exact bounded M003 follow-up.
 - Persistence work is independent; no cross-subsystem dependency.
 
 ## 7. Milestones
@@ -171,11 +171,11 @@ Dependencies:
 
 Deliverable boundary:
 
-No implementation plan is authorized yet. If the retain scan is not material, record a keep decision and leave the simple exact LRU unchanged.
+Closed with Pi 5 evidence: the 4,096-entry cache-hit p95 was 92.056 μs. See `plans/closure/routing-selection/002-affinity-lru-qualification.md`. The evidence authorizes M003.
 
 Exit conditions:
 
-A later plan exists only with measured evidence and a bounded exact-LRU design. Approximate eviction or an unbounded stale-node queue is not acceptable.
+A measured follow-up is registered as M003. Approximate eviction or an unbounded stale-node queue is not acceptable.
 
 ## 8. Cross-cutting requirements
 
@@ -218,11 +218,12 @@ Run strict Clippy and the full serial default/no-default workspace before closur
 
 ## 11. Completion definition
 
-This roadmap closes when M001 has removed the known deferred transient scoring collections with full parity evidence and M002 has either produced a measured exact-LRU follow-up or an explicit keep decision. No routing architecture or public compatibility surface may regress.
+This roadmap closes when M001 and M003 are closed with semantic and performance evidence. No routing architecture or public compatibility surface may regress.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — ordered quota-scoring and candidate-allocation cleanup | closed | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | plans/closure/routing-selection/001-status.md | none |
-| 002 — semantic-affinity exact-LRU cost qualification | not started | — | — | M001 closed; still needs a representative 64/512/4096-entry workload showing the exact VecDeque touch is material (see `plans/closure/routing-selection/001-status.md` §11) |
+| 002 — semantic-affinity exact-LRU cost qualification | closed | — | plans/closure/routing-selection/002-affinity-lru-qualification.md | Pi 5 workload showed material 4,096-entry hit cost; M003 is registered ready |
+| 003 — bounded exact affinity LRU | ready | plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md | — | M002 qualification evidence; no external dependency |
