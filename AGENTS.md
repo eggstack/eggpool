@@ -117,12 +117,15 @@ changes (`docs/`, `architecture/`, `plans/`, `.opencode/skills/`, `CHANGELOG.md`
   seam — run both for any `rust/src/wire/` change.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
-- Provider transport is exact-pinned to `eggfetch-core =0.2.1` with
+- Provider transport is exact-pinned to `eggfetch-core =0.2.2` with
   `native-http1,tls-rustls` (not the `http1` alias or `standard-http1`),
   excluding high-level URL/retry/redirect/Basic-auth, built-in proxy, and
-  HTTP/2/3; provider proxy dialing is exact-pinned Eggress `1.0.11`
-  `eggress-outbound` via `connect_tcp_detailed` with a typed kind/stage
-  adapter (no message-string classifier). `operations/update.rs` is a separate
-  Hyper/Rustls owner. Downstream HTTP/1 is exact-pinned `eggserve-server =0.4.0`
-  with `tower` (server-owned `TowerToEggserve` into the existing Axum router).
+  HTTP/2/3. EggPool maps Eggfetch's typed `TransportFailureKind` after its
+  pool, timeout, request, proxy, and custom-dialer categories; provider-side
+  Hyper/Rustls error-chain inspection is removed. Provider proxy dialing is
+  exact-pinned Eggress `1.0.11` `eggress-outbound` via `connect_tcp_detailed`
+  with a typed kind/stage adapter (no message-string classifier).
+  `operations/update.rs` remains a separate Hyper/Rustls owner. Downstream
+  HTTP/1 is exact-pinned `eggserve-server =0.4.0` with `tower` (server-owned
+  `TowerToEggserve` into the existing Axum router).
 - Branch `main`, imperative commits. Never commit secrets, API keys, or `.env`.

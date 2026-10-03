@@ -1,6 +1,6 @@
 # Dashboard Milestone 008 — Post-merge strict-CI and planning reconciliation corrective
 
-Status: ready
+Status: closed
 
 Repository baseline: `299a0b3657667af509742a184e658c14df22d406`
 
@@ -122,9 +122,9 @@ Planning evidence at the same baseline:
   supported feature boundary.
 - Deployment/Packaging M001-M003 remain closed; registry cleanup must not
   rewrite their closure records.
-- Provider Transport M002 remains blocked on its upstream Eggfetch interface;
-  Routing Selection M002 remains evidence-gated unless independent evidence
-  changes during closure audit.
+- Provider Transport M002 is currently ready after its upstream Eggfetch
+  interface was published; Routing Selection M002 remains evidence-gated
+  because no affinity workload measurement is available.
 
 ## 5. Scope
 
@@ -407,3 +407,14 @@ so M008 cannot close merely because Clippy compiles locally.
 Do not reopen Dashboard M001-M007 or Deployment/Packaging M001-M003. Preserve
 their closure records as historical evidence and add M008 as the corrective
 layer.
+
+### Status update — hosted oracle history
+
+Local M008 gates passed, and hosted CI run `37047638579` passed the Rust
+qualification gates. Its tooling pytest gate then failed because the default
+depth-one checkout did not contain the pinned oracle commit required by
+`test_frozen_manifest_identity_inventory_and_asset_blobs`. This is outside
+the original source correction. Dashboard M011 is registered to make the
+pinned commit available without changing the test or oracle. M011 is now
+closed, and hosted run `37049147155` completed all gates successfully; M008 is
+active again for its final closure pass.

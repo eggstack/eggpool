@@ -33,6 +33,12 @@ Scheduling is fixed-delay: the next interval starts after the previous tick comp
 
 `TaskCallbackRegistry::with_checkpoint` registers the opportunistic WAL-maintenance tick (idle ticks skip via one in-memory transaction counter; busy-gate ticks defer via `try_acquire` rather than queueing). `with_generation_maintenance` adds catalog refresh and retention cleanup. `register_metrics_flush` (via `operations/metrics.rs::MetricsWriteCoalescer`), `register_update_checker` (via `operations/update.rs::UpdateCheckerState`, check-only probes), and `register_automatic_backup` (re-resolves config per tick so reloads change directory/retention without capturing a retiring generation) complete the set. `capability_inventory` keeps deferred rows explicit instead of silently installing no-ops.
 
+Only the non-default persistence M007 qualification feature lets the existing
+checkpoint task also wait for a coalesced successful-commit notification;
+the configured timer remains its fallback and cancellation still joins the
+same supervised task. Ordinary builds and disabled M007 runs keep timer-only
+scheduling. See the M007 plan and closure record for qualification details.
+
 ## Checkpoint qualification context
 
 Persistence M004 (`plans/closure/persistence/004-status.md`, closed against HEAD `8113d264`) collected 14 accepted Pi 5 / ext4 / MMC physical artifacts and rejected the periodic 60s/256-frame checkpoint strategy on the target class: maintenance ticks do not fire inside short finite bursts, so the foreground publication `COMMIT` still owns the 1000-page automatic-checkpoint ceiling. The landed mechanism is retained as additive-safe per Plan 240 §9 with no constant retune authorized. M003 then tested commit-driven wakeups on that same gate/worker; it removed publication-COMMIT tails but transferred 1.88–3.30 second stalls into finalization gate wait and was reverted. M007 is the registered qualification-only experiment for a dedicated checkpointer worker; ordinary builds retain the current timer-only single-connection topology.

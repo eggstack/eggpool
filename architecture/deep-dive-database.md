@@ -28,6 +28,18 @@ Durable publication prepares its deterministic routing-decision row before acqui
 
 ## Qualification diagnostics (Plans 238/239, tooling only)
 
+Persistence M007 adds a second topology only behind the non-default
+`qualification-dedicated-checkpointer` feature and the startup-only
+`EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER=1` switch. The ordinary build,
+the diagnostics feature alone, and M007 with the switch off retain one
+connection, gate, and worker. Enabled mode adds one private connection used
+only for bounded PASSIVE checkpoint maintenance; successful commits coalesce
+through the existing supervised checkpoint task. The primary connection
+retains `wal_autocheckpoint=1000`; the dedicated connection uses
+`wal_autocheckpoint=0`. This is qualification instrumentation, not a supported
+operator setting or a production topology decision. See the M007 plan and
+closure record for evidence and disposition.
+
 Plan 238's `scripts/qualification_sbc.py --diagnose-publication-storage` waits for task quiescence, runs bounded sequential native finite requests, and retains only scalar page-size/checkpoint-sequence facts. Plan 239's `qualification-db-diagnostics` feature adds a bounded 256-entry in-memory collector (`RECORD_CAPACITY`, `sqlite-db-phase.v1`) keyed by transaction kind with monotonic sequence numbers; `EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES` (`0..=100000`) applies once at startup and never enters `Config`, reload policy, or production defaults. The authenticated `/api/stats/runtime` projection exposes the snapshot only in feature builds. Plan 240 authorizes no runtime change: single connection/gate, WAL/NORMAL, existing ownership, and the passive maintenance boundary stay as-is pending a reviewed design.
 
 ## M004 checkpoint context

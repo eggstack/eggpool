@@ -7,6 +7,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
@@ -40,6 +41,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v4
         with:

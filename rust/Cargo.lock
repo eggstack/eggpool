@@ -930,9 +930,9 @@ dependencies = [
 
 [[package]]
 name = "eggfetch-core"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "826f2baa59cf84f0ba06017685f60065121d69419856a1a57669f184ea7e5b99"
+checksum = "27463e41d20019d7f1dd877ab2e71d49db14a01e2781766ecc2ef112421e4055"
 dependencies = [
  "bytes",
  "futures-core",
@@ -955,9 +955,9 @@ dependencies = [
 
 [[package]]
 name = "eggfetch-http-connect"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "584942580b487889b3fe1f77dc2ed076ea3009620c03ffae90028fd70949db5c"
+checksum = "dbc41df795f7b7152912bc8fccf424c58ceb76da83eed31096edaef2a9340d5f"
 dependencies = [
  "base64 0.23.1",
  "thiserror",

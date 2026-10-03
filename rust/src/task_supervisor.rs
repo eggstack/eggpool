@@ -400,6 +400,7 @@ pub enum TaskCallbackError {
 #[derive(Clone, Default)]
 pub struct TaskCallbackRegistry {
     callbacks: BTreeMap<String, TaskCallback>,
+    event_notifications: BTreeMap<String, Arc<Notify>>,
 }
 
 impl std::fmt::Debug for TaskCallbackRegistry {
@@ -429,8 +430,22 @@ impl TaskCallbackRegistry {
         self
     }
 
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    fn register_event_notification(
+        &mut self,
+        callback_kind: impl Into<String>,
+        notification: Arc<Notify>,
+    ) {
+        self.event_notifications
+            .insert(callback_kind.into(), notification);
+    }
+
     fn get(&self, callback_kind: &str) -> Option<TaskCallback> {
         self.callbacks.get(callback_kind).cloned()
+    }
+
+    fn event_notification(&self, callback_kind: &str) -> Option<Arc<Notify>> {
+        self.event_notifications.get(callback_kind).cloned()
     }
 
     /// The only business callback available in R006.  R008 supplies the
@@ -445,7 +460,9 @@ impl TaskCallbackRegistry {
     pub fn with_checkpoint(database: Database) -> Self {
         let observed = Arc::new(AtomicU64::new(database.transaction_count()));
         let policy = crate::db::CheckpointMaintenancePolicy::effective();
-        Self::new().with_callback(
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        let event_notification = database.checkpoint_event_notification();
+        let registry = Self::new().with_callback(
             "checkpoint",
             task_callback(move |_| {
                 let database = database.clone();
@@ -469,7 +486,14 @@ impl TaskCallbackRegistry {
                     }
                 }
             }),
-        )
+        );
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        let mut registry = registry;
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        if let Some(notification) = event_notification {
+            registry.register_event_notification("checkpoint", notification);
+        }
+        registry
     }
 
     /// Register the M5 catalog refresh and bounded historical retention
@@ -788,6 +812,7 @@ pub struct RuntimeTaskSnapshot {
 struct TaskState {
     spec: RuntimeTaskSpec,
     callback: TaskCallback,
+    event_notification: Option<Arc<Notify>>,
     cancel: watch::Sender<TaskControl>,
     cancel_notify: Notify,
     cancelled: AtomicBool,
@@ -801,11 +826,16 @@ struct TaskState {
 }
 
 impl TaskState {
-    fn new(spec: RuntimeTaskSpec, callback: TaskCallback) -> Arc<Self> {
+    fn new(
+        spec: RuntimeTaskSpec,
+        callback: TaskCallback,
+        event_notification: Option<Arc<Notify>>,
+    ) -> Arc<Self> {
         let (cancel, _) = watch::channel(TaskControl::Running);
         Arc::new(Self {
             spec,
             callback,
+            event_notification,
             cancel,
             cancel_notify: Notify::new(),
             cancelled: AtomicBool::new(false),
@@ -1156,7 +1186,11 @@ impl RuntimeTaskSupervisor {
                     callback_kind: spec.callback_kind.clone(),
                 });
             };
-            prepared.push(TaskState::new(spec.clone(), callback));
+            prepared.push(TaskState::new(
+                spec.clone(),
+                callback,
+                callbacks.event_notification(&spec.callback_kind),
+            ));
         }
         Ok(PreparedTaskDiff {
             supervisor: self.clone(),
@@ -1441,10 +1475,26 @@ async fn run_task(state: Arc<TaskState>, supervisor: Arc<SupervisorInner>) {
             state.running.store(false, Ordering::Release);
             return;
         }
-        if !wait_or_cancel(&state, Duration::from_secs_f64(state.spec.interval_s)).await {
+        if !wait_for_next_tick(&state, Duration::from_secs_f64(state.spec.interval_s)).await {
             state.running.store(false, Ordering::Release);
             return;
         }
+    }
+}
+
+async fn wait_for_next_tick(state: &TaskState, delay: Duration) -> bool {
+    if let Some(notification) = &state.event_notification {
+        let notified = notification.notified();
+        if state.cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => true,
+            _ = notified => !state.cancelled.load(Ordering::Acquire),
+            _ = state.cancel_notify.notified() => false,
+        }
+    } else {
+        wait_or_cancel(state, delay).await
     }
 }
 
@@ -1546,5 +1596,64 @@ mod qualification_checkpoint_tests {
             "checkpoint cadence must stay bounded: {}",
             checkpoint.interval_s
         );
+    }
+}
+
+#[cfg(all(test, feature = "qualification-dedicated-checkpointer"))]
+mod dedicated_checkpointer_task_tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn checkpoint_event_wakes_existing_process_task_and_shutdown_cancels_wait() {
+        let (called_tx, mut called_rx) = mpsc::unbounded_channel();
+        let callback = task_callback(move |_| {
+            let called_tx = called_tx.clone();
+            async move {
+                called_tx
+                    .send(())
+                    .expect("test observes checkpoint callback");
+                Ok(())
+            }
+        });
+        let event = Arc::new(Notify::new());
+        let spec = spec(
+            "checkpoint",
+            3_600.0,
+            None,
+            true,
+            TaskOwnership::Process,
+            "qualification checkpoint event fixture",
+            &[],
+            &[],
+            &[],
+        );
+        let state = TaskState::new(spec, callback, Some(Arc::clone(&event)));
+        let supervisor = RuntimeTaskSupervisor::new();
+        let task_state = Arc::clone(&state);
+        let task_supervisor = Arc::clone(&supervisor.inner);
+        let task = tokio::spawn(async move { run_task(task_state, task_supervisor).await });
+
+        tokio::time::timeout(Duration::from_secs(2), called_rx.recv())
+            .await
+            .expect("immediate task callback runs")
+            .expect("callback event arrives");
+        event.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), called_rx.recv())
+            .await
+            .expect("commit notification interrupts the fallback interval")
+            .expect("event-driven callback runs");
+
+        cancel_task(&state);
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("task cancellation joins promptly")
+            .expect("task does not panic");
+        assert_eq!(state.tick_count.load(Ordering::Relaxed), 2);
+        let checkpoint_tasks = runtime_task_inventory()
+            .into_iter()
+            .filter(|candidate| candidate.name == "checkpoint")
+            .count();
+        assert_eq!(checkpoint_tasks, 1, "M007 adds no scheduler task");
     }
 }

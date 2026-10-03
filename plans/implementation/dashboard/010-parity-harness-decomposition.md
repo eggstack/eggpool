@@ -1,6 +1,6 @@
 # Dashboard Milestone 010 — Parity qualification harness decomposition
 
-Status: blocked
+Status: closed
 
 Repository baseline: `deafb2c143cfa0992af7715e220fe8f574a23f9b`
 
@@ -35,14 +35,14 @@ exit behavior.
 M010 runs only after M009 so the qualification harness remains unchanged while
 guarding the production module refactor.
 
-## 2. Why this milestone is blocked
+## 2. Why this milestone is ready
 
-Hard dependency: Dashboard M009 must close.
+Hard dependency: Dashboard M009 closed at `plans/closure/dashboard/009-status.md`.
 
-M009 deliberately relies on the current qualification script as the trusted
-refactor oracle. Refactoring production and the guard simultaneously would
-weaken causal evidence. After M009 closes with unchanged behavior, the harness
-can be decomposed against a known-good production candidate.
+M009 deliberately relied on the current qualification script as the trusted
+refactor oracle. Its closure confirms unchanged behavior against the
+pre-refactor baseline, so the harness can now be decomposed against a
+known-good production candidate.
 
 No production/runtime dependency is expected.
 

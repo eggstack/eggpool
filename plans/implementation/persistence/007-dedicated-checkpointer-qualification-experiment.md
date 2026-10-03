@@ -1,6 +1,6 @@
 # Persistence Milestone 007 — Dedicated Checkpointer Qualification Experiment
 
-Status: ready
+Status: blocked
 
 Repository baseline: `3270f4b71b2a7dd5115d9b8e1666a789ac292676`
 
@@ -609,7 +609,10 @@ Stop and report rather than improvise if:
 
 ## 15. Closure evidence required
 
-`plans/closure/persistence/007-status.md` must contain:
+`plans/closure/persistence/007-implementation-status.md` contains the current
+revised-scope implementation and disposition evidence; the earlier
+`plans/closure/persistence/007-status.md` remains the pre-reactivation
+assessment:
 
 - implementation commit(s);
 - exact SQLite stack/build baseline;

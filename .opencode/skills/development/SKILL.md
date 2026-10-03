@@ -236,11 +236,14 @@ cargo tree --manifest-path rust/Cargo.toml -e features
 cargo tree --manifest-path rust/Cargo.toml --duplicates
 ```
 
-The provider transport currently requires exact `eggfetch-core =0.2.1` with
+The provider transport currently requires exact `eggfetch-core =0.2.2` with
 `native-http1,tls-rustls` (not the high-level `http1` alias or
 `standard-http1`). Dependency/profile changes must run both provider transport
 targets and the C008/C009/C011 plus boundary/finalization/publication suites
-before the full workspace checks.
+before the full workspace checks. Eggfetch's typed
+`TransportFailureKind` is consumed after EggPool's more-specific pool,
+timeout, request, proxy, and custom-dialer mappings; no provider-side
+Hyper/Rustls source-chain inspection is needed.
 
 The Eggress SSH capability is intentionally optional. Feature changes affecting
 provider transport must also qualify the reduced surface:
@@ -294,8 +297,19 @@ uv run pytest tests/tooling/ -q --tb=short --maxfail=1
 ```
 
 For dashboard rendering, API, asset, or qualification changes, use the focused
-Rust renderer suite and the frozen Python oracle runner. The oracle source is
-provided by the M001 pinned worktree through these environment variables:
+Rust renderer suite and the frozen Python oracle runner. The stable command
+facade is `scripts/qualification_dashboard_parity.py`; its internal tooling
+owners live in `scripts/dashboard_parity/` (`projection.py`, `oracle.py`,
+`process.py`, `fixtures.py`, `browser.py`, `report.py`, `runner.py`, and
+`cli.py`). The oracle source is provided by the M001 pinned worktree through
+these environment variables:
+
+Production dashboard ownership is under `rust/src/server/dashboard/`:
+`routes.rs` gathers bounded snapshots, `api.rs` projects dashboard JSON,
+`assets.rs`/`theme.rs` serve assets and theme CSS, shared response/format
+helpers have dedicated modules, and `render/` contains pure page-family
+renderers. `mod.rs` preserves the `server::dashboard` facade; focused unit
+tests stay at `server::dashboard::tests` in `tests.rs`.
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1

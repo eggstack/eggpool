@@ -22,7 +22,7 @@ adapters supplied with caller-owned static facts.
 ## Toolchain policy
 
 The package uses Rust edition 2024 and declares Rust 1.89 as its MSRV, required
-by `eggfetch-core` 0.2.1 for the provider direct transport. The current
+by `eggfetch-core` 0.2.2 for the provider direct transport. The current
 development toolchain may be newer, but code should remain compatible with the
 declared MSRV and intended deployment targets.
 
@@ -48,7 +48,7 @@ development. Use the built binary directly, or build a local wheel through
 
 `eggpool::providers::ProviderHttpClient` is the provider transport boundary
 for direct and proxied provider HTTP/HTTPS. Both routes use one
-cheap-to-clone `eggfetch-core` 0.2.1 HTTP/1.1 client per provider scope via
+cheap-to-clone `eggfetch-core` 0.2.2 HTTP/1.1 client per provider scope via
 the native `Client::execute_http_body` API. Eggpool selects Eggfetch's
 `native-http1` profile (`transport-http1`, `standard-route`, and
 `advanced-routing`) rather than the high-level `http1` alias; redirects,
@@ -70,7 +70,10 @@ and trust uses WebPKI roots plus explicit additional CA roots with
 Eggfetch-owned SNI/hostname verification. Pool wait, connect, write, read,
 TLS, protocol, and route/dial failures are exposed as stable
 `TransportError` categories through one Eggfetch-to-`TransportError`
-translation boundary. Bodies are consumed incrementally through
+translation boundary. Eggfetch's typed `TransportFailureKind` supplies
+generic connect/TLS/protocol/cancellation facts after EggPool preserves its
+pool, timeout, request, proxy, and custom-dialer mappings; no provider-side
+Hyper/Rustls source-chain inspection is used. Bodies are consumed incrementally through
 `ProviderBody::next`; transport does not buffer complete responses or inject
 provider credentials.
 

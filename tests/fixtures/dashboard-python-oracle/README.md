@@ -22,10 +22,20 @@ Static assets and themes matched. This is diagnostic evidence for M002-M005,
 not a parity claim.
 
 `scripts/qualification_dashboard_parity.py --write-manifest` regenerates the
-source and asset inventory without starting either implementation. It writes
-to a temporary file and atomically replaces the manifest. Review any manifest
-change as an explicit oracle change; do not run this command to bless candidate
-Rust behavior.
+source and asset inventory without starting either implementation. The stable
+command facade is `scripts/qualification_dashboard_parity.py`; its internal
+owners are under `scripts/dashboard_parity/`: `projection.py` owns strict
+projection/comparison, `oracle.py` owns manifest/capture generation,
+`process.py` owns readiness and HTTP/process helpers, `fixtures.py` owns
+synthetic fixture and lifecycle orchestration, `browser.py` owns screenshots
+and browser checks, `report.py` owns mismatch grouping and output, and
+`runner.py` composes a qualification run. `cli.py` owns argument parsing and
+top-level command flow. The package uses only repository tooling dependencies
+and remains outside the Rust runtime and release dependency graph.
+
+The command writes the manifest to a temporary file and atomically replaces
+the checked-in copy. Review any manifest change as an explicit oracle change;
+do not run this command to bless candidate Rust behavior.
 
 DOM projection retains ordered elements, element types, all attributes,
 controls, and non-whitespace text. Insignificant whitespace runs and class

@@ -1,5 +1,7 @@
 //! Serialized asynchronous SQLite access.
 
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+use std::sync::Mutex;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -7,6 +9,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tokio_rusqlite::{Connection as AsyncConnection, Error as AsyncSqliteError};
 
@@ -174,6 +178,10 @@ pub(crate) enum CheckpointMaintenanceOutcome {
     /// The database gate was already owned by foreground work; the optional
     /// tick deferred instead of queueing behind it.
     GateBusy,
+    /// A dedicated SQLite checkpoint reported a bounded busy/incomplete
+    /// result. This is distinct from owning or waiting on the primary gate.
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    SqliteBusy,
     /// WAL state was inspected through SQLite and remains below the soft
     /// maintenance threshold.
     BelowThreshold { log_frames: u32 },
@@ -190,6 +198,8 @@ impl CheckpointMaintenanceOutcome {
         match self {
             Self::NotDue => "not_due",
             Self::GateBusy => "gate_busy",
+            #[cfg(feature = "qualification-dedicated-checkpointer")]
+            Self::SqliteBusy => "sqlite_busy_or_incomplete",
             Self::BelowThreshold { .. } => "below_threshold",
             Self::Checkpointed { .. } => "checkpointed",
         }
@@ -235,8 +245,46 @@ struct DatabaseInner {
     transactions: AtomicU64,
     config: DatabaseConfig,
     checkpoint_stats: CheckpointMaintenanceStats,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    dedicated_checkpointer: Mutex<Option<DedicatedCheckpointer>>,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    commit_sequence: AtomicU64,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    maintenance_watermark: AtomicU64,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    commit_notify: Arc<Notify>,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    dedicated_close_result: AtomicU64,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    dedicated_was_enabled: AtomicBool,
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    dedicated_stats: Arc<DedicatedCheckpointerStats>,
     #[cfg(feature = "qualification-db-diagnostics")]
     qualification: super::qualification::QualificationCollector,
+}
+
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+struct DedicatedCheckpointer {
+    connection: AsyncConnection,
+}
+
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+#[derive(Debug, Default)]
+struct DedicatedCheckpointerStats {
+    event_wakes: AtomicU64,
+    noop_observations: AtomicU64,
+    passive_attempts: AtomicU64,
+    passive_progress: AtomicU64,
+    passive_completed: AtomicU64,
+    busy_or_incomplete: AtomicU64,
+    failures: AtomicU64,
+    max_log_frames: AtomicU64,
+    max_checkpointed_frames: AtomicU64,
+    last_log_frames: AtomicU64,
+    last_checkpointed_frames: AtomicU64,
+    elapsed_count: AtomicU64,
+    elapsed_max_us: AtomicU64,
+    elapsed_histogram: [AtomicU64; 6],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +345,19 @@ impl std::fmt::Debug for Database {
 
 impl Database {
     pub async fn open(config: DatabaseConfig) -> Result<Self, DatabaseError> {
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        let dedicated_enabled = qualification_dedicated_checkpointer_toggle()?;
+        #[cfg(not(feature = "qualification-dedicated-checkpointer"))]
+        let dedicated_enabled = false;
+        Self::open_with_dedicated_toggle(config, dedicated_enabled).await
+    }
+
+    async fn open_with_dedicated_toggle(
+        config: DatabaseConfig,
+        dedicated_enabled: bool,
+    ) -> Result<Self, DatabaseError> {
+        #[cfg(not(feature = "qualification-dedicated-checkpointer"))]
+        let _ = dedicated_enabled;
         validate_config(&config)?;
         let connection = if config.read_only && config.path != ":memory:" {
             let uri = format!("file:{}?mode=ro", percent_encode_path(&config.path));
@@ -323,11 +384,30 @@ impl Database {
                 transactions: AtomicU64::new(0),
                 config,
                 checkpoint_stats: CheckpointMaintenanceStats::default(),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                dedicated_checkpointer: Mutex::new(None),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                commit_sequence: AtomicU64::new(0),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                maintenance_watermark: AtomicU64::new(0),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                commit_notify: Arc::new(Notify::new()),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                dedicated_close_result: AtomicU64::new(0),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                dedicated_was_enabled: AtomicBool::new(false),
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                dedicated_stats: Arc::new(DedicatedCheckpointerStats::default()),
                 #[cfg(feature = "qualification-db-diagnostics")]
                 qualification: super::qualification::QualificationCollector::new(),
             }),
         };
         if let Err(error) = database.configure().await {
+            let _ = database.close().await;
+            return Err(error);
+        }
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        if dedicated_enabled && let Err(error) = database.open_dedicated_checkpointer().await {
             let _ = database.close().await;
             return Err(error);
         }
@@ -349,6 +429,34 @@ impl Database {
         self.inner.transactions.load(Ordering::Relaxed)
     }
 
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    pub(crate) fn checkpoint_event_notification(&self) -> Option<Arc<Notify>> {
+        self.dedicated_is_enabled()
+            .then(|| Arc::clone(&self.inner.commit_notify))
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    fn dedicated_is_enabled(&self) -> bool {
+        self.inner.dedicated_was_enabled.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    fn signal_successful_commit(&self) {
+        let guard = self
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if guard.is_some() {
+            self.inner.commit_sequence.fetch_add(1, Ordering::Release);
+            self.inner
+                .dedicated_stats
+                .event_wakes
+                .fetch_add(1, Ordering::Relaxed);
+            self.inner.commit_notify.notify_one();
+        }
+    }
+
     #[cfg(feature = "qualification-db-diagnostics")]
     pub fn qualification_snapshot(&self) -> Option<crate::db::QualificationDbSnapshot> {
         let mut snapshot = self.inner.qualification.snapshot()?;
@@ -356,7 +464,67 @@ impl Database {
             .inner
             .checkpoint_stats
             .snapshot(CheckpointMaintenancePolicy::effective().soft_wal_frames);
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        {
+            snapshot.dedicated_checkpointer =
+                self.dedicated_qualification_snapshot(snapshot.effective.wal_autocheckpoint_pages);
+        }
         Some(snapshot)
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    fn dedicated_qualification_snapshot(
+        &self,
+        primary_autocheckpoint_pages: u64,
+    ) -> super::qualification::QualificationDedicatedCheckpointer {
+        let stats = &self.inner.dedicated_stats;
+        let elapsed_count = stats.elapsed_count.load(Ordering::Relaxed);
+        let p95 = if elapsed_count == 0 {
+            None
+        } else {
+            let rank = elapsed_count.saturating_mul(95).saturating_add(99) / 100;
+            let upper_bounds = [100, 1_000, 10_000, 100_000, 1_000_000, u64::MAX];
+            let mut cumulative = 0u64;
+            let mut value = u64::MAX;
+            for (index, upper_bound) in upper_bounds.into_iter().enumerate() {
+                cumulative = cumulative
+                    .saturating_add(stats.elapsed_histogram[index].load(Ordering::Relaxed));
+                if cumulative >= rank {
+                    value = upper_bound;
+                    break;
+                }
+            }
+            Some(value)
+        };
+        let enabled = self.dedicated_is_enabled();
+        let close_result = match self.inner.dedicated_close_result.load(Ordering::Acquire) {
+            1 => Some("closed".to_owned()),
+            2 => Some("failed".to_owned()),
+            _ => None,
+        };
+        super::qualification::QualificationDedicatedCheckpointer {
+            enabled,
+            primary_wal_autocheckpoint_pages: primary_autocheckpoint_pages,
+            dedicated_journal_mode: enabled.then(|| "wal".to_owned()),
+            dedicated_synchronous: enabled.then(|| "NORMAL".to_owned()),
+            dedicated_wal_autocheckpoint_pages: enabled.then_some(0),
+            event_wakes: stats.event_wakes.load(Ordering::Relaxed),
+            noop_observations: stats.noop_observations.load(Ordering::Relaxed),
+            passive_attempts: stats.passive_attempts.load(Ordering::Relaxed),
+            passive_progress: stats.passive_progress.load(Ordering::Relaxed),
+            passive_completed: stats.passive_completed.load(Ordering::Relaxed),
+            busy_or_incomplete: stats.busy_or_incomplete.load(Ordering::Relaxed),
+            failures: stats.failures.load(Ordering::Relaxed),
+            max_log_frames: stats.max_log_frames.load(Ordering::Relaxed),
+            max_checkpointed_frames: stats.max_checkpointed_frames.load(Ordering::Relaxed),
+            last_log_frames: stats.last_log_frames.load(Ordering::Relaxed),
+            last_checkpointed_frames: stats.last_checkpointed_frames.load(Ordering::Relaxed),
+            elapsed_count,
+            elapsed_max_us: stats.elapsed_max_us.load(Ordering::Relaxed),
+            elapsed_p95_upper_bound_us: p95,
+            close_result,
+            process_thread_count: process_thread_count(),
+        }
     }
 
     pub async fn close(&self) -> Result<(), DatabaseError> {
@@ -372,6 +540,8 @@ impl Database {
             drop(permit);
             return Ok(());
         }
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        let dedicated_result = self.close_dedicated_checkpointer().await;
         let result = self
             .inner
             .connection
@@ -389,6 +559,8 @@ impl Database {
                 _ => DatabaseError::WorkerClosed,
             });
         drop(permit);
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        dedicated_result?;
         result
     }
 
@@ -549,6 +721,16 @@ impl Database {
             })
             .await;
         drop(permit);
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        if matches!(
+            &result,
+            Ok(TransactionEnvelope {
+                outcome: TransactionCallResult::Completed(Ok(_)),
+                ..
+            })
+        ) {
+            self.signal_successful_commit();
+        }
         #[cfg(feature = "qualification-db-diagnostics")]
         let total_us = elapsed_us(started_at);
         match result {
@@ -763,6 +945,10 @@ impl Database {
         policy: CheckpointMaintenancePolicy,
         observed_transactions: &AtomicU64,
     ) -> Result<CheckpointMaintenanceOutcome, DatabaseError> {
+        #[cfg(feature = "qualification-dedicated-checkpointer")]
+        if self.dedicated_is_enabled() {
+            return self.dedicated_checkpoint_maintenance(policy).await;
+        }
         let current = self.inner.transactions.load(Ordering::Relaxed);
         if current == observed_transactions.load(Ordering::Relaxed) {
             self.inner
@@ -860,6 +1046,153 @@ impl Database {
                 checkpointed_frames: progress.checkpointed_frames,
             })
         }
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    async fn dedicated_checkpoint_maintenance(
+        &self,
+        policy: CheckpointMaintenancePolicy,
+    ) -> Result<CheckpointMaintenanceOutcome, DatabaseError> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            self.inner
+                .dedicated_stats
+                .failures
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(DatabaseError::Closed);
+        }
+        let current = self.inner.commit_sequence.load(Ordering::Acquire);
+        let observed = self.inner.maintenance_watermark.load(Ordering::Acquire);
+        if current == observed {
+            return Ok(CheckpointMaintenanceOutcome::NotDue);
+        }
+        let connection = self
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|checkpointer| checkpointer.connection.clone())
+            .ok_or(DatabaseError::Closed)?;
+        let started = Instant::now();
+        let stats = Arc::clone(&self.inner.dedicated_stats);
+        let soft_threshold = policy.soft_wal_frames;
+        let inspected = connection
+            .call(move |connection| {
+                let progress = query_wal_progress(connection)?;
+                stats.noop_observations.fetch_add(1, Ordering::Relaxed);
+                stats
+                    .last_log_frames
+                    .store(u64::from(progress.log_frames), Ordering::Relaxed);
+                stats
+                    .last_checkpointed_frames
+                    .store(u64::from(progress.checkpointed_frames), Ordering::Relaxed);
+                if progress.busy {
+                    return Ok(MaintenanceInspection::Deferred);
+                }
+                if progress.log_frames < soft_threshold {
+                    return Ok(MaintenanceInspection::BelowThreshold(progress));
+                }
+                stats.passive_attempts.fetch_add(1, Ordering::Relaxed);
+                let after = run_passive_checkpoint(connection)?;
+                Ok(MaintenanceInspection::Checkpointed(after))
+            })
+            .await;
+        let elapsed_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        self.inner
+            .dedicated_stats
+            .elapsed_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .dedicated_stats
+            .elapsed_max_us
+            .fetch_max(elapsed_us, Ordering::Relaxed);
+        let histogram_bucket = match elapsed_us {
+            0..=100 => 0,
+            101..=1_000 => 1,
+            1_001..=10_000 => 2,
+            10_001..=100_000 => 3,
+            100_001..=1_000_000 => 4,
+            _ => 5,
+        };
+        self.inner.dedicated_stats.elapsed_histogram[histogram_bucket]
+            .fetch_add(1, Ordering::Relaxed);
+        let inspection = inspected.map_err(|error| {
+            self.inner
+                .dedicated_stats
+                .failures
+                .fetch_add(1, Ordering::Relaxed);
+            match error {
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite(
+                        "dedicated checkpoint maintenance",
+                        self.inner.config.busy_timeout_ms,
+                        source,
+                    )
+                }
+                _ => DatabaseError::WorkerClosed,
+            }
+        })?;
+        if matches!(inspection, MaintenanceInspection::Deferred) {
+            self.inner
+                .dedicated_stats
+                .busy_or_incomplete
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(CheckpointMaintenanceOutcome::SqliteBusy);
+        }
+        let progress = match inspection {
+            MaintenanceInspection::BelowThreshold(progress)
+            | MaintenanceInspection::Checkpointed(progress) => progress,
+            MaintenanceInspection::Deferred => unreachable!("deferred returned above"),
+        };
+        self.inner
+            .dedicated_stats
+            .max_log_frames
+            .fetch_max(u64::from(progress.log_frames), Ordering::Relaxed);
+        self.inner
+            .dedicated_stats
+            .max_checkpointed_frames
+            .fetch_max(u64::from(progress.checkpointed_frames), Ordering::Relaxed);
+        self.inner
+            .dedicated_stats
+            .last_log_frames
+            .store(u64::from(progress.log_frames), Ordering::Relaxed);
+        self.inner
+            .dedicated_stats
+            .last_checkpointed_frames
+            .store(u64::from(progress.checkpointed_frames), Ordering::Relaxed);
+        if matches!(inspection, MaintenanceInspection::BelowThreshold(_)) {
+            self.inner
+                .maintenance_watermark
+                .store(current, Ordering::Release);
+            return Ok(CheckpointMaintenanceOutcome::BelowThreshold {
+                log_frames: progress.log_frames,
+            });
+        }
+        if progress.checkpointed_frames > 0 {
+            self.inner
+                .dedicated_stats
+                .passive_progress
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        if !progress.busy && progress.checkpointed_frames >= progress.log_frames {
+            self.inner
+                .dedicated_stats
+                .passive_completed
+                .fetch_add(1, Ordering::Relaxed);
+            self.inner
+                .maintenance_watermark
+                .store(current, Ordering::Release);
+        } else {
+            self.inner
+                .dedicated_stats
+                .busy_or_incomplete
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(CheckpointMaintenanceOutcome::Checkpointed {
+            log_frames: progress.log_frames,
+            checkpointed_frames: progress.checkpointed_frames,
+        })
     }
 
     fn record_maintenance_failure(&self) {
@@ -1066,6 +1399,137 @@ impl Database {
         })
     }
 
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    async fn open_dedicated_checkpointer(&self) -> Result<(), DatabaseError> {
+        let config = &self.inner.config;
+        if config.read_only
+            || !config.wal
+            || config.path == ":memory:"
+            || !config.synchronous.eq_ignore_ascii_case("NORMAL")
+        {
+            return Err(DatabaseError::Integrity {
+                detail: "dedicated checkpointer requires a file-backed writable WAL database using NORMAL synchronous mode".to_owned(),
+            });
+        }
+        let (journal_mode, auto_checkpoint): (String, i64) = self
+            .call(|connection| {
+                let journal_mode =
+                    connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                let auto_checkpoint =
+                    connection.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+                Ok((journal_mode, auto_checkpoint))
+            })
+            .await?;
+        if !journal_mode.eq_ignore_ascii_case("wal") || auto_checkpoint != 1000 {
+            return Err(DatabaseError::Integrity {
+                detail:
+                    "dedicated checkpointer requires primary WAL mode and wal_autocheckpoint=1000"
+                        .to_owned(),
+            });
+        }
+
+        let connection = AsyncConnection::open(config.path.clone())
+            .await
+            .map_err(|source| {
+                map_sqlite(
+                    "open dedicated checkpointer",
+                    config.busy_timeout_ms,
+                    source,
+                )
+            })?;
+        let timeout = config.busy_timeout_ms;
+        let configured = connection
+            .call(move |connection| {
+                connection.pragma_update(None, "busy_timeout", timeout)?;
+                let journal_mode: String =
+                    connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                if !journal_mode.eq_ignore_ascii_case("wal") {
+                    return Err(SqliteError::SqliteFailure(
+                        tokio_rusqlite::rusqlite::ffi::Error::new(14),
+                        Some("dedicated connection did not observe WAL mode".to_owned()),
+                    ));
+                }
+                connection.pragma_update(None, "synchronous", "NORMAL")?;
+                connection.pragma_update(None, "wal_autocheckpoint", 0)?;
+                let synchronous: i64 =
+                    connection.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+                let auto_checkpoint: i64 =
+                    connection.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+                if synchronous != 1 || auto_checkpoint != 0 {
+                    return Err(SqliteError::SqliteFailure(
+                        tokio_rusqlite::rusqlite::ffi::Error::new(14),
+                        Some(
+                            "dedicated connection pragmas did not match the qualification contract"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|error| match error {
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite(
+                        "configure dedicated checkpointer",
+                        self.inner.config.busy_timeout_ms,
+                        source,
+                    )
+                }
+                _ => DatabaseError::WorkerClosed,
+            });
+        if let Err(error) = configured {
+            let _ = connection.clone().close().await;
+            return Err(error);
+        }
+        *self
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            Some(DedicatedCheckpointer { connection });
+        self.inner
+            .dedicated_was_enabled
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    async fn close_dedicated_checkpointer(&self) -> Result<(), DatabaseError> {
+        let checkpointer = self
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let Some(checkpointer) = checkpointer else {
+            return Ok(());
+        };
+        let result = checkpointer
+            .connection
+            .close()
+            .await
+            .map_err(|error| match error {
+                AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
+                    map_sqlite(
+                        "close dedicated checkpointer",
+                        self.inner.config.busy_timeout_ms,
+                        source,
+                    )
+                }
+                AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
+                _ => DatabaseError::WorkerClosed,
+            });
+        self.inner
+            .dedicated_close_result
+            .store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
+        tracing::info!(
+            success = result.is_ok(),
+            "M007 dedicated checkpointer close complete"
+        );
+        result
+    }
+
     async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, DatabaseError> {
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(DatabaseError::Closed);
@@ -1141,8 +1605,50 @@ fn validate_qualification_checkpoint_overrides() -> Result<(), DatabaseError> {
         })?;
         parse_qualification_checkpoint_soft_frames(raw)?;
     }
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    if qualification_dedicated_checkpointer_toggle()? {
+        if let Some(pages) = qualification_wal_autocheckpoint_override()?
+            && pages != 1000
+        {
+            return Err(DatabaseError::Integrity {
+                detail:
+                    "dedicated checkpointer qualification requires primary wal_autocheckpoint=1000"
+                        .to_owned(),
+            });
+        }
+        if let Some(frames) = qualification_checkpoint_soft_frames_override()
+            && frames != CheckpointMaintenancePolicy::DEFAULT_SOFT_WAL_FRAMES
+        {
+            return Err(DatabaseError::Integrity {
+                detail: "dedicated checkpointer qualification requires a 256-frame soft threshold"
+                    .to_owned(),
+            });
+        }
+    }
     crate::task_supervisor::validate_qualification_checkpoint_interval()?;
     Ok(())
+}
+
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+fn qualification_dedicated_checkpointer_toggle() -> Result<bool, DatabaseError> {
+    let Some(value) = std::env::var_os("EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER") else {
+        return Ok(false);
+    };
+    let value = value.to_str().ok_or_else(|| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER must be 0 or 1".to_owned(),
+    })?;
+    parse_qualification_dedicated_checkpointer_toggle(value)
+}
+
+#[cfg(feature = "qualification-dedicated-checkpointer")]
+fn parse_qualification_dedicated_checkpointer_toggle(value: &str) -> Result<bool, DatabaseError> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(DatabaseError::Integrity {
+            detail: "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER must be 0 or 1".to_owned(),
+        }),
+    }
 }
 
 #[cfg(feature = "qualification-db-diagnostics")]
@@ -1239,6 +1745,8 @@ impl DatabaseTransaction {
             Ok(()) => {
                 self.finished = true;
                 self.permit.take();
+                #[cfg(feature = "qualification-dedicated-checkpointer")]
+                self.database.signal_successful_commit();
                 Ok(())
             }
             Err(error) => {
@@ -1386,12 +1894,12 @@ fn query_wal_progress(
 fn run_passive_checkpoint(
     connection: &mut SqliteConnection,
 ) -> Result<WalCheckpointProgress, SqliteError> {
-    let (_, log, checkpointed): (i64, i64, i64) =
+    let (busy, log, checkpointed): (i64, i64, i64) =
         connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
     Ok(WalCheckpointProgress {
-        busy: false,
+        busy: busy != 0,
         log_frames: u32::try_from(log.max(0)).unwrap_or(u32::MAX),
         checkpointed_frames: u32::try_from(checkpointed.max(0)).unwrap_or(u32::MAX),
     })
@@ -1425,6 +1933,23 @@ fn percent_encode_path(path: &str) -> String {
             other => format!("%{other:02X}").chars().collect(),
         })
         .collect()
+}
+
+#[cfg(all(feature = "qualification-dedicated-checkpointer", target_os = "linux"))]
+fn process_thread_count() -> Option<u64> {
+    std::fs::read_dir("/proc/self/task")
+        .ok()?
+        .count()
+        .try_into()
+        .ok()
+}
+
+#[cfg(all(
+    feature = "qualification-dedicated-checkpointer",
+    not(target_os = "linux")
+))]
+fn process_thread_count() -> Option<u64> {
+    None
 }
 
 #[cfg(all(test, feature = "qualification-db-diagnostics"))]
@@ -1675,6 +2200,291 @@ mod maintenance_tests {
             "frame scalars must stay bounded: {log_frames}/{checkpointed_frames}"
         );
         assert_eq!(observed.load(Ordering::Relaxed), 1);
+        database.close().await.expect("database closes");
+        remove_temp_database(&path);
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    #[test]
+    fn dedicated_checkpointer_toggle_is_fail_closed() {
+        assert!(!parse_qualification_dedicated_checkpointer_toggle("0").unwrap());
+        assert!(parse_qualification_dedicated_checkpointer_toggle("1").unwrap());
+        for value in ["", "true", "yes", "2", " 1"] {
+            assert!(parse_qualification_dedicated_checkpointer_toggle(value).is_err());
+        }
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn dedicated_topology_has_private_pragmas_and_successful_commit_wakes_only() {
+        let path = unique_temp_path("dedicated-topology");
+        let database = Database::open_with_dedicated_toggle(
+            DatabaseConfig {
+                path: path.to_string_lossy().into_owned(),
+                ..DatabaseConfig::default()
+            },
+            true,
+        )
+        .await
+        .expect("feature mode opens the dedicated connection");
+        let notification = database
+            .checkpoint_event_notification()
+            .expect("enabled mode exposes the private task wake");
+        let initial_snapshot = database
+            .qualification_snapshot()
+            .expect("feature diagnostics are captured");
+        assert!(initial_snapshot.dedicated_checkpointer.enabled);
+        assert_eq!(
+            initial_snapshot
+                .dedicated_checkpointer
+                .primary_wal_autocheckpoint_pages,
+            1000
+        );
+        assert_eq!(
+            initial_snapshot
+                .dedicated_checkpointer
+                .dedicated_wal_autocheckpoint_pages,
+            Some(0)
+        );
+        let dedicated = database
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .expect("dedicated connection exists")
+            .connection
+            .clone();
+        let pragmas = dedicated
+            .call(|connection| {
+                let journal: String =
+                    connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                let synchronous: i64 =
+                    connection.query_row("PRAGMA synchronous", [], |row| row.get(0))?;
+                let auto: i64 =
+                    connection.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))?;
+                Ok::<_, SqliteError>((journal, synchronous, auto))
+            })
+            .await
+            .expect("dedicated pragmas can be read");
+        assert_eq!(pragmas, ("wal".to_owned(), 1, 0));
+        let primary_auto: i64 = database
+            .call(|connection| {
+                connection.query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+            })
+            .await
+            .expect("primary pragma can be read");
+        assert_eq!(primary_auto, 1000);
+
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE m007_wake (id INTEGER PRIMARY KEY)")
+            })
+            .await
+            .expect("successful transaction commits");
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 1);
+        assert_eq!(
+            database
+                .inner
+                .dedicated_stats
+                .event_wakes
+                .load(Ordering::Relaxed),
+            1
+        );
+        notification.notified().await;
+
+        let explicit = database
+            .begin_transaction()
+            .await
+            .expect("explicit transaction begins");
+        explicit.rollback().await.expect("rollback succeeds");
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 1);
+
+        let error = database
+            .with_transaction(|connection| {
+                connection.execute_batch("SELECT * FROM m007_missing_table")
+            })
+            .await
+            .expect_err("body failure rolls back");
+        assert!(matches!(error, DatabaseError::Sqlite { .. }));
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 1);
+
+        let error = database
+            .with_transaction(|connection| {
+                connection.execute_batch(
+                    "CREATE TABLE m007_parent (id INTEGER PRIMARY KEY); \
+                     CREATE TABLE m007_child (parent_id INTEGER REFERENCES m007_parent(id) \
+                         DEFERRABLE INITIALLY DEFERRED); \
+                     INSERT INTO m007_child VALUES (99)",
+                )
+            })
+            .await
+            .expect_err("deferred constraint fails at COMMIT");
+        assert!(matches!(error, DatabaseError::CommitFailed { .. }));
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 1);
+
+        database
+            .begin_transaction()
+            .await
+            .expect("explicit transaction begins")
+            .commit()
+            .await
+            .expect("explicit commit succeeds");
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 2);
+
+        database
+            .close()
+            .await
+            .expect("dedicated closes before primary");
+        assert_eq!(
+            database
+                .inner
+                .dedicated_close_result
+                .load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            database
+                .qualification_snapshot()
+                .expect("snapshot remains available after close")
+                .dedicated_checkpointer
+                .close_result
+                .as_deref(),
+            Some("closed")
+        );
+        remove_temp_database(&path);
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn m007_feature_with_toggle_disabled_stays_single_connection() {
+        let path = unique_temp_path("dedicated-disabled");
+        let database = Database::open_with_dedicated_toggle(
+            DatabaseConfig {
+                path: path.to_string_lossy().into_owned(),
+                ..DatabaseConfig::default()
+            },
+            false,
+        )
+        .await
+        .expect("feature build with disabled toggle opens primary only");
+        assert!(database.checkpoint_event_notification().is_none());
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE m007_disabled (id INTEGER)")
+            })
+            .await
+            .expect("primary transaction commits");
+        assert_eq!(database.inner.commit_sequence.load(Ordering::Acquire), 0);
+        let snapshot = database
+            .qualification_snapshot()
+            .expect("feature diagnostics are captured");
+        assert!(!snapshot.dedicated_checkpointer.enabled);
+        assert_eq!(snapshot.dedicated_checkpointer.event_wakes, 0);
+        assert_eq!(snapshot.effective.wal_autocheckpoint_pages, 1000);
+        database.close().await.expect("primary connection closes");
+        remove_temp_database(&path);
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn dedicated_worker_runs_while_primary_gate_is_owned() {
+        let path = unique_temp_path("dedicated-concurrency");
+        let database = Database::open_with_dedicated_toggle(
+            DatabaseConfig {
+                path: path.to_string_lossy().into_owned(),
+                ..DatabaseConfig::default()
+            },
+            true,
+        )
+        .await
+        .expect("feature mode opens the dedicated connection");
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE m007_concurrency (id INTEGER)")
+            })
+            .await
+            .expect("initial transaction commits");
+        let holder = database
+            .begin_transaction()
+            .await
+            .expect("primary gate holder begins");
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            database.dedicated_checkpoint_maintenance(CheckpointMaintenancePolicy {
+                soft_wal_frames: 1,
+            }),
+        )
+        .await
+        .expect("dedicated SQLite work is bounded")
+        .expect("dedicated SQLite work succeeds");
+        assert_ne!(
+            outcome,
+            CheckpointMaintenanceOutcome::GateBusy,
+            "M007 maintenance must never acquire or wait on the primary gate"
+        );
+        assert_ne!(outcome, CheckpointMaintenanceOutcome::NotDue);
+        assert_eq!(
+            database
+                .inner
+                .dedicated_stats
+                .noop_observations
+                .load(Ordering::Relaxed),
+            1
+        );
+        holder.rollback().await.expect("primary gate releases");
+        database.close().await.expect("database closes");
+        remove_temp_database(&path);
+    }
+
+    #[cfg(feature = "qualification-dedicated-checkpointer")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn primary_writer_progresses_while_dedicated_worker_is_occupied() {
+        let path = unique_temp_path("dedicated-independent-worker");
+        let database = Database::open_with_dedicated_toggle(
+            DatabaseConfig {
+                path: path.to_string_lossy().into_owned(),
+                ..DatabaseConfig::default()
+            },
+            true,
+        )
+        .await
+        .expect("feature mode opens the dedicated connection");
+        let dedicated = database
+            .inner
+            .dedicated_checkpointer
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .expect("dedicated connection exists")
+            .connection
+            .clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let dedicated_call = tokio::spawn(async move {
+            dedicated
+                .call(move |_| {
+                    let _ = started_tx.send(());
+                    release_rx.recv().expect("test releases dedicated worker");
+                    Ok::<(), SqliteError>(())
+                })
+                .await
+        });
+        started_rx.await.expect("dedicated worker reaches barrier");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            database.with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE m007_primary_progress (id INTEGER)")
+            }),
+        )
+        .await
+        .expect("primary transaction is independent of dedicated worker")
+        .expect("primary transaction commits");
+        release_tx.send(()).expect("dedicated worker is waiting");
+        dedicated_call
+            .await
+            .expect("dedicated call task joins")
+            .expect("dedicated call completes");
         database.close().await.expect("database closes");
         remove_temp_database(&path);
     }

@@ -6,7 +6,7 @@
 //!
 //! Direct and proxied provider requests share Eggfetch's HTTP/1.1, origin TLS,
 //! pooling, physical admission, and transport-I/O machinery through
-//! `eggfetch-core` 0.2.1 native `Client::execute_http_body`. Proxied routes
+//! `eggfetch-core` 0.2.2 native `Client::execute_http_body`. Proxied routes
 //! supply the physical byte stream through a thin `EggressDialer` adapter that
 //! implements Eggfetch's general custom `Dialer` interface over the
 //! listener-free `eggress-outbound` 1.0.11 `OutboundConnector` route API.
@@ -17,18 +17,20 @@
 //! `DialError` kinds without inspecting display strings.
 
 use std::{
-    error::Error as StdError,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 
+#[cfg(feature = "test-support")]
+use std::error::Error as StdError;
+
 use bytes::Bytes;
 use eggfetch_core::{
     DialError, DialErrorKind, DialFuture, DialStream, DialTarget, Dialer, HttpVersionPolicy,
     NativeRequestOptions, PhysicalConnectionPolicy, Timeout as EggfetchTimeout,
-    TransportIoDirection, TransportIoTimeout, TrustStore,
+    TransportFailureKind, TransportIoDirection, TransportIoTimeout, TrustStore,
 };
 #[cfg(feature = "test-support")]
 use eggress_core::{TargetAddr, TargetHost};
@@ -1010,29 +1012,20 @@ fn map_eggfetch_error(
 ) -> TransportError {
     use eggfetch_core::{Error as EggfetchError, TimeoutPhase};
 
-    // 1. Physical connection admission timeout stays PoolTimeout. The
-    // physical policy is authoritative for live connections including idle
-    // pooled sockets; never conflate with logical request concurrency.
+    // Preserve EggPool-specific timeout facts before consulting Eggfetch's
+    // broader transport classifier.
     if error.is_physical_connection_admission_timeout() {
         return TransportError::PoolTimeout;
     }
     if matches!(error, EggfetchError::Pool(_)) {
-        // The typed physical-admission predicate above is the only runtime
-        // pool-timeout signal. Residual pool errors are setup/internal faults.
         return TransportError::Configuration;
     }
-    // 2-3. Established transport inactivity direction is typed.
     if let EggfetchError::TransportIoTimeout { direction, .. } = error {
         return match direction {
             TransportIoDirection::Read => TransportError::ReadTimeout,
             TransportIoDirection::Write => TransportError::WriteTimeout,
         };
     }
-    // 4. Phase-aware timeouts. Only connect is configured on either route;
-    // read/write/total/proxy phases are mapped defensively so a future
-    // misconfiguration cannot silently become Connect. A connect timeout on
-    // a proxied route covers Eggress route establishment plus origin TLS,
-    // so it keeps the established Eggress timeout category.
     if let EggfetchError::Timeout { phase, .. } = error {
         return match phase {
             TimeoutPhase::Pool => TransportError::PoolTimeout,
@@ -1040,59 +1033,15 @@ fn map_eggfetch_error(
             TimeoutPhase::Connect => TransportError::ConnectTimeout,
             TimeoutPhase::Read => TransportError::ReadTimeout,
             TimeoutPhase::Write => TransportError::WriteTimeout,
-            // No total deadline is configured on either route. Map to a
-            // timeout category rather than a connection failure.
             TimeoutPhase::Total => TransportError::ReadTimeout,
             TimeoutPhase::ProxyConnect | TimeoutPhase::ProxyTls => {
                 TransportError::ProxyConnectTimeout
             }
         };
     }
-    // 5. TLS establishment/verification stays Tls, including rustls sources
-    // wrapped through the Eggfetch engine's connector path.
-    match error {
-        EggfetchError::Tls(_)
-        | EggfetchError::TlsConfig(_)
-        | EggfetchError::CaBundle(_)
-        | EggfetchError::ClientCert(_)
-        | EggfetchError::PrivateKey(_)
-        | EggfetchError::CertificateVerification(_)
-        | EggfetchError::HostnameVerification(_) => return TransportError::Tls,
-        _ => {}
-    }
-    if contains_source::<rustls::Error>(error) {
-        return TransportError::Tls;
-    }
-    // Canceled requests map to Cancelled so coordinator accounting can
-    // distinguish caller cancellation from transport failures.
-    if eggfetch_source_is_canceled(error) {
-        return TransportError::Cancelled;
-    }
-    // 6. Malformed/protocol/body framing failures map to Protocol.
-    if matches!(
-        error,
-        EggfetchError::Protocol(_)
-            | EggfetchError::Body(_)
-            | EggfetchError::Decompression(_)
-            | EggfetchError::UnsupportedContentEncoding(_)
-            | EggfetchError::DecodedBodyTooLarge
-            | EggfetchError::DecompressionRatioExceeded
-            | EggfetchError::Http2GoAway { .. }
-            | EggfetchError::Http2StreamReset { .. }
-            | EggfetchError::Http2FlowControl(_)
-            | EggfetchError::Http2Protocol(_)
-            | EggfetchError::H3Connect(_)
-            | EggfetchError::H3ConnectionClosed(_)
-            | EggfetchError::H3Stream(_)
-            | EggfetchError::H3Protocol(_)
-    ) {
-        return TransportError::Protocol;
-    }
-    if eggfetch_source_is_protocol(error) {
-        return TransportError::Protocol;
-    }
-    // Target construction failures stay InvalidTarget; other request-build
-    // failures are malformed requests and map to Protocol.
+
+    // Target/request, proxy-route, and custom-dialer facts have more specific
+    // EggPool meanings than the generic Eggfetch category.
     match error {
         EggfetchError::InvalidUrl(_)
         | EggfetchError::InvalidResolvedTarget(_)
@@ -1107,91 +1056,64 @@ fn map_eggfetch_error(
         | EggfetchError::BodyNotReplayableForRedirect
         | EggfetchError::BodyNotReplayableForRetry
         | EggfetchError::JsonSerialize(_)
-        | EggfetchError::JsonDeserialize(_) => return TransportError::Protocol,
-        EggfetchError::RetryBudgetExhausted { .. } | EggfetchError::RetryNotConfigured => {
-            return TransportError::Protocol;
-        }
+        | EggfetchError::JsonDeserialize(_)
+        | EggfetchError::RetryBudgetExhausted { .. }
+        | EggfetchError::RetryNotConfigured => return TransportError::Protocol,
         EggfetchError::TraceCallbackAborted => return TransportError::TransportFault,
         EggfetchError::Unsupported(_) => return TransportError::Configuration,
-        _ => {}
-    }
-    // Proxy-route errors retain proxy categories; the direct path never
-    // configures a proxy so these are defensive.
-    match error {
         EggfetchError::InvalidProxyUrl(_)
         | EggfetchError::ProxyConnect(_)
         | EggfetchError::MalformedProxyResponse(_) => return TransportError::ProxyConnect,
         EggfetchError::ProxyAuthRequired => return TransportError::ProxyAuthentication,
         EggfetchError::ProxyConnectRejected { .. } => return TransportError::ProxyTargetConnect,
+        EggfetchError::CustomTransport(_) => {
+            return match error.custom_transport_error().map(DialError::kind) {
+                Some(DialErrorKind::Timeout) => TransportError::ProxyConnectTimeout,
+                Some(DialErrorKind::Authentication) => TransportError::ProxyAuthentication,
+                Some(DialErrorKind::Rejected) => TransportError::ProxyTargetConnect,
+                // Eggfetch's broad classifier reports this as Connect. On
+                // EggPool's custom Eggress route it remains ProxyConnect.
+                Some(DialErrorKind::Connection) | Some(DialErrorKind::Other) | None => {
+                    TransportError::ProxyConnect
+                }
+            };
+        }
+        // Preserve historical EggPool compatibility for non-native protocol
+        // and body variants, including H3Connect (generic Eggfetch calls it
+        // Connect). Those features are disabled, but remain defensive cases.
+        EggfetchError::Body(_)
+        | EggfetchError::Decompression(_)
+        | EggfetchError::UnsupportedContentEncoding(_)
+        | EggfetchError::DecodedBodyTooLarge
+        | EggfetchError::DecompressionRatioExceeded
+        | EggfetchError::Http2GoAway { .. }
+        | EggfetchError::Http2StreamReset { .. }
+        | EggfetchError::Http2FlowControl(_)
+        | EggfetchError::Http2Protocol(_)
+        | EggfetchError::H3Connect(_)
+        | EggfetchError::H3ConnectionClosed(_)
+        | EggfetchError::H3Stream(_)
+        | EggfetchError::H3Protocol(_) => return TransportError::Protocol,
         _ => {}
     }
-    // Custom dialer failures are Eggress route failures by construction:
-    // only proxied clients install a dialer. The typed dial kind selects
-    // the established Eggress category, keeping route authentication and
-    // rejection distinct from ordinary direct connection failures and from
-    // origin TLS.
-    if let EggfetchError::CustomTransport(_) = error {
-        return match error.custom_transport_error().map(DialError::kind) {
-            Some(DialErrorKind::Timeout) => TransportError::ProxyConnectTimeout,
-            Some(DialErrorKind::Authentication) => TransportError::ProxyAuthentication,
-            Some(DialErrorKind::Rejected) => TransportError::ProxyTargetConnect,
-            Some(DialErrorKind::Connection) | Some(DialErrorKind::Other) | None => {
-                TransportError::ProxyConnect
-            }
-        };
-    }
-    // 7. Ordinary direct connection failures stay Connect. This includes
-    // typed Connect, HyperClient connect failures, and I/O connection
-    // refusal observed through the Eggfetch connector.
-    if let EggfetchError::HyperClient(inner) = error
-        && inner.is_connect()
-    {
-        return TransportError::Connect;
-    }
-    if let EggfetchError::Connect(_) = error {
-        return TransportError::Connect;
-    }
-    if let EggfetchError::Io(inner) = error
-        && inner.kind() == std::io::ErrorKind::ConnectionRefused
-    {
-        return TransportError::Connect;
-    }
-    // Remaining engine and I/O errors without a more specific classification fall back
-    // to the caller phase: Write for dispatch, Read for body polling.
-    fallback
+
+    map_transport_failure_kind(error.transport_failure_kind()).unwrap_or(fallback)
 }
 
-/// Return true when any Hyper error in the Eggfetch source chain reports a
-/// canceled request.
-fn eggfetch_source_is_canceled(error: &(dyn StdError + 'static)) -> bool {
-    let mut current: Option<&(dyn StdError + 'static)> = Some(error);
-    while let Some(next) = current {
-        if next
-            .downcast_ref::<hyper::Error>()
-            .is_some_and(|hyper_error| hyper_error.is_canceled())
-        {
-            return true;
-        }
-        current = next.source();
+/// Convert Eggfetch's generic diagnostic fact without adding EggPool policy.
+/// Unknown future non-exhaustive variants retain the existing phase fallback.
+fn map_transport_failure_kind(kind: Option<TransportFailureKind>) -> Option<TransportError> {
+    match kind {
+        Some(TransportFailureKind::Tls) => Some(TransportError::Tls),
+        Some(TransportFailureKind::Cancelled) => Some(TransportError::Cancelled),
+        Some(TransportFailureKind::Protocol) => Some(TransportError::Protocol),
+        Some(TransportFailureKind::Connect) => Some(TransportError::Connect),
+        None => None,
+        _ => None,
     }
-    false
 }
 
-/// Return true when any Hyper framing error or truncated-body I/O marker in
-/// the Eggfetch source chain indicates a protocol failure.
-fn eggfetch_source_is_protocol(error: &(dyn StdError + 'static)) -> bool {
-    let mut current: Option<&(dyn StdError + 'static)> = Some(error);
-    while let Some(next) = current {
-        if let Some(hyper_error) = next.downcast_ref::<hyper::Error>()
-            && (hyper_error.is_parse() || hyper_error.is_incomplete_message())
-        {
-            return true;
-        }
-        current = next.source();
-    }
-    contains_io_kind(error, std::io::ErrorKind::UnexpectedEof)
-}
-
+#[cfg(feature = "test-support")]
 fn contains_source<T: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
     if error.downcast_ref::<T>().is_some() {
         return true;
@@ -1205,30 +1127,12 @@ fn contains_source<T: StdError + 'static>(error: &(dyn StdError + 'static)) -> b
     error.source().is_some_and(contains_source::<T>)
 }
 
-fn contains_io_kind(error: &(dyn StdError + 'static), kind: std::io::ErrorKind) -> bool {
-    if error
-        .downcast_ref::<std::io::Error>()
-        .is_some_and(|io_error| io_error.kind() == kind)
-    {
-        return true;
-    }
-    if let Some(io_error) = error.downcast_ref::<std::io::Error>()
-        && let Some(inner) = io_error.get_ref()
-        && contains_io_kind(inner, kind)
-    {
-        return true;
-    }
-    if let Some(source) = error.source()
-        && contains_io_kind(source, kind)
-    {
-        return true;
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ProviderHttpConfig, TransportError, join_provider_target, parse_base_url};
+    use super::{
+        ProviderHttpConfig, TransportError, join_provider_target, map_transport_failure_kind,
+        parse_base_url,
+    };
 
     #[test]
     fn joins_base_path_and_query_without_changing_authority() {
@@ -1344,7 +1248,7 @@ mod tests {
     #[test]
     fn custom_dial_kinds_map_to_stable_proxy_transport_errors() {
         use super::{DialError, DialErrorKind, map_eggfetch_error};
-        use eggfetch_core::Error as EggfetchError;
+        use eggfetch_core::{Error as EggfetchError, TransportFailureKind};
 
         for (kind, expected) in [
             (DialErrorKind::Timeout, TransportError::ProxyConnectTimeout),
@@ -1358,12 +1262,49 @@ mod tests {
         ] {
             let dial = DialError::new(kind, "route failed");
             let error = EggfetchError::CustomTransport(std::sync::Arc::new(dial));
+            if kind == DialErrorKind::Connection {
+                assert_eq!(
+                    error.transport_failure_kind(),
+                    Some(TransportFailureKind::Connect),
+                    "Eggfetch's general fact remains broader than the route mapping"
+                );
+            }
             assert_eq!(
                 map_eggfetch_error(&error, TransportError::Write, true),
                 expected,
                 "dial kind {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn generic_eggfetch_transport_kinds_map_to_stable_transport_errors() {
+        use eggfetch_core::TransportFailureKind as Kind;
+
+        for (kind, expected) in [
+            (Kind::Tls, TransportError::Tls),
+            (Kind::Cancelled, TransportError::Cancelled),
+            (Kind::Protocol, TransportError::Protocol),
+            (Kind::Connect, TransportError::Connect),
+        ] {
+            assert_eq!(map_transport_failure_kind(Some(kind)), Some(expected));
+        }
+        assert_eq!(map_transport_failure_kind(None), None);
+    }
+
+    #[test]
+    fn h3_connect_keeps_eggpool_protocol_compatibility_mapping() {
+        use eggfetch_core::{Error as EggfetchError, TransportFailureKind};
+
+        let error = EggfetchError::H3Connect("connection refused".to_owned());
+        assert_eq!(
+            error.transport_failure_kind(),
+            Some(TransportFailureKind::Connect)
+        );
+        assert_eq!(
+            super::map_eggfetch_error(&error, TransportError::Write, false),
+            TransportError::Protocol
+        );
     }
 
     #[test]

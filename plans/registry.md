@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Dashboard M006 (full parity qualification;
-`plans/closure/dashboard/006-status.md`).
+Most recently closed: Provider Transport M002 (Eggfetch 0.2.2 typed transport
+failure classification; `plans/closure/provider-transport/002-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -39,39 +39,47 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M002 ready — Eggfetch 0.2.2 transport failure classification adoption | Upstream blocker satisfied by published Eggfetch 0.2.2; implementation/qualification pending. |
+| Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
 | Provider profile metadata corrective | active | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | No successor registered; future re-reviews (including two low deferred discovery-probing items) require new bounded plans. |
 | Provider profile metadata planning/documentation reconciliation | active | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 ready — closed-roadmap/source-truth reconciliation | Docs-only correction: predecessor M001 is already closed; reconcile stale active lifecycle and refuted Together `.xyz` premise. No template/runtime change. |
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 ready — dedicated checkpointer qualification experiment | Evidence-only second-connection topology test; production remains one connection/worker and adoption requires a later architecture decision. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M008 ready — post-merge strict-CI and planning reconciliation corrective | M001-M007 closed; M008 has no hard blocker and restores current-head CI without reopening parity semantics. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closed — parity qualification harness decomposition | No registered successor became ready; new qualification work requires a bounded plan. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
-| Provider transport | M002 stable Eggfetch transport error taxonomy | ready | `plans/implementation/provider-transport/002-eggfetch-0.2.2-transport-failure-classification-adoption.md` | Eggfetch 0.2.2 published `TransportFailureKind` / `Error::transport_failure_kind()`; M001/M003/M004/M005 closed. |
-| Dashboard | M008 post-merge strict-CI and planning reconciliation corrective | ready | `plans/implementation/dashboard/008-post-merge-strict-ci-and-planning-reconciliation.md` | M001-M007 closed; deterministic current-head Clippy failure; no hard blocker. |
-| Persistence | M007 dedicated checkpointer qualification experiment | ready | `plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md` | M003/M006 closed; qualification-only topology experiment; physical Pi/MMC evidence required for closure. |
+
+## Active implementation plans
+
+| Subsystem | Milestone | Status | Implementation plan | Handoff note |
+|---|---|---|---|---|
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| Dashboard | M009 production module decomposition and ownership cleanup | Hard-blocked on M008 strict-CI/planning corrective closure; preserve the current oracle harness unchanged while refactoring production. |
-| Dashboard | M010 parity qualification harness decomposition | Hard-blocked on M009 production decomposition closure; refactor the guard only after it has qualified M009. |
+| Persistence | M007 dedicated checkpointer qualification experiment | Physical Linux/aarch64 Raspberry Pi-class MMC target required for three paired 60-request control/candidate runs and the candidate 300-request convergence corpus; implementation and local qualification are complete. |
+
+Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persistence/007-status.md`) predates the scope revision that allowed implementation and local qualification. The current disposition is in `plans/closure/persistence/007-implementation-status.md`: implementation passed locally, while paired Pi/MMC performance evidence remains an operational blocker.
 
 ## Recently closed
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider Transport M002 — Eggfetch 0.2.2 transport failure classification adoption | closed — typed upstream classifications adopted without changing EggPool policy; default/test-support/no-default provider fixtures and hosted gates pass | `plans/closure/provider-transport/002-status.md`, implementation `67d6ceb3`, hosted CI `37070421301`, dependency audit `37070423689` |
 | Provider profile metadata corrective M001 — provider template endpoint/source reconciliation | closed — all 23 bundled templates dispositioned against first-party docs; Together retained on canonical `.ai` (plan's `.xyz` correction refuted), OpenCode Go retained on `/zen/go/v1`; 5 template regression tests + authority docs; zero template diff; 815 workspace tests green | `plans/closure/provider-profile-metadata/001-status.md`, implementation `805d6f70` |
 | Request admission and wire M006 — external semantic-producer consumer contract | closed — source-neutral canonical requests, surface encoding/options, bounded tool-call accumulation, isolated consumer compile, and EggPool regression gates pass; downstream pin available | `plans/closure/request-admission-wire/006-status.md`, implementation `f05b18b7358d9a4125d1e20c491151eec265e403` |
 | Deployment and packaging M003 — config publication ownership corrective | closed — transaction-owned staging + no-clobber publish, concurrent config preserved, final never deleted, 60-case qualification green, zero Rust diff | `plans/closure/deployment-packaging/003-status.md`, implementation `292a1e3f` |
 | Dashboard M006 — Full parity qualification and closure | closed — strict report retains nine explicitly accepted source-backed differences; 144 matched captures, eight interaction runs, lifecycle shutdown/restart, and full local Rust/tooling gates passed | `plans/closure/dashboard/006-status.md`, browser manifest `plans/closure/dashboard/006-browser-manifest.json`; implementation `6bfa1781`, `5bb3aba1` |
 | Dashboard corrective pass 007 — deterministic recovery-summary qualification | closed | `plans/closure/dashboard/007-status.md`; two consecutive strict empty/populated Reliability runs pass with the startup event inside the summary window. |
+| Dashboard M011 — hosted oracle history qualification | closed — checkout now includes the pinned oracle source commit; all hosted CI gates pass | `plans/closure/dashboard/011-status.md`, run `37049147155`, implementation `30b8282a` |
+| Dashboard M008 — post-merge strict-CI and planning reconciliation | closed — strict Clippy, no-default, serial Rust, tooling, strict oracle baseline, and hosted CI all pass; M009 ready | `plans/closure/dashboard/008-status.md`, run `37049147155`, implementation `3c40e34f` |
+| Dashboard M009 — production module decomposition and ownership cleanup | closed — strict parity, full local/hosted gates pass; M010 is ready | `plans/closure/dashboard/009-status.md`, implementation `caa0b042`, hosted run `37053752173` |
+| Dashboard M010 — parity qualification harness decomposition | closed — stable command facade, unchanged oracle/report semantics, browser/lifecycle and full local/hosted gates pass; no successor unblocked | `plans/closure/dashboard/010-status.md`, implementation `06c950f`, hosted run `37057371175` |
 | Dashboard M004 — telemetry, routing, reliability, and trace parity | closed | `plans/closure/dashboard/004-status.md` plus additive resolution `plans/closure/dashboard/004-follow-up-007.md`; all M004 routes pass strict qualification. |
 | Dashboard M005 — Runtime and Cache Observability Parity | closed | `plans/closure/dashboard/005-status.md` plus additive resolution `plans/closure/dashboard/005-follow-up-006.md`; M006 accepted the four source-truth dispositions, 815 serial Rust tests, 152 tooling tests (one skipped), and 144 matched browser captures. |
 | Dashboard M003 — Overview, Accounts, Models, and Model Detail parity | closed — restored bounded current-owner projections; exact populated Model Detail oracle comparison; 32 paired captures; four accepted source-truth differences | `plans/closure/dashboard/003-status.md`, implementation/qualification `03b4988`, `8261e5a` |
@@ -109,14 +117,19 @@ existing typed APIs. M002 is registered `ready` at baseline `8db2d16c73cb7bb832c
 Eggress stays 1.0.11 and no separate upstream work remains before downstream
 implementation.
 
-Dashboard M008 is registered `ready` against baseline
-`299a0b3657667af509742a184e658c14df22d406` after hosted CI run
-`37040025250` failed on two strict-Clippy `collapsible_if` diagnostics in
-the Linux load-average dashboard projection and skipped all subsequent CI
-gates. M001-M007 remain closed historical evidence; M008 does not reopen
-dashboard parity semantics. Deployment/Packaging M003 remains closed.
-Provider-transport M002 remains independently blocked on the upstream Eggfetch
-typed-classification interface, and Routing-selection M002 remains
+Provider-transport M002 is now closed. Hosted CI `37070421301` and hosted
+dependency audit `37070423689` passed at implementation head
+`6f0cfd532e753a43c454b370453850c55679aab5`. Its completion unblocks no
+registered plan; the ready provider-profile metadata C001 plan is independent.
+The Provider Transport roadmap is closed because all registered milestones
+M001–M005 are closed and no successor is ready.
+
+Historical unblock-audit snapshot: Dashboard M008 was registered `ready` at
+baseline `299a0b3657667af509742a184e658c14df22d406` after hosted run
+`37040025250` reported two strict-Clippy findings. This snapshot is superseded
+by M008's closure record and the current tables above. M008 and M011 are now
+closed, M009 is closed and M010 is ready, Deployment/Packaging M003 remains closed,
+Provider-transport M002 is ready, and Routing-selection M002 remains
 evidence-gated.
 
 Post-closure review of deployment-packaging M001 found two concrete invariant
