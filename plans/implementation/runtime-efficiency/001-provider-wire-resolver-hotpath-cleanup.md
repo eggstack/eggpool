@@ -1,8 +1,8 @@
 # Runtime Efficiency Milestone 001 — Provider/Wire-Resolver Hot-Path Cleanup
 
-Status: active
+Status: closing
 
-Repository baseline: `6489aa75aa276a12ff14c35a07b46f2eba01e2b8`
+Repository baseline: `b9ba100d8f4165e338c76a11359381137590b1d2` (reviewed current head; implementation started on branch after this commit)
 
 Source roadmap:
 

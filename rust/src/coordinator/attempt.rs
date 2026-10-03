@@ -343,6 +343,18 @@ impl AttemptBuilder {
             .collect()
     }
 
+    pub(crate) fn prepare_candidates_borrowed(
+        &self,
+        profiles: &[ConfiguredWireProfile],
+        fingerprint: &str,
+    ) -> Vec<WireCandidate> {
+        profiles
+            .iter()
+            .cloned()
+            .map(|profile| WireCandidate::new(profile, fingerprint))
+            .collect()
+    }
+
     /// Prepare one native remote-compaction attempt.
     ///
     /// The compact operation reuses the neutral HTTP transport and

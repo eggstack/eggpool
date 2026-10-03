@@ -117,7 +117,7 @@ work and all reads occupy the serialized database worker/gate.
 
 ### Milestone 001 — Provider/wire-resolver hot-path ownership and cache cleanup
 
-Class: polish. Status: ready.
+Class: polish. Status: closing.
 
 Implementation plan:
 

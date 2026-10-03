@@ -348,21 +348,23 @@ impl StreamingCoordinator {
             };
 
             let provider_id = claim.provider_id().to_owned();
-            let Some(provider) = self.providers.get(&provider_id).cloned() else {
+            let Some(provider) = self.providers.get(&provider_id) else {
                 claim.rollback_claim()?;
                 return Err(StreamingCoordinatorError::MissingProvider { provider_id });
             };
             let profiles = self
                 .provider_profiles
                 .get(&provider_id)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             if profiles.is_empty() {
                 claim.rollback_claim()?;
                 return Err(StreamingCoordinatorError::MissingWireProfile { provider_id });
             }
 
-            let candidates = self.attempts.prepare_candidates(profiles, "static");
+            let candidates = self
+                .attempts
+                .prepare_candidates_borrowed(profiles, "static");
             let resolution = self.wire_resolver.resolve(
                 &provider_id,
                 claim.canonical_model_id(),

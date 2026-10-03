@@ -671,15 +671,15 @@ impl FiniteCoordinator {
             };
 
             let provider_id = claim.provider_id().to_owned();
-            let Some(provider) = self.providers.get(&provider_id).cloned() else {
+            let Some(provider) = self.providers.get(&provider_id) else {
                 claim.rollback_claim()?;
                 return Err(FiniteCoordinatorError::MissingProvider { provider_id });
             };
-            let mut profiles = self
+            let profiles = self
                 .provider_profiles
                 .get(&provider_id)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             if profiles.is_empty() {
                 claim.rollback_claim()?;
                 return Err(FiniteCoordinatorError::MissingWireProfile { provider_id });
@@ -690,26 +690,34 @@ impl FiniteCoordinator {
             // loop converges to no-eligible-route rather than a lossy
             // translated compaction.
             let is_compact = request.operation == super::endpoints::InferenceOperation::Compact;
-            if is_compact {
-                profiles.retain(|profile| {
-                    profile.definition.surface == crate::wire::WireSurface::OpenaiResponses
-                        && provider
-                            .wire_surfaces
-                            .get(profile.definition.surface.as_str())
-                            .is_some_and(|surface| {
-                                crate::wire::compaction_capabilities_from_surface_config(surface)
+            let candidates = if is_compact {
+                let compact_profiles: Vec<_> = profiles
+                    .iter()
+                    .filter(|profile| {
+                        profile.definition.surface == crate::wire::WireSurface::OpenaiResponses
+                            && provider
+                                .wire_surfaces
+                                .get(profile.definition.surface.as_str())
+                                .is_some_and(|surface| {
+                                    crate::wire::compaction_capabilities_from_surface_config(
+                                        surface,
+                                    )
                                     .native_v1_supported()
-                            })
-                });
-                if profiles.is_empty() {
+                                })
+                    })
+                    .cloned()
+                    .collect();
+                if compact_profiles.is_empty() {
                     claim.rollback_claim()?;
                     excluded_accounts.insert(claim.account_name().to_owned());
                     preferred_account = None;
                     continue;
                 }
-            }
-
-            let candidates = self.attempts.prepare_candidates(profiles, "static");
+                self.attempts.prepare_candidates(compact_profiles, "static")
+            } else {
+                self.attempts
+                    .prepare_candidates_borrowed(profiles, "static")
+            };
             let resolution = self.wire_resolver.resolve(
                 &provider_id,
                 claim.canonical_model_id(),
