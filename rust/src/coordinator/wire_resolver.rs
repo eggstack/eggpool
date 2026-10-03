@@ -5,7 +5,7 @@
 //! provider boundary has classified the result.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -173,13 +173,15 @@ struct Flight {
 #[derive(Debug, Default)]
 struct ResolverState {
     entries: BTreeMap<CacheKey, CacheEntry>,
-    lru: VecDeque<CacheKey>,
+    lru_by_key: BTreeMap<CacheKey, u64>,
+    lru_order: BTreeMap<u64, CacheKey>,
+    next_lru_order: u64,
     flights: BTreeMap<FlightKey, Arc<Flight>>,
     last_negotiation: BTreeMap<String, Instant>,
     negotiation_delay_until: BTreeMap<String, Instant>,
-    operator_preferences: BTreeMap<(String, String), (WireSurface, bool)>,
-    configured_preferences: BTreeMap<(String, String), (WireSurface, bool)>,
-    metadata_hints: BTreeMap<(String, String), WireSurface>,
+    operator_preferences: BTreeMap<String, BTreeMap<String, (WireSurface, bool)>>,
+    configured_preferences: BTreeMap<String, BTreeMap<String, (WireSurface, bool)>>,
+    metadata_hints: BTreeMap<String, BTreeMap<String, WireSurface>>,
     metrics: BTreeMap<String, u64>,
 }
 
@@ -377,37 +379,29 @@ impl WireResolver {
         mut candidates: Vec<WireCandidate>,
         now: Instant,
     ) -> WireResolution {
-        let structure = candidates
-            .iter()
-            .map(|candidate| {
-                format!(
-                    "{}:{}",
-                    candidate.profile.definition.surface.as_str(),
-                    candidate.fingerprint
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("|");
         let preference = {
             let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (
                 state
                     .operator_preferences
-                    .get(&(provider_id.to_owned(), model_id.to_owned()))
+                    .get(provider_id)
+                    .and_then(|models| models.get(model_id))
                     .copied()
                     .or_else(|| {
                         state
                             .configured_preferences
-                            .get(&(provider_id.to_owned(), model_id.to_owned()))
+                            .get(provider_id)
+                            .and_then(|models| models.get(model_id))
                             .copied()
                     }),
                 state
                     .metadata_hints
-                    .get(&(provider_id.to_owned(), model_id.to_owned()))
+                    .get(provider_id)
+                    .and_then(|models| models.get(model_id))
                     .copied(),
             )
         };
-        let fingerprint = fingerprint(&structure, preference);
+        let fingerprint = fingerprint_candidates(&candidates, preference);
         let key = CacheKey {
             provider_id: provider_id.to_owned(),
             model_id: model_id.to_owned(),
@@ -627,10 +621,11 @@ impl WireResolver {
     ) {
         let config = self.config();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.operator_preferences.insert(
-            (provider_id.to_owned(), model_id.to_owned()),
-            (surface, fixed),
-        );
+        state
+            .operator_preferences
+            .entry(provider_id.to_owned())
+            .or_default()
+            .insert(model_id.to_owned(), (surface, fixed));
         trim_preference_state(&mut state, config.max_provider_state);
     }
 
@@ -648,7 +643,9 @@ impl WireResolver {
         for (provider_id, model_id, surface, fixed) in preferences {
             state
                 .configured_preferences
-                .insert((provider_id, model_id), (surface, fixed));
+                .entry(provider_id)
+                .or_default()
+                .insert(model_id, (surface, fixed));
         }
         trim_preference_state(&mut state, config.max_provider_state);
     }
@@ -659,8 +656,10 @@ impl WireResolver {
             .unwrap_or_else(|e| e.into_inner())
             .configured_preferences
             .iter()
-            .map(|((provider_id, model_id), (surface, fixed))| {
-                (provider_id.clone(), model_id.clone(), *surface, *fixed)
+            .flat_map(|(provider_id, models)| {
+                models.iter().map(move |(model_id, (surface, fixed))| {
+                    (provider_id.clone(), model_id.clone(), *surface, *fixed)
+                })
             })
             .collect()
     }
@@ -670,7 +669,9 @@ impl WireResolver {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state
             .metadata_hints
-            .insert((provider_id.to_owned(), model_id.to_owned()), surface);
+            .entry(provider_id.to_owned())
+            .or_default()
+            .insert(model_id.to_owned(), surface);
         trim_preference_state(&mut state, config.max_provider_state);
     }
 
@@ -842,12 +843,19 @@ pub struct WireResolverSnapshot {
     pub metric_labels: usize,
 }
 
-fn fingerprint(
-    structure: &str,
+fn fingerprint_candidates(
+    candidates: &[WireCandidate],
     preference: (Option<(WireSurface, bool)>, Option<WireSurface>),
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(structure.as_bytes());
+    for (index, candidate) in candidates.iter().enumerate() {
+        if index > 0 {
+            digest.update(b"|");
+        }
+        digest.update(candidate.profile.definition.surface.as_str().as_bytes());
+        digest.update(b":");
+        digest.update(candidate.fingerprint.as_bytes());
+    }
     digest.update(format!("|preference={preference:?}").as_bytes());
     format!("{:x}", digest.finalize())
 }
@@ -879,14 +887,25 @@ fn trim_provider_state(state: &mut ResolverState, capacity: usize) {
 
 fn trim_preference_state(state: &mut ResolverState, capacity: usize) {
     let capacity = capacity.max(1);
-    while state.operator_preferences.len() > capacity {
-        if let Some(key) = state.operator_preferences.keys().next().cloned() {
-            state.operator_preferences.remove(&key);
-        }
-    }
-    while state.metadata_hints.len() > capacity {
-        if let Some(key) = state.metadata_hints.keys().next().cloned() {
-            state.metadata_hints.remove(&key);
+    trim_nested(&mut state.operator_preferences, capacity);
+    trim_nested(&mut state.metadata_hints, capacity);
+}
+
+fn trim_nested<T>(map: &mut BTreeMap<String, BTreeMap<String, T>>, capacity: usize) {
+    while map.values().map(BTreeMap::len).sum::<usize>() > capacity {
+        let Some((provider, model)) = map.iter().find_map(|(provider, models)| {
+            models
+                .keys()
+                .next()
+                .map(|model| (provider.clone(), model.clone()))
+        }) else {
+            break;
+        };
+        if let Some(models) = map.get_mut(&provider) {
+            models.remove(&model);
+            if models.is_empty() {
+                map.remove(&provider);
+            }
         }
     }
 }
@@ -901,24 +920,49 @@ fn trim_metrics(state: &mut ResolverState, capacity: usize) {
 }
 
 fn touch_lru(state: &mut ResolverState, key: CacheKey, capacity: usize) {
-    state.lru.retain(|existing| existing != &key);
-    state.lru.push_back(key);
+    if let Some(old_order) = state.lru_by_key.remove(&key) {
+        state.lru_order.remove(&old_order);
+    }
+    if state.next_lru_order == u64::MAX {
+        let reordered = std::mem::take(&mut state.lru_order);
+        state.lru_by_key.clear();
+        state.next_lru_order = 0;
+        for (_, key) in reordered {
+            let order = state.next_lru_order;
+            state.next_lru_order += 1;
+            state.lru_by_key.insert(key.clone(), order);
+            state.lru_order.insert(order, key);
+        }
+    }
+    let order = state.next_lru_order;
+    state.next_lru_order += 1;
+    state.lru_by_key.insert(key.clone(), order);
+    state.lru_order.insert(order, key);
     while state.entries.len() > capacity.max(1) {
-        let Some(oldest) = state.lru.pop_front() else {
+        let Some((order, oldest)) = state.lru_order.pop_first() else {
             break;
         };
+        state.lru_by_key.remove(&oldest);
+        let _ = order;
         state.entries.remove(&oldest);
     }
 }
 
 fn trim_cache(state: &mut ResolverState, capacity: usize) {
     while state.entries.len() > capacity.max(1) {
-        let Some(oldest) = state.lru.pop_front() else {
+        let Some((order, oldest)) = state.lru_order.pop_first() else {
             break;
         };
+        state.lru_by_key.remove(&oldest);
+        let _ = order;
         state.entries.remove(&oldest);
     }
-    state.lru.retain(|key| state.entries.contains_key(key));
+    state
+        .lru_order
+        .retain(|_, key| state.entries.contains_key(key));
+    state
+        .lru_by_key
+        .retain(|key, _| state.entries.contains_key(key));
 }
 
 fn duration_from_seconds(

@@ -1845,7 +1845,10 @@ async fn failed_pool_build_after_bind_closes_database_and_releases_listener() {
     let error = server::run(config)
         .await
         .expect_err("pool construction failure");
-    assert!(matches!(error, server::ServerError::ProviderPool(_)));
+    assert!(
+        matches!(error, server::ServerError::ProviderPool(_)),
+        "unexpected startup error: {error:?}"
+    );
     assert!(!error.to_string().contains(marker));
 
     let reusable = TcpListener::bind(("127.0.0.1", port)).expect("listener was released");

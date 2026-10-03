@@ -1,6 +1,6 @@
 # Routing Selection Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -114,7 +114,7 @@ Public score_accounts/rank_accounts/near_ties remain available and delegate to t
 - Legacy Plan 231 → historical evidence and explicit deferred-work source for M001.
 - Current quota/routing public contracts → stable interface dependency; already satisfied.
 - M001 has no external hard dependency.
-- M002 affinity LRU is soft/evidence-gated and should be reconsidered only after M001 closure and a representative sticky-alias workload.
+- M002 affinity LRU qualification is closed; the representative Pi 5 workload justifies the exact bounded M003 follow-up.
 - Persistence work is independent; no cross-subsystem dependency.
 
 ## 7. Milestones
@@ -171,11 +171,23 @@ Dependencies:
 
 Deliverable boundary:
 
-No implementation plan is authorized yet. If the retain scan is not material, record a keep decision and leave the simple exact LRU unchanged.
+Closed with Pi 5 evidence: the 4,096-entry cache-hit p95 was 92.056 μs. See `plans/closure/routing-selection/002-affinity-lru-qualification.md`. The evidence authorizes M003.
 
 Exit conditions:
 
-A later plan exists only with measured evidence and a bounded exact-LRU design. Approximate eviction or an unbounded stale-node queue is not acceptable.
+M003 implemented and qualified a bounded exact indexed LRU. Approximate eviction and unbounded stale-node queues were not introduced.
+
+### Milestone 003 — Bounded exact affinity LRU
+
+Class: polish
+
+Objective: replace the O(n) cache-hit recency scan with an exact, bounded, dependency-free indexed LRU while preserving all cache and single-flight semantics.
+
+Dependency: M002's representative Pi 5 workload showed material hit-path cost at the configured 4,096-entry cap.
+
+Deliverable: slot-bearing cache entries and a reusable slot-indexed doubly linked list under the existing mutex; semantic regression coverage; matching Pi 5 before/after release measurements. The implementation plan and closure evidence are `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` and `plans/closure/routing-selection/003-status.md`.
+
+Exit conditions: exact eviction/TTL/stats/cancellation behavior, bounded node/free-slot storage, default/no-default workspace and strict Clippy/fmt gates, and the Pi 5 p95 thresholds all pass. **Closed** with implementation `dc6ea713`; 4,096-entry p95 improved about 90× and 64-entry p95 improved about 3.2×.
 
 ## 8. Cross-cutting requirements
 
@@ -214,15 +226,16 @@ Run strict Clippy and the full serial default/no-default workspace before closur
 - QuotaEstimator::snapshot currently calls sync_mirrors and clones AccountQuota. Avoid per-account lock calls, but do not hold the estimator Mutex while doing expensive routing/fairness work.
 - Reordering score production can silently alter deterministic tie behavior even if numeric scores match. Order parity is a first-class acceptance criterion.
 - Moving fairness candidates rather than cloning is optional; stop if it complicates accepted-fairness/rejected-probe diagnostics.
-- Affinity LRU redesign has materially higher correctness complexity than M001 and stays deferred without measurement.
+- Affinity LRU redesign was separately measured and implemented as M002/M003; exact order and bounded slot reuse passed on the current Pi 5.
 
 ## 11. Completion definition
 
-This roadmap closes when M001 has removed the known deferred transient scoring collections with full parity evidence and M002 has either produced a measured exact-LRU follow-up or an explicit keep decision. No routing architecture or public compatibility surface may regress.
+This roadmap closes when M001 and M003 are closed with semantic and performance evidence. No routing architecture or public compatibility surface may regress.
 
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — ordered quota-scoring and candidate-allocation cleanup | closed | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | plans/closure/routing-selection/001-status.md | none |
-| 002 — semantic-affinity exact-LRU cost qualification | not started | — | — | M001 closed; still needs a representative 64/512/4096-entry workload showing the exact VecDeque touch is material (see `plans/closure/routing-selection/001-status.md` §11) |
+| 002 — semantic-affinity exact-LRU cost qualification | closed | — | plans/closure/routing-selection/002-affinity-lru-qualification.md | Pi 5 workload justified M003, now closed |
+| 003 — bounded exact affinity LRU | closed | plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md | plans/closure/routing-selection/003-status.md | Exact bounded LRU passed semantic tests and Pi 5 performance gates |

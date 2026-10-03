@@ -11,7 +11,10 @@ use thiserror::Error;
 
 use crate::{
     Config,
-    db::{CatalogRepository, Database, DatabaseError},
+    db::{
+        CatalogModelWrite, CatalogPersistenceBatch, CatalogRepository, Database, DatabaseError,
+        ProviderModelWrite,
+    },
 };
 
 const DEPRECATED_MODEL_ID: &str = "__deprecated__";
@@ -242,6 +245,12 @@ pub struct CacheSnapshot {
     pub freshness: BTreeMap<String, AccountFreshness>,
     pub outcomes: BTreeMap<String, AccountCatalogOutcome>,
     pub account_provider_keys: BTreeMap<String, Vec<(String, String)>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheDiffProjection {
+    pub model_ids: BTreeSet<String>,
+    pub provider_model_keys: BTreeSet<(String, String)>,
 }
 
 #[derive(Debug, Error)]
@@ -842,6 +851,80 @@ impl ModelCatalogCache {
                 .collect(),
         }
     }
+
+    pub(crate) fn diff_projection(&self) -> CacheDiffProjection {
+        CacheDiffProjection {
+            model_ids: self.models.keys().cloned().collect(),
+            provider_model_keys: self.provider_models.keys().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn persistence_projection(
+        &self,
+        account_ids: &BTreeMap<String, i64>,
+    ) -> CatalogPersistenceBatch {
+        let mut models = Vec::new();
+        let mut persisted_ids = BTreeSet::new();
+        for model in self.models.values() {
+            if model.model_id == DEPRECATED_MODEL_ID || model.protocol.is_none() {
+                continue;
+            }
+            persisted_ids.insert(model.model_id.clone());
+            models.push(CatalogModelWrite {
+                model_id: model.model_id.clone(),
+                display_name: model.display_name.clone(),
+                protocol: model.protocol.clone().unwrap_or_default(),
+                capabilities: serde_json::to_value(&model.capabilities)
+                    .unwrap_or_else(|_| Value::Object(Map::new())),
+                source_metadata: model.source_metadata.clone(),
+                first_seen_at: model.first_seen_at,
+                last_seen_at: model.last_seen_at,
+                protocol_source: model.protocol_source.clone(),
+            });
+        }
+        let provider_models = self
+            .provider_models
+            .values()
+            .filter(|row| persisted_ids.contains(&row.model_id))
+            .map(|row| ProviderModelWrite {
+                model_id: row.model_id.clone(),
+                provider_id: row.provider_id.clone(),
+                display_name: row.display_name.clone(),
+                protocol: row.protocol.clone(),
+                capabilities: serde_json::to_value(&row.capabilities)
+                    .unwrap_or_else(|_| Value::Object(Map::new())),
+                source_metadata: row.source_metadata.clone(),
+                protocol_source: row.protocol_source.clone(),
+                first_seen_at: row.first_seen_at,
+                last_seen_at: row.last_seen_at,
+                resolution_status: if row.protocol.is_some() {
+                    "resolved"
+                } else {
+                    "unresolved"
+                }
+                .into(),
+            })
+            .collect();
+        let support = self
+            .account_support
+            .iter()
+            .filter(|(model_id, _)| persisted_ids.contains(*model_id))
+            .flat_map(|(model_id, accounts)| {
+                accounts.iter().filter_map(|account| {
+                    account_ids
+                        .get(account)
+                        .copied()
+                        .map(|id| (id, model_id.clone()))
+                })
+            })
+            .collect();
+        CatalogPersistenceBatch {
+            models,
+            provider_models,
+            support,
+            ..CatalogPersistenceBatch::default()
+        }
+    }
     pub fn exposed_model_ids(&self) -> Vec<String> {
         self.models
             .keys()
@@ -1311,4 +1394,93 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn large_projection_matches_snapshot_and_legacy_row_walk() {
+        let mut cache = ModelCatalogCache::default();
+        cache.set_account_provider("account-a", "provider-a");
+        cache.set_account_provider("account-b", "provider-b");
+        let models: Vec<_> = (0..600)
+            .map(|index| {
+                let mut model = ModelInput::new(format!("model-{index:04}"));
+                model.protocol = Some("openai".into());
+                model.protocol_source = Some("fixture".into());
+                model.source_metadata = serde_json::json!({"source":"large-fixture","index":index});
+                model.capabilities.supports_tools = Some(index % 2 == 0);
+                model
+            })
+            .collect();
+        cache
+            .update_from_account("account-a", "provider-a", &models, true, true)
+            .expect("provider a models");
+        cache
+            .update_from_account("account-b", "provider-b", &models, true, true)
+            .expect("provider b models");
+
+        let ids = [
+            (String::from("account-a"), 11),
+            (String::from("account-b"), 12),
+        ]
+        .into_iter()
+        .collect();
+        let projected = cache.persistence_projection(&ids);
+        let legacy_models: Vec<_> = cache
+            .get_all_models()
+            .into_iter()
+            .filter(|model| model.model_id != DEPRECATED_MODEL_ID && model.protocol.is_some())
+            .collect();
+        assert_eq!(
+            projected
+                .models
+                .iter()
+                .map(|row| row.model_id.as_str())
+                .collect::<Vec<_>>(),
+            legacy_models
+                .iter()
+                .map(|model| model.model_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            projected
+                .models
+                .iter()
+                .map(|row| &row.source_metadata)
+                .collect::<Vec<_>>(),
+            legacy_models
+                .iter()
+                .map(|model| &model.source_metadata)
+                .collect::<Vec<_>>()
+        );
+        for (row, model) in projected.models.iter().zip(&legacy_models) {
+            assert_eq!(
+                row.capabilities,
+                serde_json::to_value(&model.capabilities).expect("capabilities")
+            );
+        }
+
+        let snapshot = cache.snapshot();
+        assert_eq!(
+            cache.diff_projection(),
+            CacheDiffProjection {
+                model_ids: snapshot.model_ids.into_iter().collect(),
+                provider_model_keys: snapshot.provider_model_keys.into_iter().collect(),
+            }
+        );
+        assert_eq!(projected.models.len(), 600);
+        assert_eq!(projected.provider_models.len(), 1200);
+        assert_eq!(projected.support.len(), 1200);
+        assert_eq!(projected.models[0].model_id, "model-0000");
+        assert_eq!(projected.provider_models[0].provider_id, "provider-a");
+        assert_eq!(projected.provider_models[1].provider_id, "provider-b");
+        assert_eq!(projected.provider_models[1199].provider_id, "provider-b");
+        assert!(projected.support.contains(&(11, "model-0000".into())));
+        assert!(projected.support.contains(&(12, "model-0599".into())));
+        assert_eq!(projected.models[0].source_metadata["index"], 0);
+        assert_eq!(projected.models[1].capabilities["supports_tools"], false);
+    }
 }

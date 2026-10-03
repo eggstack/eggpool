@@ -12,6 +12,7 @@ from scripts.qualification_live_provider import (
     DEFAULT_FIXTURE,
     MAX_REQUESTS,
     RequestCase,
+    _isolated_child_runtime_environment,
     bounded,
     main,
     run_qualification,
@@ -81,3 +82,11 @@ def test_q007_fixture_is_loopback_safe_and_uses_env_credential() -> None:
     assert "Q007_PROVIDER_API_KEY" in text
     assert "https://" not in text
     assert 'api_key = "q007-server-key"' in text
+
+
+def test_q007_child_runtime_paths_are_isolated(tmp_path: Path) -> None:
+    environment = _isolated_child_runtime_environment({"PATH": "/usr/bin"}, tmp_path)
+
+    assert environment["EGGPOOL_RUNTIME_DIR"] == str(tmp_path / "runtime")
+    assert environment["EGGPOOL_PID_FILE"] == str(tmp_path / "runtime/eggpool.pid")
+    assert environment["EGGPOOL_LOG_FILE"] == str(tmp_path / "candidate.log")

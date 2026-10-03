@@ -1,6 +1,6 @@
 # Provider Profile Metadata — Planning and Documentation Reconciliation Corrective Roadmap
 
-Status: active
+Status: closed
 
 Repository baseline reviewed: `43c987ea458bd563d5108fd8051ad31185704bb0`
 
@@ -41,7 +41,7 @@ No technical corrective is required. The accepted closure found no unresolved me
 
 ### C001 — Closed-roadmap and source-truth reconciliation
 
-Status: ready.
+Status: closed (`plans/closure/provider-profile-metadata-planning-reconciliation/001-status.md`).
 
 Implementation plan:
 
@@ -153,3 +153,6 @@ Record:
 - reference-resolution and `git diff --check` results;
 - zero production/config/test diff;
 - unblock audit (expected: nothing unblocked).
+
+
+C001 is complete. The predecessor roadmap is terminal and closed, and no successor is registered.

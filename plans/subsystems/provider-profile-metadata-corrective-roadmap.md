@@ -1,6 +1,6 @@
 # Provider Profile Metadata Corrective Roadmap
 
-Status: active
+Status: closed
 
 Repository baseline reviewed: `c17a55218b2810791fcf6f3136b8805becfa27c1`
 
@@ -34,21 +34,11 @@ They do not own live provider availability, account credentials, provider health
 
 Current provider documentation is the external authority for endpoint/auth/protocol facts. CodeGG is a sibling consumer with overlapping metadata and useful comparison evidence, but neither repository may be treated as the source of truth for the other.
 
-## 2. Corrective trigger
+## 2. Corrective trigger and disposition
 
-Post-CodeGG wire-consolidation review found real cross-repository provider-metadata drift.
+The planning-time trigger proposed an evidence-backed audit after apparent cross-repository provider-metadata drift. Its Together premise was refuted during M001 execution: current first-party documentation confirms `https://api.together.ai/v1` as canonical and `https://api.together.xyz/v1` as a legacy alias. No template correction was warranted, and the zero template diff was the correct outcome.
 
-Two current examples were externally verified on 2026-10-02:
-
-- Together AI's current OpenAI-compatible base URL is `https://api.together.xyz/v1`, while EggPool currently stores `https://api.together.ai/v1`.
-- OpenCode Go's current API prefix is `https://opencode.ai/zen/go/v1`; EggPool already carries that prefix correctly, while CodeGG currently does not.
-
-The fact that each repository is correct on a different provider proves that cross-repo copying is not a safe reconciliation strategy. The bundled template catalog needs an explicit evidence-backed audit and focused regression surface.
-
-Official evidence reviewed for this corrective includes:
-
-- Together AI current model/API examples using `https://api.together.xyz/v1/chat/completions`.
-- OpenCode Go current endpoint/model documentation using `https://opencode.ai/zen/go/v1/{chat/completions,responses,messages,models}`.
+OpenCode Go uses the confirmed `https://opencode.ai/zen/go/v1` prefix; EggPool already carried it correctly. The differing repository values demonstrate why first-party provider documentation, rather than sibling-repository copying, is authoritative. See the immutable M001 closure record for reviewed sources and the full disposition.
 
 ## 3. Invariants
 
@@ -80,7 +70,7 @@ At the baseline:
 - `rust/assets/providers/_templates.toml` contains the bundled provider definitions used by setup/bootstrap and provider catalog behavior.
 - Several templates already carry protocol-specific wire surfaces, auth overrides, model endpoints, and verification metadata.
 - OpenCode Go currently uses the externally confirmed `https://opencode.ai/zen/go/v1` prefix.
-- Together currently uses the stale `https://api.together.ai/v1` prefix.
+- Together uses the canonical `https://api.together.ai/v1` prefix; `.xyz` is a legacy alias (M001 closure).
 - There is no single committed review matrix recording which bundled endpoint/auth/model-discovery facts were checked against which first-party source at the current correction boundary.
 - Existing catalog/provider tests prove parsing/runtime behavior but do not by themselves prove that externally mutable provider facts are current.
 
@@ -122,7 +112,7 @@ Dependencies:
 
 Exit conditions:
 
-- Together's stale endpoint is corrected to the current first-party value unless implementation obtains newer contradictory first-party evidence;
+- Together's canonical `.ai` endpoint is retained as confirmed by M001 closure;
 - OpenCode Go's already-correct `/zen/go/v1` prefix is retained and explicitly qualified;
 - every bundled provider receives an evidence disposition: confirmed, corrected, intentionally provider/operator-configurable, or blocked on insufficient first-party evidence;
 - base URL + path-template composition is tested for corrected providers;
@@ -171,3 +161,6 @@ The roadmap closes after M001 records an evidence-backed disposition for every b
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
 | 001 — provider template endpoint and source reconciliation | closed | `plans/implementation/provider-profile-metadata/001-provider-template-endpoint-and-source-reconciliation.md` | `plans/closure/provider-profile-metadata/001-status.md` | none |
+
+
+M001 is terminal for this roadmap. It is closed with no successor registered; any future provider-template review requires a new bounded plan.

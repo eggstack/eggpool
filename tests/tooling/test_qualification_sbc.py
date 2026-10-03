@@ -18,6 +18,7 @@ from scripts.qualification_sbc import (
     DIAGNOSTIC_MAX_SAMPLES,
     DIAGNOSTIC_MIN_SAMPLES,
     DIRECT_CONTROL_SAMPLES,
+    MEASUREMENT_HTTP_TIMEOUT,
     NATIVE_FINITE_CASE,
     NATIVE_STREAMING_CASE,
     PUBLICATION_PHASE_SAMPLES,
@@ -34,10 +35,13 @@ from scripts.qualification_sbc import (
     _checkpoint_maintenance_deltas,
     _combine_diagnostic_sample,
     _correlate_transaction_phases,
+    _dedicated_checkpointer_close_succeeded,
     _dedicated_checkpointer_deltas,
+    _dedicated_checkpointer_server_environment,
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
+    _m007_candidate_gates_pass,
     _ns_to_ms,
     _percentile,
     _publication_storage_sample_count,
@@ -52,6 +56,7 @@ from scripts.qualification_sbc import (
     _runtime_task_snapshot,
     _storage_device_class,
     _task_tick_deltas,
+    _timed_http,
     _timing_summary,
     _wal_snapshot,
     benchmark_cadence_facts,
@@ -925,3 +930,76 @@ def test_238_diagnostic_summary_retains_wal_scalars_without_p99() -> None:
     payload = json.dumps(summary, sort_keys=True)
     assert "p99" not in payload
     assert "usage.sqlite3" not in payload
+
+
+def test_measurement_http_timeout_preserves_long_latency_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, float] = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int = -1) -> bytes:
+            if not getattr(self, "_read_once", False):
+                self._read_once = True
+                return b"o"
+            return b"k"
+
+    def fake_urlopen(_request: object, *, timeout: float) -> Response:
+        observed["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(
+        "scripts.qualification_sbc.urllib.request.urlopen", fake_urlopen
+    )
+    status, body, _elapsed_ms, _ttft_ms = _timed_http("http://127.0.0.1/test")
+
+    assert status == 200
+    assert body == b"ok"
+    assert observed["timeout"] == MEASUREMENT_HTTP_TIMEOUT
+    assert MEASUREMENT_HTTP_TIMEOUT > 5.0
+
+
+def test_m007_toggle_is_scoped_to_server_environment() -> None:
+    base = {"PATH": "/usr/bin"}
+
+    control = _dedicated_checkpointer_server_environment(base, "control")
+    candidate = _dedicated_checkpointer_server_environment(base, "candidate")
+    ordinary = _dedicated_checkpointer_server_environment(base, None)
+
+    assert control["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] == "0"
+    assert candidate["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] == "1"
+    assert "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER" not in ordinary
+    assert "EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER" not in base
+
+
+def test_m007_close_marker_is_found_in_server_output_stream() -> None:
+    marker = "INFO M007 dedicated checkpointer close complete success=true"
+
+    assert _dedicated_checkpointer_close_succeeded(marker)
+    assert not _dedicated_checkpointer_close_succeeded(
+        "INFO M007 dedicated checkpointer close complete success=false"
+    )
+    assert not _dedicated_checkpointer_close_succeeded("server stopped")
+
+
+def test_m007_candidate_disposition_requires_all_qualification_gates() -> None:
+    passing = {"candidate_phase_gates": {"latency": True, "wal": True}}
+    assert _m007_candidate_gates_pass(passing)
+    assert not _m007_candidate_gates_pass(
+        {"candidate_phase_gates": {"latency": True, "wal": False}}
+    )
+    assert not _m007_candidate_gates_pass(
+        {
+            "candidate_phase_gates": {"latency": True},
+            "steady_state_300_requests": {"gates": {"convergence": False}},
+        }
+    )
+    assert not _m007_candidate_gates_pass({})

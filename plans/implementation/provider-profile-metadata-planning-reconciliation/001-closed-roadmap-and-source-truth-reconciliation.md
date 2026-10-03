@@ -1,6 +1,6 @@
 # Provider Profile Metadata Planning Reconciliation C001 — Closed-Roadmap and Source-Truth Reconciliation
 
-Status: ready
+Status: implemented
 
 Repository baseline: `43c987ea458bd563d5108fd8051ad31185704bb0`
 

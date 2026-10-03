@@ -2088,25 +2088,42 @@ impl UsageRollupRepository {
         let period = period.to_owned();
         self.database
             .call(move |connection| {
+                let ttft_predicate = "streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')";
                 let ttft_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')",
+                    &format!("SELECT COUNT(*) FROM requests WHERE {ttft_predicate}"),
                     [&period],
                     |row| row.get(0),
                 )?;
-                let ttft_at = |offset: i64| -> Result<f64, tokio_rusqlite::rusqlite::Error> {
-                    connection.query_row(
-                        "SELECT first_byte_ms FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now') ORDER BY first_byte_ms LIMIT 1 OFFSET ?2",
-                        params![&period, offset],
-                        |row| row.get(0),
+                let (p50_ttft_ms, p99_ttft_ms) = if ttft_count >= 50_000 {
+                    let (lower_ttft, upper_ttft, p99_ttft): (
+                        Option<f64>,
+                        Option<f64>,
+                        Option<f64>,
+                    ) = connection.query_row(
+                        "WITH histogram AS (SELECT first_byte_ms, COUNT(*) AS frequency FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now') GROUP BY first_byte_ms), ranked AS (SELECT first_byte_ms, frequency, SUM(frequency) OVER (ORDER BY first_byte_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_count, SUM(frequency) OVER () AS total_count FROM histogram) SELECT MAX(CASE WHEN cumulative_count >= (total_count + 1) / 2 AND cumulative_count - frequency < (total_count + 1) / 2 THEN first_byte_ms END), MAX(CASE WHEN cumulative_count >= (total_count + 2) / 2 AND cumulative_count - frequency < (total_count + 2) / 2 THEN first_byte_ms END), MAX(CASE WHEN cumulative_count >= (99 * total_count + 99) / 100 AND cumulative_count - frequency < (99 * total_count + 99) / 100 THEN first_byte_ms END) FROM ranked",
+                        [&period],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                    (
+                        lower_ttft
+                            .zip(upper_ttft)
+                            .map_or(0.0, |(lower, upper)| f64::midpoint(lower, upper)),
+                        p99_ttft.unwrap_or(0.0),
                     )
-                };
-                let (p50_ttft_ms, p99_ttft_ms) = if ttft_count == 0 {
+                } else if ttft_count == 0 {
                     (0.0, 0.0)
                 } else {
-                    let lower = ttft_at((ttft_count - 1) / 2)?;
-                    let upper = ttft_at(ttft_count / 2)?;
+                    let at = |offset: i64| -> Result<f64, tokio_rusqlite::rusqlite::Error> {
+                        connection.query_row(
+                            &format!("SELECT first_byte_ms FROM requests WHERE {ttft_predicate} ORDER BY first_byte_ms LIMIT 1 OFFSET ?2"),
+                            params![&period, offset],
+                            |row| row.get(0),
+                        )
+                    };
+                    let lower = at((ttft_count - 1) / 2)?;
+                    let upper = at(ttft_count / 2)?;
                     let p99_offset = (99 * ttft_count + 99) / 100 - 1;
-                    (f64::midpoint(lower, upper), ttft_at(p99_offset)?)
+                    (f64::midpoint(lower, upper), at(p99_offset)?)
                 };
                 connection.query_row(
                     "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_microdollars), 0), COALESCE(AVG(upstream_latency_ms), 0), COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(CASE WHEN streamed = 1 THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN streamed = 0 THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'exact' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'derived' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'partial' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'unknown' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'provider_reported' THEN cost_microdollars ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' THEN cost_microdollars ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' AND reserved_microdollars IS NOT NULL AND cost_microdollars = reserved_microdollars AND local_cost_microdollars IS NOT NULL AND local_cost_microdollars > 0 AND local_cost_microdollars < cost_microdollars THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN exactness = 'estimated' AND reserved_microdollars IS NOT NULL AND cost_microdollars = reserved_microdollars AND local_cost_microdollars IS NOT NULL AND local_cost_microdollars > 0 AND local_cost_microdollars < cost_microdollars THEN cost_microdollars - local_cost_microdollars ELSE 0 END), 0), COALESCE(SUM(bytes_received), 0), COALESCE(SUM(bytes_emitted), 0), (SELECT COUNT(DISTINCT provider_id) FROM accounts), COALESCE(AVG(CASE WHEN streamed = 1 THEN first_byte_ms END), 0), CASE WHEN COALESCE(SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END), 0) > 0 THEN CAST(SUM(CASE WHEN status != 'pending' THEN output_tokens ELSE 0 END) AS REAL) * 1000.0 / SUM(CASE WHEN status != 'pending' THEN upstream_latency_ms ELSE 0 END) ELSE 0 END, ?2, ?3 FROM requests WHERE started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '24h' THEN datetime('now', '-24 hours') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')",

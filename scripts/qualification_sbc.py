@@ -54,6 +54,9 @@ MANIFEST_VERSION = "runtime-q001.v1"
 MAX_REASON_BYTES = 768
 MAX_HTTP_BODY_BYTES = 128 * 1024
 COMMAND_TIMEOUT = 45.0
+# Keep measurement requests alive long enough to record multi-second storage
+# stalls as latency evidence instead of aborting the run before phase capture.
+MEASUREMENT_HTTP_TIMEOUT = 120.0
 SAMPLE_SECONDS = 0.20
 BENCHMARK_MAX_SAMPLES = 100
 BENCHMARK_WARMUPS = 5
@@ -635,7 +638,7 @@ def _timed_http(
     method: str = "GET",
     body: bytes | None = None,
     headers: Mapping[str, str] | None = None,
-    timeout: float = 5.0,
+    timeout: float = MEASUREMENT_HTTP_TIMEOUT,
 ) -> tuple[int, bytes, int, int | None]:
     """Return a bounded response plus total and first-byte timings."""
     request = urllib.request.Request(
@@ -1550,6 +1553,27 @@ def _dedicated_checkpointer_deltas(
     return result
 
 
+def _m007_candidate_gates_pass(benchmark: Mapping[str, Any]) -> bool:
+    """Require every evaluated candidate phase and convergence gate to pass."""
+    phase_gates = benchmark.get("candidate_phase_gates")
+    if not isinstance(phase_gates, dict):
+        return False
+    typed_phase_gates = cast("dict[str, object]", phase_gates)
+    if not all(value is True for value in typed_phase_gates.values()):
+        return False
+    steady_state = benchmark.get("steady_state_300_requests")
+    if steady_state is None:
+        return True
+    if not isinstance(steady_state, dict):
+        return False
+    typed_steady_state = cast("dict[str, object]", steady_state)
+    steady_gates = typed_steady_state.get("gates")
+    if not isinstance(steady_gates, dict):
+        return False
+    typed_steady_gates = cast("dict[str, object]", steady_gates)
+    return all(value is True for value in typed_steady_gates.values())
+
+
 def _checkpoint_maintenance_deltas(
     baseline: Mapping[str, Any] | None, final: Mapping[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -2274,6 +2298,26 @@ def _environment(root: Path, config: Path) -> dict[str, str]:
     return values
 
 
+def _dedicated_checkpointer_close_succeeded(logs: str) -> bool:
+    """Find the successful worker-close marker across both server streams."""
+    return any(
+        "M007 dedicated checkpointer close complete" in line and "success=true" in line
+        for line in logs.splitlines()
+    )
+
+
+def _dedicated_checkpointer_server_environment(
+    environment: Mapping[str, str], mode: str | None
+) -> dict[str, str]:
+    """Scope the feature toggle to the qualified long-running server only."""
+    server_environment = dict(environment)
+    if mode is not None:
+        server_environment["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] = (
+            "1" if mode == "candidate" else "0"
+        )
+    return server_environment
+
+
 def _request_timed(
     port: int, surface: str, model: str, streaming: bool
 ) -> tuple[int, bytes, int, int | None]:
@@ -2511,10 +2555,6 @@ def run_qualification(
             env["EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES"] = str(
                 qualification_checkpoint_soft_frames
             )
-        if qualification_dedicated_checkpointer_mode is not None:
-            env["EGGPOOL_QUALIFICATION_DEDICATED_CHECKPOINTER"] = (
-                "1" if qualification_dedicated_checkpointer_mode == "candidate" else "0"
-            )
         commands: list[CommandResult] = []
         samples: list[dict[str, Any]] = []
         workload_timings: dict[str, list[int]] = {
@@ -2561,6 +2601,9 @@ def run_qualification(
                 commands.append(result)
                 if result.status != "pass":
                     raise QualificationError(f"{command_id}: {result.reason}")
+            server_env = _dedicated_checkpointer_server_environment(
+                env, qualification_dedicated_checkpointer_mode
+            )
             log_out = (root / "stdout.log").open("w", encoding="utf-8")
             log_err = (root / "stderr.log").open("w", encoding="utf-8")
             try:
@@ -2568,7 +2611,7 @@ def run_qualification(
                 process = subprocess.Popen(
                     [str(binary), "--config", str(config), "serve", "--verbose"],
                     cwd=ROOT,
-                    env=env,
+                    env=server_env,
                     stdin=subprocess.DEVNULL,
                     stdout=log_out,
                     stderr=log_err,
@@ -2877,12 +2920,12 @@ def run_qualification(
                             )
                             gates = {
                                 "request_p95_below_100_ms": (
-                                    isinstance(phase_run.get("p95_elapsed_ms"), int)
-                                    and phase_run["p95_elapsed_ms"] < 100
+                                    isinstance(phase_run.get("p95_total_ms"), int)
+                                    and phase_run["p95_total_ms"] < 100
                                 ),
                                 "request_max_below_500_ms": (
-                                    isinstance(phase_run.get("maximum_elapsed_ms"), int)
-                                    and phase_run["maximum_elapsed_ms"] < 500
+                                    isinstance(phase_run.get("maximum_total_ms"), int)
+                                    and phase_run["maximum_total_ms"] < 500
                                 ),
                                 "publication_commit_max_below_50_ms": (
                                     (publication["maximum_commit_us"] or 0) < 50_000
@@ -2990,9 +3033,9 @@ def run_qualification(
                                 "five_60_request_windows": len(windows) == 5,
                                 "all_requests_below_500_ms": all(
                                     isinstance(
-                                        item["summary"].get("maximum_elapsed_ms"), int
+                                        item["summary"].get("maximum_total_ms"), int
                                     )
-                                    and item["summary"]["maximum_elapsed_ms"] < 500
+                                    and item["summary"]["maximum_total_ms"] < 500
                                     for item in windows
                                 ),
                                 "checkpoint_progress_in_multiple_windows": (
@@ -3383,9 +3426,22 @@ def run_qualification(
                         include_peak=benchmark_mode,
                     )
                 )
-                _stop(process, min(timeout, 10))
+                result = _command(
+                    "stop-before-recovery",
+                    binary,
+                    config,
+                    env,
+                    ("stop", "--timeout", "30"),
+                    timeout,
+                )
+                commands.append(result)
+                if result.status != "pass":
+                    raise QualificationError(f"stop-before-recovery: {result.reason}")
                 if process.poll() is None:
                     raise QualificationError("candidate did not stop before recovery")
+                report["functional"].append(
+                    {"id": "graceful-stop-before-recovery", "status": "pass"}
+                )
                 process = None
                 recovery_config = recovery_root / "config.toml"
                 recovery_database = recovery_root / "usage.sqlite3"
@@ -3439,7 +3495,7 @@ def run_qualification(
                 process = subprocess.Popen(
                     [str(binary), "--config", str(config), "serve", "--verbose"],
                     cwd=ROOT,
-                    env=env,
+                    env=server_env,
                     stdin=subprocess.DEVNULL,
                     stdout=log_out,
                     stderr=log_err,
@@ -3523,22 +3579,16 @@ def run_qualification(
                 log_out.close()
                 log_err.close()
             if qualification_dedicated_checkpointer_mode == "candidate":
-                log_lines = (
-                    (root / "stderr.log").read_text(encoding="utf-8").splitlines()
+                server_logs = "\n".join(
+                    (root / name).read_text(encoding="utf-8")
+                    for name in ("stdout.log", "stderr.log")
                 )
-                close_line = next(
-                    (
-                        line
-                        for line in log_lines
-                        if "M007 dedicated checkpointer close complete" in line
-                    ),
-                    None,
+                close_observed = (
+                    "M007 dedicated checkpointer close complete" in server_logs
                 )
-                close_succeeded = (
-                    close_line is not None and "success=true" in close_line
-                )
+                close_succeeded = _dedicated_checkpointer_close_succeeded(server_logs)
                 report["dedicated_close_result"] = {
-                    "observed": close_line is not None,
+                    "observed": close_observed,
                     "success": close_succeeded,
                 }
                 if not close_succeeded:
@@ -3569,6 +3619,12 @@ def run_qualification(
                     report["findings"].append(
                         "CPU frequency governor changed during run"
                     )
+    if qualification_dedicated_checkpointer_mode == "candidate" and not (
+        _m007_candidate_gates_pass(
+            cast("Mapping[str, Any]", report.get("benchmark", {}))
+        )
+    ):
+        report["status"] = "fail"
     return report
 
 

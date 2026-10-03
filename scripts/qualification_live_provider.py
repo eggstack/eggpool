@@ -288,6 +288,23 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _isolated_child_runtime_environment(
+    environment: dict[str, str], root: Path
+) -> dict[str, str]:
+    """Keep qualification lifecycle paths inside its temporary fixture root."""
+    runtime = root / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    child_environment = dict(environment)
+    child_environment.update(
+        {
+            "EGGPOOL_RUNTIME_DIR": str(runtime),
+            "EGGPOOL_PID_FILE": str(runtime / "eggpool.pid"),
+            "EGGPOOL_LOG_FILE": str(root / "candidate.log"),
+        }
+    )
+    return child_environment
+
+
 def _render_config(
     fixture: Path,
     destination: Path,
@@ -921,6 +938,7 @@ def run_qualification(
             )
             child_env = os.environ.copy()
             child_env.update(loaded_env)
+            child_env = _isolated_child_runtime_environment(child_env, root)
             if live:
                 assert provider_key is not None
                 if profile == "opencode-go":

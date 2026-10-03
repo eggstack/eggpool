@@ -134,6 +134,38 @@ async fn affinity_is_ttl_lru_bounded_and_sticky_false_bypasses_cache() {
 }
 
 #[tokio::test]
+async fn affinity_reuses_slots_across_repeated_capacity_eviction() {
+    let cache = ModelRouterAffinity::with_capacity(3);
+    let router = compile_model_router(
+        "virtual",
+        &router_config([("default", "model-default", "Default")], "model-default"),
+    )
+    .expect("router");
+
+    for index in 0..30 {
+        let identity =
+            session_identity_from_header(Some(&format!("session-{index}"))).expect("identity");
+        cache
+            .resolve(&router, &identity, || {
+                let chosen = selection(&router, "0");
+                async move { Ok(chosen) }
+            })
+            .await
+            .expect("selection");
+        assert!(cache.stats().entry_count <= 3);
+    }
+
+    let stats = cache.stats();
+    assert_eq!(stats.entry_count, 3);
+    assert_eq!(stats.evictions, 27);
+    for index in 27..30 {
+        let identity =
+            session_identity_from_header(Some(&format!("session-{index}"))).expect("identity");
+        assert!(cache.get(&router, &identity).is_some());
+    }
+}
+
+#[tokio::test]
 async fn concurrent_misses_single_flight_and_cancelled_leader_recovers() {
     let cache = Arc::new(ModelRouterAffinity::new());
     let router = Arc::new(

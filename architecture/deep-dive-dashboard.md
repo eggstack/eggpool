@@ -164,6 +164,14 @@ costs remain bounded on the shared SQLite gate. The work package, acceptance
 criteria, and evidence requirements are tracked in
 `plans/implementation/dashboard/003-overview-account-model-parity.md`.
 
+The basic dashboard summary computes streamed TTFT p50/p99 on the existing
+serialized database worker. For ordinary or high-cardinality populations it
+keeps the ordered-offset query path. For at least 50,000 eligible rows where
+distinct TTFT values are no more than one quarter of the population, it uses a
+grouped frequency/window query so repeated offsets do not sort every row.
+Both paths use the same time bounds and percentile ranks; this remains a
+query-only optimization with no additional database connection or index.
+
 ## Telemetry, Routing, Reliability, and Traces projections
 
 M004 telemetry pages are projections of persisted request attempts, requests,

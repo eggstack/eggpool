@@ -1580,6 +1580,52 @@ async fn c011_wire_fixed_and_negotiable_with_leader_follower() {
         .expect("database closes");
 }
 
+#[test]
+fn c011_wire_fingerprint_matches_preallocation_reference_and_lru_recency() {
+    use sha2::{Digest, Sha256};
+    let resolver = WireResolver::new(WireResolverConfig {
+        cache_capacity: 2,
+        min_negotiation_interval: Duration::ZERO,
+        ..Default::default()
+    });
+    let now = Instant::now();
+    let chat = WireCandidate::new(profile(WireSurface::OpenaiChatCompletions), "chat");
+    let messages = WireCandidate::new(profile(WireSurface::AnthropicMessages), "messages");
+    let old_structure = format!(
+        "{}:{}|{}:{}",
+        chat.surface().as_str(),
+        chat.fingerprint,
+        messages.surface().as_str(),
+        messages.fingerprint
+    );
+    let mut old = Sha256::new();
+    old.update(old_structure.as_bytes());
+    old.update(b"|preference=(None, None)");
+    let expected = format!("{:x}", old.finalize());
+    let first = resolver.resolve("a", "m", vec![chat.clone(), messages.clone()], now);
+    assert_eq!(first.fingerprint, expected);
+
+    resolver.reject(
+        "a",
+        "m",
+        &first.fingerprint,
+        WireSurface::OpenaiChatCompletions,
+        now,
+    );
+    // Touch A after B so A remains newest; C must evict B.
+    resolver.resolve("b", "m", vec![chat.clone()], now);
+    resolver.resolve("a", "m", vec![chat.clone(), messages.clone()], now);
+    resolver.resolve("c", "m", vec![chat.clone()], now);
+    let a_again = resolver.resolve("a", "m", vec![chat, messages], now);
+    assert!(
+        a_again
+            .candidates
+            .iter()
+            .all(|candidate| candidate.surface() != WireSurface::OpenaiChatCompletions)
+    );
+    assert!(resolver.snapshot().entries <= 2);
+}
+
 // ---------------------------------------------------------------------------
 // 9. Finite malformed and provider-error taxonomy
 // ---------------------------------------------------------------------------

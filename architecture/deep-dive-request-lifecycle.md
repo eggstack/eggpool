@@ -59,6 +59,10 @@ adapts the response, and converges durable state.
   mints the opaque proxy identity; `coordinator/attempt.rs::add_forwarded_headers`
   strips `HOP_BY_HOP_HEADERS` + `LOCAL_HEADERS` + `Connection`-listed tokens
   before upstream dispatch.
+- Finite and streaming coordinators borrow the selected provider and its
+  generation-static wire-profile slice while selecting and preparing an
+  attempt. The borrow ends at synchronous preparation; the resulting
+  `PreparedUpstreamAttempt` owns everything needed across provider I/O.
 
 ## 3. Bounded admission and ownership
 

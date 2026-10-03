@@ -1,6 +1,6 @@
 # Runtime Efficiency Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -117,7 +117,7 @@ work and all reads occupy the serialized database worker/gate.
 
 ### Milestone 001 — Provider/wire-resolver hot-path ownership and cache cleanup
 
-Class: polish. Status: ready.
+Class: polish. Status: active.
 
 Implementation plan:
 
@@ -145,7 +145,7 @@ Exit conditions:
 
 ### Milestone 002 — Catalog refresh projection and lock-tenure cleanup
 
-Class: polish. Status: ready.
+Class: polish. Status: closing.
 
 Implementation plan:
 
@@ -173,7 +173,7 @@ Exit conditions:
 
 ### Milestone 003 — Dashboard TTFT percentile query qualification and bounded rewrite
 
-Class: polish. Status: ready.
+Class: polish. Status: closing.
 
 Implementation plan:
 
@@ -257,6 +257,6 @@ resolved.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| 001 — provider/wire-resolver hot-path ownership and cache cleanup | ready | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | not yet | none |
-| 002 — catalog refresh projection and lock-tenure cleanup | ready | `plans/implementation/runtime-efficiency/002-catalog-refresh-projection-lock-tenure-cleanup.md` | not yet | none |
-| 003 — dashboard TTFT percentile query qualification and bounded rewrite | ready | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | not yet | none |
+| 001 — provider/wire-resolver hot-path ownership and cache cleanup | closed | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | `plans/closure/runtime-efficiency/001-status.md` | none; M002/M003 remain independently ready |
+| 002 — catalog refresh projection and lock-tenure cleanup | closed | `plans/implementation/runtime-efficiency/002-catalog-refresh-projection-lock-tenure-cleanup.md` | `plans/closure/runtime-efficiency/002-status.md` | none; M003 remains ready |
+| 003 — dashboard TTFT percentile query qualification and bounded rewrite | closed | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | `plans/closure/runtime-efficiency/003-status.md` | none; no successor registered |
