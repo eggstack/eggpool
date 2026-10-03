@@ -45,12 +45,13 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M010 closed — parity qualification harness decomposition | No registered successor became ready; new qualification work requires a bounded plan. |
+| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M012 ready — lifecycle closure and documentation polish | M001-M011 closed; M012 has no hard blocker and is limited to terminal planning/docs reconciliation. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Dashboard | M012 lifecycle closure and documentation polish | ready | `plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md` | M001-M011 closed; documentation/planning only; no runtime/oracle change. |
 | Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
 
 ## Active implementation plans

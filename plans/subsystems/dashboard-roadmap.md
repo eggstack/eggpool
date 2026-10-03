@@ -366,6 +366,32 @@ Exit conditions: the pinned source asset blobs are available in hosted CI;
 the tooling manifest test passes; no oracle, production, or dashboard
 behavior changes occur.
 
+
+### Milestone 012 — Lifecycle closure and documentation polish
+
+Class: polish
+
+Objective: reconcile the final Dashboard planning lifecycle after M008-M011,
+confirm current-facing docs describe the decomposed production/tooling layout,
+and record the merged green mainline as the terminal baseline without changing
+runtime, assets, oracle, or accepted parity semantics.
+
+Dependencies: M001-M011 hard and closed; no external dependency.
+
+Deliverable boundary: roadmap/registry lifecycle reconciliation, current-doc
+ownership-path audit, M012 closure evidence, and optional narrow generic
+planning-consistency guard only if an existing tooling seam supports it
+cleanly.
+
+User or operator value: no UI/runtime change; removes stale active/no-successor
+planning state and leaves the completed Dashboard workstream unambiguous for
+future maintenance.
+
+Exit conditions: Dashboard roadmap and registry are closed with no successor;
+M001-M012 have closure links; current ownership docs are accurate; no
+production/oracle files change; merge-head CI/dependency-audit evidence is
+recorded.
+
 ## 12. Milestone status
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
@@ -381,13 +407,14 @@ behavior changes occur.
 | 009 | closed | plans/implementation/dashboard/009-production-module-decomposition.md | plans/closure/dashboard/009-status.md | Strict oracle, full Rust/tooling gates, and hosted CI passed. |
 | 010 | closed | plans/implementation/dashboard/010-parity-harness-decomposition.md | plans/closure/dashboard/010-status.md | Strict oracle/report semantics, browser/lifecycle, local gates, and hosted CI pass. |
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
+| 012 | ready | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | — | M001-M011 closed; terminal planning/docs cleanup only. |
 
-M001-M008 remain closed historical evidence. M008 corrected the post-merge
-strict-CI failure and reconciled planning state without reopening accepted
-dashboard parity dispositions. M009 decomposed production modules while
-preserving the qualification harness and exact accepted parity differences.
-M010 is closed after strict oracle/report semantics, browser/lifecycle, local
-gates, and hosted CI passed. M011 closed the hosted checkout history
-prerequisite for the frozen oracle blob test. No registered dashboard
-successor is dependency-ready; future qualification maintenance requires a
-new bounded plan.
+M001-M011 remain closed historical evidence. M008 corrected the post-merge
+strict-CI failure without reopening accepted dashboard parity dispositions.
+M009 decomposed production modules while preserving the qualification harness
+and exact accepted parity differences. M010 closed after strict oracle/report
+semantics, browser/lifecycle, local gates, and hosted CI passed. M011 closed
+the hosted checkout history prerequisite for the frozen oracle blob test.
+M012 is the sole ready Dashboard successor and is limited to terminal
+planning/documentation reconciliation; it does not reopen runtime or parity
+scope.
