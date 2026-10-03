@@ -1553,6 +1553,24 @@ def _dedicated_checkpointer_deltas(
     return result
 
 
+def _m007_candidate_gates_pass(benchmark: Mapping[str, Any]) -> bool:
+    """Require every evaluated candidate phase and convergence gate to pass."""
+    phase_gates = benchmark.get("candidate_phase_gates")
+    if not isinstance(phase_gates, dict) or not all(
+        value is True for value in phase_gates.values()
+    ):
+        return False
+    steady_state = benchmark.get("steady_state_300_requests")
+    if steady_state is None:
+        return True
+    if not isinstance(steady_state, dict):
+        return False
+    steady_gates = steady_state.get("gates")
+    return isinstance(steady_gates, dict) and all(
+        value is True for value in steady_gates.values()
+    )
+
+
 def _checkpoint_maintenance_deltas(
     baseline: Mapping[str, Any] | None, final: Mapping[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -2899,12 +2917,12 @@ def run_qualification(
                             )
                             gates = {
                                 "request_p95_below_100_ms": (
-                                    isinstance(phase_run.get("p95_elapsed_ms"), int)
-                                    and phase_run["p95_elapsed_ms"] < 100
+                                    isinstance(phase_run.get("p95_total_ms"), int)
+                                    and phase_run["p95_total_ms"] < 100
                                 ),
                                 "request_max_below_500_ms": (
-                                    isinstance(phase_run.get("maximum_elapsed_ms"), int)
-                                    and phase_run["maximum_elapsed_ms"] < 500
+                                    isinstance(phase_run.get("maximum_total_ms"), int)
+                                    and phase_run["maximum_total_ms"] < 500
                                 ),
                                 "publication_commit_max_below_50_ms": (
                                     (publication["maximum_commit_us"] or 0) < 50_000
@@ -3012,9 +3030,9 @@ def run_qualification(
                                 "five_60_request_windows": len(windows) == 5,
                                 "all_requests_below_500_ms": all(
                                     isinstance(
-                                        item["summary"].get("maximum_elapsed_ms"), int
+                                        item["summary"].get("maximum_total_ms"), int
                                     )
-                                    and item["summary"]["maximum_elapsed_ms"] < 500
+                                    and item["summary"]["maximum_total_ms"] < 500
                                     for item in windows
                                 ),
                                 "checkpoint_progress_in_multiple_windows": (
@@ -3598,6 +3616,12 @@ def run_qualification(
                     report["findings"].append(
                         "CPU frequency governor changed during run"
                     )
+    if qualification_dedicated_checkpointer_mode == "candidate" and not (
+        _m007_candidate_gates_pass(
+            cast("Mapping[str, Any]", report.get("benchmark", {}))
+        )
+    ):
+        report["status"] = "fail"
     return report
 
 

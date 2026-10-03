@@ -41,6 +41,7 @@ from scripts.qualification_sbc import (
     _diagnose_sample_count,
     _diagnostic_phase_summary,
     _direct_provider_control,
+    _m007_candidate_gates_pass,
     _ns_to_ms,
     _percentile,
     _publication_storage_sample_count,
@@ -987,3 +988,18 @@ def test_m007_close_marker_is_found_in_server_output_stream() -> None:
         "INFO M007 dedicated checkpointer close complete success=false"
     )
     assert not _dedicated_checkpointer_close_succeeded("server stopped")
+
+
+def test_m007_candidate_disposition_requires_all_qualification_gates() -> None:
+    passing = {"candidate_phase_gates": {"latency": True, "wal": True}}
+    assert _m007_candidate_gates_pass(passing)
+    assert not _m007_candidate_gates_pass(
+        {"candidate_phase_gates": {"latency": True, "wal": False}}
+    )
+    assert not _m007_candidate_gates_pass(
+        {
+            "candidate_phase_gates": {"latency": True},
+            "steady_state_300_requests": {"gates": {"convergence": False}},
+        }
+    )
+    assert not _m007_candidate_gates_pass({})
