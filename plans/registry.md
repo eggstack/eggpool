@@ -42,7 +42,7 @@ pair is a known numbering accident.
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
-| Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M003 ready — bounded exact affinity LRU | M001 closed; M002 qualification closed with Pi 5 evidence; M003 ready. |
+| Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M003 closing — bounded exact affinity LRU | M001/M002 closed; M003 implementation and Pi 5 qualification landed; closure audit in progress. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 closed — dedicated checkpointer candidate rejected | Pi 5/MMC candidate failed WAL progress/convergence gates; no successor registered; production topology remains unchanged. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
@@ -59,7 +59,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Routing selection | M003 — bounded exact affinity LRU | active | `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` | Pi 5 before/after qualification required |
+| Routing selection | M003 — bounded exact affinity LRU | closing | `plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md` | Implementation `dc6ea713`; closure evidence and unblock audit in progress |
 
 ## Blocked work
 

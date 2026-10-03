@@ -226,4 +226,4 @@ This roadmap closes when M001 and M003 are closed with semantic and performance 
 |---|---|---|---|---|
 | 001 — ordered quota-scoring and candidate-allocation cleanup | closed | plans/implementation/routing-selection/001-ordered-quota-scoring-and-candidate-allocation-cleanup.md | plans/closure/routing-selection/001-status.md | none |
 | 002 — semantic-affinity exact-LRU cost qualification | closed | — | plans/closure/routing-selection/002-affinity-lru-qualification.md | Pi 5 workload showed material 4,096-entry hit cost; M003 is registered ready |
-| 003 — bounded exact affinity LRU | active | plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md | — | M002 qualification evidence; no external dependency |
+| 003 — bounded exact affinity LRU | closing | plans/implementation/routing-selection/003-bounded-affinity-exact-lru.md | — | M002 qualification evidence; no external dependency |
