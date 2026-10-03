@@ -6,7 +6,7 @@
 //! concern and is not yet required by downstream consumers.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     fmt,
     sync::{Arc, Mutex},
     time::Instant,
@@ -119,11 +119,90 @@ struct Flight {
     result: watch::Sender<Option<FlightResult>>,
 }
 
+struct CachedDecision {
+    decision: AffinityDecision,
+    lru_slot: usize,
+}
+
+struct LruNode {
+    key: AffinityKey,
+    previous: Option<usize>,
+    next: Option<usize>,
+}
+
 struct AffinityState {
-    entries: HashMap<AffinityKey, AffinityDecision>,
-    lru: VecDeque<AffinityKey>,
+    entries: HashMap<AffinityKey, CachedDecision>,
+    lru_nodes: Vec<Option<LruNode>>,
+    free_lru_slots: Vec<usize>,
+    lru_head: Option<usize>,
+    lru_tail: Option<usize>,
     flights: HashMap<AffinityKey, Arc<Flight>>,
     stats: AffinityStats,
+}
+
+impl AffinityState {
+    fn append_mru(&mut self, key: AffinityKey) -> usize {
+        let slot = self.free_lru_slots.pop().unwrap_or_else(|| {
+            let slot = self.lru_nodes.len();
+            self.lru_nodes.push(None);
+            slot
+        });
+        self.lru_nodes[slot] = Some(LruNode {
+            key,
+            previous: self.lru_tail,
+            next: None,
+        });
+        if let Some(tail) = self.lru_tail {
+            self.lru_nodes[tail].as_mut().expect("linked tail").next = Some(slot);
+        } else {
+            self.lru_head = Some(slot);
+        }
+        self.lru_tail = Some(slot);
+        slot
+    }
+
+    fn unlink(&mut self, slot: usize) -> LruNode {
+        let node = self.lru_nodes[slot].take().expect("occupied LRU slot");
+        if let Some(previous) = node.previous {
+            self.lru_nodes[previous]
+                .as_mut()
+                .expect("linked previous")
+                .next = node.next;
+        } else {
+            self.lru_head = node.next;
+        }
+        if let Some(next) = node.next {
+            self.lru_nodes[next].as_mut().expect("linked next").previous = node.previous;
+        } else {
+            self.lru_tail = node.previous;
+        }
+        node
+    }
+
+    fn move_to_mru(&mut self, slot: usize) {
+        if self.lru_tail == Some(slot) {
+            return;
+        }
+        let node = self.unlink(slot);
+        self.lru_nodes[slot] = Some(LruNode {
+            key: node.key,
+            previous: self.lru_tail,
+            next: None,
+        });
+        if let Some(tail) = self.lru_tail {
+            self.lru_nodes[tail].as_mut().expect("linked tail").next = Some(slot);
+        } else {
+            self.lru_head = Some(slot);
+        }
+        self.lru_tail = Some(slot);
+    }
+
+    fn remove_entry(&mut self, key: &AffinityKey) -> Option<CachedDecision> {
+        let entry = self.entries.remove(key)?;
+        self.unlink(entry.lru_slot);
+        self.free_lru_slots.push(entry.lru_slot);
+        Some(entry)
+    }
 }
 
 struct FlightGuard {
@@ -190,7 +269,10 @@ impl ModelRouterAffinity {
             clock: Arc::new(clock),
             state: Arc::new(Mutex::new(AffinityState {
                 entries: HashMap::new(),
-                lru: VecDeque::new(),
+                lru_nodes: Vec::new(),
+                free_lru_slots: Vec::new(),
+                lru_head: None,
+                lru_tail: None,
                 flights: HashMap::new(),
                 stats: AffinityStats {
                     hits: 0,
@@ -249,25 +331,24 @@ impl ModelRouterAffinity {
     fn lookup(&self, key: &AffinityKey, router: &CompiledModelRouter) -> Option<AffinityDecision> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = (self.clock)();
-        let Some(decision) = state.entries.get(key).cloned() else {
+        let Some(entry) = state.entries.get(key) else {
             state.stats.misses += 1;
             return None;
         };
+        let slot = entry.lru_slot;
+        let decision = entry.decision.clone();
         if decision.expires_at_monotonic <= now {
-            state.entries.remove(key);
-            state.lru.retain(|item| item != key);
+            state.remove_entry(key);
             state.stats.expirations += 1;
             state.stats.misses += 1;
             return None;
         }
         if !Self::valid_cached_target(router, &decision) {
-            state.entries.remove(key);
-            state.lru.retain(|item| item != key);
+            state.remove_entry(key);
             state.stats.misses += 1;
             return None;
         }
-        state.lru.retain(|item| item != key);
-        state.lru.push_back(key.clone());
+        state.move_to_mru(slot);
         state.stats.hits += 1;
         Some(decision)
     }
@@ -275,40 +356,50 @@ impl ModelRouterAffinity {
     fn cleanup_expired(&self, state: &mut AffinityState, limit: usize) {
         let now = (self.clock)();
         let mut checked = 0;
-        let mut index = 0;
-        while index < state.lru.len() && checked < limit {
-            let key = state.lru[index].clone();
+        let mut cursor = state.lru_head;
+        while let Some(slot) = cursor {
+            if checked >= limit {
+                break;
+            }
             checked += 1;
+            let node = state.lru_nodes[slot].as_ref().expect("linked node");
+            let key = node.key.clone();
+            let next = node.next;
             if state
                 .entries
                 .get(&key)
-                .is_some_and(|decision| decision.expires_at_monotonic <= now)
+                .is_some_and(|entry| entry.decision.expires_at_monotonic <= now)
             {
-                state.entries.remove(&key);
-                state.lru.remove(index);
+                state.remove_entry(&key);
                 state.stats.expirations += 1;
-            } else {
-                index += 1;
             }
+            cursor = next;
         }
     }
 
     fn store(&self, key: AffinityKey, decision: AffinityDecision) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.cleanup_expired(&mut state, 16);
-        state.entries.remove(&key);
-        state.lru.retain(|item| item != &key);
+        state.remove_entry(&key);
         while state.entries.len() >= self.max_entries {
-            if let Some(oldest) = state.lru.pop_front() {
-                if state.entries.remove(&oldest).is_some() {
-                    state.stats.evictions += 1;
-                }
-            } else {
-                break;
+            let Some(oldest) = state.lru_head else { break };
+            let key = state.lru_nodes[oldest]
+                .as_ref()
+                .expect("linked head")
+                .key
+                .clone();
+            if state.remove_entry(&key).is_some() {
+                state.stats.evictions += 1;
             }
         }
-        state.lru.push_back(key.clone());
-        state.entries.insert(key, decision);
+        let slot = state.append_mru(key.clone());
+        state.entries.insert(
+            key,
+            CachedDecision {
+                decision,
+                lru_slot: slot,
+            },
+        );
     }
 
     fn decision_from_selection(
