@@ -117,7 +117,7 @@ work and all reads occupy the serialized database worker/gate.
 
 ### Milestone 001 — Provider/wire-resolver hot-path ownership and cache cleanup
 
-Class: polish. Status: closing.
+Class: polish. Status: active.
 
 Implementation plan:
 
@@ -259,4 +259,4 @@ resolved.
 |---|---|---|---|---|
 | 001 — provider/wire-resolver hot-path ownership and cache cleanup | closed | `plans/implementation/runtime-efficiency/001-provider-wire-resolver-hotpath-cleanup.md` | `plans/closure/runtime-efficiency/001-status.md` | none; M002/M003 remain independently ready |
 | 002 — catalog refresh projection and lock-tenure cleanup | closed | `plans/implementation/runtime-efficiency/002-catalog-refresh-projection-lock-tenure-cleanup.md` | `plans/closure/runtime-efficiency/002-status.md` | none; M003 remains ready |
-| 003 — dashboard TTFT percentile query qualification and bounded rewrite | closing | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | not yet | none |
+| 003 — dashboard TTFT percentile query qualification and bounded rewrite | active | `plans/implementation/runtime-efficiency/003-dashboard-ttft-percentile-query-qualification.md` | not yet | none |

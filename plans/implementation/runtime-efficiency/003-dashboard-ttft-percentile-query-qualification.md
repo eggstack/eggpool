@@ -1,6 +1,6 @@
 # Runtime Efficiency Milestone 003 — Dashboard TTFT Percentile Query Qualification
 
-Status: closing
+Status: active
 
 Repository baseline: `5f028625` (M002 closure; original query baseline `6489aa75aa276a12ff14c35a07b46f2eba01e2b8`)
 
@@ -349,8 +349,9 @@ The opt-in file-backed qualification is implemented in
 `rust/tests/dashboard_ttft_qualification.rs` and was run twice with the pinned
 bundled SQLite 3.53.2 engine. Each run seeds independent schema-54 files with
 10,000 and 100,000 deterministic request rows (80% streamed, 68.6% of all
-rows with TTFT, and 10% outside 30 days). The printed file size is the main
-database file only; the WAL sidecar is not included.
+rows with TTFT, 90% timestamped 12 hours back inside the 24-hour query, and
+10% outside 30 days). The printed file size is the main database file only;
+the WAL sidecar is not included.
 
 Both runs selected `idx_requests_streamed_started_ttft` for the count and
 ordered TTFT queries. COUNT is a covering-index range scan. Each
