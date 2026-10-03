@@ -1,6 +1,6 @@
 # Deep Dive: Deployment & Operations
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §11](overview.md) (operations and local lifecycle) and [Backup/restore](deep-dive-lifecycle.md).
 
 ## Purpose
 
@@ -55,19 +55,30 @@ ambiguous ownership, collisions, unsupported targets, and unsafe
 symlink/special-file destinations, and preserves configuration (seeding only
 after the command is committed and verified). Ordinary standalone updates
 remain standalone; `--adopt-standalone` is an explicit advanced migration to
-wheel ownership only. Native releases start at `NATIVE_RELEASE_VERSION =
-"0.8.0"`; historical Python versions are catalogued exact-only targets and
+ wheel ownership only. Native releases start at `NATIVE_RELEASE_VERSION =
+"0.8.1"` (`rust/src/operations/update.rs`; `rust/Cargo.toml` `version =
+"0.8.1"`); historical Python versions are catalogued exact-only targets and
 never the default.
 
 ## Operational tooling
 
-The `scripts/` directory contains release, package-boundary, installer,
-portability, and qualification tooling. The most relevant commands are
+The `scripts/` directory (26 `.py` modules besides `__init__.py`, plus
+`install.sh`/`smoke_codex_compat.sh`) and `tests/tooling/` (21 `.py` files:
+20 `test_*` modules plus `__init__.py`) contain release,
+package-boundary, installer, portability, and qualification tooling only.
+There is no Python runtime fallback; never import the retired application.
+The most relevant commands are
 `qualify_quick_installer.py`, `validate_runtime_package_boundary.py`,
 `validate_release_workflow.py`, `build_release_artifacts.py`,
 `build_connect_artifacts.py`, `inspect_connect_artifact.py`,
 `create_release_manifest.py`,
 `validate_release_artifacts.py`, and `verify_published_release.py`.
+
+The native wheel is defined by `packaging/pypi/pyproject.toml` (metadata plus
+executable/assets only; `Requires-Python >=3.11` is package-manager
+compatibility, not a production interpreter dependency). The repository-root
+`pyproject.toml` is tooling-only (`project_role = "repository-tooling-only"`,
+`package = false`).
 
 Release footprint qualification keeps the reviewed Maturin 1.14.1 setting
 in `packaging/pypi/pyproject.toml`
@@ -86,23 +97,37 @@ plus Windows x86_64) from the same clean tag commit. Helpers build with plain
 Cargo (`scripts/build_connect_artifacts.py`, never Maturin; target classes in
 `scripts/inspect_connect_artifact.py::CONNECT_TARGETS`) and upload as
 `connect-*` CI artifacts so they cannot mix with the wheel pipeline; the
-aggregate job stages the reviewed `packaging/connect/` bootstraps next to
+aggregate job stages the reviewed `packaging/connect/` bootstraps
+(`eggpool-connect.sh`, `eggpool-connect.ps1`) next to
 them, binds everything into the manifest `connect_artifacts` section
 (`scripts/create_release_manifest.py --connect-artifact-dir`), validates
 digests (`scripts/validate_release_artifacts.py --connect-artifact-dir`),
 and publishes the exact bytes under `dist/publish/connect/` with
-`SHA256SUMS`. An absent or empty `connect_artifacts` list is valid for a
-proxy-only bundle: the checked-in `packaging/release/release-manifest.json`
-example carries exactly three proxy artifacts and no `connect_artifacts` key.
-Nothing is rebuilt in a publish job. The Windows helper is a
+`SHA256SUMS`. The checked-in `packaging/release/release-manifest.json`
+carries exactly three proxy artifacts (`kind = "eggpool"`: Linux
+x86_64/aarch64, macOS arm64) plus a `connect_artifacts` list (four
+`kind = "eggpool-connect"` helper executables plus two
+`kind = "connect-bootstrap"` helper assets, `eggpool-connect.sh` /
+`eggpool-connect.ps1`, typed separately from the proxy triple). An absent
+or empty `connect_artifacts` list remains valid for a proxy-only bundle.
+Nothing is rebuilt in a publish job. Each bootstrap block verifies SHA-256
+against the release `SHA256SUMS` before executing anything. The Windows helper is a
 desktop-only asset and never implies Windows proxy support; the proxy matrix and its validators are unchanged, and
 `validate_release_workflow.py` scopes the word “windows” to the single
 helper build job so a helper binary can never read as proxy support.
 macOS x86_64 was evaluated and deferred: no Intel runner exists to
 execute-qualify that binary, and publishing an unexecuted binary would
 violate the per-target qualification rule (Intel Mac operators build the
-helper from source with `cargo build --bin eggpool-connect --release`).
+ helper from source with `cargo build --bin eggpool-connect --release`).
 See `docs/releasing.md` for the release/rollback operator boundary.
+
+## Native tests (not a runtime fallback)
+
+Native tests live in `rust/tests/` (57 targets, serial
+`--test-threads=1`), including `build_manifest.rs`. Coordinator coverage is
+`coordinator_c007`–`c011` plus `c013`–`c014`: there is no `coordinator_c012`.
+`unsafe_code = "forbid"` is a repo invariant (`rust/src/lib.rs`,
+`rust/Cargo.toml`, both portable crates).
 
 ## Systemd Integration
 

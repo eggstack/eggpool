@@ -1,6 +1,8 @@
 # Deep Dive: Observability and Routing Traces
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also the review index in
+[overview.md](overview.md) (§12): §12 is the birds-eye summary, this file
+is the observability authority.
 
 Observability in the native runtime is bounded, deterministic, and
 metadata-only. Every surface below reports scalar facts, counters, labels,
@@ -102,9 +104,10 @@ Routing decisions are recorded as facts, not prompts: eligibility
 outcomes and exclusion reason codes are queryable through
 `eggpool accounts explain` (per-account eligible/reason, optional gates
 and scores), the dashboard routing/reliability pages, and the bounded
-`routing_decision_retain_days` rows. `[routing.trace]` and
-`MetricsConfig::trace_sample_rate` (default `0.05`, aggregate-only)
-tune sampling; traces describe which account was selected and why
+`routing_decision_retain_days` rows. `[routing.trace]` (default
+`mode = "off"`, `sample_rate = 0.0`) tunes live trace sampling separately
+from `MetricsConfig::trace_sample_rate` (default `0.05`,
+`aggregate_only = true`); traces describe which account was selected and why
 others were excluded.
 
 ## Presentation

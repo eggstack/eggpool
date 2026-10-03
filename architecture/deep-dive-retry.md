@@ -44,7 +44,9 @@ authoritative catalog presence (`ProviderModelPresence::AbsentAuthoritative`).
 
 `RetryPolicy` bounds the single shared upstream-submission budget: `max_attempts` (default 3) gates
 both `RetryAccount` and `RetryWire` through one `attempt_number < max_attempts` check, and
-`max_retry_after` (default 1,800 s) clamps every `Retry-After` before storage. Each coordinator
+`max_retry_after` (default 1,800 s) clamps every `Retry-After` before storage. Production
+constructs `max_attempts` as `max_retries_before_stream.max(1) + 1` (`coordinator/endpoints.rs`
+inference-state build). Each coordinator
 holds its own `FailureDecisionEngine`, which pairs the policy with an `EffectLedger` (default
 capacity 256, `EffectLedgerError::Capacity` when full): `decide()` classifies once per attempt and
 reports whether the caller owns the first effect application, so retried finalization observes the

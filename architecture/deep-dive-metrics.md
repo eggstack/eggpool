@@ -1,6 +1,8 @@
 # Deep Dive: Metrics and Telemetry
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also the review index in
+[overview.md](overview.md) (§§11, 12): §11/§12 are the birds-eye summary,
+this file is the metrics authority.
 
 `rust/src/operations/metrics.rs` owns bounded request, usage, latency, failure,
 reasoning, and routing telemetry. Correctness-critical request/accounting

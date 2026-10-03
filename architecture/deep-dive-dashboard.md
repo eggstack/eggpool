@@ -1,14 +1,18 @@
 # Deep Dive: Dashboard and Stats API
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also the review index in
+[overview.md](overview.md) (§§3, 12): §3 is the birds-eye route topology,
+this file is the dashboard authority.
 
-`rust/src/server/dashboard/` is the dashboard subsystem. Its `mod.rs` is a
+`rust/src/server/dashboard/` is the dashboard subsystem (17 files: 8
+top-level plus 9 under `render/`). Its `mod.rs` is a
 thin facade that preserves the route entry points consumed by
 `rust/src/server/mod.rs`. `routes.rs` owns page request parsing and bounded
 data gathering; `api.rs` owns dashboard JSON request parsing and projections;
 `assets.rs` and `theme.rs` own static/theme delivery; `response.rs` owns
 response/degraded helpers; and `format.rs` owns shared escaping and scalar
-formatting. Pure page renderers live under `render/`: `layout.rs`,
+formatting. Pure page renderers live under `render/`: `mod.rs` (per-page
+dispatch), `layout.rs`,
 `overview.rs`, `accounts.rs`, `models.rs`, `telemetry.rs`, `diagnostics.rs`,
 `runtime.rs`, and `cache.rs`. They consume gathered snapshots and do not read
 database or runtime state. Unit tests remain in `tests.rs` under the same
@@ -20,8 +24,8 @@ versioned `GET /api/integrations/v1/profile` (aggregation lives in
 `rust/src/operations/status.rs`, sharing readiness evaluation with `readyz`).
 The shared server assembly and route topology remain in `rust/src/server/mod.rs`.
 Embedded dashboard assets live under `rust/assets/dashboard/static/`
-(`dashboard.css`, `dashboard.js`, `chart.umd.min.js`, `favicon.svg`, served
-under `/static/`); `/static/theme.css` renders the selected embedded theme
+(`dashboard.css`, `dashboard.js`, `chart.umd.min.js`, `favicon.svg`);
+`/static/theme.css` renders the selected embedded theme
 from `rust/assets/dashboard/themes/`. `rust/src/operations/metrics.rs` and the database
 repositories provide bounded, redacted snapshots for request, usage, model,
 runtime, health, and routing views.
@@ -35,13 +39,24 @@ button, link, and heatmap colors.
 
 ## Pages and API routes
 
-When `[dashboard].enabled`, the router serves `/`, `/accounts`, `/models`,
+`rust/src/server/mod.rs::build_router` registers always-on routes
+unconditionally (inference at `/v1/chat/completions`, `/v1/messages`,
+`/v1/responses`, `/v1/responses/compact`; health/discovery at
+`/v1/healthz`, `/v1/readyz`, `/v1/models`,
+`/api/integrations/v1/profile`, `/api/stats/runtime`, `/api/stats/update`,
+`/api/status`; plus the five statics `/static/dashboard.css`,
+`/static/dashboard.js`, `/static/chart.js` (served from
+`chart.umd.min.js`), `/static/favicon.svg`, `/static/theme.css`). The
+remaining dashboard surface below is dashboard-gated: it is registered
+only when `[dashboard].enabled`, for 14 pages + 8 JSON endpoints.
+
+When `[dashboard].enabled`, the router additionally serves `/`, `/accounts`, `/models`,
 `/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
 `/pings`, `/reliability`, `/routing`, `/traces`, `/runtime`, `/cache`, plus
 `GET /api/stats/summary` — all rendered server-side from
 `db::DashboardRepository` / `db::UsageRollupRepository` snapshots for one
 of four validated periods (`1h`, `24h`, `7d`, `30d`; anything else is
-`400 Invalid period`). `GET /v1/models` stays the standard OpenAI-schema
+`400 {"detail":"Invalid period"}`). `GET /v1/models` stays the standard OpenAI-schema
 model list and is always authenticated; the rich sanitized projection is
 the separately versioned integration-profile endpoint.
 
@@ -50,7 +65,8 @@ The dashboard chart client also reads `GET /api/timeseries` and
 endpoints: they follow `[dashboard].public`, validate the same four periods,
 and return bounded bucket and grouped-series projections from dashboard
 usage/request repositories. The grouped endpoint accepts `group_by`
-(`provider_model`, `provider`, `model`, or `account`), a bounded `limit`, and
+(`provider_model`, `provider`, `model`, or `account`; unknown defaults to
+`provider_model`), a bounded `limit` (default 12, clamped 1–25), and
 retains the historical `metric` parameter while ranking by request count. It
 does not expose request bodies or credentials. Operational
 diagnostics such as `/api/stats/runtime` remain separately authenticated.
@@ -86,9 +102,10 @@ raw prompts, credentials, cache keys, or provider bodies.
 
 Pages share one layout (`render_dashboard_layout`) with period/theme
 selectors, auto-refresh footer, and preloaded static assets. All dynamic
-values pass through `html_escape()`; chart payloads pass through
-`json_escape()` (angle brackets, ampersands, control characters, and
-U+2028/2029 are neutralized). Model links use percent-encoded path
+values pass through `html_escape()`; embedded chart JSON passes through
+`grouped_timeseries_json()` (deterministic field ordering) plus
+`escape_script_end_tags()` (case-insensitive `</script` neutralized as
+`\u003c`). Model links use percent-encoded path
 components (`query_component`). DB failures degrade to a bounded
 `503 {"status":"degraded","reason":"dashboard data unavailable"}` — never
 a stack trace or raw error.

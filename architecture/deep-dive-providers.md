@@ -1,17 +1,21 @@
 # Deep Dive: Providers and Outbound Clients
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §7](overview.md).
 
-`rust/src/providers/` owns provider contracts, account credentials, endpoint
-composition, Eggfetch direct/proxied transport with the Eggress route dialer,
-and the per-provider/account client pool. Provider profiles
-describe protocol, URL, auth shape, wire surface, and capability facts without
-storing secrets in metadata.
+`rust/src/providers/` (`mod.rs`, `transport.rs`, `client_pool.rs`) stops at
+neutral HTTP transport: `transport.rs` (`ProviderHttpClient`, `ProviderBody`,
+`ProviderResponse`, `TransportError`) and `client_pool.rs`
+(generation-owned per-provider/account pool over an immutable nested topology
+with atomic close) own HTTP, connection ownership, and timeouts only. No
+auth, wire selection, routing, or retry here; credentials render only at
+dispatch-header construction. Provider profiles describe protocol, URL, auth
+shape, wire surface, and capability facts without storing secrets in metadata.
 
 ## Bundled provider-template authority
 
 `rust/assets/providers/_templates.toml` is the bundled bootstrap authority
-consumed by `operations/config_mutation.rs::load_provider_templates`. The
+consumed by `operations/config_mutation.rs::load_provider_templates` (not by
+`rust/src/providers/`, which holds no templates). The
 templates carry secret-free setup facts only (canonical base URL, protocol
 families/wire surfaces, auth/header shape, model-discovery path, verification
 model/protocol, conservative capability hints). Provider IDs and config keys
@@ -96,7 +100,10 @@ IDNA conversion. `join_provider_target()` remains the boundary that validates
 the configured authority and rejects unsafe absolute or authority-form
 relative targets before dispatch. The updater's bounded Hyper/Rustls client
 in `operations/update.rs` remains a separate owner and is not being migrated
-to Eggfetch by this adoption.
+to Eggfetch by this adoption. Downstream HTTP/1 is the separate exact-pinned
+`eggserve-server =0.4.0` with `tower` owner; direct `hyper`/`hyper-util`/
+`hyper-rustls`/`rustls`/`webpki-roots` dependencies remain only for that
+updater owner plus the `test-support` route-TLS seam.
 
 Direct and proxied provider routes share one Eggfetch HTTP/1.1 engine with
 the same physical admission, idle-pool, connect/I/O timeout, and WebPKI plus
@@ -169,8 +176,11 @@ cargo tree --manifest-path rust/Cargo.toml --duplicates
 The policy deliberately reports duplicate versions instead of rejecting the
 legitimate Eggress/SSH/crypto and platform families in the current lockfile.
 
-## Consolidation footprint (Phase 4 measurement)
+## Consolidation footprint (Phase 4 measurement, superseded historical)
 
+This pre-migration vs post-cutover comparison is superseded by the 0.1.7 and
+0.2.0/1.0.11 adoptions below; its 0.1.5 `http1` + `tls-rustls` row is
+historical only and must not be read as the current profile.
 Before/after comparison of the pre-migration revision against the post-cutover
 revision, both built with Rust 1.89.0 for `aarch64-apple-darwin`, default
 features, the normal release profile, and no stripping (matching the release
@@ -262,7 +272,7 @@ qualification passes unchanged, and one coordinator attempt still produces at
 most one transport submission. Plans 215–220 remain the historical
 migration/adoption evidence; the 0.1.7 measurement above stays historical.
 
-## Eggress 1.0.8 outbound-crate adoption measurement (2026-09-22)
+## Eggress 1.0.8 outbound-crate adoption measurement (2026-09-22, historical)
 
 Plan 243 adopts the published Eggress `1.0.8` crate family and moves the
 normal listener-free provider proxy path from the full-service
@@ -320,7 +330,7 @@ implementation, all conservative and all requalified:
   passes no SSH session cache and remains `cfg(test-support)`.
 - The RSA advisory exception (`RUSTSEC-2023-0071`) is retained with a
   corrected rationale: the affected `rsa 0.10.0-rc.18` still resolves through
-  the live Eggress 1.0.8 / `russh` 0.62.7 SSH path.
+  the live Eggress 1.0.11 / `russh` 0.62.7 SSH path.
 
 Focused qualification tightened one previously broad assertion (HTTP CONNECT
 rejection without credentials is now deterministically

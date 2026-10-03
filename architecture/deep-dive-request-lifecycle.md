@@ -1,6 +1,7 @@
 # Deep Dive: Request Lifecycle
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also the review index in
+[overview.md](overview.md) §§4-6.
 
 `rust/src/server/inference.rs` owns the four thin public adapters
 (`chat_completions`, `messages`, `responses`, `responses_compact`); route
@@ -34,24 +35,30 @@ adapts the response, and converges durable state.
 
 ## 2. Endpoint classification (one parse, one call)
 
-- `handle_inference` calls `coordinator::execute_endpoint` exactly once per
-  request; `handle_finite_compact` calls `execute_compact_finite` exactly once.
+- `handle_inference` calls `coordinator::execute_endpoint`
+  (`coordinator/endpoints.rs:777`) exactly once per request;
+  `handle_finite_compact` calls `execute_compact_finite` exactly once.
+  `execute_finite`/`execute_stream` are thin wrappers delegating to
+  `execute_endpoint` and rejecting the mismatched `EndpointExecution`.
   `server/*` holds no routing, retry, or finalization logic.
 - `coordinator/endpoints.rs::execute_endpoint` parses once via
-  `request::parse_request_body` (bounded size + depth), reads the `stream`
-  flag from the same `ParsedRequestBody`, resolves the concrete model
-  (`resolve_concrete`), admits (`admit_parsed_request`), and constructs
+  `request::parse_request_body(raw_body, max_body_bytes)` (bounded `Bytes`
+  size + depth), reads the `stream` flag from the same `ParsedRequestBody`
+  (`stream_flag`), resolves the concrete model (`resolve_concrete`), admits
+  (`admit_resolved` wrapping `admit_parsed_request`), and constructs
   `FiniteRequest::from_admitted` or `StreamRequest::from_admitted`. Canonical
   `stream` must match the flag or the request is rejected.
 - Model resolution mutates the one parsed tree: `parse_provider_qualified_model`
   strips a known `model/provider` qualifier (native no-rewrite path clones only
-  the ingress `Bytes` handle); virtual aliases resolve through
+  the ingress `Bytes` handle via refcount; provider-qualified rewrite
+  re-encodes only on an actual model-id change); virtual aliases resolve through
   `SemanticSelector` over the same `FiniteCoordinator` with recursion refusal
   and affinity commit in the endpoints layer only.
 - `EndpointError::status` maps admission errors; `endpoint_error_body` shapes
   OpenAI vs Messages envelopes truncated to 512 bytes. `new_proxy_request_id`
-  mints the opaque proxy identity; `filtered_incoming_headers` strips
-  credentials and hop-by-hop framing before dispatch.
+  mints the opaque proxy identity; `coordinator/attempt.rs::add_forwarded_headers`
+  strips `HOP_BY_HOP_HEADERS` + `LOCAL_HEADERS` + `Connection`-listed tokens
+  before upstream dispatch.
 
 ## 3. Bounded admission and ownership
 
@@ -79,9 +86,11 @@ adapts the response, and converges durable state.
 - `POST /v1/responses/compact` is a bounded distinct operation
   (`InferenceOperation::Compact` vs `Generate`), finite-only, history `input`
   required, trigger rejected, same stateless and body bounds.
-- Production uses `admit_compact_parsed_request` plus
-  `FiniteCoordinator::execute_compact_admitted`: the `CompactAdmittedRequest`
-  remains the single owner of the preserved JSON tree. Public
+- Production uses `execute_compact_finite` (finite-only) plus
+  `FiniteCoordinator::execute_compact_admitted` (private single-owner
+  `FiniteExecutionInput::compact`): the `CompactAdmittedRequest`
+  remains the single owner of the preserved JSON tree, never duplicated
+  into a public `FiniteRequest`. Public
   `FiniteRequest::new_compact`/`from_compact_admitted` keep their dual-view
   shape for compatibility callers only.
 - Routing filters to `CompactionCapabilities::native_v1_supported()` Responses
@@ -116,7 +125,11 @@ server/Axum
 - `StreamingCoordinator::execute` owns route claims, header/first-byte timers
   (`StreamTimeoutPolicy`: header, first-byte, idle; no whole-stream deadline),
   non-2xx terminalization, first-byte prefetch, and all retry/alternate-wire
-  decisions. Returning `StreamingExecution` closes the retry window.
+  decisions. Retry is available only before the downstream handoff
+  (`!response_started && !downstream_started`); returning `StreamingExecution`
+  closes the retry window. Production `RetryPolicy` is
+  `max_retries_before_stream.max(1) + 1` (`RetryPolicy::default` is
+  `max_attempts` 3).
 - `StreamingExecution` (`execution.rs`) owns the one live `ProviderBody`,
   `next_chunk` pull loop, idle timeout, and `complete`. Native
   `NativeObserved` streams call `observe_native_push` and forward original

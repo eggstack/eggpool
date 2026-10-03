@@ -4,7 +4,7 @@ Back to [Architecture](README.md). See also [overview.md §9](overview.md), [Run
 
 ## Ownership
 
-`rust/src/db/` is the only persistence boundary: `connection.rs` (serialized `Database` gate, caller-owned transactions), `migrations.rs` (checksum-validated runner), `repositories.rs` (typed account/catalog/model/request/ping/dashboard/usage access), `mod.rs` (facade), and feature-gated `qualification.rs` (tooling-only in-memory collector, compiled only with `qualification-db-diagnostics`). `db/` owns only the `backup_to` snapshot primitive; orchestration lives in `operations/backup.rs`, and crash repair lives in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation. `Database::open` is pinned to `tokio-rusqlite 0.8.0` (`bundled`, `backup` features) over `rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`.
+`rust/src/db/` is the five-file persistence boundary: `connection.rs` (serialized `Database` gate, caller-owned transactions), `migrations.rs` (checksum-validated runner), `repositories.rs` (typed account/catalog/model/request/ping/dashboard/usage access), `mod.rs` (facade), and feature-gated `qualification.rs` (dependency-free tooling-only in-memory collector — `std` + `serde` + `TransactionKind` only, no new Cargo deps — compiled only with non-default `qualification-db-diagnostics`). `db/` owns only the `backup_to` snapshot primitive; orchestration lives in `operations/backup.rs`, and crash repair lives in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation (`coordinator/reconciliation.rs`). `Database::open` is pinned to `tokio-rusqlite 0.8.0` (`bundled`, `backup` features) over `rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`.
 
 ## Connection and gate
 
@@ -16,7 +16,7 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` with `checksums.json`: v1–v54, 54 files, validated by `MigrationRunner::validate_embedded_checksums` before any database use (`canonical_inventory_is_complete_and_immutable` guards first = 1, last = 54, len = 54). `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. History is never rewritten or renumbered; restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0054_*.sql` = versions 1–54) with `checksums.json` (`files` map, 54 entries): v1–v54, 54 files, validated by `MigrationRunner::validate_embedded_checksums` before any database use (`canonical_inventory_is_complete_and_immutable` guards first = 1, last = 54, len = 54). `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. History is never rewritten or renumbered; restore validation additionally checks the staged ledger against this inventory.
 
 ## Publication and finalization transactions
 

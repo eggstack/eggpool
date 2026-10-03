@@ -1,9 +1,9 @@
 # Deep Dive: Agent Integrations
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also [overview.md §11](overview.md) (operations and local lifecycle).
 
 `eggpool configsetup` output for supported coding agents is split across a
-portable boundary. `rust/crates/eggpool-client-config/` owns the
+portable boundary. `rust/crates/eggpool-client-config/` (13 `src/` files) owns the
 provider-neutral projection, `ConnectionProfileV1`/`epc1` codecs,
 `AgentIntegrationProfileV1`, Codex/OpenCode V1/V2 renderers, the narrow
 TOML mutator (`text.rs`/`codex.rs`), the trivia-preserving JSONC scanner and
@@ -177,9 +177,9 @@ static models only and never creates the database file), merges
 static/overrides through the authoritative projection path, resolves the
 advertised URL, and reports `EGGPOOL_API_KEY` plus `auth_configured` without
 creating/rotating keys, mutating config/transcoding, refreshing catalogs, or
-sending upstream requests. `remote_connection_token()` builds the portable
-`ConnectionProfileV1` + `epc1` token; `--format json` emits the stable bounded
-`eggpool.configremote/v1` object (now with a `bootstrap` section carrying the
+ sending upstream requests. `remote_connection_token()` builds the portable
+ secret-free `ConnectionProfileV1` + `epc1` token; `--format json` emits the stable bounded
+ secret-free `eggpool.configremote/v1` object (now with a `bootstrap` section carrying the
 pinned version/tag, per-shell asset URLs, helper asset names, and both shell
 commands); default human output shows target, endpoint, auth reference, token,
 and the `--shell`-selected bootstrap block. `runtime.rs` remains
@@ -289,7 +289,7 @@ structural operations the narrow editors cannot express.
 
 ## Transactional desktop helper (`eggpool-connect`)
 
-`rust/crates/eggpool-connect/` is the small desktop counterpart over the
+`rust/crates/eggpool-connect/` (14 `src/` files) is the small desktop counterpart over the
 same portable crate (`src/`: `cli.rs`, `transaction.rs`, `install.rs`,
 `backup.rs`, `verify.rs`, `detect.rs`, `fetch.rs`, `credential.rs`,
 `paths.rs`, `process.rs`, `atomic.rs`, `outcome.rs`, `lib.rs`, `main.rs`).
@@ -301,7 +301,8 @@ duplicates renderers:
   checks), `verify --client`, `backups`, `restore <id>`, `remove --client`
   with `--config` overrides, `--api-key-stdin`, `--no-verify-network`,
   `--json`, and `--force` for owned drift only.
-- Sequence before any write: decode/validate `ConnectionProfileV1`, resolve
+- Sequence before any write: decode/validate the secret-free `epc1`
+  `ConnectionProfileV1`, resolve
   the advertised URL, obtain the credential separately (`EGGPOOL_API_KEY` >
   TTY prompt > `--api-key-stdin`; never argv), fetch the authenticated
   `GET /api/integrations/v1/profile` over narrow Hyper/Rustls with TLS
@@ -316,8 +317,9 @@ duplicates renderers:
 - Backups: byte-exact snapshots under `<user-state>/eggpool-connect/
   backups/<id>/` (`manifest.json` + `config.bin` + `generated-artifacts/…`),
   user-private (`0o700`/`0o600` on POSIX), secret-free manifests (profile
-  fingerprint, never credentials), conservative retention (newest 10 per
-  target, never the only recovery point). `restore` takes a pre-restore
+  fingerprint, never credentials), conservative retention
+  (`BACKUP_RETENTION_PER_TARGET = 10` newest per target, never the only
+  recovery point). `restore` takes a pre-restore
   backup first, making restore itself reversible.
 - Mutation: regular-file-or-absent check with symlink/device/FIFO/socket
   refusal, complete proposed bytes in memory, pre-write parse validation,
@@ -338,6 +340,7 @@ duplicates renderers:
   Serde/JSON, SHA-2, TOML, narrow Hyper/Rustls/`webpki-roots`
   (`http`, `http-body-util`, `hyper`, `hyper-util`, `hyper-rustls`),
   Tokio, and the
-  portable crate. No Axum, SQLite, Eggress, routing, provider codecs, or
+  portable crate. No Axum, SQLite, Eggress, routing, provider codecs,
+  proxy/agent/daemon, or
   dashboard assets, so publishing a Windows helper never implies Windows
   proxy support.

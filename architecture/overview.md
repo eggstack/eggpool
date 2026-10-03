@@ -139,8 +139,9 @@ is always authenticated and never inherits a dashboard-public exemption),
 `health.rs` (`GET /v1/healthz`, `GET /v1/readyz`, `GET /v1/models`,
 `GET /api/integrations/v1/profile`, `GET /api/stats/runtime`, `GET /api/stats/update`, `GET /api/status`), `inference.rs`
 (`chat_completions`, `messages`, `responses`, `responses_compact`; finite vs. stream dispatch on the
-`stream` flag; exactly one `coordinator::execute_finite`/`execute_stream` call
-per request, compact via finite-only `execute_compact_finite`), `dashboard/`
+`stream` flag; exactly one `coordinator::endpoints::execute_endpoint` call
+per request (`execute_finite`/`execute_stream` are thin wrappers over it),
+compact via finite-only `execute_compact_finite`), `dashboard/`
 (thin route facade plus bounded read projections, static/theme delivery,
 shared formatting, and page-family renderers).
 Route topology: inference at `/v1/chat/completions`, `/v1/messages`,
@@ -148,7 +149,11 @@ Route topology: inference at `/v1/chat/completions`, `/v1/messages`,
 operation, not a Responses alias); dashboard at `/`, `/accounts`, `/models`,
 `/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
 `/pings`, `/reliability`, `/routing`, `/traces`, `/runtime`, `/cache`,
-`/api/stats/summary`; statics under `/static/`.
+`/api/stats/summary` plus the dashboard-gated compat/observability JSON
+(`/api/stats/transcoding`, `/api/stats/cache-observability`,
+`/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
+`/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
+statics under `/static/`.
 
 Deep dives: [Request lifecycle](deep-dive-request-lifecycle.md),
 [Dashboard](deep-dive-dashboard.md), [Runtime](deep-dive-runtime.md).
@@ -252,10 +257,12 @@ direct Eggfetch client). The root `ssh` capability forwards to
 `eggress-outbound/ssh` plus the compatibility crate's SSH translation support
 (pproxy-style SSH needs both);
 `--no-default-features` keeps direct/non-SSH proxy paths and rejects SSH proxy
-config as `TransportError::ProxyConfiguration` before dialing. Underlying HTTP
-is Eggfetch (`eggfetch-core` 0.2.2 with
-`native-http1` + `tls-rustls` over Hyper/Rustls: HTTP/1.1, `ring`, TLS 1.2,
-WebPKI roots, bounded pooling, standard and advanced routing); proxied routes
+config as `TransportError::ProxyConfiguration` before dialing. Provider
+underlying HTTP is Eggfetch (`eggfetch-core` 0.2.2 with
+`native-http1` + `tls-rustls`: HTTP/1.1, `ring`, TLS 1.2,
+WebPKI roots, bounded pooling, standard and advanced routing; direct
+Hyper/Hyper-util/Hyper-Rustls dependencies remain only for the separate
+`operations/update.rs` owner and the `test-support` TLS-peer seam); proxied routes
 add only a thin Eggress `Dialer` supplying the raw route stream, with origin
 TLS still owned by Eggfetch. There is no `eggress-embed` facade in the graph.
 Route failures arrive as typed
@@ -346,8 +353,9 @@ watchdog composition), `process.rs` (PID files, health/control probes,
 identity proof), `paths.rs` (canonical config/data/state/log/PID/socket
 resolution; production `/etc/eggpool`, `/var/lib/eggpool`, `/var/log/eggpool`
 vs. XDG personal layout; `$EGGPOOL_CONFIG`, `$EGGPOOL_ENV`,
-`$EGGPOOL_RUNTIME_DIR` aware), `control.rs` (Unix-domain JSON control
-protocol for `rehash`/`runtime-status`), `config_mutation.rs` (comment-preserving
+`$EGGPOOL_RUNTIME_DIR` aware), `control.rs` (Unix-domain JSON control protocol: only `command = "reload_config"`;
+`rehash` sends over the socket while `runtime-status` is served over HTTP
+`GET /api/stats/runtime`), `config_mutation.rs` (comment-preserving
 atomic TOML edits + `classify_transition`-carrying apply), `terminal.rs`
 (TTY-only `j/k`/arrow interactive selector with a deterministic line-oriented
 fallback for non-TTY use; `Ctrl-C` stays `MutationError::Interrupted` to
@@ -421,7 +429,11 @@ Deep dives: [Observability](deep-dive-observability.md),
   `GET /api/stats/update`, `GET /api/integrations/v1/profile` (authenticated
   versioned sanitized projection with deterministic revision/ETag; `/v1/models`
   unchanged).
-- Dashboard: pages listed in §3 plus `/api/stats/summary`; observational only.
+- Dashboard: pages plus `/api/stats/summary` and the dashboard-gated
+observability JSON (`/api/stats/transcoding`, `/api/stats/cache-observability`,
+`/api/stats/canonical-request-segmentation`, `/api/stats/cache-stability`,
+`/api/stats/request-shaping`, `/api/timeseries`, `/api/timeseries/grouped`);
+observational only.
 - CLI: full command tree in §1 (`status` is the concise provider health
   summary, `runtime-status` the detailed diagnostics; `configremote codex|opencode`
   is the read-only remote exporter); `runtime.rs` keeps
@@ -481,9 +493,10 @@ pytest suite, `packaging/` release manifests. No Python runtime fallback; never
 (`codecs`, `stream`, `runtime`, `qualification`, `adaptation`, `profiles`,
 `multimodal`, plus the kernel-seam guards `wire_extraction_contract` and
 `wire_kernel_boundary`), `operations_o002`–`o010`, `runtime_lifecycle_r002`–`r013`,
-`routing_*`, `quota`, `health`, `catalog_refresh`, `model_router`,
+`routing_*` (including `routing_claims`, `routing_domain`,
+`routing_domain_d008`, `routing_selection_efficiency`), `quota`, `health`, `catalog_refresh`, `model_router`,
 `database_compatibility`, `provider_transport`, `server_transport`,
-`status_command`, `canonical_request`, `codex_responses_compat`,
+`status_command`, `canonical_request`, `build_manifest`, `codex_responses_compat`,
 `codex_compaction_compat`.
 
 Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).

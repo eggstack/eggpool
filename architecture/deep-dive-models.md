@@ -81,8 +81,8 @@ carry only bounded numeric/diagnostic facts into selection traces.
 - Unknown capability data stays distinct from unsupported data.
 - Compiled policy bytes and fingerprints change only through explicit compatibility review.
 - Affinity stores digests and decisions only, never raw requests or secrets.
-- Public finite/compact request shapes remain compatibility surfaces; private execution
-  inputs avoid duplicating preserved trees.
+- Public `coordinator/finite.rs::FiniteRequest` and `request/admission.rs::CompactAdmittedRequest`
+  shapes remain compatibility surfaces; private execution inputs avoid duplicating preserved trees.
 
 ## Verification
 

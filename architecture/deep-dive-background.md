@@ -16,18 +16,18 @@ Back to [Architecture](README.md). See also [overview.md §10](overview.md) and 
 
 | Name | Ownership | Default cadence | Gate |
 |---|---|---|---|
-| `catalog_refresh` | generation-leased | 300s | `models.refresh_interval_s` (0 disables) |
-| `retention_cleanup` | generation-leased | 86400s | `metrics.cleanup_interval_s` |
-| `checkpoint` | process | 60s (`CHECKPOINT_POLL_INTERVAL_S`) | always on |
-| `metrics_flush` | process | 30s, 5s delay | skipped when `metrics.write_mode = "immediate"` |
-| `update_checker` | process | 86400s, immediate | `update_checker.enabled` |
-| `automatic_backup` | process | 86400s, 300s delay | `[backup].enabled`/`interval_s`/`startup_delay_s` |
+| `catalog_refresh` | generation-leased (`ActiveGenerationLeased`) | 300s, no delay, not immediate | `models.refresh_interval_s` (0 disables) |
+| `retention_cleanup` | generation-leased (`ActiveGenerationLeased`) | 86400s, no delay, not immediate | `metrics.cleanup_interval_s` |
+| `checkpoint` | process | 60s (`CHECKPOINT_POLL_INTERVAL_S`), immediate | always on |
+| `metrics_flush` | process | 30s interval, 5s delay, not immediate | skipped when `metrics.write_mode = "immediate"` |
+| `update_checker` | process | 86400s, immediate | `update_checker.enabled` (plus `include_update_checker` caller gate) |
+| `automatic_backup` | process | 86400s interval, 300s delay, not immediate | `[backup].enabled`/`interval_s`/`startup_delay_s` |
 
 `catalog_refresh` is also the bounded model-info enrichment opportunity; there is no separate model-info scheduler.
 
 ## Scheduling and supervision
 
-Scheduling is fixed-delay: the next interval starts after the previous tick completes (`run_task` records `TaskOutcome`: `Success`/`Error`/`TimedOut`/`Panicked`/`GenerationUnavailable`/`Cancelled`, then waits). Generation-leased ticks acquire the manager per tick and exit quietly on `ShuttingDown`; admission closure during a staged swap surfaces as `GenerationUnavailable`, never as fabricated success. `prepare_diff` validates specs (names, intervals, callback capabilities, ownership) and pre-allocates callback/channel state; `commit` applies only added/removed/rescheduled rows; `rollback` discards a staged diff synchronously, while `rollback_committed` restores the pre-commit set after a late SQLite compensation. `TaskTransition` and `TaskShutdownReport` are the bounded, secret-free evidence.
+Scheduling is fixed-delay: the next interval starts after the previous tick completes (`run_task` records `TaskOutcome`: `Success`/`Error`/`TimedOut`/`Panicked`/`GenerationUnavailable`/`Cancelled`, then waits). Generation-leased ticks call `manager.acquire()` fresh every tick, run as `TaskTickContext::Generation(lease)`, drop the lease before the next sleep (never retained across ticks), and exit quietly on `ShuttingDown`; admission closure during a staged swap surfaces as `GenerationUnavailable`, never as fabricated success. `prepare_diff` validates specs (names, intervals, callback capabilities, ownership) and pre-allocates callback/channel state; `commit` applies only added/removed/rescheduled rows; `rollback` discards a staged diff synchronously, while `rollback_committed` restores the pre-commit set after a late SQLite compensation. `TaskTransition` and `TaskShutdownReport` are the bounded, secret-free evidence.
 
 ## Callbacks
 

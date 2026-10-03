@@ -1,6 +1,8 @@
 # Deep Dive: Security and Redaction
 
-Back to [Architecture](README.md)
+Back to [Architecture](README.md). See also the review index in
+[overview.md](overview.md) (§12): §12 is the birds-eye summary, this file
+is the security authority.
 
 The native runtime applies request limits, API-key authentication
 (constant-time `Bearer`/`x-api-key` check in `rust/src/server/middleware.rs`,

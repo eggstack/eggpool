@@ -22,7 +22,7 @@ consults the semantic IR plus the plan, never source extras.
 ## Kernel seam and EggPool-owned joins (M002)
 
 The pure sans-I/O kernel is `ir`, `adaptation` (neutral), `codec`, `codecs`, `additional_codecs`,
-`decode`, `registry` (neutral), `stream`, plus `fidelity`, `provenance`, and `conformance`. It never
+`decode`, `profile` (neutral registry), `stream`, `tool_calls`, plus `fidelity`, `provenance`, and `conformance`. It never
 imports EggPool routing, catalog, config, request-runtime state, model-router, provider, database, server,
 coordinator, Tokio, Axum, Hyper, TLS, or transport types — guarded by `rust/tests/wire_kernel_boundary.rs`,
 which scans both the root facades and the extracted crate sources and pins the root files to
@@ -35,7 +35,9 @@ and config facts into neutral types (`neutral_capability_status`, `neutral_think
 `neutral_native_summary`, `reasoning_capability_notices`, `native_preservation_notices`,
 `provenance_from_preservation`, `thinking_requirement_from_intent`, `configured_profiles[_from_facts]`,
 `compaction_capabilities_from_surface_config`, `validate_provider_references[_neutral]`); `wire::runtime`
-owns selection-time joining (`WireRuntime`, `WireRuntimeContext`, `WireRuntimeIdentity`); and
+owns selection-time joining (`WireRuntime`, `WireRuntimeContext`, `WireRuntimeIdentity`,
+plus `WireStream`/`PreparedRequest`/`FiniteResponse` with native `Bytes`-handle
+passthrough on the no-rewrite path); and
 `request::admission` owns the single bounded parse with `DecodeLimits::current()` passed through unchanged
 (`MAX_JSON_DEPTH` 64), stateless Responses policy, token/context estimates, and the routing projection.
 

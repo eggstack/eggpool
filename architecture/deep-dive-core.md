@@ -6,9 +6,9 @@ Back to [Architecture](README.md). See also the review index in
 ## Ownership
 
 The native executable is bootstrapped by `rust/src/main.rs` and
-`rust/src/cli.rs`. `rust/src/main.rs` runs Tokio's `current_thread` runtime
+`rust/src/cli.rs`. `rust/src/main.rs:3` runs Tokio's `current_thread` runtime
 and maps `AppError` to `ExitCode` via `AppError::exit_code`.
-`rust/src/lib.rs` declares the module tree (`accounts`, `catalog`, `cli`,
+`rust/src/lib.rs:6-29` declares the module tree (`accounts`, `catalog`, `cli`,
 `config`, `config_reload_policy`, `coordinator`, `db`, `error`, `health`,
 `model_router`, `operations`, `providers`, `quota`, `reload`, `request`,
 `routing`, `runtime`, `runtime_lifecycle`, `server`, `task_supervisor`,
@@ -42,12 +42,13 @@ The repository-root configuration examples are the canonical build inputs:
 for `eggpool init-config`, and embeds the `rust/assets/db/migrations/` chain
 with checksums; there is no second Rust-local copy to synchronize.
 `[server].threads` remains accepted for compatibility and diagnostics
-(validated `1..=64`, restart-required), but the executable uses Tokio's
+(validated `1..=64` at `rust/src/config.rs:1616`, restart-required at
+`rust/src/config_reload_policy.rs:894`), but the executable uses Tokio's
 `current_thread` runtime and does not use that field to select worker threads.
 
 ## CLI, errors, version
 
-`rust/src/cli.rs` owns the command tree (`serve`, `connect`, `logout`,
+`rust/src/cli.rs:24-97` owns the command tree (`serve`, `connect`, `logout`,
 `check-config`, `edit`, `getkey`, `newkey`, `configsetup`, `configremote`,
 `deploy`, `accounts`, `dashboard`, `db`, `models`, `modelinfo`, `stats`,
 `onboard`, `croncheck`, `ensure-running`, `migrate`, `stop`, `restart`,
@@ -65,12 +66,15 @@ The reusable local process workflow is `rust/src/operations/lifecycle.rs`
 aggregation shared with `readyz` (see [Control](deep-dive-control.md));
 `rust/src/server/*` stays thin with no coordinator retries/finalization.
 
-`rust/src/error.rs` owns the top-level typed hierarchy only:
+`rust/src/error.rs` owns the top-level typed hierarchy only (see the
+ownership comment at `rust/src/error.rs:5-12`):
 `AppError::Cli`/`Bootstrap` with `exit_code()`, and `BootstrapError`
 (`Output`, `NotImplemented`, `Config`, `Server`, `ServeUnsupported`,
 `Command { code, detail }`, `Interrupted`). `Command` carries its stable
 exit code, `Interrupted` exits 130, everything else exits 1. HTTP/status
-mappings for server surfaces live with their adapters, not here; errors
+mappings live with their owners (`coordinator/endpoints.rs`
+(`EndpointError::status`), `coordinator/finite.rs` (provider-failure
+statuses), `server/middleware.rs` (generation errors)), not here; errors
 retain structured context without credential values or raw request bodies.
 The server maps local validation, capability, model, upstream, and
 transport failures to their public contracts.
@@ -81,10 +85,18 @@ transport failures to their public contracts.
 ## Dependency and feature authority
 
 `rust/Cargo.toml` (package `eggpool`, currently `0.8.1`) plus its locked
-resolved graph is the native dependency authority. Exact pins:
+resolved graph is the native dependency authority. Exact pins
+(`rust/Cargo.toml:58-74`):
 `eggserve-server =0.4.0` (`tower` feature), the Eggress `1.0.11` family
 (normal path via `eggress-outbound` directly), and
-`eggfetch-core =0.2.2` (`native-http1`, `tls-rustls`). Feature gates:
+`eggfetch-core =0.2.2` (`native-http1`, `tls-rustls`). Direct
+`hyper`/`hyper-util`/`hyper-rustls` (`rust/Cargo.toml:81-92`) serve only the
+separate `operations/update.rs` HTTPS client
+(`rust/src/operations/update.rs:22-27`); `rust/src/server/mod.rs:55` imports
+just the `hyper::body::Body` trait for body size-hint checks, and
+deterministic local TLS peers stay behind the `test-support`-gated adapter in
+`rust/src/providers/transport.rs`. Provider transport itself is Eggfetch-only:
+never the `http1` alias, `standard-http1`, or `eggress-embed`. Feature gates:
 default `ssh` (root capability forwarded to `eggress-outbound/ssh` plus the
 compat crate's SSH translation support); `--no-default-features` still
 compiles/tests, keeps direct/non-SSH proxy paths, and rejects SSH proxy

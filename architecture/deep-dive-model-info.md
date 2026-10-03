@@ -24,8 +24,8 @@ task (`TaskOwnership::ActiveGenerationLeased`).
 `include_in_models_endpoint`, `store_raw_observations`, `sources`, `aliases`, and
 `overrides`. `ModelInfoSourcesConfig` declares `provider_catalog`, `openrouter`,
 `artificial_analysis`, and `huggingface` via `ModelInfoSourceConfig` (`enabled`,
-`priority`, `ttl_seconds`, `base_url`, `api_key_env`, `max_entries`); defaults keep the
-provider catalog highest priority and artificial-analysis/huggingface disabled.
+`priority`, `ttl_seconds`, `base_url`, `api_key`, `api_key_env`, `max_entries`, `options`);
+defaults keep the provider catalog highest priority and artificial-analysis/huggingface disabled.
 `ModelInfoAliasConfig` maps (`provider_id`, `model_id`, `source`, `source_model_id`,
 `confidence`, `notes`); `ModelInfoOverrideConfig` carries operator display/status pins
 (`summary`, `family`, `display_name`, `notes`, `hide_benchmark_sources`,

@@ -9,22 +9,22 @@ Back to [Architecture](README.md). See also the review index in [overview.md §1
 
 ## Reload policy
 
-`classify_transition` is pure and deterministic over two validated configs. It returns one redacted typed `ConfigTransition` (unchanged, live-reloadable, or restart-required) with secret-scrubbed displays. Mixed live plus restart-required changes are wholly restart-required. `[integrations].advertise_base_url` is `Live`: it changes client-facing profile output only, never the listen socket. Binding (`server.host`/`port`), database topology, `[server].threads`, proxies, and other disruptive resources are restart-required via `disposition_for` / `FIELD_DISPOSITIONS`, with blanket live rules for `providers.*`, `accounts.*`, `model_overrides.*`, `model_capabilities.*`, and `transcoder.*`.
+`classify_transition` is pure and deterministic over two validated configs. It returns one redacted typed `ConfigTransition` (unchanged, live-reloadable, or restart-required) with secret-scrubbed displays. Mixed live plus restart-required changes are wholly restart-required. `[integrations].advertise_base_url` is `Live`: it changes client-facing profile output only, never the listen socket. Binding (`server.host`/`port`), database topology, `[server].threads`, proxies, and other disruptive resources are restart-required via `disposition_for` / `FIELD_DISPOSITIONS` (`rust/src/config_reload_policy.rs:523-923`), with blanket live rules for `providers.*`, `accounts.*`, `model_overrides.*`, `model_capabilities.*`, and `transcoder.*`.
 
 ## Reload service
 
-`ReloadService::new(process, manager)` binds one process runtime to one active-generation manager over the process-owned reload lock. `reload` runs owned work in a spawned task so caller cancellation never drops a staged candidate or leaves admission unresolved. The transaction order is: read and digest input, `verify_expected_digest`, parse/validate, `classify_transition` (noop and restart-required return before publication), prepare the provider/account persistence delta, build the complete candidate via `RuntimeGenerationFactory::prepare_with_durable_accounts`, preflight the task diff, `stage`, apply persistence in a caller-owned `DatabaseTransaction`, `commit_pointer`, commit tasks, commit the SQLite transaction, then `accept` (or `accept_during_shutdown`). Post-commit acceptance failure goes fail-closed (`fail_closed`), never restoring the old pointer. `eggpool rehash` serializes reloads through the control socket below.
+`ReloadService::new(process, manager)` binds one process runtime to one active-generation manager over the process-owned reload lock. `reload` runs owned work in a spawned task (`rust/src/reload.rs:341-354`) so caller cancellation never drops a staged candidate or leaves admission unresolved. The transaction order (`rust/src/reload.rs:370-684`) is: read and digest input, `verify_expected_digest`, parse/validate, `classify_transition` (noop and restart-required return before publication), prepare the provider/account persistence delta, build the complete candidate via `RuntimeGenerationFactory::prepare_with_durable_accounts`, preflight the task diff, `stage`, apply persistence in a caller-owned `DatabaseTransaction`, `commit_pointer`, commit tasks, commit the SQLite transaction, then `accept` (or `accept_during_shutdown`). Post-commit acceptance failure goes fail-closed (`fail_closed`), never restoring the old pointer. `eggpool rehash` (`rust/src/runtime.rs:2266-2311`) serializes reloads through the control socket below.
 
 ## Control socket
 
-`rust/src/operations/control.rs` owns the Unix-domain JSON protocol, one request per connection, `PROTOCOL_VERSION = 1`, `MAX_REQUEST_BYTES = 65_536`, `CONTROL_TIMEOUT = 30s`:
+`rust/src/operations/control.rs` owns the Unix-domain JSON protocol, one request per connection, `PROTOCOL_VERSION = 1`, `MAX_REQUEST_BYTES = 65_536`, `CONTROL_TIMEOUT = 30s` (`rust/src/operations/control.rs:31-34`):
 
-- `ControlRequest` (`reload`, `parse_frame`): the only accepted command is `reload_config`, with an optional 64-char lowercase hex `validated_digest`. Depth pre-checks bound parsing before DOM allocation.
+- `ControlRequest` (`reload`, `parse_frame`): the only accepted command is `reload_config` (`control.rs:173-177`), with an optional 64-char lowercase hex `validated_digest`. Depth pre-checks bound parsing before DOM allocation.
 - `ControlResponse` (`error`, `from_reload`): bounded metadata-only outcomes (stage, generation, changed sections, restart-required paths, retirement flag); no secrets, bodies, or provider error text.
 - `ControlClient` (`new`, `with_timeout`, `reload`, `send`): typed one-shot client used by `rehash`.
 - `ControlServerHandle` (`path`, `close`) via `start`: sole process-local listener, socket mode `0o600`, runtime dir `0o700`, stale-socket identity checks; `close` unlinks only its own socket while a retained reload may still finish.
 
-The control plane carries reload only. `runtime-status` is not a control command: `runtime.rs::fetch_runtime_status` reads the authenticated `GET /api/stats/runtime` projection (`server/health.rs::runtime_status`), which renders `RuntimeDiagnosticsSnapshot`.
+The control plane carries reload only. `runtime-status` is not a control command: `runtime.rs::fetch_runtime_status` (`rust/src/runtime.rs:2759-2761`) reads the authenticated `GET /api/stats/runtime` projection (`server/health.rs::runtime_status` at `rust/src/server/health.rs:129`), which renders `RuntimeDiagnosticsSnapshot`.
 
 ## Config mutation
 
