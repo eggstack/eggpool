@@ -54,6 +54,34 @@ async fn insert_ttft_rows(database: &Database, values: &[(i64, i64, &str)]) {
         .expect("TTFT rows insert");
 }
 
+async fn legacy_percentiles(database: &Database, period: &str) -> (f64, f64) {
+    let period = period.to_owned();
+    database
+        .call(move |connection| {
+            let count: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')",
+                [&period],
+                |row| row.get(0),
+            )?;
+            if count == 0 {
+                return Ok((0.0, 0.0));
+            }
+            let at = |offset: i64| {
+                connection.query_row(
+                    "SELECT first_byte_ms FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now') ORDER BY first_byte_ms LIMIT 1 OFFSET ?2",
+                    params![&period, offset],
+                    |row| row.get::<_, f64>(0),
+                )
+            };
+            let lower = at((count - 1) / 2)?;
+            let upper = at(count / 2)?;
+            let p99 = at((99 * count + 99) / 100 - 1)?;
+            Ok((f64::midpoint(lower, upper), p99))
+        })
+        .await
+        .expect("legacy percentile query")
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn dashboard_ttft_percentiles_preserve_population_and_rank_definitions() {
     let directory = tempfile::tempdir().expect("fixture directory");
@@ -65,6 +93,10 @@ async fn dashboard_ttft_percentiles_preserve_population_and_rank_definitions() {
         .await
         .expect("empty summary");
     assert_eq!((empty.p50_ttft_ms, empty.p99_ttft_ms), (0.0, 0.0));
+    assert_eq!(
+        (empty.p50_ttft_ms, empty.p99_ttft_ms),
+        legacy_percentiles(&database, "24h").await
+    );
 
     insert_ttft_rows(&database, &[(1, 17, "-1 hour")]).await;
     let single = repository
@@ -72,6 +104,10 @@ async fn dashboard_ttft_percentiles_preserve_population_and_rank_definitions() {
         .await
         .expect("single summary");
     assert_eq!((single.p50_ttft_ms, single.p99_ttft_ms), (17.0, 17.0));
+    assert_eq!(
+        (single.p50_ttft_ms, single.p99_ttft_ms),
+        legacy_percentiles(&database, "24h").await
+    );
 
     database
         .call(|connection| connection.execute("DELETE FROM requests", []).map(|_| ()))
@@ -96,6 +132,10 @@ async fn dashboard_ttft_percentiles_preserve_population_and_rank_definitions() {
         .await
         .expect("odd summary");
     assert_eq!((odd.p50_ttft_ms, odd.p99_ttft_ms), (200.0, 1000.0));
+    assert_eq!(
+        (odd.p50_ttft_ms, odd.p99_ttft_ms),
+        legacy_percentiles(&database, "24h").await
+    );
 
     database
         .call(|connection| connection.execute("DELETE FROM requests", []).map(|_| ()))
@@ -116,6 +156,10 @@ async fn dashboard_ttft_percentiles_preserve_population_and_rank_definitions() {
         .await
         .expect("even summary");
     assert_eq!((even.p50_ttft_ms, even.p99_ttft_ms), (5.0, 9.0));
+    assert_eq!(
+        (even.p50_ttft_ms, even.p99_ttft_ms),
+        legacy_percentiles(&database, "24h").await
+    );
 
     database.close().await.expect("database closes");
 }
@@ -150,7 +194,7 @@ async fn qualify_dashboard_ttft_query_plans_and_serialized_write_delay() {
             .await
             .expect("large history inserts");
 
-        let (sqlite_version, index_list, count_plan, ordered_plan) = database
+        let (sqlite_version, index_list, count_plan, ordered_plan, window_plan, selector_plan) = database
             .call(|connection| {
                 let version = connection.query_row(
                     "SELECT sqlite_version()",
@@ -172,12 +216,26 @@ async fn qualify_dashboard_ttft_query_plans_and_serialized_write_delay() {
                     .prepare("EXPLAIN QUERY PLAN SELECT first_byte_ms FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now') ORDER BY first_byte_ms LIMIT 1 OFFSET ?2")?
                     .query_map(params!["24h", 300], |row| row.get(3))?
                     .collect::<Result<Vec<String>, _>>()?;
-                Ok((version, indexes, count, ordered))
+                let window = connection
+                    .prepare("EXPLAIN QUERY PLAN WITH histogram AS (SELECT first_byte_ms, COUNT(*) AS frequency FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now') GROUP BY first_byte_ms), ranked AS (SELECT first_byte_ms, frequency, SUM(frequency) OVER (ORDER BY first_byte_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_count, SUM(frequency) OVER () AS total_count FROM histogram) SELECT MAX(CASE WHEN cumulative_count >= (total_count + 1) / 2 AND cumulative_count - frequency < (total_count + 1) / 2 THEN first_byte_ms END), MAX(CASE WHEN cumulative_count >= (total_count + 2) / 2 AND cumulative_count - frequency < (total_count + 2) / 2 THEN first_byte_ms END), MAX(CASE WHEN cumulative_count >= (99 * total_count + 99) / 100 AND cumulative_count - frequency < (99 * total_count + 99) / 100 THEN first_byte_ms END) FROM ranked")?
+                    .query_map(params!["24h"], |row| row.get(3))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                let selector = connection
+                    .prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM requests WHERE streamed = 1 AND first_byte_ms IS NOT NULL AND started_at >= CASE ?1 WHEN '1h' THEN datetime('now', '-1 hour') WHEN '7d' THEN datetime('now', '-7 days') WHEN '30d' THEN datetime('now', '-30 days') ELSE datetime('now', '-24 hours') END AND started_at < datetime('now')")?
+                    .query_map(params!["24h"], |row| row.get(3))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                Ok((version, indexes, count, ordered, window, selector))
             })
             .await
             .expect("query plans inspect");
         let db_bytes = std::fs::metadata(&path).expect("database metadata").len();
         let repository = UsageRollupRepository::new(&database);
+        let expected = legacy_percentiles(&database, "24h").await;
+        let actual = repository
+            .dashboard_summary_basic("24h")
+            .await
+            .expect("qualified summary");
+        assert_eq!((actual.p50_ttft_ms, actual.p99_ttft_ms), expected);
         let mut durations = Vec::new();
         for _ in 0..20 {
             let start = Instant::now();
@@ -217,6 +275,8 @@ async fn qualify_dashboard_ttft_query_plans_and_serialized_write_delay() {
         );
         println!("count_plan={count_plan:?}");
         println!("ordered_offset_plan={ordered_plan:?}");
+        println!("single_window_plan={window_plan:?}");
+        println!("adaptive_count_plan={selector_plan:?}");
         println!(
             "summary_ms p50={} p95={} max={}",
             durations[9].as_secs_f64() * 1000.0,

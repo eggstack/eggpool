@@ -377,16 +377,30 @@ database worker; their elapsed time tracks the summary duration, with some
 additional host scheduling noise. These are host-local descriptive measurements,
 not an SBC latency claim.
 
-Decision: **implement the query-only bounded rewrite**. The corrected fixture
-shows a repeatable roughly 14x summary slowdown for 10x in-window history, and
-writer waits rise with it. The three ordered TTFT statements each create a
-temporary B-tree. A single ordered window relation is justified; no new index,
-schema, connection, or persistence-topology change is authorized.
+Decision: **implement an adaptive query-only bounded rewrite**. A grouped
+frequency/window query alone regressed the 10k fixture (~68 ms vs the original
+~53 ms), while reducing the 100k fixture to ~454–456 ms from ~754–756 ms. The
+grouped path therefore runs only for at least 50,000 eligible rows; other
+populations retain the original offset queries. A first adaptive selector
+counted distinct TTFT values, which added a temporary B-tree and measured
+56–68 ms at 10k and 510–518 ms at 100k, so it was removed. The existing
+covering-index count is reused for the threshold. The final adaptive query
+plans keep that count as an index range scan and use the frequency GROUP BY
+plus bounded window ranking for the large history. Final p50 at 10k was
+54.719 ms (writer p50 55.605 ms), close to the 52.959–53.078 ms baseline;
+final p50 at 100k was 472.781 ms (writer p50 471.905 ms), about 37% below
+the 754.329–755.840 ms baseline. Exact parity was asserted against the old
+offset implementation on both deterministic large fixtures and the semantic
+oracle. The grouped query uses temporary B-trees for grouping and window
+ordering, but does not sort each of three full-row offset queries. No new
+index, schema, connection, or persistence-topology change is authorized.
 
 The semantic test locks empty/single/odd/even/duplicate/null/non-streamed and
 out-of-window behavior. The expensive seeded harness is ignored by normal
 workspace test runs and can be explicitly invoked with the command recorded
-in the closure record.
+in the closure record. Accepted adaptive qualification runs used the bundled
+SQLite 3.53.2 engine and checked exact p50/p99 equality against the old query
+for each seeded 10k/100k database before timing.
 
 ## 17. Handoff notes
 
