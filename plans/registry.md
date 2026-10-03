@@ -58,7 +58,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | closing | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | Closure evidence assembled; no production/template changes. |
 
 ## Blocked work
 
