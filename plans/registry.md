@@ -52,12 +52,13 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | ready | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | No hard dependency. Markdown/planning only; M001 closure and provider templates remain immutable. |
+
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Provider profile metadata planning/documentation reconciliation | C001 closed-roadmap + source-truth reconciliation | active | `plans/implementation/provider-profile-metadata-planning-reconciliation/001-closed-roadmap-and-source-truth-reconciliation.md` | Markdown/planning only; M001 closure and provider templates remain immutable. |
 
 ## Blocked work
 
