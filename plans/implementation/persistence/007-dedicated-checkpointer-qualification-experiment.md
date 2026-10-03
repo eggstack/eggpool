@@ -1,6 +1,6 @@
 # Persistence Milestone 007 — Dedicated Checkpointer Qualification Experiment
 
-Status: closing
+Status: implemented (physical disposition: `plans/closure/persistence/007-pi5-qualification.md`)
 
 Repository baseline: `3270f4b71b2a7dd5115d9b8e1666a789ac292676`
 

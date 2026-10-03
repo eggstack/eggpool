@@ -374,7 +374,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture. Implementation and local qualification are ready; paired performance disposition is being collected on the available Linux/aarch64 Raspberry Pi 5 MMC target. The workstream may close only when later bounded evidence and any required architecture decision either eliminate the target-class tail without transferring it to foreground gate/I/O wait, or explicitly accept the residual behavior.
+This roadmap remains active while the foreground SQLite checkpoint tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M006 established the retained SQLite safety baseline. M007 is the evidence-only dedicated-checkpointer topology experiment; it does not alter production architecture. M007 has now been physically qualified on a Raspberry Pi 5/MMC and rejected: the dedicated candidate failed WAL progress and convergence gates. No production change was made. The workstream remains active because the foreground SQLite checkpoint tail is unresolved; any alternative requires a new bounded plan and must not transfer the tail to foreground gate/I/O wait.
 
 ## 12. Milestone status
 
