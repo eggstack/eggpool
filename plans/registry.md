@@ -14,8 +14,8 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Provider Transport M002 (Eggfetch 0.2.2 typed transport
-failure classification; `plans/closure/provider-transport/002-status.md`).
+Most recently closed: Dashboard M012 (lifecycle closure and documentation
+polish; `plans/closure/dashboard/012-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -45,7 +45,7 @@ pair is a known numbering accident.
 | Routing selection | active | `plans/subsystems/routing-selection-roadmap.md` | M001 closed — ordered quota-scoring and candidate-allocation cleanup | M002 stays evidence-gated (no affinity workload measured yet). |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M007 blocked — dedicated checkpointer qualification experiment | Implementation/local gates passed; paired physical Pi/MMC performance disposition is unavailable from this host. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
-| Dashboard | active | `plans/subsystems/dashboard-roadmap.md` | M012 active — lifecycle closure and documentation polish | M001-M011 closed; M012 has no hard blocker and is limited to terminal planning/docs reconciliation. |
+| Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
 
@@ -57,7 +57,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Dashboard | M012 lifecycle closure and documentation polish | active | `plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md` | M001-M011 closed; documentation/planning only; no runtime/oracle change. |
 
 ## Blocked work
 
@@ -71,6 +70,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Dashboard M012 — lifecycle closure and documentation polish | closed — terminal planning/docs reconciliation; M001–M012 closed, no registered successor; three stale dashboard ownership paths corrected; zero Rust/Cargo/asset/oracle diff; merge-head CI and dependency audit green | `plans/closure/dashboard/012-status.md`, documentation `bdd22aef`, hosted CI `37090882257`, dependency audit `37090882237` |
 | Provider Transport M002 — Eggfetch 0.2.2 transport failure classification adoption | closed — typed upstream classifications adopted without changing EggPool policy; default/test-support/no-default provider fixtures and hosted gates pass | `plans/closure/provider-transport/002-status.md`, implementation `67d6ceb3`, hosted CI `37070421301`, dependency audit `37070423689` |
 | Provider profile metadata corrective M001 — provider template endpoint/source reconciliation | closed — all 23 bundled templates dispositioned against first-party docs; Together retained on canonical `.ai` (plan's `.xyz` correction refuted), OpenCode Go retained on `/zen/go/v1`; 5 template regression tests + authority docs; zero template diff; 815 workspace tests green | `plans/closure/provider-profile-metadata/001-status.md`, implementation `805d6f70` |
 | Request admission and wire M006 — external semantic-producer consumer contract | closed — source-neutral canonical requests, surface encoding/options, bounded tool-call accumulation, isolated consumer compile, and EggPool regression gates pass; downstream pin available | `plans/closure/request-admission-wire/006-status.md`, implementation `f05b18b7358d9a4125d1e20c491151eec265e403` |
@@ -304,3 +304,5 @@ unrelated independent blockers/evidence gates.
 
 
 Explicit user direction opens a documentation-only provider-profile metadata reconciliation at baseline `43c987ea458bd563d5108fd8051ad31185704bb0`. The accepted technical outcome remains M001 closure `805d6f70`: canonical Together `api.together.ai/v1` retained, OpenCode Go `/zen/go/v1` retained, zero template diff, two low discovery uncertainties deferred. C001 exists only to reconcile the predecessor roadmap's stale top-level `active` state, the registry's active/no-successor contradiction, and planning-time Together `.xyz` wording that was superseded by execution-time first-party evidence. No provider/template/runtime work is reopened.
+
+Unblock audit (dashboard M012 closed, documentation `bdd22aef`, `plans/closure/dashboard/012-status.md`): M012 was a terminal planning/documentation pass with no hard dependency beyond the already-closed M001–M011. It promoted nothing and unblocks nothing. Dashboard M001–M012 are closed, the dashboard roadmap is closed, and no dashboard plan remains in the dependency-ready, active, or blocked tables. Persistence M007 stays blocked for the same independent reason: paired physical aarch64 Pi-class MMC control/candidate evidence is an operational requirement no planning change can satisfy. Routing-selection M002 stays evidence-gated because no affinity workload has been measured. Provider Transport M002 stays closed and its upstream blocker is historical. The only remaining ready row is the independent provider-profile-metadata planning/documentation reconciliation C001, which M012 does not affect. M012's closure record carries three out-of-scope documentation findings, none of them a dashboard defect: one medium (`docs/thinking.md` still describes Python-era thinking counters, `GET /api/stats/thinking`, and coordinator/health Python members that have no Rust owner) and two low (`docs/rust-dashboard-qualification.md` does not mention the frozen Python oracle runner; `tests/tooling/test_release_docs.py` invokes `uv run` without `--frozen` and so rewrites the committed `uv.lock` `requires-python`). Each requires a new bounded plan outside this subsystem.

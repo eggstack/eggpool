@@ -1,6 +1,6 @@
 # Dashboard Parity Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -407,14 +407,17 @@ recorded.
 | 009 | closed | plans/implementation/dashboard/009-production-module-decomposition.md | plans/closure/dashboard/009-status.md | Strict oracle, full Rust/tooling gates, and hosted CI passed. |
 | 010 | closed | plans/implementation/dashboard/010-parity-harness-decomposition.md | plans/closure/dashboard/010-status.md | Strict oracle/report semantics, browser/lifecycle, local gates, and hosted CI pass. |
 | 011 | closed | plans/implementation/dashboard/011-hosted-oracle-history-qualification.md | plans/closure/dashboard/011-status.md | Hosted CI run 37049147155 passed all gates, including frozen manifest blob identity. |
-| 012 | active | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | — | M001-M011 closed; terminal planning/docs cleanup only. |
+| 012 | closed | plans/implementation/dashboard/012-lifecycle-closure-and-documentation-polish.md | plans/closure/dashboard/012-status.md | M001-M011 closed; terminal planning/docs cleanup only; no production or oracle change. |
 
-M001-M011 remain closed historical evidence. M008 corrected the post-merge
-strict-CI failure without reopening accepted dashboard parity dispositions.
+M001-M012 are closed. M008 corrected the post-merge strict-CI failure without
+reopening accepted dashboard parity dispositions.
 M009 decomposed production modules while preserving the qualification harness
 and exact accepted parity differences. M010 closed after strict oracle/report
 semantics, browser/lifecycle, local gates, and hosted CI passed. M011 closed
 the hosted checkout history prerequisite for the frozen oracle blob test.
-M012 is the sole active Dashboard successor and is limited to terminal
-planning/documentation reconciliation; it does not reopen runtime or parity
-scope.
+M012 reconciled the terminal planning lifecycle and the current-document
+ownership paths without changing runtime, assets, oracle, or accepted parity
+semantics. This is the terminal dashboard milestone: no successor is
+registered, and any future dashboard work — new capability, asset/theme change,
+or comparator revision — requires a new bounded plan. Severity-tagged
+out-of-scope documentation findings are recorded in M012's closure record.
