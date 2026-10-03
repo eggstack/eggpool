@@ -770,9 +770,10 @@ pub async fn run_with_digest(
     let listener = TcpListener::bind(&address).await?;
 
     let mut database_config = db::DatabaseConfig::from(&config.database);
-    database_config.path = Config::runtime_path(&config.database.path)
-        .to_string_lossy()
-        .into_owned();
+    let database_path = Config::runtime_path(&config.database.path);
+    crate::operations::paths::ensure_parent_dir(&database_path)
+        .map_err(crate::operations::process::ProcessError::Path)?;
+    database_config.path = database_path.to_string_lossy().into_owned();
     let database = db::Database::open(database_config).await?;
     if let Err(error) = db::MigrationRunner::new(&database).run().await {
         let _ = database.close().await;

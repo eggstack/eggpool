@@ -629,6 +629,17 @@ async fn open_maintenance_database(
             format!("database not found: {}", path.display()),
         ));
     }
+    if !require_existing {
+        crate::operations::paths::ensure_parent_dir(&path).map_err(|error| {
+            command_error(
+                EXIT_VALIDATION,
+                format!(
+                    "database directory could not be prepared ({}): {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    }
     let mut database_config = crate::db::DatabaseConfig::from(&config.database);
     database_config.path = path.display().to_string();
     crate::db::Database::open(database_config)

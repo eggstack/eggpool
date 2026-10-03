@@ -9,7 +9,11 @@ use eggpool::{
     server::{ServerError, ServerRuntime, ShutdownPhase, ShutdownReason},
 };
 use tempfile::TempDir;
-use tokio::{net::TcpListener, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    time::Duration,
+};
 
 async fn runtime_fixture(timeout: Duration) -> (TempDir, Database, ServerRuntime) {
     let directory = tempfile::tempdir().expect("temporary state directory");
@@ -160,4 +164,93 @@ async fn initial_tasks_are_installed_once_before_acceptance() {
     assert_eq!(report.task_count_at_start, 3);
     assert_eq!(report.task_count_joined, 3);
     database.close().await.expect("idempotent DB close");
+}
+
+/// First-run robustness: `run_with_digest` creates a missing database parent
+/// directory instead of failing SQLite open. The database path points into a
+/// nested directory that does not exist yet; readiness on `/v1/healthz` is
+/// the observable proof the server got past database open.
+#[tokio::test]
+async fn first_run_creates_missing_database_parent_directory() {
+    let directory = tempfile::tempdir().expect("temporary state directory");
+    let path = directory.path().join("nested").join("first-run.db");
+    assert!(
+        !path.parent().expect("database parent").exists(),
+        "fixture must start with a missing database parent directory"
+    );
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = Some("test-key-first-run".to_owned());
+    config.models.startup_refresh = false;
+    config.database.path = path.to_string_lossy().into_owned();
+    // Probe a free loopback port, then release it for the server under test.
+    // A small retry loop keeps the probe-then-bind sequence robust when the
+    // port is stolen between probe and bind.
+    for _ in 0..3 {
+        let probe = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("free port probe");
+        config.server.port = probe.local_addr().expect("probe address").port();
+        drop(probe);
+        let task = tokio::spawn(eggpool::server::run_with_digest(
+            config.clone(),
+            "r009-first-run".to_owned(),
+            None,
+        ));
+        if wait_for_healthz(config.server.port, &task).await {
+            assert!(
+                path.is_file(),
+                "server creates the database file on first run"
+            );
+            task.abort();
+            let _ = task.await;
+            return;
+        }
+        match task.await.expect("server task joins") {
+            Err(ServerError::Bind(_)) => continue,
+            other => panic!("server failed before serving: {other:?}"),
+        }
+    }
+    panic!("server never reached ready on a free loopback port");
+}
+
+/// Poll `/v1/healthz` until it reports ok or the server task finishes.
+/// Returns true only on observed readiness under the bounded timeout.
+async fn wait_for_healthz(
+    port: u16,
+    task: &tokio::task::JoinHandle<Result<(), ServerError>>,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while tokio::time::Instant::now() < deadline {
+        if task.is_finished() {
+            return false;
+        }
+        if healthz_is_ok(port).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+
+async fn healthz_is_ok(port: u16) -> bool {
+    let address = format!("127.0.0.1:{port}");
+    let connect =
+        tokio::time::timeout(Duration::from_millis(200), TcpStream::connect(&address)).await;
+    let Ok(Ok(mut stream)) = connect else {
+        return false;
+    };
+    let request = b"GET /v1/healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request).await.is_err() {
+        return false;
+    }
+    let mut body = Vec::new();
+    if tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut body))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&body);
+    text.contains("200") && text.contains("\"status\":\"ok\"")
 }

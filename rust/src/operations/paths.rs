@@ -1,8 +1,9 @@
 //! Canonical, read-only runtime path resolution for local operations.
 //!
 //! Resolution is intentionally side-effect free.  Callers that are about to
-//! bind a control socket or write lifecycle state must use the explicit
-//! `ensure_*` helpers, which create and validate private directories.
+//! bind a control socket, write lifecycle state, or open a runtime data file
+//! must use the explicit `ensure_*` helpers, which create and validate
+//! private directories.
 
 use std::{
     env,
@@ -193,7 +194,7 @@ impl RuntimePaths {
     }
 
     /// Create and validate the private state directory used by lifecycle
-    /// files.  This is the only path helper that intentionally mutates disk.
+    /// files.
     pub fn ensure_state_dir(&self) -> Result<(), PathError> {
         ensure_private_dir(&self.state_dir)
     }
@@ -202,6 +203,29 @@ impl RuntimePaths {
     pub fn ensure_runtime_dir(&self) -> Result<(), PathError> {
         ensure_private_dir(&self.runtime_dir)
     }
+}
+
+/// Ensure the parent directory of a runtime data file (for example the
+/// SQLite database) exists, creating it when missing.  Existing directories
+/// are never modified: installers own ownership and mode, first-run only
+/// needs existence so the database file itself can be created.
+pub fn ensure_parent_dir(path: &Path) -> Result<(), PathError> {
+    let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    if parent.is_dir() {
+        return Ok(());
+    }
+    if parent.exists() {
+        return Err(PathError::DataDir(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            format!("database parent is not a directory: {}", parent.display()),
+        )));
+    }
+    fs::create_dir_all(parent).map_err(PathError::DataDir)
 }
 
 fn command_line_config() -> Option<String> {
@@ -226,6 +250,8 @@ pub enum PathError {
     UnsafeDirectory,
     #[error("private runtime path could not be prepared")]
     Io(#[source] io::Error),
+    #[error("runtime data directory could not be prepared")]
+    DataDir(#[source] io::Error),
 }
 
 fn resolve_runtime_dir(environment: &PathEnvironment, state_dir: &Path, home: &Path) -> PathBuf {
@@ -348,4 +374,48 @@ pub(crate) fn create_private_file(path: &Path) -> Result<fs::File, PathError> {
 
 pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), PathError> {
     ensure_private_dir(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_parent_dir_creates_missing_nested_parents() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("eggpool.db");
+        assert!(!target.parent().expect("parent").exists());
+        ensure_parent_dir(&target).expect("parent directories are created");
+        assert!(target.parent().expect("parent").is_dir());
+    }
+
+    #[test]
+    fn ensure_parent_dir_is_idempotent_for_existing_directories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("eggpool.db");
+        ensure_parent_dir(&target).expect("existing parent is accepted");
+        ensure_parent_dir(&target).expect("second call is accepted");
+        assert!(directory.path().is_dir());
+    }
+
+    #[test]
+    fn ensure_parent_dir_accepts_bare_filenames() {
+        ensure_parent_dir(Path::new("eggpool.db")).expect("empty parent is a no-op");
+    }
+
+    #[test]
+    fn ensure_parent_dir_rejects_file_blocking_parent() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let blocker = directory.path().join("blocker");
+        fs::write(&blocker, b"not a directory").expect("blocker file is written");
+        let target = blocker.join("eggpool.db");
+        assert!(
+            matches!(ensure_parent_dir(&target), Err(PathError::DataDir(_))),
+            "a file in place of the parent directory must surface a data-dir error"
+        );
+    }
 }

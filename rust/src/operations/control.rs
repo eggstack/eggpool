@@ -729,5 +729,6 @@ fn map_path_error(error: PathError) -> ControlError {
         PathError::NotDirectory | PathError::UnsafeDirectory | PathError::Io(_) => {
             ControlError::UnsafeRuntimeDirectory
         }
+        PathError::DataDir(source) => ControlError::Io(source.kind()),
     }
 }
