@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M010 closed — control/projection split rejected under current history/outage contract | M007–M010 are closed; foreground SQLite checkpoint/storage tail remains unresolved. No successor is registered; split follow-up needs an explicit retention and analytics-outage admission policy. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -52,6 +52,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 
 
 
@@ -339,3 +340,6 @@ Explicit user direction opens Persistence M008 at baseline `849dfd5fd26afc027fc1
 
 
 Explicit user direction opens Persistence M010 at baseline `3efd650e63eef4999e450bdef738af9e54971d4b`. M008's rejected PERSIST/EXTRA result and worker-write attribution are the hard evidence basis. M010 is bounded to ownership inventory, durable-outbox/projector/backup/failure design, and an isolated test-only transaction-shape prototype. It does not add a production database, projector, schema migration, API/config surface, or accepted ADR. If a viable boundary survives, ADR-0002 may be created only as proposed; production implementation requires later explicit acceptance and separate milestones.
+
+
+Explicit user direction opens Persistence M011 at baseline `9c1d86bc17a2a91b2ed8441bf23bd3e80b6603ed`. The accepted M009/M010 technical outcomes are unchanged: M009 closed the first lifecycle-doc drift; M010 rejected the control/outbox/analytics split under the current history/outage contract and proposed no ADR. M011 is restricted to current-authority roadmap/docs status reconciliation plus a targeted guard. It does not reopen storage architecture, retention policy, SQLite tuning, or production behavior.

@@ -96,7 +96,8 @@ Request publication/finalization continue to own their current transactions. Det
 - M007 is closed rejected after Pi 5/MMC qualification: its second PASSIVE worker removed foreground latency but failed WAL progress/convergence. This is the hard evidence dependency for M008.
 - M008 has no remaining hard dependency. It preserves one connection/gate/worker and tests a different SQLite journal architecture under a non-default qualification feature. Physical Linux/aarch64 Pi 5-class ext4/MMC evidence is an operational closure dependency, not an implementation blocker.
 - M008 is closed rejected. M009 is a documentation-only corrective pass and has no runtime dependency.
-- M010 is closed rejected after the schema/index/consumer inventory, failure and backup/read-plane analysis, and isolated transaction-shape prototype. No registered successor depends on it. Any future split remains unready until the product contract explicitly resolves finite history retention and analytics-outage admission behavior; a separate architecture/ADR and implementation/physical-qualification plan would then be required.
+- M010 is closed rejected after the schema/index/consumer inventory, failure and backup/read-plane analysis, and isolated transaction-shape prototype. Any future split remains unready until the product contract explicitly resolves finite history retention and analytics-outage admission behavior; a separate architecture/ADR and implementation/physical-qualification plan would then be required.
+- M011 is dependency-ready as a documentation-only corrective for residual M008/M009/M010 roadmap lifecycle drift. It does not reopen persistence architecture or alter runtime behavior.
 
 ## 7. Milestones
 
@@ -448,6 +449,39 @@ Exit conditions:
 - No production implementation becomes ready automatically.
 - Any future split requires an accepted ADR and separate implementation/physical-qualification milestones.
 
+### Milestone 011 — Post-M010 roadmap and documentation reconciliation
+
+Class: polish
+
+Status: ready
+
+Implementation plan:
+
+- `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md`
+
+Objective:
+
+Reconcile the remaining detailed milestone-body lifecycle drift after M009 and M010 closure and add a narrow guard that keeps the persistence roadmap's current status declarations aligned with accepted closure records.
+
+Dependencies:
+
+- Hard: M009 and M010 closures accepted. **Satisfied.**
+- No runtime, hardware, ADR, or external dependency.
+
+Deliverable boundary:
+
+- Correct stale M009 `active` and M010 `closing` detailed-body statuses.
+- Collapse M008's redundant adjacent status declarations to one closed/rejected status.
+- Sweep only current-authority persistence docs for equivalent lifecycle contradictions.
+- Extend the existing targeted persistence documentation guard.
+- Zero production Rust/Cargo/schema/API/config/artifact change.
+
+Exit conditions:
+
+- Detailed milestone bodies, milestone table, dependency graph, completion definition, registry, and current architecture docs agree.
+- Persistence remains top-level active because the storage tail is unresolved.
+- M011 closes with no successor registered and no Persistence ready/active/blocked implementation rows.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -491,7 +525,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, M007 rejected a separate PASSIVE worker, and M008 rejected PERSIST/EXTRA after physical Pi 5/MMC qualification. Production remains WAL/NORMAL. M009 reconciled current documentation and is closed; M010 is closed with the control/outbox/analytics split rejected under the current history/outage contract. No successor is registered or promoted. Any further split work first needs an explicit product decision on finite history retention and request admission during prolonged analytics outages, followed by a separately registered plan.
+This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, M007 rejected a separate PASSIVE worker, and M008 rejected PERSIST/EXTRA after physical Pi 5/MMC qualification. Production remains WAL/NORMAL. M009 reconciled the first post-M008 documentation drift and is closed; M010 is closed with the control/outbox/analytics split rejected under the current history/outage contract. M011 is registered solely to reconcile the remaining detailed roadmap lifecycle statuses. No technical successor is registered or promoted. Any further split work first needs an explicit product decision on finite history retention and request admission during prolonged analytics outages, followed by a separately registered plan.
 
 ## 12. Milestone status
 
@@ -507,3 +541,4 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
 | 009 — M008 documentation reconciliation corrective pass | closed | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | plans/closure/persistence/009-status.md | no runtime/hardware blocker; M010 remains eligible |
 | 010 — control/projection storage boundary architecture investigation | closed — split rejected under current history/outage contract | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | plans/closure/persistence/010-status.md | no successor registered; future split work needs an explicit retention/outage policy |
+| 011 — post-M010 roadmap and documentation reconciliation | ready | plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md | — | M009/M010 closures satisfied; documentation/tooling only |
