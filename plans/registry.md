@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M009 ready — M008 documentation reconciliation corrective pass | M008 closure accepted; documentation-only corrective has no runtime or hardware blocker. Production remains WAL/NORMAL; storage tail unresolved. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M009/M010 ready — docs reconciliation + control/projection architecture investigation | M008 closure accepted. M009 and M010 may run in parallel; M010 is research/prototype only and cannot authorize production split storage. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -53,6 +53,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M009 — M008 documentation reconciliation corrective pass | ready | `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md` | Hard: M008 closure accepted. Documentation/tooling only; no physical target required. |
+| Persistence | M010 — control/projection storage boundary architecture investigation | ready | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Hard: M008 closure accepted. Soft: M009 may run in parallel. Investigation/test-only prototype only; any production split requires ADR acceptance and separate plans. |
 
 
 
@@ -333,3 +334,6 @@ Efficiency M001–M003 are closed. No additional existing plan became eligible.
 
 
 Explicit user direction opens Persistence M008 at baseline `849dfd5fd26afc027fc1f00316dea70d62973a52`. M007's Pi 5/MMC rejection is the hard evidence dependency: the dedicated PASSIVE candidate removed foreground latency but failed WAL progress/convergence. M008 therefore tests a different journaling architecture rather than another checkpoint schedule. The ready plan keeps one connection/gate/worker, compares WAL/NORMAL control with isolated PERSIST/EXTRA candidate databases, and gathers separate Linux worker-write attribution evidence without contaminating the latency corpus. Production remains WAL/NORMAL; positive evidence requires a later ADR/adoption plan, while rejection may justify separately bounded control/outbox/analytics persistence research.
+
+
+Explicit user direction opens Persistence M010 at baseline `3efd650e63eef4999e450bdef738af9e54971d4b`. M008's rejected PERSIST/EXTRA result and worker-write attribution are the hard evidence basis. M010 is bounded to ownership inventory, durable-outbox/projector/backup/failure design, and an isolated test-only transaction-shape prototype. It does not add a production database, projector, schema migration, API/config surface, or accepted ADR. If a viable boundary survives, ADR-0002 may be created only as proposed; production implementation requires later explicit acceptance and separate milestones.

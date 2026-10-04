@@ -10,8 +10,8 @@ Long-term references:
 
 Related ADRs:
 
-- M008 itself requires no ADR because PERSIST/EXTRA exists only in a repository-only qualification build against isolated benchmark databases; default/release storage remains WAL/NORMAL on one connection/gate/worker.
-- A positive M008 result does not authorize production adoption. Shipping a different journal/durability mode, adding a second SQLite authority, introducing a control/outbox/analytics split, exposing a public storage-tuning surface, or changing process-lifecycle authority requires a new ADR or explicit architecture decision.
+- M008 required no ADR because PERSIST/EXTRA was qualification-only; it is now closed rejected and production remains WAL/NORMAL.
+- M010 investigates a possible control/outbox/analytics storage boundary. No split-storage ADR is accepted at start. If M010 converges on a viable contract it may create ADR-0002 with status proposed only; production adoption still requires explicit acceptance and separate implementation milestones.
 
 ## 1. Purpose and ownership boundary
 
@@ -49,7 +49,7 @@ No new user-facing capability is planned. Existing inference, statistics, backup
 
 ## 3. Non-goals
 
-- No second SQLite connection, read pool, writer pool, or checkpoint-only connection.
+- No production second SQLite connection, read pool, writer pool, checkpoint-only connection, or analytics projector is authorized by this roadmap today. M010 may model/test a split only in isolated non-production prototypes.
 - No production journal-mode or durability change, synchronous = OFF, relaxed transaction durability, or early finite-response delivery. M008 may set PERSIST/EXTRA only under its non-default qualification feature on runner-owned isolated databases.
 - No public wal_autocheckpoint/checkpoint tuning key in Config, CLI, environment documentation, or example config.
 - No schema migration solely for performance.
@@ -95,7 +95,8 @@ Request publication/finalization continue to own their current transactions. Det
 - M003's evidence, architecture, and M006 engine dependencies were met. Its implementation is closed rejected and reverted.
 - M007 is closed rejected after Pi 5/MMC qualification: its second PASSIVE worker removed foreground latency but failed WAL progress/convergence. This is the hard evidence dependency for M008.
 - M008 has no remaining hard dependency. It preserves one connection/gate/worker and tests a different SQLite journal architecture under a non-default qualification feature. Physical Linux/aarch64 Pi 5-class ext4/MMC evidence is an operational closure dependency, not an implementation blocker.
-- M008 is closed rejected. M009 is a documentation-only corrective pass and has no runtime dependency. A separately authorized storage-architecture investigation may proceed from M008's accepted physical evidence; production adoption of any split authority still requires an ADR and separate implementation milestones.
+- M008 is closed rejected. M009 is a documentation-only corrective pass and has no runtime dependency.
+- M010 is dependency-ready from M008's accepted physical evidence. It is an architecture investigation only; M009 is a soft parallel dependency. A production control/outbox/analytics split still requires a proposed/accepted ADR and separate implementation/physical-qualification milestones.
 
 ## 7. Milestones
 
@@ -407,6 +408,44 @@ Exit conditions:
 - Historical closure/artifact evidence remains immutable.
 - Targeted documentation guard passes.
 
+### Milestone 010 — Control/projection storage boundary architecture investigation
+
+Class: infrastructure
+
+Status: ready
+
+Implementation plan:
+
+- `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md`
+
+Objective:
+
+Determine whether latency-critical correctness state should remain in one authoritative control SQLite database while replayable observability/history is projected asynchronously through a durable outbox into a separate analytics database.
+
+Dependencies:
+
+- Hard: M008 physical closure/rejection. **Satisfied.**
+- Interface: current publication/finalization/recovery, dashboard repository, retention, and backup contracts. **Stable for investigation.**
+- Soft: M009 documentation reconciliation may execute in parallel and does not block M010.
+- No physical hardware dependency for architecture closure; any prototype performance data is structural/local unless separately run on the Pi target.
+
+Deliverable boundary:
+
+- Exhaustive table/field/index/consumer ownership matrix.
+- Minimum synchronous control-state definition.
+- Comparison of current monolith, same-database logical split, and control+outbox+analytics designs.
+- Bounded durable outbox/projector protocol with replay/idempotency/reclamation semantics.
+- Explicit backlog/outage, backup/restore, read-consistency, migration/rollback, and security models.
+- Test-only isolated transaction-shape prototype comparing current foreground mutations with the selected candidate.
+- Proposed ADR-0002 only if a coherent candidate survives the investigation.
+- Zero production schema/runtime/API/config change.
+
+Exit conditions:
+
+- Candidate architecture is proposed with decision-quality evidence, narrowed to an exact missing-evidence follow-up, or rejected.
+- No production implementation becomes ready automatically.
+- Any future split requires an accepted ADR and separate implementation/physical-qualification milestones.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -450,7 +489,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M007 rejected a separate PASSIVE worker because WAL progress/convergence failed despite excellent foreground latency. M006 remains the retained SQLite safety baseline. M008 completed physical Pi 5/MMC qualification and rejected PERSIST/EXTRA adoption: candidate request p95 exceeded 100 ms in all three primary runs and all five steady-state windows, while separate worker-I/O attribution measured about 2.04× control. Production remains WAL/NORMAL. M009 is registered as the bounded documentation corrective for the residual lifecycle drift; it changes no runtime behavior.
+This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, M007 rejected a separate PASSIVE worker, and M008 rejected PERSIST/EXTRA after physical Pi 5/MMC qualification. Production remains WAL/NORMAL. M009 is the bounded documentation corrective. M010 is the bounded next architecture investigation: derive whether a minimal correctness control database plus durable outbox and replayable analytics/history projection can reduce critical-path writes without weakening retry, finalization, recovery, backup, bounded-resource, or API semantics. Neither M009 nor M010 changes production storage.
 
 ## 12. Milestone status
 
@@ -465,3 +504,4 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
 | 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
 | 009 — M008 documentation reconciliation corrective pass | ready | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | — | hard dependency M008 closure satisfied; no runtime/hardware blocker |
+| 010 — control/projection storage boundary architecture investigation | ready | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | hard dependency M008 closure satisfied; M009 is soft/parallel; no production split authorized |
