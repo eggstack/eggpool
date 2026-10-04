@@ -8,6 +8,7 @@
 
 use std::{
     env, fs,
+    fs::File,
     io::{self, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -384,6 +385,9 @@ pub fn write_atomic(path: &Path, content: &[u8], mode: u32) -> Result<(), Deploy
         file.write_all(content)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
+        // Fsync the parent directory so the rename itself survives a crash;
+        // without it a deployed binary or restored config can revert.
+        File::open(parent)?.sync_all()?;
         Ok::<(), io::Error>(())
     })();
     if result.is_err() {

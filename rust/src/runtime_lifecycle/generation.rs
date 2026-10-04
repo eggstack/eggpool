@@ -243,6 +243,13 @@ impl GenerationResources {
             )
         } else {
             loop {
+                // Register interest *before* re-reading the report:
+                // `notify_waiters` only wakes waiters that already exist, so a
+                // caller preempted between the check and the first poll of
+                // `notified()` would otherwise park forever.
+                let notified = self.close_notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 if let Some(report) = self
                     .close_report
                     .lock()
@@ -251,7 +258,7 @@ impl GenerationResources {
                 {
                     return report;
                 }
-                self.close_notify.notified().await;
+                notified.await;
             }
         }
     }

@@ -190,6 +190,33 @@ struct BodyTaskTracker {
     inner: Arc<BodyTaskTrackerInner>,
 }
 
+/// Owns one body-task registry entry.
+///
+/// The entry is removed on drop rather than after `future.await`, so a panic
+/// (or an abort) inside the body bridge cannot leave the id in `active`
+/// forever: every later drain would then end at its timeout and report a
+/// leaked body task.
+struct ActiveBodyTask {
+    id: u64,
+    tracker: BodyTaskTracker,
+}
+
+impl Drop for ActiveBodyTask {
+    fn drop(&mut self) {
+        let removed = self
+            .tracker
+            .inner
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.id)
+            .is_some();
+        if removed {
+            self.tracker.inner.notify.notify_waiters();
+        }
+    }
+}
+
 impl BodyTaskTracker {
     fn new() -> Self {
         Self {
@@ -216,19 +243,18 @@ impl BodyTaskTracker {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let tracker = self.clone();
         let (started, ready) = oneshot::channel();
+        // The registry entry is owned by a guard, not by the code after
+        // `future.await`: a panic (or an abort) unwinds past that code and
+        // would leave the id in `active` forever, so every later shutdown
+        // would drain to its timeout and report a leaked body task.
+        let guard = ActiveBodyTask {
+            id,
+            tracker: tracker.clone(),
+        };
         let handle = tokio::spawn(async move {
             let _ = ready.await;
             future.await;
-            let removed = tracker
-                .inner
-                .active
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .remove(&id)
-                .is_some();
-            if removed {
-                tracker.inner.notify.notify_waiters();
-            }
+            drop(guard);
         });
         self.inner
             .active

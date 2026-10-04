@@ -583,13 +583,21 @@ fn add_request_identity_headers(
         let Some(value) = value.filter(|value| !value.is_empty()) else {
             continue;
         };
-        let value = value
-            .get(..value.len().min(128))
-            .ok_or_else(|| AttemptError::InvalidInput("request ID is not UTF-8 bounded".into()))?;
+        // Truncate on a char boundary: a byte index that lands mid-character
+        // would otherwise fail the whole request instead of shortening it.
+        let truncated = if value.len() <= 128 {
+            value
+        } else {
+            let mut end = 128;
+            while end > 0 && !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            &value[..end]
+        };
         headers.insert(
             HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| AttemptError::InvalidInput("invalid request ID header".into()))?,
-            HeaderValue::try_from(value)
+            HeaderValue::try_from(truncated)
                 .map_err(|_| AttemptError::InvalidInput("invalid request ID value".into()))?,
         );
     }
@@ -700,4 +708,51 @@ fn add_auth_header_value(
         .map_err(|_| AttemptError::InvalidInput("invalid provider auth value".into()))?;
     headers.insert(name, value);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::add_request_identity_headers;
+    use http::HeaderMap;
+
+    #[test]
+    fn request_identity_headers_truncate_on_a_char_boundary() {
+        let mut headers = HeaderMap::new();
+        // 127 ASCII bytes plus a 3-byte character, then more ASCII: byte 128 is
+        // inside that character.
+        let mut request_id = "a".repeat(127);
+        request_id.push('é');
+        request_id.push_str("tail");
+        add_request_identity_headers(&mut headers, Some(&request_id), Some("corr"))
+            .expect("headers");
+        let forwarded = headers
+            .get("x-request-id")
+            .expect("request id")
+            .to_str()
+            .expect("text");
+        assert_eq!(forwarded, "a".repeat(127));
+        assert_eq!(
+            headers
+                .get("x-correlation-id")
+                .expect("correlation")
+                .to_str()
+                .expect("text"),
+            "corr"
+        );
+    }
+
+    #[test]
+    fn request_identity_headers_pass_through_short_values() {
+        let mut headers = HeaderMap::new();
+        add_request_identity_headers(&mut headers, Some("short"), None).expect("headers");
+        assert_eq!(
+            headers
+                .get("x-request-id")
+                .expect("id")
+                .to_str()
+                .expect("text"),
+            "short"
+        );
+        assert!(headers.get("x-correlation-id").is_none());
+    }
 }

@@ -10,8 +10,8 @@ use tokio::{runtime::Handle, time::timeout};
 
 use crate::{
     routing::{RoutingRouter, SelectionClaim},
-    wire::ir::{CanonicalEventType, CanonicalUsage},
-    wire::{StreamForwardingMode, WireStream, WireSurface},
+    wire::ir::{CanonicalEvent, CanonicalEventType, CanonicalUsage},
+    wire::{StreamForwardingMode, TerminalEvidence, WireStream, WireSurface},
 };
 
 use crate::coordinator::{
@@ -23,7 +23,8 @@ use crate::coordinator::{
 use super::{
     OUTCOME_CLIENT_CANCELLED, StreamChunkError, StreamClientHeaders, StreamDiagnostics,
     StreamPhase, bounded_i64, bounded_usize, cache_status, duration_i64, store_eof,
-    store_idle_timeout, store_midstream_transport, store_translation_error,
+    store_forwarded_terminal, store_idle_timeout, store_midstream_transport,
+    store_translation_error,
 };
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,14 @@ impl AttemptStreamFacts {
     }
 }
 
+/// How an already-forwarded provider terminal classifies the stream end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForwardedTerminal {
+    Completed,
+    Incomplete,
+    Failed,
+}
+
 /// Incremental body state for one live upstream stream.
 ///
 /// Only scalar progress plus the current chunk exist here: provider bytes are
@@ -57,13 +66,12 @@ pub(crate) struct ActiveStream {
     pub(crate) body: Option<crate::providers::ProviderBody>,
     pub(crate) wire: Option<WireStream>,
     pub(crate) pending_raw: Option<Bytes>,
-    pub(crate) pending_client: Option<Bytes>,
     pub(crate) idle_timeout: Option<Duration>,
     pub(crate) provider_bytes: usize,
     pub(crate) client_bytes: usize,
     pub(crate) events_forwarded: u64,
     pub(crate) malformed_chunks: usize,
-    pub(crate) saw_terminal_event: bool,
+    pub(crate) forwarded_terminal: Option<ForwardedTerminal>,
     pub(crate) completion_policy: String,
     pub(crate) first_byte_elapsed: Option<Duration>,
 }
@@ -240,13 +248,21 @@ impl StreamingExecution {
             return None;
         }
         loop {
-            // Serve bytes already decoded at a previous terminal boundary.
-            let stashed = parts
+            // The provider's authoritative terminal event has already been
+            // forwarded downstream. A provider that holds the socket open
+            // instead of closing must not turn that complete delivery into a
+            // midstream failure (or wait for the idle timer at all).
+            //
+            // A stream that already skipped a malformed chunk is excluded: EOF
+            // classification is what reports it, and a forwarded terminal must
+            // never upgrade a poisoned stream into a success.
+            if let Some(terminal) = parts
                 .stream
-                .as_mut()
-                .and_then(|stream| stream.pending_client.take());
-            if let Some(pending) = stashed {
-                return Some(Ok(pending));
+                .as_ref()
+                .filter(|stream| stream.malformed_chunks == 0)
+                .and_then(|stream| stream.forwarded_terminal)
+            {
+                return store_forwarded_terminal(parts, facts, router, wire_resolver, terminal);
             }
             // Pull one raw provider chunk. The borrow of the stream ends
             // before any terminal helper runs, so terminal ownership can
@@ -371,6 +387,30 @@ enum ChunkDecode {
     TranslationError,
 }
 
+fn forwarded_terminal_from_event(event: &CanonicalEvent) -> Option<ForwardedTerminal> {
+    match event.event_type {
+        CanonicalEventType::ResponseComplete => Some(ForwardedTerminal::Completed),
+        CanonicalEventType::ResponseIncomplete => Some(ForwardedTerminal::Incomplete),
+        CanonicalEventType::Error => Some(ForwardedTerminal::Failed),
+        _ => None,
+    }
+}
+
+fn forwarded_terminal_from_evidence(evidence: TerminalEvidence) -> ForwardedTerminal {
+    match evidence {
+        TerminalEvidence::ResponsesCompleted
+        | TerminalEvidence::OpenaiDone
+        | TerminalEvidence::AnthropicMessageStop
+        | TerminalEvidence::GeminiCompleted => ForwardedTerminal::Completed,
+        TerminalEvidence::ResponsesIncomplete | TerminalEvidence::GeminiIncomplete => {
+            ForwardedTerminal::Incomplete
+        }
+        TerminalEvidence::ResponsesFailed | TerminalEvidence::ProviderError => {
+            ForwardedTerminal::Failed
+        }
+    }
+}
+
 impl ActiveStream {
     /// Push one raw provider chunk through M6. Native Responses streams keep
     /// the original bytes while the observer supplies terminal/accounting
@@ -392,7 +432,11 @@ impl ActiveStream {
                     return ChunkDecode::Skip;
                 }
             };
-            self.saw_terminal_event |= observed.saw_terminal_event;
+            if observed.saw_terminal_event {
+                self.forwarded_terminal = observed
+                    .terminal_evidence
+                    .map(forwarded_terminal_from_evidence);
+            }
             self.client_bytes = self.client_bytes.saturating_add(chunk.len());
             return ChunkDecode::Forward(chunk, observed.saw_terminal_event);
         }
@@ -410,13 +454,9 @@ impl ActiveStream {
         let mut out = Vec::new();
         let mut saw_terminal = false;
         for event in &pushed.events {
-            if matches!(
-                event.event_type,
-                CanonicalEventType::ResponseComplete
-                    | CanonicalEventType::ResponseIncomplete
-                    | CanonicalEventType::Error
-            ) {
+            if let Some(terminal) = forwarded_terminal_from_event(event) {
                 saw_terminal = true;
+                self.forwarded_terminal.get_or_insert(terminal);
             }
             match wire.encode_client_event_stateful(event) {
                 Ok(bytes) if !bytes.is_empty() => {
@@ -427,7 +467,6 @@ impl ActiveStream {
                 Err(_) => return ChunkDecode::TranslationError,
             }
         }
-        self.saw_terminal_event |= saw_terminal;
         if out.is_empty() {
             return ChunkDecode::Skip;
         }
@@ -695,6 +734,14 @@ impl Drop for PendingStreamFinalization {
         };
         let supervisor = parts.supervisor;
         let Ok(handle) = Handle::try_current() else {
+            // `register` spawns its worker, so it cannot run here. The
+            // attempt row is already durable, which means the startup
+            // reconciler converges this request; losing it must not be
+            // silent, and it must not be reported as a clean drop.
+            tracing::error!(
+                "stream finalization dropped outside a runtime context; \
+                 leaving the durable attempt for reconciliation"
+            );
             return;
         };
         let Ok(finalization) = supervisor.register(command) else {

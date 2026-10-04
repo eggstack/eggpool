@@ -358,6 +358,9 @@ impl QuotaEstimator {
         require_non_negative(cost, "pending cost")?;
         self.ensure_account(account_name);
         let mut state = self.lock();
+        // The right-hand side of each assignment below is evaluated before the
+        // `entry` is inserted, so `or_default` reads the pre-increment value.
+        // Reordering the two operands would turn every increment into a reset.
         *state
             .pending_requests
             .entry(account_name.to_owned())
@@ -445,6 +448,7 @@ impl QuotaEstimator {
         state
             .pending_cost
             .insert(account_name.to_owned(), current_cost - cost);
+        // Evaluated before the entry insert: see the note in `add_pending`.
         *state
             .reserved_requests
             .entry(account_name.to_owned())
@@ -498,9 +502,25 @@ impl QuotaEstimator {
         require_non_negative(tokens, "reservation tokens")?;
         require_non_negative(cost, "reservation cost")?;
         let mut state = self.lock();
-        checked_subtract_counter(&mut state.reserved_requests, account_name, requests)?;
-        checked_subtract_counter(&mut state.reserved_tokens, account_name, tokens)?;
-        checked_subtract_counter(&mut state.reserved_cost, account_name, cost)?;
+        // Validate every counter before mutating any of them: a partial
+        // release would decrement `reserved_requests` and then return, so a
+        // retry would subtract it a second time while the account mirror keeps
+        // the stale value.
+        let current_requests = counter_value(&state.reserved_requests, account_name);
+        let current_tokens = counter_value(&state.reserved_tokens, account_name);
+        let current_cost = counter_value(&state.reserved_cost, account_name);
+        check_subtractable(current_requests, account_name, requests)?;
+        check_subtractable(current_tokens, account_name, tokens)?;
+        check_subtractable(current_cost, account_name, cost)?;
+        state
+            .reserved_requests
+            .insert(account_name.to_owned(), current_requests - requests);
+        state
+            .reserved_tokens
+            .insert(account_name.to_owned(), current_tokens - tokens);
+        state
+            .reserved_cost
+            .insert(account_name.to_owned(), current_cost - cost);
         sync_mirrors(&mut state, account_name);
         Ok(())
     }
@@ -593,18 +613,16 @@ fn add_counter(map: &mut BTreeMap<String, i64>, name: &str, value: i64) {
     map.insert(name.to_owned(), saturating_add(current, value));
 }
 
-fn checked_subtract_counter(
-    map: &mut BTreeMap<String, i64>,
-    name: &str,
-    value: i64,
-) -> Result<(), QuotaInvariantError> {
-    let current = *map.get(name).unwrap_or(&0);
+fn counter_value(map: &BTreeMap<String, i64>, name: &str) -> i64 {
+    *map.get(name).unwrap_or(&0)
+}
+
+fn check_subtractable(current: i64, name: &str, value: i64) -> Result<(), QuotaInvariantError> {
     if current < value {
         return Err(QuotaInvariantError::ReservationOwnershipUnderflow {
             account: name.to_owned(),
         });
     }
-    map.insert(name.to_owned(), current - value);
     Ok(())
 }
 

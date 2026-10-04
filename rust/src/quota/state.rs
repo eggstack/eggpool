@@ -265,6 +265,13 @@ impl AccountQuota {
         })
     }
 
+    /// Whether the account is still inside every configured cap.
+    ///
+    /// Request and token limits use the same defaulting capacities as
+    /// [`Self::utilization`], so the hard-cap admission check and the
+    /// score-only path agree on what "at capacity" means. Cost limits stay
+    /// opt-in: there is no default cost capacity, so only a configured
+    /// `capacity_*_microdollars` can exclude on spend.
     pub fn is_within_limits(&mut self, now: f64) -> bool {
         for window in [
             QuotaWindowName::FiveHour,
@@ -276,14 +283,8 @@ impl AccountQuota {
                 .policy
                 .cost_capacity(window)
                 .is_some_and(|capacity| cost >= capacity)
-                || self
-                    .policy
-                    .request_capacity(window)
-                    .is_some_and(|capacity| requests >= capacity)
-                || self
-                    .policy
-                    .token_capacity(window)
-                    .is_some_and(|capacity| tokens >= capacity)
+                || requests >= self.request_capacity(window)
+                || tokens >= self.token_capacity(window)
             {
                 return false;
             }

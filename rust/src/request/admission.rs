@@ -97,14 +97,12 @@ pub struct NativeRequestPreservation {
 
 impl std::fmt::Debug for NativeRequestPreservation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The parsed body is never serialized here: a `{:?}` on this struct
+        // would cost an O(body) encode of up to the admission size limit.
         formatter
             .debug_struct("NativeRequestPreservation")
             .field("source_surface", &self.source_surface)
             .field("parsed_is_object", &self.parsed.is_object())
-            .field(
-                "parsed_bytes",
-                &serde_json::to_vec(&self.parsed).ok().map(|v| v.len()),
-            )
             .field("summary", &self.summary)
             .finish()
     }

@@ -38,11 +38,13 @@ pub use timeout::StreamTimeoutPolicy;
 pub use types::{StreamClientHeaders, StreamPhase, StreamRequest, StreamingCoordinatorError};
 
 pub(crate) use execution::{
-    ActiveStream, AttemptStreamFacts, PendingStreamFinalization, PendingStreamFinalizationParts,
+    ActiveStream, AttemptStreamFacts, ForwardedTerminal, PendingStreamFinalization,
+    PendingStreamFinalizationParts,
 };
 pub(crate) use terminal::{
     bounded_i64, bounded_request_id, bounded_usize, cache_status, category_label, duration_i64,
-    is_event_stream, protocol_for_surface, provider_error_signal, store_eof, store_idle_timeout,
-    store_midstream_transport, store_translation_error,
+    is_event_stream, protocol_for_surface, provider_error_signal, store_eof,
+    store_forwarded_terminal, store_idle_timeout, store_midstream_transport,
+    store_translation_error,
 };
 pub(crate) use types::LastUpstream;

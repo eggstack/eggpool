@@ -5,6 +5,69 @@ All notable changes to EggPool are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **SSE keep-alive frames no longer abort a stream.** An empty `data` buffer
+  (the common provider heartbeat `data:\n\n`) is now a no-op frame instead of
+  a malformed-event abort, in both the public decoder and native observation.
+
+- **`[DONE]` agreement between the decoder and the terminal observer.** The
+  sentinel is trimmed in one shared helper, so a payload such as
+  `data: [DONE] ` is classified as a terminal instead of aborting the stream in
+  the decoder before the observer could see it.
+
+- **The effect ledger no longer fails closed at capacity.** After
+  `DEFAULT_EFFECT_LEDGER_CAPACITY` classifications a long-running server
+  stopped applying failure effects for every later attempt, stranding pending
+  rows, reservations, and routing claims. The oldest classification is now
+  evicted instead.
+
+- **A forwarded provider terminal ends the stream.** A streamed
+  `response.completed` / `response.incomplete` / `response.failed` (or the
+  `[DONE]`-equivalent) that has already been forwarded downstream now closes the
+  stream, so a provider that holds the socket open no longer turns a complete
+  delivery into a midstream failure and a health penalty. A stream that already
+  skipped a malformed chunk is still classified by EOF.
+
+- **Terminal model withdrawals survive a timed disable.** A timed model
+  disable no longer erases an authoritative withdrawal for the same key.
+
+- **A success no longer clears a live account cooldown**, and configured
+  per-account `weight` and window `*_offset_microdollars` now reach the quota
+  estimator, so `local_quota_mode = "hard_cap"` compares against the same
+  default capacities the scorer uses.
+
+- **Atomic durability fixes.** The SQLite gate is held until a
+  `Drop`-initiated `ROLLBACK` completes; `backup`/`deploy` atomic writers fsync
+  the parent directory after rename and apply file mode before it; a release of
+  a quota reservation is all-or-nothing across all three counters; a task-spec
+  diff commits all-or-nothing; and a `PostCommit` publication interruption
+  resumes the local claim conversion instead of stranding a durable `pending`
+  row.
+
+- **Permanent finalization errors are surfaced directly** instead of being
+  retried three times and reported as `RetryExhausted`, finalization dropped
+  outside a runtime context is now logged rather than silently lost, and
+  generation-close/negotiation waits register their interest before testing the
+  condition, closing a lost-wakeup window.
+
+- **Bound retirement.** A generation whose leases never drain can no longer
+  consume a retirement slot forever, and a per-request `retire_slot` drain is
+  bounded by the retirement deadline.
+
+- **Smaller correctness and hygiene fixes.** The streaming body-task registry
+  releases its entry on panic; a terminal translation failure is no longer
+  reported as an upstream transport error; mirrored provider
+  `reasoning_content`/`refusal` fields are not decoded twice; explicit `null`
+  reasoning fields decode as absent; output-token presence covers every
+  accepted spelling; a multi-byte `x-request-id` truncates on a char boundary;
+  health timestamps round-trip exactly; reload diagnostics always derive the
+  secret flag from the path; clipboard helpers reap their children and never
+  resolve a helper from the current directory; affinity eviction always makes
+  progress; and the tooling workspace states its Python floor explicitly.
+
 ## [0.8.0] - 2026-09-11
 
 ### Changed

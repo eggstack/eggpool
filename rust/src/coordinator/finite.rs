@@ -23,7 +23,7 @@ use crate::{
     request::{
         AdmissionError, AdmittedRequest, CompactAdmittedRequest, StaticRoutingFacts, admit_request,
     },
-    routing::{RoutingRequestFacts, RoutingRouter, SelectionClaim},
+    routing::{ClaimTransition, RoutingRequestFacts, RoutingRouter, SelectionClaim},
     wire::{
         ConfiguredWireProfile, FiniteResponseOutcome, WireRuntime, WireRuntimeContext, WireSurface,
         ir::{CacheCounterStatus, CanonicalUsage, ClientSurface, ProviderErrorEvidence},
@@ -34,8 +34,9 @@ use super::{
     AttemptBuilder, AttemptError, AttemptPreparation, FailureCategory, FailureDecisionEngine,
     FailureEffects, FailureObservation, FailureSource, FinalizationCommand, FinalizationData,
     FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
-    FinalizationSupervisor, PublicationError, PublicationInput, PublicationOutcome,
-    PublicationService, RetryPolicy, WireResolver,
+    FinalizationSupervisor, PostCommitInterruption, PublicationError, PublicationInput,
+    PublicationOutcome, PublicationService, PublishedAttempt, RetryPolicy,
+    RuntimePublicationReceipt, WireResolver,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -751,15 +752,68 @@ impl FiniteCoordinator {
                 false,
                 i64::from(attempt_number),
             );
-            let published = match self.publication.publish(claim, publication_input).await? {
-                PublicationOutcome::Published(value) => value,
-                PublicationOutcome::AlreadyPublished(_) => {
+            let published = match self.publication.publish(claim, publication_input).await {
+                Ok(PublicationOutcome::Published(value)) => value,
+                Ok(PublicationOutcome::AlreadyPublished(_)) => {
                     return Err(FiniteCoordinatorError::Publication(
                         PublicationError::DuplicateConflict {
                             proxy_request_id: request.proxy_request_id,
                         },
                     ));
                 }
+                Err(PublicationError::PostCommit { interruption }) => {
+                    // The attempt row is already durable, so this is not a
+                    // publication failure to fail on: resume the interrupted
+                    // local claim conversion. Discarding the receipt would
+                    // strand a committed `pending` row with an active
+                    // reservation for the reconciler to sweep later.
+                    let PostCommitInterruption {
+                        identity,
+                        receipt,
+                        claim: interrupted_claim,
+                        reason,
+                    } = *interruption;
+                    match interrupted_claim.convert_claim_after_durable_publication() {
+                        Ok(ClaimTransition::Converted | ClaimTransition::AlreadyTransitioned) => {
+                            Box::new(PublishedAttempt {
+                                identity,
+                                receipt: RuntimePublicationReceipt {
+                                    pending_load_converted: true,
+                                    quota_reservation_added: true,
+                                    ..receipt
+                                },
+                                claim: interrupted_claim,
+                            })
+                        }
+                        Err(convert_error) => {
+                            return Err(FiniteCoordinatorError::Publication(
+                                PublicationError::PostCommit {
+                                    interruption: Box::new(PostCommitInterruption {
+                                        identity,
+                                        receipt,
+                                        claim: interrupted_claim,
+                                        reason: format!("{reason}; {convert_error}"),
+                                    }),
+                                },
+                            ));
+                        }
+                        Ok(ClaimTransition::Released | ClaimTransition::RolledBack) => {
+                            return Err(FiniteCoordinatorError::Publication(
+                                PublicationError::PostCommit {
+                                    interruption: Box::new(PostCommitInterruption {
+                                        identity,
+                                        receipt,
+                                        claim: interrupted_claim,
+                                        reason: format!(
+                                            "{reason}; claim was not pending at conversion"
+                                        ),
+                                    }),
+                                },
+                            ));
+                        }
+                    }
+                }
+                Err(error) => return Err(FiniteCoordinatorError::Publication(error)),
             };
             last_identity = Some(published.identity.clone());
             let identity = published.identity.clone();
@@ -2014,6 +2068,13 @@ impl Drop for PendingFinalization {
         };
         let supervisor = parts.supervisor;
         let Ok(handle) = Handle::try_current() else {
+            // `register` spawns its worker, so it cannot run here. The
+            // attempt row is already durable, which means the startup
+            // reconciler converges this request; losing it must not be
+            // silent, and it must not be reported as a clean drop.
+            tracing::error!(
+                "pending finalization dropped outside a runtime context;                  leaving the durable attempt for reconciliation"
+            );
             return;
         };
         let Ok(finalization) = supervisor.register(command) else {

@@ -53,6 +53,7 @@ pub struct RuntimeManager {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetirementFailure {
+    ActiveLeases { count: usize },
     FinalizationReferences { count: usize },
     GenerationClose(GenerationCloseFailure),
 }
@@ -532,7 +533,21 @@ impl RuntimeManager {
     }
 
     async fn retire_slot(&self, slot: Arc<GenerationSlot>, timeout: Duration) {
-        slot.wait_for_drain().await;
+        // The lease drain is bounded by the same deadline as the rest of the
+        // retirement. A leaked lease would otherwise park this slot in
+        // `retiring` forever; with `MAX_RETIRING_GENERATIONS` slots, four such
+        // stalls make every later reload fail with `RetirementBacklog`.
+        if tokio::time::timeout(timeout, slot.wait_for_drain())
+            .await
+            .is_err()
+        {
+            let failure = RetirementFailure::ActiveLeases {
+                count: slot.active_lease_count(),
+            };
+            slot.set_state(GenerationSlotState::FailedClose);
+            self.record_retirement(&slot, None, Some(failure));
+            return;
+        }
         slot.set_state(GenerationSlotState::DrainingFinalization);
         if tokio::time::timeout(timeout, slot.wait_for_finalization_references())
             .await

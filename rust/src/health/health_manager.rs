@@ -317,7 +317,16 @@ impl HealthManager {
         account.consecutive_cooldowns = 0;
         account.last_check = now;
         account.last_success = Some(now);
-        if account.disabled_reason.is_empty() && account.health_state != "authentication_failed" {
+        // A success clears an active account-level cooldown only when one is
+        // not already serving out a rate-limit backoff. `record_success`
+        // carries no model and no reason, so clearing unconditionally would
+        // let an unrelated in-flight success cancel a 429 backoff and re-admit
+        // the account immediately.
+        let cooling_down = account.cooldown_until > now;
+        if account.disabled_reason.is_empty()
+            && account.health_state != "authentication_failed"
+            && !cooling_down
+        {
             account.is_healthy = true;
             account.health_state = "healthy".to_owned();
             account.cooldown_until = 0.0;
@@ -431,7 +440,10 @@ impl HealthManager {
         };
         if terminal || duration.is_none() {
             account.terminal_models.insert(model_id.to_owned());
-        } else {
+        } else if !account.terminal_models.contains(model_id) {
+            // A timed disable never clears an authoritative (terminal)
+            // withdrawal: that state has no timed expiry, so removing it here
+            // would silently re-admit the model once the quarantine lapses.
             account.terminal_models.remove(model_id);
         }
         account.disabled_models.insert(

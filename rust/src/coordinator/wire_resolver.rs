@@ -206,6 +206,13 @@ impl NegotiationLease {
             return NegotiationResult::Rejected;
         }
         loop {
+            // Register interest *before* re-reading the result:
+            // `notify_waiters` only wakes waiters that already exist, so a
+            // follower preempted between the check and the first poll of
+            // `notified()` would otherwise park forever.
+            let notified = self.flight.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if let Some(result) = self
                 .flight
                 .result
@@ -215,7 +222,7 @@ impl NegotiationLease {
             {
                 return result;
             }
-            self.flight.notify.notified().await;
+            notified.await;
         }
     }
 

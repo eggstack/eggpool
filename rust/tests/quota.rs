@@ -162,6 +162,70 @@ fn pending_claim_conversion_and_underflow_preserve_ownership() {
 }
 
 #[test]
+fn reservation_release_is_all_or_nothing_across_counters() {
+    let estimator = QuotaEstimator::default();
+    estimator
+        .add_pending_claim("account", 128, 500)
+        .expect("claim");
+    estimator
+        .convert_pending_claim("account", 128, 500)
+        .expect("conversion");
+    // The token counter underflows while the request counter would not: the
+    // release must reject the whole operation, leaving every counter intact so
+    // a later retry cannot subtract a counter twice.
+    assert!(
+        estimator
+            .remove_reservation("account", 1, 1_000, 0)
+            .is_err()
+    );
+    let after_failure = estimator.snapshot(&["account".into()])["account"].clone();
+    assert_eq!(after_failure.quota.reserved_requests, 1);
+    assert_eq!(after_failure.quota.reserved_tokens, 128);
+    assert_eq!(after_failure.quota.reserved_cost, 500);
+    estimator
+        .remove_reservation("account", 1, 128, 500)
+        .expect("retry after the rejected release");
+    let released = estimator.snapshot(&["account".into()])["account"].clone();
+    assert_eq!(released.quota.reserved_requests, 0);
+    assert_eq!(released.quota.reserved_tokens, 0);
+    assert_eq!(released.quota.reserved_cost, 0);
+}
+
+#[test]
+fn hard_cap_excludes_on_the_same_default_capacities_the_scorer_uses() {
+    let estimator = QuotaEstimator::default();
+    estimator.add_pending_claim("account", 1, 1).expect("claim");
+    estimator
+        .convert_pending_claim("account", 1, 1)
+        .expect("conversion");
+    // A reservation inside the default window is not at capacity.
+    assert!(
+        estimator
+            .get_account_quota("account")
+            .expect("account")
+            .is_within_limits(0.0)
+    );
+    // A configured hard cap that the account has reached excludes it, exactly
+    // as the scorer reports the same window as exhausted.
+    estimator
+        .configure_policy(
+            "account",
+            1.0,
+            QuotaPolicy {
+                capacity_5h_requests: Some(1),
+                ..QuotaPolicy::default()
+            },
+        )
+        .expect("valid policy");
+    assert!(
+        !estimator
+            .get_account_quota("account")
+            .expect("account")
+            .is_within_limits(0.0)
+    );
+}
+
+#[test]
 fn concurrent_claim_publication_is_visible_at_the_snapshot_boundary() {
     let estimator = QuotaEstimator::default();
     let barrier = Arc::new(Barrier::new(2));

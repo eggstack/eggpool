@@ -2086,18 +2086,23 @@ impl Drop for DatabaseTransaction {
             return;
         }
         // A dropped in-transaction holder would brick writes (next BEGIN
-        // IMMEDIATE fails). Best-effort async rollback; the permit drops with
-        // `self` to release the gate regardless.
+        // IMMEDIATE fails). Best-effort async rollback.
         tracing::error!("database transaction dropped without commit or rollback");
+        self.finished = true;
         let connection = self.database.inner.connection.clone();
+        // The rollback task keeps the gate: releasing it when `self` drops
+        // would let the next writer start BEGIN IMMEDIATE while this ROLLBACK
+        // is still pending, which SQLite rejects and which could otherwise
+        // leave the new transaction rolled back underneath it.
+        let permit = self.permit.take();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let _ = connection
                     .call(|connection| connection.execute_batch("ROLLBACK"))
                     .await;
+                drop(permit);
             });
         }
-        self.finished = true;
     }
 }
 

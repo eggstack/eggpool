@@ -1092,7 +1092,16 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
     }
     let mut quotas = Vec::new();
     for account in registry.all() {
-        quotas.push(AccountQuota::new(account.account_name.clone()));
+        let mut quota = AccountQuota::new(account.account_name.clone());
+        // The operator-configured weight and window offsets are routing state,
+        // not decoration: without them `utilization` cannot scale capacity by
+        // weight, the hard-cap admission check has nothing to compare, and the
+        // configured `*_offset_microdollars` surface is inert.
+        quota.weight = account.weight;
+        quota.policy.five_hour_offset = account.quota_offsets.five_hour;
+        quota.policy.weekly_offset = account.quota_offsets.weekly;
+        quota.policy.monthly_offset = account.quota_offsets.monthly;
+        quotas.push(quota);
     }
     let estimator = QuotaEstimator::new(quotas);
     let shared_catalog = Arc::new(std::sync::Mutex::new(catalog));

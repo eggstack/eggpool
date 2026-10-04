@@ -413,6 +413,10 @@ impl CanonicalEventSink for NativeObservationSink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeStreamObservation {
     pub saw_terminal_event: bool,
+    /// Terminal evidence observed for the first time by this push, so a
+    /// caller forwarding the original bytes can end the stream as soon as the
+    /// provider's authoritative terminal has been delivered.
+    pub terminal_evidence: Option<TerminalEvidence>,
 }
 
 /// Incremental canonical event decoder and usage/terminal observer.
@@ -511,8 +515,11 @@ impl StreamEventDecoder {
                 return Err(error.into());
             }
         };
-        let saw_terminal_event = self.observe_frames(frames)?;
-        Ok(NativeStreamObservation { saw_terminal_event })
+        let terminal_evidence = self.observe_frames(frames)?;
+        Ok(NativeStreamObservation {
+            saw_terminal_event: terminal_evidence.is_some(),
+            terminal_evidence,
+        })
     }
 
     pub fn finalize(&mut self) -> Result<StreamTerminalSummary, StreamError> {
@@ -574,7 +581,7 @@ impl StreamEventDecoder {
     fn decode_frames(&mut self, frames: Vec<SseFrame>) -> Result<Vec<CanonicalEvent>, StreamError> {
         let mut events = Vec::new();
         for frame in frames {
-            if frame.is_comment_only || !frame.fields.iter().any(|(name, _)| name == "data") {
+            if !carries_decodable_payload(&frame) {
                 continue;
             }
             if !frame.data.is_empty() {
@@ -612,10 +619,13 @@ impl StreamEventDecoder {
         Ok(events)
     }
 
-    fn observe_frames(&mut self, frames: Vec<SseFrame>) -> Result<bool, StreamError> {
-        let mut saw_terminal_event = false;
+    fn observe_frames(
+        &mut self,
+        frames: Vec<SseFrame>,
+    ) -> Result<Option<TerminalEvidence>, StreamError> {
+        let mut first_evidence = None;
         for frame in frames {
-            if frame.is_comment_only || !frame.fields.iter().any(|(name, _)| name == "data") {
+            if !carries_decodable_payload(&frame) {
                 continue;
             }
             if !frame.data.is_empty() {
@@ -641,14 +651,17 @@ impl StreamEventDecoder {
                 return Err(StreamError::MalformedEvent(error.reason));
             }
             self.usage.absorb(&sink.usage);
-            saw_terminal_event |= self.observe_native_terminal(&frame, sink.saw_error);
+            let observed = self.observe_native_terminal(&frame, sink.saw_error);
+            if first_evidence.is_none() {
+                first_evidence = observed;
+            }
         }
-        Ok(saw_terminal_event)
+        Ok(first_evidence)
     }
 
     fn observe_terminal(&mut self, frame: &SseFrame, events: &[CanonicalEvent]) {
         let event_name = frame.event.as_deref().unwrap_or_default();
-        let data_done = frame.data.trim() == "[DONE]";
+        let data_done = is_openai_done(&frame.data);
         let evidence = match self.adapter {
             StreamAdapterKind::OpenaiChatSse if data_done => Some(TerminalEvidence::OpenaiDone),
             StreamAdapterKind::AnthropicMessagesSse if event_name == "message_stop" => {
@@ -703,7 +716,13 @@ impl StreamEventDecoder {
         }
     }
 
-    fn observe_native_terminal(&mut self, frame: &SseFrame, saw_error: bool) -> bool {
+    /// Fold one observed frame and report the terminal evidence it carried, if
+    /// any.
+    fn observe_native_terminal(
+        &mut self,
+        frame: &SseFrame,
+        saw_error: bool,
+    ) -> Option<TerminalEvidence> {
         let event_name = frame.event.as_deref().unwrap_or_default();
         let evidence = match event_name {
             "response.completed" => Some(TerminalEvidence::ResponsesCompleted),
@@ -712,7 +731,7 @@ impl StreamEventDecoder {
             "error" => Some(TerminalEvidence::ProviderError),
             _ => None,
         };
-        let observed = evidence.is_some() || saw_error;
+        let observed = evidence.or_else(|| saw_error.then_some(TerminalEvidence::ProviderError));
         if let Some(evidence) = evidence {
             if self.saw_terminal_event {
                 self.post_terminal_data = true;
@@ -851,6 +870,26 @@ fn object(value: Option<&Value>) -> Option<&Map<String, Value>> {
     value.and_then(Value::as_object)
 }
 
+/// OpenAI's terminal sentinel.  The parser and the terminal observer must agree
+/// on it: the decoder runs first, so an intolerant comparison here would abort
+/// the stream before the tolerant observer could classify the frame.
+const OPENAI_DONE_SENTINEL: &str = "[DONE]";
+
+fn is_openai_done(data: &str) -> bool {
+    data.trim() == OPENAI_DONE_SENTINEL
+}
+
+/// A frame is only decoded when it carries a `data` field with a non-empty
+/// buffer.  The SSE grammar dispatches an event for an empty data buffer (the
+/// common provider keep-alive `data:\n\n`), but there is no canonical event for
+/// it, so such a frame is a no-op instead of a malformed-event abort.
+fn carries_decodable_payload(frame: &SseFrame) -> bool {
+    if frame.is_comment_only || !frame.fields.iter().any(|(name, _)| name == "data") {
+        return false;
+    }
+    !frame.data.trim().is_empty()
+}
+
 fn array(value: Option<&Value>) -> Option<&Vec<Value>> {
     value.and_then(Value::as_array)
 }
@@ -866,8 +905,8 @@ fn payload_value(frame: &Value) -> Result<(Map<String, Value>, Option<String>), 
         .as_object()
         .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))?;
     let data = frame_object.get("data").unwrap_or(frame);
-    if data.as_str() == Some("[DONE]") {
-        return Ok((Map::new(), Some("[DONE]".into())));
+    if data.as_str().is_some_and(is_openai_done) {
+        return Ok((Map::new(), Some(OPENAI_DONE_SENTINEL.into())));
     }
     let payload = match data {
         Value::Object(object) => object.clone(),
@@ -1051,7 +1090,7 @@ fn decode_stream_event_into<S: CanonicalEventSink>(
         .ok_or_else(|| CodecError::new(CodecReasonCode::MalformedProviderEvent))?;
     let (payload, marker) = payload_value(frame)?;
     let name = event_name(frame_object, &payload);
-    if marker.as_deref() == Some("[DONE]") {
+    if marker.as_deref().is_some_and(is_openai_done) {
         if adapter == StreamAdapterKind::OpenaiChatSse {
             events.push(canonical_event(CanonicalEventType::ResponseComplete));
         }
@@ -1077,7 +1116,11 @@ fn decode_openai_chat<S: CanonicalEventSink>(
     payload: &Map<String, Value>,
     events: &mut S,
 ) {
-    if frame.get("data").and_then(Value::as_str) == Some("[DONE]") {
+    if frame
+        .get("data")
+        .and_then(Value::as_str)
+        .is_some_and(is_openai_done)
+    {
         return;
     }
     if frame.get("event").and_then(Value::as_str) == Some("error") || payload.contains_key("error")
@@ -2398,7 +2441,57 @@ impl fmt::Display for TerminalEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome};
+    use super::{StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome, TerminalEvidence};
+
+    #[test]
+    fn empty_data_buffer_is_a_no_op_frame_not_a_malformed_event() {
+        let source = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data:\n\n",
+            "data: \n\n",
+            "data: [DONE]\n\n",
+            "data:\n\n",
+        );
+        let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+        let events = decoder.push(source.as_bytes()).expect("legal stream");
+        let summary = decoder.finalize().expect("finalize");
+        assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+        assert_eq!(summary.evidence, Some(TerminalEvidence::OpenaiDone));
+        // An empty keep-alive after the sentinel is not post-terminal data.
+        assert_eq!(summary.parser_error_count, 0);
+        assert_eq!(
+            events.iter().filter(|event| event.delta.is_some()).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn native_responses_observation_tolerates_the_same_empty_data_keep_alive() {
+        let source = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+            "data:\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+        );
+        let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+        decoder
+            .observe_native_push(source.as_bytes())
+            .expect("native observation");
+        let summary = decoder.finalize_observed().expect("native finalize");
+        assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+        assert_eq!(summary.evidence, Some(TerminalEvidence::ResponsesCompleted));
+    }
+
+    #[test]
+    fn trailing_space_after_the_done_sentinel_is_observed_as_a_terminal() {
+        let source = "data: [DONE] \n\n";
+        let mut decoder = StreamEventDecoder::new(StreamAdapterKind::OpenaiChatSse);
+        let _ = decoder.push(source.as_bytes()).expect("done sentinel");
+        let summary = decoder.finalize().expect("finalize");
+        assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+        assert_eq!(summary.evidence, Some(TerminalEvidence::OpenaiDone));
+    }
 
     #[test]
     fn native_observation_matches_public_responses_terminal_and_usage_state() {

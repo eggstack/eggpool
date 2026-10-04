@@ -2214,7 +2214,8 @@ async fn c011_finalization_duplicate_conflict_release_and_capacity() {
                 attempt_id: 2,
                 ..c011_observation("http_500_server")
             })
-            .is_err()
+            .expect("classification survives a full ledger window")
+            .1
     );
     database.close().await.expect("database closes");
 }

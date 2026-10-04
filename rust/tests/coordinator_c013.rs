@@ -215,27 +215,41 @@ fn c013_retry_after_parsing_preserves_python_semantics_and_bound() {
 }
 
 #[test]
-fn c013_effect_ledger_retires_before_capacity_and_decision_cannot_hide_overflow() {
+fn c013_effect_ledger_retires_before_capacity_and_never_permanently_fails_closed() {
     let mut ledger = EffectLedger::with_capacity(8);
     for attempt_id in 0..512 {
         assert_eq!(ledger.try_apply_once(attempt_id), Ok(true));
         assert!(ledger.retire(attempt_id));
     }
     assert!(ledger.is_empty());
+    // A long-lived generation classifies far more than `capacity` attempts:
+    // every one of them still owns its first effect application.
     let mut engine = eggpool::coordinator::FailureDecisionEngine::new(RetryPolicy::default());
     engine.ledger = EffectLedger::with_capacity(1);
     let first = engine
         .decide(&observation("http_500_server"))
         .expect("first effect");
     assert!(first.1);
-    let second = engine.decide(&FailureObservation {
-        attempt_id: 2,
-        ..observation("http_500_server")
-    });
-    assert!(
-        second.is_err(),
-        "capacity must fail before effect ownership"
-    );
+    let second = engine
+        .decide(&FailureObservation {
+            attempt_id: 2,
+            ..observation("http_500_server")
+        })
+        .expect("classification continues past capacity");
+    assert!(second.1, "each distinct attempt owns its own effect");
+    assert_eq!(engine.ledger.len(), 1, "the window stays bounded");
+    for attempt_id in 3..1_000 {
+        assert!(
+            engine
+                .decide(&FailureObservation {
+                    attempt_id,
+                    ..observation("http_500_server")
+                })
+                .expect("classification continues")
+                .1
+        );
+    }
+    assert_eq!(engine.ledger.len(), 1);
 }
 
 #[tokio::test]

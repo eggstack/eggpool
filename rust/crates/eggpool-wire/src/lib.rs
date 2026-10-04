@@ -280,4 +280,79 @@ mod external_consumer_tests {
             assert_eq!(decoded_fidelity.source, Some(expected));
         }
     }
+
+    #[test]
+    fn mirrored_reasoning_and_refusal_are_not_decoded_twice() {
+        let payload = serde_json::json!({
+            "id": "chatcmpl-1",
+            "model": "model",
+            "choices": [{
+                "message": {
+                    "content": [
+                        {"type": "reasoning_content", "text": "R"},
+                        {"type": "refusal", "refusal": "N"},
+                        {"type": "text", "text": "T"}
+                    ],
+                    "reasoning_content": "R",
+                    "refusal": "N"
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let codec = codecs::builtin_codec_instance(codec::WireCodecId::OpenaiChat)
+            .expect("builtin chat codec");
+        let decoded = codec
+            .decode_response(&payload, 200)
+            .expect("decode response");
+        let codec::DecodedProviderPayload::Response(response) = decoded.value else {
+            panic!("expected a canonical response");
+        };
+        let reasoning: Vec<&str> = response
+            .output
+            .iter()
+            .filter(|block| block.kind == ir::CanonicalBlockKind::Reasoning)
+            .filter_map(|block| block.text.as_deref())
+            .collect();
+        let refusals: Vec<&str> = response
+            .output
+            .iter()
+            .filter(|block| block.kind == ir::CanonicalBlockKind::Refusal)
+            .filter_map(|block| block.text.as_deref())
+            .collect();
+        assert_eq!(reasoning, vec!["R"]);
+        assert_eq!(refusals, vec!["N"]);
+
+        // Re-encoding to the same surface must not concatenate the mirrors.
+        let encoded = codec
+            .encode_response(&response, ir::ClientSurface::ChatCompletions)
+            .expect("encode response");
+        let message = encoded.value["choices"][0]["message"].clone();
+        assert_eq!(message["reasoning_content"], serde_json::json!("R"));
+        assert_eq!(message["refusal"], serde_json::json!("N"));
+    }
+
+    #[test]
+    fn legacy_top_level_reasoning_alone_still_decodes() {
+        let payload = serde_json::json!({
+            "model": "model",
+            "choices": [{
+                "message": {"content": null, "reasoning_content": "R", "refusal": "N"},
+                "finish_reason": "stop"
+            }]
+        });
+        let codec = codecs::builtin_codec_instance(codec::WireCodecId::OpenaiChat)
+            .expect("builtin chat codec");
+        let decoded = codec
+            .decode_response(&payload, 200)
+            .expect("decode response");
+        let codec::DecodedProviderPayload::Response(response) = decoded.value else {
+            panic!("expected a canonical response");
+        };
+        assert!(response.output.iter().any(|block| {
+            block.kind == ir::CanonicalBlockKind::Reasoning && block.text.as_deref() == Some("R")
+        }));
+        assert!(response.output.iter().any(|block| {
+            block.kind == ir::CanonicalBlockKind::Refusal && block.text.as_deref() == Some("N")
+        }));
+    }
 }

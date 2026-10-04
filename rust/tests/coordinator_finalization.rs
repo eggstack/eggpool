@@ -404,14 +404,27 @@ fn failure_policy_distinguishes_ambiguous_credentials_and_model_evidence() {
 }
 
 #[test]
-fn effect_ledger_retirement_keeps_capacity_available() {
+fn effect_ledger_evicts_the_oldest_classification_at_capacity() {
     let mut ledger = EffectLedger::with_capacity(2);
     assert_eq!(ledger.try_apply_once(1), Ok(true));
     assert_eq!(ledger.try_apply_once(1), Ok(false));
     assert_eq!(ledger.try_apply_once(2), Ok(true));
-    assert!(ledger.try_apply_once(3).is_err());
-    assert!(ledger.retire(1));
+    // A full window evicts the oldest entry instead of failing closed.
     assert_eq!(ledger.try_apply_once(3), Ok(true));
+    assert_eq!(ledger.len(), 2);
+    assert!(!ledger.retire(1), "the evicted entry is already gone");
+    assert!(ledger.retire(3));
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(
+        ledger.try_apply_once(3),
+        Ok(true),
+        "re-classified after retirement"
+    );
+    assert_eq!(
+        ledger.try_apply_once(4),
+        Ok(true),
+        "capacity stays available"
+    );
     assert_eq!(ledger.len(), 2);
 }
 

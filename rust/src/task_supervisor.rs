@@ -1280,31 +1280,32 @@ impl PreparedTaskDiff {
     /// Apply exactly the affected operations.  The caller invokes this only
     /// after the runtime publication acceptance point; no callback can run
     /// while this diff is merely staged.
+    ///
+    /// The apply is all-or-nothing: the shutdown state is sampled before the
+    /// first mutation and the prepared set is length-checked up front, so this
+    /// never returns an error after a task has already been started. A
+    /// mid-apply error would leave started tasks in the registry under the new
+    /// spec while the caller's `rollback` only clears the prepared set, so the
+    /// reload would report `Aborted` with half the diff live.
     pub async fn commit(&mut self) -> Result<TaskTransition, TaskSpecError> {
         self.preflight()?;
         if self.supervisor.is_shutting_down() {
             return Err(TaskSpecError::ShuttingDown);
         }
 
-        let prepared = std::mem::take(&mut self.prepared);
+        let prepared: Vec<Arc<TaskState>> = std::mem::take(&mut self.prepared);
+        if prepared.len() != self.diff.rescheduled.len() + self.diff.added.len() {
+            return Err(TaskSpecError::InconsistentPreparedState);
+        }
         let mut prepared = prepared.into_iter();
         for spec in &self.diff.removed {
-            if self.supervisor.is_shutting_down() {
-                return Err(TaskSpecError::ShuttingDown);
-            }
             if let Some(task) = self.remove_task(&spec.name) {
                 stop_task(task).await;
             }
         }
         for spec in &self.diff.rescheduled {
-            if self.supervisor.is_shutting_down() {
-                return Err(TaskSpecError::ShuttingDown);
-            }
             if let Some(task) = self.remove_task(&spec.0.name) {
                 stop_task(task).await;
-            }
-            if self.supervisor.is_shutting_down() {
-                return Err(TaskSpecError::ShuttingDown);
             }
             let task = prepared
                 .next()
@@ -1313,9 +1314,6 @@ impl PreparedTaskDiff {
             self.insert_and_start(task).await;
         }
         for spec in &self.diff.added {
-            if self.supervisor.is_shutting_down() {
-                return Err(TaskSpecError::ShuttingDown);
-            }
             let task = prepared
                 .next()
                 .ok_or(TaskSpecError::InconsistentPreparedState)?;

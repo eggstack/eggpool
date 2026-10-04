@@ -141,6 +141,24 @@ pub enum FinalizationError {
     Injected { point: CrashFaultPoint },
 }
 
+impl FinalizationError {
+    /// Whether re-running the same command can never succeed.
+    ///
+    /// These are deterministic local outcomes, not transient database or
+    /// ownership contention, so the bounded retry loop must surface them
+    /// directly instead of collapsing them into `RetryExhausted`.
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::TerminalConflict { .. }
+                | Self::Capacity
+                | Self::Invariant { .. }
+                | Self::IncompatibleCommand
+                | Self::AlreadyTransitioned
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DurableFinalizer {
     database: Database,
@@ -1100,6 +1118,12 @@ async fn run_command(
         match result {
             Ok(value) => return Ok(value),
             Err(error) => {
+                // A permanent error cannot succeed on a retry: re-running it
+                // only burns the bounded delay and hides the real variant
+                // behind `RetryExhausted` at the call site.
+                if error.is_permanent() {
+                    return Err(error);
+                }
                 last = Some(error.to_string());
                 tokio::time::sleep(retry_delay).await;
             }

@@ -133,6 +133,57 @@ fn health_separates_cooldowns_models_operator_disable_and_circuit() {
 }
 
 #[test]
+fn terminal_model_withdrawal_survives_a_later_timed_disable() {
+    let now = Arc::new(AtomicU64::new(100));
+    let manager = {
+        let now = Arc::clone(&now);
+        HealthManager::with_clock(move || now.load(Ordering::Relaxed) as f64)
+    };
+    manager.register_account(1, "account-a");
+    // A terminal (authoritative) withdrawal has no timed expiry.
+    manager.disable_model("account-a", "model-a", None, true);
+    assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
+    // A later timed disable for the same key must not erase it, or the
+    // quarantine silently lapses and the model is re-admitted.
+    manager.disable_model("account-a", "model-a", Some(10.0), false);
+    now.store(1_000, Ordering::Relaxed);
+    assert!(
+        !manager.is_model_healthy_read_only("account-a", "model-a"),
+        "a timed disable must not clear a terminal withdrawal"
+    );
+    // Re-registering the account does not resurrect it either.
+    manager.register_account(1, "account-a");
+    assert!(!manager.is_model_healthy_read_only("account-a", "model-a"));
+}
+
+#[test]
+fn record_success_does_not_clear_an_active_cooldown() {
+    let now = Arc::new(AtomicU64::new(100));
+    let manager = {
+        let now = Arc::clone(&now);
+        HealthManager::with_clock(move || now.load(Ordering::Relaxed) as f64)
+    };
+    manager.register_account(1, "account-a");
+    manager.record_cooldown("account-a", BackoffReason::RateLimited, 60.0);
+    assert!(!manager.is_account_healthy_read_only("account-a"));
+    // An in-flight success for a different request must not re-admit an
+    // account that is serving out a backoff.
+    manager.record_success("account-a", None);
+    assert!(
+        !manager.is_account_healthy_read_only("account-a"),
+        "a success must not clear a live cooldown"
+    );
+    now.store(160, Ordering::Relaxed);
+    assert!(manager.is_account_healthy_read_only("account-a"));
+    // Once the cooldown has expired a success still normalizes the record.
+    manager.record_cooldown("account-a", BackoffReason::RateLimited, 60.0);
+    now.store(400, Ordering::Relaxed);
+    manager.record_success("account-a", None);
+    let snapshot = manager.snapshot("account-a").expect("health");
+    assert_eq!(snapshot.cooldown_until, 0.0);
+}
+
+#[test]
 fn quarantine_is_exact_key_bounded_and_terminal_recovery_is_authoritative() {
     let quarantine = ModelQuarantine::default();
     let key = quarantine.key(

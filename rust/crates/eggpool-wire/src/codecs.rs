@@ -875,6 +875,8 @@ fn decode_openai_message_output(
     message: &Map<String, Value>,
 ) -> Result<Vec<CanonicalOutputBlock>, CodecError> {
     let mut output = Vec::new();
+    let mut saw_reasoning_block = false;
+    let mut saw_refusal_block = false;
     match message.get("content") {
         None | Some(Value::Null) => {}
         Some(Value::String(text)) => output.push(CanonicalOutputBlock {
@@ -939,6 +941,11 @@ fn decode_openai_message_output(
                     "refusal" => CanonicalBlockKind::Refusal,
                     _ => CanonicalBlockKind::Text,
                 };
+                match output_kind {
+                    CanonicalBlockKind::Reasoning => saw_reasoning_block = true,
+                    CanonicalBlockKind::Refusal => saw_refusal_block = true,
+                    _ => {}
+                }
                 output.push(CanonicalOutputBlock {
                     kind: output_kind,
                     text: Some(text.to_owned()),
@@ -952,7 +959,10 @@ fn decode_openai_message_output(
         }
         Some(_) => return Err(response_error("message.content")),
     }
-    if let Some(refusal) = message.get("refusal") {
+    // Some providers mirror the same text into the legacy top-level fields.
+    // Emitting both spellings would double the block on re-encode, so the
+    // content-array spelling wins.
+    if !saw_refusal_block && let Some(refusal) = message.get("refusal") {
         let refusal = refusal
             .as_str()
             .ok_or_else(|| response_error("message.refusal"))?;
@@ -966,7 +976,7 @@ fn decode_openai_message_output(
             tool_kind: CanonicalToolKind::Function,
         });
     }
-    if let Some(reasoning) = message.get("reasoning_content") {
+    if !saw_reasoning_block && let Some(reasoning) = message.get("reasoning_content") {
         let reasoning = reasoning
             .as_str()
             .ok_or_else(|| response_error("message.reasoning_content"))?;

@@ -2466,6 +2466,9 @@ async fn copy_to_clipboard(text: &str) -> bool {
             continue;
         };
         let Some(mut stdin) = child.stdin.take() else {
+            // The child is already running: kill and reap it before moving on,
+            // or it becomes a zombie.
+            reap_child(&mut child).await;
             continue;
         };
         let result = timeout(CLIPBOARD_TIMEOUT, async {
@@ -2477,18 +2480,42 @@ async fn copy_to_clipboard(text: &str) -> bool {
         if matches!(result, Ok(Ok(status)) if status.success()) {
             return true;
         }
-        if result.is_err() {
-            let _ = child.start_kill();
-        }
+        // A timed-out or broken child (for example `EPIPE` because the helper
+        // exited early) is killed *and* waited on, so no zombie survives the
+        // loop.
+        reap_child(&mut child).await;
     }
     false
+}
+
+async fn reap_child(child: &mut tokio::process::Child) {
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.start_kill();
+    }
+    let _ = child.wait().await;
 }
 
 fn which(name: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
+        // An empty `PATH` component means the current directory, which must
+        // never supply a helper binary.
+        .filter(|directory| !directory.as_os_str().is_empty())
         .map(|directory| directory.join(name))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable(candidate))
+}
+
+#[cfg(unix)]
+fn is_executable(candidate: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    candidate
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(candidate: &Path) -> bool {
+    candidate.is_file()
 }
 
 #[cfg(test)]

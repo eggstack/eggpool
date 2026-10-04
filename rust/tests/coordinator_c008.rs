@@ -198,6 +198,18 @@ fn usage_without_terminal() -> Vec<u8> {
     .into()
 }
 
+fn responses_completed_stream() -> Vec<u8> {
+    concat!(
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",",
+        "\"status\":\"completed\",\"usage\":{\"input_tokens\":10,",
+        "\"output_tokens\":4}}}\n\n",
+    )
+    .into()
+}
+
 fn responses_failed_stream() -> Vec<u8> {
     concat!(
         "event: response.output_text.delta\n",
@@ -355,6 +367,8 @@ enum Finish {
     CleanEof,
     /// Partial chunk bytes then an abrupt close (transport error).
     Abort,
+    /// Keep the connection open after the scripted chunks.
+    HoldOpen(Duration),
 }
 
 struct SseScript {
@@ -440,6 +454,12 @@ impl StreamingProvider {
                         let _ = socket.write_all(b"9\r\nabc").await;
                     }
                     (Framing::Raw, _) => {}
+                }
+                // `HoldOpen` keeps the connection open past the proxy's idle
+                // timer so a test can prove the proxy closed the stream on the
+                // forwarded terminal instead of waiting for transport EOF.
+                if let Finish::HoldOpen(hold) = script.finish {
+                    sleep(hold).await;
                 }
             }
         });
@@ -1510,6 +1530,73 @@ async fn stream_invalid_utf8_is_terminal_not_success() {
 // ---------------------------------------------------------------------------
 // Provider terminal events: Responses failed/incomplete, Gemini incomplete
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[tokio::test]
+async fn stream_forwarded_responses_terminal_ends_the_stream_without_eof() {
+    // The provider sends its authoritative terminal and then holds the socket
+    // open. That delivery is complete: the stream must close on the forwarded
+    // terminal instead of waiting for the idle timer, and it must not be
+    // recorded as a midstream failure.
+    let server = StreamingProvider::start(vec![SseScript {
+        header_delay: Duration::ZERO,
+        extra_headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
+        framing: Framing::Raw,
+        chunks: vec![(Duration::ZERO, responses_completed_stream())],
+        finish: Finish::HoldOpen(Duration::from_secs(30)),
+    }]);
+    let fixture = build_fixture(
+        "openai",
+        &[ProviderSpec {
+            name: "account-a".to_owned(),
+            provider_id: "provider-a".to_owned(),
+            account_id: 1,
+            base_url: server.base_url(),
+            surfaces: vec![WireSurface::OpenaiResponses],
+        }],
+        RetryPolicy::default(),
+        &StreamOptions {
+            idle_timeout_s: Some(0.25),
+            ..StreamOptions::default()
+        },
+    )
+    .await;
+    let proxy_id = "proxy-responses-held-open";
+    let mut execution = fixture
+        .coordinator
+        .execute(stream_request(ClientSurface::Responses, proxy_id))
+        .await
+        .expect("held-open stream executes");
+    execution.mark_started();
+    let (chunks, error) = drain_stream(&mut execution).await;
+    assert_eq!(error, None, "a complete delivery is not a midstream error");
+    assert!(!chunks.is_empty());
+    let result = execution
+        .complete(DownstreamResult::Delivered)
+        .await
+        .expect("completion converges");
+    assert!(result.progress.completed);
+    assert_eq!(
+        fixture.coordinator.diagnostic_count(OUTCOME_IDLE_TIMEOUT),
+        0
+    );
+    assert_eq!(
+        fixture
+            .coordinator
+            .diagnostic_count(OUTCOME_COMPLETED_CANONICAL),
+        1
+    );
+    let (status, input, output, _, _) = db_request_row(&fixture.database, proxy_id).await;
+    assert_eq!(status, "completed");
+    assert_eq!((input, output), (Some(10), Some(4)));
+    let (_, terminal_attempts, active) = count_rows(&fixture.database).await;
+    assert_eq!(terminal_attempts, 1);
+    assert_eq!(active, 0, "the reservation is released, not stranded");
+    // The provider is still holding the connection; the test deliberately does
+    // not wait for it to close.
+    drop(server);
+    fixture.database.close().await.expect("database closes");
+}
 
 #[tokio::test]
 async fn stream_responses_failed_is_forwarded_terminal() {

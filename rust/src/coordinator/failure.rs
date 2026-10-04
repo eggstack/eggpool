@@ -217,8 +217,19 @@ impl EffectLedger {
         if self.applied.contains_key(&attempt_id) {
             return Ok(false);
         }
-        if self.applied.len() >= self.capacity {
-            return Err(EffectLedgerError::Capacity);
+        // The ledger is a duplicate-effect guard for retries of the *current*
+        // attempt, not durable storage: one engine is shared by every request
+        // in a generation, so refusing to classify once the window is full
+        // would strand every later attempt (pending row, unreleased
+        // reservation, held routing claim). Evict the oldest classification
+        // instead — it is terminal by construction and never revisited.
+        while self.applied.len() >= self.capacity {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    self.applied.remove(&oldest);
+                }
+                None => self.applied.clear(),
+            }
         }
         self.applied.insert(attempt_id, ());
         self.order.push_back(attempt_id);

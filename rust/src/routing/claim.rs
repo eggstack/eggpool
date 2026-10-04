@@ -443,6 +443,9 @@ pub(crate) fn publish(
     }
     state.next_id = state.next_id.saturating_add(1);
     let id = state.next_id;
+    // The right-hand side is evaluated before the entry is inserted, so the
+    // `or_default` zero is the pre-increment value. Reordering these two
+    // operands would turn the increment into a reset.
     *state
         .active_requests
         .entry(claim.account_name.clone())

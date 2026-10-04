@@ -273,12 +273,16 @@ fn diff_dynamic_map(
             (None, Some(_)) => changes.push(change(path, "<missing>", "", false)),
             (Some(_), None) => changes.push(change(path, "", "<missing>", false)),
             (Some(old_entry), Some(new_entry)) if old_entry != new_entry => {
+                // Always derive the secret flag from the path: a hardcoded
+                // `false` here would put a provider `api_key` value into reload
+                // diagnostics.
+                let secret = is_secret_path(&path);
                 if structured {
                     diff_structured(&path, old_entry, new_entry, changes);
                 } else {
-                    let old_display = display_value(old_entry, false, &path);
-                    let new_display = display_value(new_entry, false, &path);
-                    changes.push(change(path, old_display, new_display, false));
+                    let old_display = display_value(old_entry, secret, &path);
+                    let new_display = display_value(new_entry, secret, &path);
+                    changes.push(change(path, old_display, new_display, secret));
                 }
             }
             _ => {}

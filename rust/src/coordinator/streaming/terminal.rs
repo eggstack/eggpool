@@ -140,17 +140,15 @@ use crate::coordinator::{
     FinalizationData, FinalizationOutcome, StreamingCoordinatorError, WireResolver,
 };
 use crate::routing::RoutingRouter;
-use crate::wire::ir::{
-    CacheCounterStatus, CanonicalEventType, CanonicalUsage, ProviderErrorEvidence,
-};
+use crate::wire::ir::{CacheCounterStatus, CanonicalUsage, ProviderErrorEvidence};
 use crate::wire::{StreamForwardingMode, StreamTerminalOutcome, TerminalEvidence, WireSurface};
 
 use super::{
-    AttemptStreamFacts, OUTCOME_COMPLETED_CANONICAL, OUTCOME_COMPLETED_COMPATIBILITY,
-    OUTCOME_EMPTY_EOF, OUTCOME_IDLE_TIMEOUT, OUTCOME_MALFORMED_EOF,
-    OUTCOME_PREMATURE_EOF_BEFORE_BODY, OUTCOME_PREMATURE_EOF_MIDSTREAM, OUTCOME_TERMINAL_FAILURE,
-    OUTCOME_TERMINAL_INCOMPLETE, OUTCOME_UPSTREAM_MIDSTREAM_ERROR, PendingStreamFinalizationParts,
-    StreamChunkError, StreamPhase,
+    AttemptStreamFacts, ForwardedTerminal, OUTCOME_COMPLETED_CANONICAL,
+    OUTCOME_COMPLETED_COMPATIBILITY, OUTCOME_EMPTY_EOF, OUTCOME_IDLE_TIMEOUT,
+    OUTCOME_MALFORMED_EOF, OUTCOME_PREMATURE_EOF_BEFORE_BODY, OUTCOME_PREMATURE_EOF_MIDSTREAM,
+    OUTCOME_TERMINAL_FAILURE, OUTCOME_TERMINAL_INCOMPLETE, OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
+    PendingStreamFinalizationParts, StreamChunkError, StreamPhase,
 };
 
 pub(crate) fn store_idle_timeout(
@@ -162,7 +160,14 @@ pub(crate) fn store_idle_timeout(
     let observation = transport_observation(parts, facts, "stream_idle", "stream_idle");
     let (effects, first) = match decide(engine, &observation) {
         Ok(value) => value,
-        Err(_) => return store_local_midstream(parts, facts, "StreamIdleTimeout"),
+        Err(_) => {
+            return store_local_midstream(
+                parts,
+                facts,
+                "StreamIdleTimeout",
+                StreamChunkError::UpstreamTransport,
+            );
+        }
     };
     if first {
         apply_effects(router, parts, &effects);
@@ -194,7 +199,14 @@ pub(crate) fn store_midstream_transport(
     let observation = transport_observation(parts, facts, "stream_body", diagnostic_class);
     let (effects, first) = match decide(engine, &observation) {
         Ok(value) => value,
-        Err(_) => return store_local_midstream(parts, facts, "UpstreamTransport"),
+        Err(_) => {
+            return store_local_midstream(
+                parts,
+                facts,
+                "UpstreamTransport",
+                StreamChunkError::UpstreamTransport,
+            );
+        }
     };
     if first {
         apply_effects(router, parts, &effects);
@@ -241,7 +253,14 @@ pub(crate) fn store_translation_error(
     };
     let (effects, first) = match decide(engine, &observation) {
         Ok(value) => value,
-        Err(_) => return store_local_midstream(parts, facts, "StreamTranslation"),
+        Err(_) => {
+            return store_local_midstream(
+                parts,
+                facts,
+                "StreamTranslation",
+                StreamChunkError::Translation,
+            );
+        }
     };
     if first {
         apply_effects(router, parts, &effects);
@@ -260,6 +279,9 @@ fn store_local_midstream(
     parts: &mut PendingStreamFinalizationParts,
     facts: &AttemptStreamFacts,
     error_class: &str,
+    // The reported error must match the fault: a translation failure reported
+    // as an upstream transport error blames the provider for a local bug.
+    error: StreamChunkError,
 ) -> Option<Result<Bytes, StreamChunkError>> {
     let data = local_midstream_data(parts, facts, error_class);
     parts.diagnostics_record(
@@ -268,7 +290,77 @@ fn store_local_midstream(
         parts.stream_bytes(),
         parts.elapsed(),
     );
-    store_terminal(parts, data, StreamChunkError::UpstreamTransport)
+    store_terminal(parts, data, error)
+}
+
+/// End the stream on a provider terminal event that has already been forwarded
+/// downstream.
+///
+/// The client holds the provider's authoritative end of the response, so the
+/// stream closes here instead of waiting for transport EOF. A provider that
+/// holds the socket open after its terminal must never turn a complete
+/// delivery into a midstream failure or a health penalty.
+pub(crate) fn store_forwarded_terminal(
+    parts: &mut PendingStreamFinalizationParts,
+    facts: &AttemptStreamFacts,
+    router: &RoutingRouter,
+    wire_resolver: &WireResolver,
+    terminal: ForwardedTerminal,
+) -> Option<Result<Bytes, StreamChunkError>> {
+    let usage = parts
+        .stream
+        .as_mut()
+        .and_then(|stream| stream.wire.as_mut())
+        .and_then(|wire| wire.usage());
+    match terminal {
+        ForwardedTerminal::Completed => {
+            wire_resolver.accept(
+                &parts.identity.provider_id,
+                &parts.identity.model_id,
+                &facts.candidate_fingerprint,
+                facts.wire_surface,
+                Instant::now(),
+            );
+            if let Some(claim) = parts.claim.as_ref() {
+                router.record_success(claim);
+            }
+            parts.diagnostics_record(
+                OUTCOME_COMPLETED_CANONICAL,
+                facts.attempt_number,
+                parts.stream_bytes(),
+                parts.elapsed(),
+            );
+            let data = success_terminal_data(parts, facts, usage);
+            parts.phase = StreamPhase::Closed;
+            parts.release_transport();
+            parts.terminal_stored = true;
+            parts.data = data;
+            parts.exhausted = true;
+            None
+        }
+        ForwardedTerminal::Incomplete | ForwardedTerminal::Failed => {
+            let failed = matches!(terminal, ForwardedTerminal::Failed);
+            parts.diagnostics_record(
+                if failed {
+                    OUTCOME_TERMINAL_FAILURE
+                } else {
+                    OUTCOME_TERMINAL_INCOMPLETE
+                },
+                facts.attempt_number,
+                parts.stream_bytes(),
+                parts.elapsed(),
+            );
+            let data = responses_terminal_data(parts, facts, usage, failed);
+            parts.phase = StreamPhase::Closed;
+            parts.release_transport();
+            parts.terminal_stored = true;
+            parts.data = data;
+            parts.exhausted = true;
+            // The provider terminal event was already forwarded; the stream
+            // ends cleanly from the caller's view.
+            None
+        }
+    }
 }
 
 pub(crate) fn store_eof(
@@ -289,7 +381,6 @@ pub(crate) fn store_eof(
             match wire.finalize_native() {
                 Ok(summary) => {
                     tail_usage = summary.usage.clone();
-                    stream.saw_terminal_event |= summary.saw_terminal_event;
                     Some(summary)
                 }
                 Err(_) => None,
@@ -299,14 +390,6 @@ pub(crate) fn store_eof(
                 Ok(finalization) => {
                     tail_usage = finalization.usage.clone();
                     for event in &finalization.events {
-                        if matches!(
-                            event.event_type,
-                            CanonicalEventType::ResponseComplete
-                                | CanonicalEventType::ResponseIncomplete
-                                | CanonicalEventType::Error
-                        ) {
-                            stream.saw_terminal_event = true;
-                        }
                         if let Ok(bytes) = wire.encode_client_event_stateful(event)
                             && !bytes.is_empty()
                         {

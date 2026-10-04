@@ -382,15 +382,22 @@ impl ModelRouterAffinity {
         self.cleanup_expired(&mut state, 16);
         state.remove_entry(&key);
         while state.entries.len() >= self.max_entries {
+            // Every iteration must remove an entry, or this loop would spin
+            // forever holding the affinity lock.
             let Some(oldest) = state.lru_head else { break };
             let key = state.lru_nodes[oldest]
                 .as_ref()
                 .expect("linked head")
                 .key
                 .clone();
-            if state.remove_entry(&key).is_some() {
-                state.stats.evictions += 1;
+            if state.remove_entry(&key).is_none() {
+                // The head is not in `entries`: the two structures disagree.
+                // Drop the head node so the loop still makes progress.
+                state.lru_head = state.lru_nodes[oldest].as_ref().and_then(|node| node.next);
+                state.lru_nodes.remove(oldest);
+                continue;
             }
+            state.stats.evictions += 1;
         }
         let slot = state.append_mru(key.clone());
         state.entries.insert(

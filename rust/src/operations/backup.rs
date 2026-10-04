@@ -1034,13 +1034,24 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), BackupError>
             .create_new(true)
             .open(&temp)?;
         set_private_file(&temp)?;
+        // The mode is part of the published content, so it is applied to the
+        // temporary file: a failure here must not leave the new bytes already
+        // committed at `path`.
+        set_mode(&temp, mode)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
-        set_mode(path, mode)
+        // Fsync the parent directory so the rename itself survives a crash.
+        fsync_parent_dir(parent)
     })();
     let _ = fs::remove_file(&temp);
     result
+}
+
+fn fsync_parent_dir(parent: &Path) -> Result<(), BackupError> {
+    let directory = File::open(parent)?;
+    directory.sync_all()?;
+    Ok(())
 }
 
 fn tempfile_path(path: &Path, kind: &str) -> Result<PathBuf, BackupError> {

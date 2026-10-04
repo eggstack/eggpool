@@ -329,11 +329,7 @@ pub fn structural_canonical_request_from_object(
         parallel_tool_calls: parallel_tool_calls.value().copied(),
         presence: RequestPresence {
             stream: optional_bool(object, "stream")?,
-            max_output_tokens: Presence::from_object(
-                object,
-                output_key(surface, protocol),
-                |value| value.as_u64(),
-            ),
+            max_output_tokens: output_presence(object, protocol, surface),
             temperature: Presence::from_object(object, "temperature", |value| value.as_f64()),
             top_p: Presence::from_object(object, "top_p", |value| value.as_f64()),
             stop: Presence::from_object(object, stop_key(surface), decode_stop_presence),
@@ -1519,7 +1515,7 @@ fn decode_tool_choice(value: Option<&Value>) -> Result<Option<CanonicalToolChoic
 }
 
 fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, DecodeError> {
-    if let Some(value) = object.get("reasoning_effort") {
+    if let Some(value) = present_field(object, "reasoning_effort") {
         let effort = value.as_str().ok_or(DecodeError::InvalidField {
             field: "reasoning_effort",
         })?;
@@ -1536,7 +1532,7 @@ fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, Deco
             explicit_disable: false,
         });
     }
-    if let Some(value) = object.get("reasoning") {
+    if let Some(value) = present_field(object, "reasoning") {
         if let Some(enabled) = value.as_bool() {
             return Ok(if enabled {
                 ReasoningIntent {
@@ -1551,7 +1547,7 @@ fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, Deco
         let reasoning = value
             .as_object()
             .ok_or(DecodeError::InvalidField { field: "reasoning" })?;
-        if let Some(effort) = reasoning.get("effort") {
+        if let Some(effort) = present_field(reasoning, "effort") {
             let effort = effort.as_str().ok_or(DecodeError::InvalidField {
                 field: "reasoning.effort",
             })?;
@@ -1576,11 +1572,11 @@ fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, Deco
         }
         return Err(DecodeError::InvalidField { field: "reasoning" });
     }
-    if let Some(value) = object.get("thinking") {
+    if let Some(value) = present_field(object, "thinking") {
         let thinking = value
             .as_object()
             .ok_or(DecodeError::InvalidField { field: "thinking" })?;
-        match thinking.get("type").and_then(Value::as_str) {
+        match present_field(thinking, "type").and_then(Value::as_str) {
             Some("disabled") | Some("none") => return Ok(ReasoningIntent::disabled()),
             Some("adaptive") => {
                 return Ok(ReasoningIntent {
@@ -1591,10 +1587,10 @@ fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, Deco
             }
             _ => {}
         }
-        if let Some(budget) = thinking.get("budget_tokens") {
+        if let Some(budget) = present_field(thinking, "budget_tokens") {
             return positive_budget(budget, "thinking.budget_tokens").map(ReasoningIntent::fixed);
         }
-        if thinking.get("type").and_then(Value::as_str) == Some("enabled") {
+        if present_field(thinking, "type").and_then(Value::as_str) == Some("enabled") {
             return Ok(ReasoningIntent {
                 requested: Some(true),
                 mode: ReasoningMode::Toggle,
@@ -1603,10 +1599,16 @@ fn decode_reasoning(object: &Map<String, Value>) -> Result<ReasoningIntent, Deco
         }
         return Err(DecodeError::InvalidField { field: "thinking" });
     }
-    if let Some(value) = object.get("thinking_budget") {
+    if let Some(value) = present_field(object, "thinking_budget") {
         return positive_budget(value, "thinking_budget").map(ReasoningIntent::fixed);
     }
     Ok(ReasoningIntent::default())
+}
+
+/// An explicit `null` is treated as an absent field, matching the sibling
+/// fields (`stream`, `cache_control`) that optional SDKs routinely serialize.
+fn present_field<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    object.get(key).filter(|value| !value.is_null())
 }
 
 fn positive_budget(value: &Value, _field: &'static str) -> Result<u64, DecodeError> {
@@ -1779,6 +1781,34 @@ fn output_key(surface: ClientSurface, _protocol: &str) -> &'static str {
     }
 }
 
+/// Output-token keys in resolution order. Presence, the value decoder and the
+/// zero-limit fallback all resolve through this one list so they cannot
+/// disagree about which spelling the client sent.
+fn output_keys(surface: ClientSurface, protocol: &str) -> &'static [&'static str] {
+    if surface == ClientSurface::Responses {
+        &["max_output_tokens", "max_completion_tokens", "max_tokens"]
+    } else if protocol == "anthropic" {
+        &["max_tokens"]
+    } else {
+        &["max_completion_tokens", "max_tokens"]
+    }
+}
+
+fn output_presence(
+    object: &Map<String, Value>,
+    protocol: &str,
+    surface: ClientSurface,
+) -> Presence<u64> {
+    for key in output_keys(surface, protocol) {
+        match object.get(*key) {
+            None => continue,
+            Some(Value::Null) => return Presence::Null,
+            Some(value) => return value.as_u64().map_or(Presence::Null, Presence::Value),
+        }
+    }
+    Presence::Missing
+}
+
 fn stop_key(surface: ClientSurface) -> &'static str {
     if surface == ClientSurface::Messages {
         "stop_sequences"
@@ -1792,13 +1822,7 @@ fn decode_requested_output_tokens(
     protocol: &str,
     surface: ClientSurface,
 ) -> Result<Option<u64>, DecodeError> {
-    let keys: &[&str] = if surface == ClientSurface::Responses {
-        &["max_output_tokens", "max_completion_tokens", "max_tokens"]
-    } else if protocol == "anthropic" {
-        &["max_tokens"]
-    } else {
-        &["max_completion_tokens", "max_tokens"]
-    };
+    let keys = output_keys(surface, protocol);
     for key in keys {
         if let Some(candidate) = object.get(*key) {
             if candidate.is_null() {
@@ -1821,21 +1845,12 @@ fn output_limit(
     protocol: &str,
 ) -> Result<Option<u64>, DecodeError> {
     let resolved = decode_requested_output_tokens(object, protocol, surface)?;
-    if resolved.is_none() {
-        let keys = if surface == ClientSurface::Responses {
-            ["max_output_tokens", "max_completion_tokens", "max_tokens"]
-        } else if protocol == "anthropic" {
-            ["max_tokens", "", ""]
-        } else {
-            ["max_completion_tokens", "max_tokens", ""]
-        };
-        if keys
+    if resolved.is_none()
+        && output_keys(surface, protocol)
             .iter()
-            .filter(|key| !key.is_empty())
             .any(|key| object.get(*key).and_then(Value::as_u64) == Some(0))
-        {
-            return Ok(Some(0));
-        }
+    {
+        return Ok(Some(0));
     }
     Ok(resolved)
 }
@@ -1976,7 +1991,11 @@ fn decode_tool_result_media(
 
 #[cfg(test)]
 mod tests {
-    use super::is_client_tool_search_declaration;
+    use super::{
+        ClientSurface, DecodeError, ReasoningIntent, ReasoningMode,
+        canonical_request_from_value_with_limits, is_client_tool_search_declaration,
+    };
+    use crate::ir::Presence;
     use serde_json::{Map, Value, json};
 
     fn object(value: Value) -> Map<String, Value> {
@@ -2045,5 +2064,122 @@ mod tests {
                 "case: {name}"
             );
         }
+    }
+
+    fn chat_request(extra: Value) -> Result<crate::ir::CanonicalRequest, DecodeError> {
+        request(ClientSurface::ChatCompletions, extra)
+    }
+
+    fn request(
+        surface: ClientSurface,
+        extra: Value,
+    ) -> Result<crate::ir::CanonicalRequest, DecodeError> {
+        let mut value = if surface == ClientSurface::Responses {
+            json!({"model": "m", "input": [{"role": "user", "content": "hi"}]})
+        } else {
+            json!({"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+        };
+        value
+            .as_object_mut()
+            .expect("request object")
+            .extend(extra.as_object().expect("extra object").clone());
+        canonical_request_from_value_with_limits(&value, surface, Default::default())
+    }
+
+    #[test]
+    fn explicit_null_reasoning_fields_decode_as_absent() {
+        for field in [
+            json!({"reasoning": null}),
+            json!({"reasoning_effort": null}),
+            json!({"thinking": null}),
+            json!({"thinking_budget": null}),
+        ] {
+            let decoded = chat_request(field.clone())
+                .unwrap_or_else(|error| panic!("{field} should decode as absent, got {error}"));
+            assert_eq!(
+                decoded.reasoning,
+                ReasoningIntent::default(),
+                "case: {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn null_reasoning_subfields_fall_through_to_the_next_signal() {
+        let cases: &[(Value, ReasoningIntent)] = &[
+            (
+                json!({"reasoning": {"effort": null, "enabled": true}}),
+                ReasoningIntent {
+                    requested: Some(true),
+                    mode: ReasoningMode::Toggle,
+                    ..ReasoningIntent::default()
+                },
+            ),
+            (
+                json!({"thinking": {"type": "enabled", "budget_tokens": null}}),
+                ReasoningIntent {
+                    requested: Some(true),
+                    mode: ReasoningMode::Toggle,
+                    ..ReasoningIntent::default()
+                },
+            ),
+            (
+                json!({"thinking": {"type": "disabled", "budget_tokens": null}}),
+                ReasoningIntent::disabled(),
+            ),
+        ];
+        for (field, expected) in cases {
+            let decoded = chat_request(field.clone())
+                .unwrap_or_else(|error| panic!("{field} should decode, got {error}"));
+            assert_eq!(decoded.reasoning, *expected, "case: {field}");
+        }
+    }
+
+    #[test]
+    fn invalid_reasoning_shapes_are_still_rejected() {
+        for field in [
+            json!({"reasoning": 1}),
+            json!({"reasoning": {}}),
+            json!({"reasoning": {"effort": null}}),
+            json!({"reasoning": {"effort": 3}}),
+            json!({"reasoning_effort": ""}),
+            json!({"thinking": "enabled"}),
+            json!({"thinking": {}}),
+            json!({"thinking": {"type": null}}),
+            json!({"thinking_budget": 0}),
+        ] {
+            assert!(
+                chat_request(field.clone()).is_err(),
+                "case: {field} must stay invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn output_token_presence_covers_every_accepted_spelling() {
+        let cases: &[(ClientSurface, &str)] = &[
+            (ClientSurface::ChatCompletions, "max_completion_tokens"),
+            (ClientSurface::ChatCompletions, "max_tokens"),
+            (ClientSurface::Responses, "max_output_tokens"),
+            (ClientSurface::Responses, "max_completion_tokens"),
+            (ClientSurface::Responses, "max_tokens"),
+        ];
+        for (surface, field) in cases {
+            let explicit = request(*surface, json!({(*field): 7})).expect("explicit value");
+            assert_eq!(
+                explicit.presence.max_output_tokens,
+                Presence::Value(7),
+                "case: {surface:?} {field}"
+            );
+            let null = request(*surface, json!({(*field): null})).expect("explicit null");
+            assert_eq!(
+                null.presence.max_output_tokens,
+                Presence::Null,
+                "case: {surface:?} {field}"
+            );
+            assert_eq!(null.max_output_tokens, None, "case: {surface:?} {field}");
+        }
+        let missing = request(ClientSurface::ChatCompletions, json!({})).expect("no limit");
+        assert_eq!(missing.presence.max_output_tokens, Presence::Missing);
     }
 }

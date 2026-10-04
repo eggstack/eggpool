@@ -593,7 +593,10 @@ fn parse_timestamp(value: &str) -> Result<Option<f64>, String> {
 }
 fn epoch_to_timestamp(epoch: f64) -> String {
     let seconds = epoch.floor() as i64;
-    let micros = ((epoch - seconds as f64) * 1_000_000.0).round() as i64;
+    // Clamped rather than rounded up: a fraction of `999_999.5` would round to
+    // `1_000_000` and format as `.1000000`, which `parse_timestamp` reads back
+    // as `0.1` — a backward drift on the round trip.
+    let micros = (((epoch - seconds as f64) * 1_000_000.0).round() as i64).clamp(0, 999_999);
     let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
     let day_seconds = seconds.rem_euclid(86_400);
     let hour = day_seconds / 3_600;
@@ -626,4 +629,29 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     (year + i64::from(month <= 2), month, day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{epoch_to_timestamp, parse_timestamp};
+
+    #[test]
+    fn timestamp_round_trip_never_emits_a_seven_digit_fraction() {
+        for epoch in [
+            1_700_000_000.0,
+            1_700_000_000.5,
+            // Rounds to 1_000_000 micros without the clamp.
+            1_700_000_000.999_999_5,
+            1_700_000_000.999_999_9,
+            0.0,
+        ] {
+            let text = epoch_to_timestamp(epoch);
+            assert!(!text.contains(".1000000"), "{epoch} formatted as {text}");
+            let parsed = parse_timestamp(&text).expect("parseable").expect("value");
+            assert!(
+                (parsed - epoch).abs() < 1e-3,
+                "{epoch} -> {text} -> {parsed}"
+            );
+        }
+    }
 }
