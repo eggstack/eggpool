@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M008 closed — PERSIST/EXTRA rejected on request-p95 gates | No registered successor depends on M008; no blocked Persistence work to promote. Production remains WAL/NORMAL; the storage tail remains unresolved. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M009 ready — M008 documentation reconciliation corrective pass | M008 closure accepted; documentation-only corrective has no runtime or hardware blocker. Production remains WAL/NORMAL; storage tail unresolved. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -52,6 +52,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Persistence | M009 — M008 documentation reconciliation corrective pass | ready | `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md` | Hard: M008 closure accepted. Documentation/tooling only; no physical target required. |
 
 
 

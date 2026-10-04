@@ -95,7 +95,7 @@ Request publication/finalization continue to own their current transactions. Det
 - M003's evidence, architecture, and M006 engine dependencies were met. Its implementation is closed rejected and reverted.
 - M007 is closed rejected after Pi 5/MMC qualification: its second PASSIVE worker removed foreground latency but failed WAL progress/convergence. This is the hard evidence dependency for M008.
 - M008 has no remaining hard dependency. It preserves one connection/gate/worker and tests a different SQLite journal architecture under a non-default qualification feature. Physical Linux/aarch64 Pi 5-class ext4/MMC evidence is an operational closure dependency, not an implementation blocker.
-- A positive M008 result may justify a separate production journal-mode ADR/adoption plan. A rejected M008 result may justify separately planning control/outbox/analytics persistence research; neither successor is pre-authorized.
+- M008 is closed rejected. M009 is a documentation-only corrective pass and has no runtime dependency. A separately authorized storage-architecture investigation may proceed from M008's accepted physical evidence; production adoption of any split authority still requires an ADR and separate implementation milestones.
 
 ## 7. Milestones
 
@@ -372,6 +372,41 @@ Exit conditions:
 - Positive evidence does not alter production; it may justify a separate ADR/adoption plan.
 - Rejection does not directly authorize a storage split; it may justify a separately bounded control/outbox/analytics architecture research plan.
 
+### Milestone 009 — M008 documentation reconciliation corrective pass
+
+Class: polish
+
+Status: ready
+
+Implementation plan:
+
+- `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md`
+
+Objective:
+
+Reconcile the remaining present-tense persistence documentation after M008 closed rejected, without changing production behavior or rewriting historical evidence.
+
+Dependencies:
+
+- Hard: M008 closure accepted. **Satisfied.**
+- No operational hardware dependency.
+- No dependency on the future storage-architecture investigation.
+
+Deliverable boundary:
+
+- Correct the stale M008 milestone-body status.
+- Correct the database deep dive's stale present-tense M007 “registered experiment” wording.
+- Sweep only current-authority persistence docs for equivalent lifecycle drift.
+- Add a narrow current-doc regression guard.
+- Zero production Rust/Cargo/schema/artifact diff.
+
+Exit conditions:
+
+- Current persistence docs agree that M007 and M008 are closed/rejected.
+- Production remains WAL/NORMAL on one connection/gate/worker.
+- Historical closure/artifact evidence remains immutable.
+- Targeted documentation guard passes.
+
 ## 8. Cross-cutting requirements
 
 Storage and migration: no schema change. WAL/NORMAL and schema 54 remain authoritative.
@@ -415,7 +450,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M007 rejected a separate PASSIVE worker because WAL progress/convergence failed despite excellent foreground latency. M006 remains the retained SQLite safety baseline. M008 completed physical Pi 5/MMC qualification and rejected PERSIST/EXTRA adoption: candidate request p95 exceeded 100 ms in all three primary runs and all five steady-state windows, while separate worker-I/O attribution measured about 2.04× control. Production remains WAL/NORMAL. No M008-dependent successor is registered or unblocked; any control/outbox/analytics persistence research requires a new bounded plan and architecture decision.
+This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, and M007 rejected a separate PASSIVE worker because WAL progress/convergence failed despite excellent foreground latency. M006 remains the retained SQLite safety baseline. M008 completed physical Pi 5/MMC qualification and rejected PERSIST/EXTRA adoption: candidate request p95 exceeded 100 ms in all three primary runs and all five steady-state windows, while separate worker-I/O attribution measured about 2.04× control. Production remains WAL/NORMAL. M009 is registered as the bounded documentation corrective for the residual lifecycle drift; it changes no runtime behavior.
 
 ## 12. Milestone status
 
@@ -428,4 +463,5 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 005 — M004 evidence and planning reconciliation corrective pass | closed | plans/implementation/persistence/005-m004-evidence-and-planning-reconciliation-corrective-pass.md | plans/closure/persistence/005-status.md | none — committed artifacts were sufficient |
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
 | 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
-| 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none; no registered successor depends on M008 |
+| 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
+| 009 — M008 documentation reconciliation corrective pass | ready | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | — | hard dependency M008 closure satisfied; no runtime/hardware blocker |
