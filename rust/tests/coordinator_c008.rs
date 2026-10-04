@@ -453,6 +453,13 @@ impl StreamingProvider {
                     (Framing::Chunked, Finish::Abort) => {
                         let _ = socket.write_all(b"9\r\nabc").await;
                     }
+                    // Deliberately no terminator. `HoldOpen` means "keep the
+                    // connection open after the scripted chunks", so a zero
+                    // chunk would end the body early and defeat the point: the
+                    // proxy has to reach its own terminal, not read EOF. The
+                    // sleep below then holds the socket open past its idle
+                    // timer. Mirrors `(Raw, _)` for the same reason.
+                    (Framing::Chunked, Finish::HoldOpen(_)) => {}
                     (Framing::Raw, _) => {}
                 }
                 // `HoldOpen` keeps the connection open past the proxy's idle
@@ -1531,7 +1538,6 @@ async fn stream_invalid_utf8_is_terminal_not_success() {
 // Provider terminal events: Responses failed/incomplete, Gemini incomplete
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
 #[tokio::test]
 async fn stream_forwarded_responses_terminal_ends_the_stream_without_eof() {
     // The provider sends its authoritative terminal and then holds the socket
