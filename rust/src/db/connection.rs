@@ -172,6 +172,9 @@ impl CheckpointMaintenancePolicy {
 /// counts cross this boundary; no SQL text, path, or request detail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CheckpointMaintenanceOutcome {
+    /// Rollback-journal qualification has no WAL checkpoint operation.
+    #[cfg(feature = "qualification-persist-journal")]
+    NotApplicable,
     /// No durable transaction completed since the previous inspection, so no
     /// SQLite work was performed.
     NotDue,
@@ -196,6 +199,8 @@ pub(crate) enum CheckpointMaintenanceOutcome {
 impl CheckpointMaintenanceOutcome {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            #[cfg(feature = "qualification-persist-journal")]
+            Self::NotApplicable => "not_applicable",
             Self::NotDue => "not_due",
             Self::GateBusy => "gate_busy",
             #[cfg(feature = "qualification-dedicated-checkpointer")]
@@ -244,6 +249,10 @@ struct DatabaseInner {
     calls: AtomicU64,
     transactions: AtomicU64,
     config: DatabaseConfig,
+    #[cfg(feature = "qualification-persist-journal")]
+    persist_journal_candidate: bool,
+    #[cfg(feature = "qualification-persist-journal")]
+    worker_io_attribution: bool,
     checkpoint_stats: CheckpointMaintenanceStats,
     #[cfg(feature = "qualification-dedicated-checkpointer")]
     dedicated_checkpointer: Mutex<Option<DedicatedCheckpointer>>,
@@ -260,7 +269,7 @@ struct DatabaseInner {
     #[cfg(feature = "qualification-dedicated-checkpointer")]
     dedicated_stats: Arc<DedicatedCheckpointerStats>,
     #[cfg(feature = "qualification-db-diagnostics")]
-    qualification: super::qualification::QualificationCollector,
+    qualification: Arc<super::qualification::QualificationCollector>,
 }
 
 #[cfg(feature = "qualification-dedicated-checkpointer")]
@@ -345,20 +354,63 @@ impl std::fmt::Debug for Database {
 
 impl Database {
     pub async fn open(config: DatabaseConfig) -> Result<Self, DatabaseError> {
+        #[cfg(feature = "qualification-persist-journal")]
+        let persist_journal_candidate = qualification_persist_journal_toggle()?;
+        #[cfg(feature = "qualification-persist-journal")]
+        let worker_io_attribution = qualification_worker_io_attribution_toggle()?;
+        #[cfg(not(feature = "qualification-persist-journal"))]
+        let worker_io_attribution = false;
+        #[cfg(not(feature = "qualification-persist-journal"))]
+        let persist_journal_candidate = false;
         #[cfg(feature = "qualification-dedicated-checkpointer")]
         let dedicated_enabled = qualification_dedicated_checkpointer_toggle()?;
         #[cfg(not(feature = "qualification-dedicated-checkpointer"))]
         let dedicated_enabled = false;
-        Self::open_with_dedicated_toggle(config, dedicated_enabled).await
+        Self::open_with_toggles(
+            config,
+            dedicated_enabled,
+            persist_journal_candidate,
+            worker_io_attribution,
+        )
+        .await
     }
 
-    async fn open_with_dedicated_toggle(
+    async fn open_with_toggles(
         config: DatabaseConfig,
         dedicated_enabled: bool,
+        persist_journal_candidate: bool,
+        worker_io_attribution: bool,
     ) -> Result<Self, DatabaseError> {
         #[cfg(not(feature = "qualification-dedicated-checkpointer"))]
         let _ = dedicated_enabled;
+        #[cfg(not(feature = "qualification-persist-journal"))]
+        let _ = persist_journal_candidate;
+        #[cfg(not(feature = "qualification-persist-journal"))]
+        let _ = worker_io_attribution;
         validate_config(&config)?;
+        #[cfg(feature = "qualification-persist-journal")]
+        validate_persist_journal_candidate(&config, persist_journal_candidate, dedicated_enabled)?;
+        #[cfg(feature = "qualification-persist-journal")]
+        if worker_io_attribution {
+            if dedicated_enabled {
+                return Err(DatabaseError::Integrity {
+                    detail:
+                        "worker I/O attribution is incompatible with the dedicated checkpointer"
+                            .to_owned(),
+                });
+            }
+            if !persist_journal_candidate && !config.wal {
+                return Err(DatabaseError::Integrity {
+                    detail:
+                        "worker I/O attribution requires the M008 WAL control or PERSIST candidate"
+                            .to_owned(),
+                });
+            }
+            #[cfg(not(target_os = "linux"))]
+            return Err(DatabaseError::Integrity {
+                detail: "worker I/O attribution is supported only on Linux".to_owned(),
+            });
+        }
         let connection = if config.read_only && config.path != ":memory:" {
             let uri = format!("file:{}?mode=ro", percent_encode_path(&config.path));
             AsyncConnection::open_with_flags(
@@ -383,6 +435,10 @@ impl Database {
                 calls: AtomicU64::new(0),
                 transactions: AtomicU64::new(0),
                 config,
+                #[cfg(feature = "qualification-persist-journal")]
+                persist_journal_candidate,
+                #[cfg(feature = "qualification-persist-journal")]
+                worker_io_attribution,
                 checkpoint_stats: CheckpointMaintenanceStats::default(),
                 #[cfg(feature = "qualification-dedicated-checkpointer")]
                 dedicated_checkpointer: Mutex::new(None),
@@ -399,9 +455,13 @@ impl Database {
                 #[cfg(feature = "qualification-dedicated-checkpointer")]
                 dedicated_stats: Arc::new(DedicatedCheckpointerStats::default()),
                 #[cfg(feature = "qualification-db-diagnostics")]
-                qualification: super::qualification::QualificationCollector::new(),
+                qualification: Arc::new(super::qualification::QualificationCollector::new()),
             }),
         };
+        #[cfg(feature = "qualification-persist-journal")]
+        if worker_io_attribution {
+            database.inner.qualification.enable_worker_io_attribution();
+        }
         if let Err(error) = database.configure().await {
             let _ = database.close().await;
             return Err(error);
@@ -627,12 +687,31 @@ impl Database {
         self.inner.calls.fetch_add(1, Ordering::Relaxed);
         self.inner.transactions.fetch_add(1, Ordering::Relaxed);
         let timeout = self.inner.config.busy_timeout_ms;
+        #[cfg(feature = "qualification-persist-journal")]
+        let worker_io_attribution = self.inner.worker_io_attribution;
+        #[cfg(feature = "qualification-persist-journal")]
+        let qualification = worker_io_attribution.then(|| Arc::clone(&self.inner.qualification));
         #[cfg(feature = "qualification-db-diagnostics")]
         let call_started_at = Instant::now();
         let result = self
             .inner
             .connection
             .call(move |connection| {
+                #[cfg(feature = "qualification-persist-journal")]
+                let worker_write_bytes_before = if worker_io_attribution {
+                    match read_worker_write_bytes() {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            qualification
+                                .as_ref()
+                                .expect("attribution collector exists when enabled")
+                                .record_worker_io_failure();
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
                 #[cfg(feature = "qualification-db-diagnostics")]
                 let worker_started_at = Instant::now();
                 #[cfg(feature = "qualification-db-diagnostics")]
@@ -698,6 +777,22 @@ impl Database {
                         }),
                     },
                 };
+                #[cfg(feature = "qualification-persist-journal")]
+                if let Some(before) = worker_write_bytes_before {
+                    let collector = qualification
+                        .as_ref()
+                        .expect("attribution collector exists when enabled");
+                    match read_worker_write_bytes()
+                        .ok()
+                        .and_then(|after| after.checked_sub(before))
+                    {
+                        Some(delta) if transaction_result.is_ok() => {
+                            collector.record_worker_io(kind, delta);
+                        }
+                        Some(_) => {}
+                        None => collector.record_worker_io_failure(),
+                    }
+                }
                 #[cfg(feature = "qualification-db-diagnostics")]
                 let phase = TransactionPhase {
                     worker_queue_us,
@@ -945,6 +1040,10 @@ impl Database {
         policy: CheckpointMaintenancePolicy,
         observed_transactions: &AtomicU64,
     ) -> Result<CheckpointMaintenanceOutcome, DatabaseError> {
+        #[cfg(feature = "qualification-persist-journal")]
+        if self.inner.persist_journal_candidate {
+            return Ok(CheckpointMaintenanceOutcome::NotApplicable);
+        }
         #[cfg(feature = "qualification-dedicated-checkpointer")]
         if self.dedicated_is_enabled() {
             return self.dedicated_checkpoint_maintenance(policy).await;
@@ -1335,13 +1434,51 @@ impl Database {
         #[cfg(feature = "qualification-db-diagnostics")]
         validate_qualification_checkpoint_overrides()?;
         let config = self.inner.config.clone();
+        #[cfg(feature = "qualification-persist-journal")]
+        let persist_journal_candidate = self.inner.persist_journal_candidate;
         #[cfg(feature = "qualification-db-diagnostics")]
         let wal_autocheckpoint_override = qualification_wal_autocheckpoint_override()?;
         self.call(move |connection| {
             connection.execute_batch("PRAGMA foreign_keys = ON")?;
             connection.pragma_update(None, "busy_timeout", config.busy_timeout_ms)?;
-            if !config.read_only && config.wal {
+            #[cfg(feature = "qualification-persist-journal")]
+            if persist_journal_candidate {
+                // Select PERSIST directly. In particular, do not briefly create
+                // a WAL before switching the isolated qualification database.
+                connection.pragma_update(None, "journal_mode", "PERSIST")?;
+                let mode: String =
+                    connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                if !mode.eq_ignore_ascii_case("persist") {
+                    return Err(SqliteError::SqliteFailure(
+                        tokio_rusqlite::rusqlite::ffi::Error::new(14),
+                        Some(format!("journal_mode is {mode}, expected persist")),
+                    ));
+                }
+            }
+            #[cfg(feature = "qualification-persist-journal")]
+            let configure_wal = !persist_journal_candidate && !config.read_only && config.wal;
+            #[cfg(not(feature = "qualification-persist-journal"))]
+            let configure_wal = !config.read_only && config.wal;
+            if configure_wal {
                 connection.pragma_update(None, "journal_mode", "WAL")?;
+            }
+            #[cfg(feature = "qualification-persist-journal")]
+            if !persist_journal_candidate
+                && !config.read_only
+                && config.wal
+                && config.path != ":memory:"
+            {
+                let mode: String =
+                    connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+                if !mode.eq_ignore_ascii_case("wal") {
+                    return Err(SqliteError::SqliteFailure(
+                        tokio_rusqlite::rusqlite::ffi::Error::new(14),
+                        Some(format!("journal_mode is {mode}, expected wal")),
+                    ));
+                }
+            }
+            #[cfg(not(feature = "qualification-persist-journal"))]
+            if !config.read_only && config.wal {
                 // `:memory:` databases legitimately stay `memory`; file DBs
                 // must actually land in WAL.
                 if config.path != ":memory:" {
@@ -1355,7 +1492,15 @@ impl Database {
                     }
                 }
             }
-            connection.pragma_update(None, "synchronous", config.synchronous.as_str())?;
+            #[cfg(feature = "qualification-persist-journal")]
+            let synchronous = if persist_journal_candidate {
+                "EXTRA"
+            } else {
+                &config.synchronous
+            };
+            #[cfg(not(feature = "qualification-persist-journal"))]
+            let synchronous = config.synchronous.as_str();
+            connection.pragma_update(None, "synchronous", synchronous)?;
             if let Some(limit) = config.journal_size_limit {
                 let limit = i64::try_from(limit)
                     .map_err(|error| SqliteError::ToSqlConversionFailure(Box::new(error)))?;
@@ -1552,6 +1697,131 @@ fn qualification_wal_autocheckpoint_override() -> Result<Option<u32>, DatabaseEr
         detail: "EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES must be ASCII digits".to_owned(),
     })?;
     parse_qualification_wal_autocheckpoint(value).map(Some)
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn qualification_persist_journal_toggle() -> Result<bool, DatabaseError> {
+    let Some(value) = std::env::var_os("EGGPOOL_QUALIFICATION_PERSIST_JOURNAL") else {
+        return Ok(false);
+    };
+    let value = value.to_str().ok_or_else(|| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_PERSIST_JOURNAL must be 0 or 1".to_owned(),
+    })?;
+    parse_qualification_persist_journal_toggle(value)
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn parse_qualification_persist_journal_toggle(value: &str) -> Result<bool, DatabaseError> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(DatabaseError::Integrity {
+            detail: "EGGPOOL_QUALIFICATION_PERSIST_JOURNAL must be 0 or 1".to_owned(),
+        }),
+    }
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn qualification_worker_io_attribution_toggle() -> Result<bool, DatabaseError> {
+    let Some(value) = std::env::var_os("EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION") else {
+        return Ok(false);
+    };
+    let value = value.to_str().ok_or_else(|| DatabaseError::Integrity {
+        detail: "EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION must be 0 or 1".to_owned(),
+    })?;
+    let enabled = parse_qualification_worker_io_toggle(value)?;
+    #[cfg(not(target_os = "linux"))]
+    if enabled {
+        return Err(DatabaseError::Integrity {
+            detail: "worker I/O attribution is supported only on Linux".to_owned(),
+        });
+    }
+    Ok(enabled)
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn parse_qualification_worker_io_toggle(value: &str) -> Result<bool, DatabaseError> {
+    match value {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err(DatabaseError::Integrity {
+            detail: "EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION must be 0 or 1".to_owned(),
+        }),
+    }
+}
+
+#[cfg(all(feature = "qualification-persist-journal", target_os = "linux"))]
+fn read_worker_write_bytes() -> Result<u64, DatabaseError> {
+    let contents =
+        std::fs::read_to_string("/proc/thread-self/io").map_err(|_| DatabaseError::Integrity {
+            detail: "worker I/O attribution counter is unavailable".to_owned(),
+        })?;
+    parse_worker_write_bytes(&contents)
+}
+
+#[cfg(all(feature = "qualification-persist-journal", not(target_os = "linux")))]
+fn read_worker_write_bytes() -> Result<u64, DatabaseError> {
+    Err(DatabaseError::Integrity {
+        detail: "worker I/O attribution is supported only on Linux".to_owned(),
+    })
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn parse_worker_write_bytes(contents: &str) -> Result<u64, DatabaseError> {
+    let mut value = None;
+    for line in contents.lines() {
+        let Some((name, raw)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim() != "write_bytes" {
+            continue;
+        }
+        if value.is_some() {
+            return Err(DatabaseError::Integrity {
+                detail: "worker I/O attribution counter is malformed".to_owned(),
+            });
+        }
+        value = Some(
+            raw.trim()
+                .parse::<u64>()
+                .map_err(|_| DatabaseError::Integrity {
+                    detail: "worker I/O attribution counter is malformed".to_owned(),
+                })?,
+        );
+    }
+    value.ok_or_else(|| DatabaseError::Integrity {
+        detail: "worker I/O attribution counter is missing".to_owned(),
+    })
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+fn validate_persist_journal_candidate(
+    config: &DatabaseConfig,
+    enabled: bool,
+    dedicated_enabled: bool,
+) -> Result<(), DatabaseError> {
+    if !enabled {
+        return Ok(());
+    }
+    if dedicated_enabled {
+        return Err(DatabaseError::Integrity {
+            detail: "PERSIST journal qualification is incompatible with the dedicated checkpointer"
+                .to_owned(),
+        });
+    }
+    if config.read_only
+        || config.path.is_empty()
+        || config.path == ":memory:"
+        || config.path.starts_with("file::memory:")
+        || config.path.contains("mode=memory")
+        || !config.wal
+        || !config.synchronous.eq_ignore_ascii_case("NORMAL")
+    {
+        return Err(DatabaseError::Integrity {
+            detail: "PERSIST journal qualification requires a file-backed writable WAL/NORMAL configuration".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "qualification-db-diagnostics")]
@@ -1986,6 +2256,152 @@ mod qualification_tests {
         }
     }
 
+    #[cfg(feature = "qualification-persist-journal")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn persist_candidate_uses_extra_and_skips_wal_maintenance() {
+        let path = std::env::temp_dir().join(format!(
+            "eggpool-persist-candidate-{}-{}.db",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        let config = DatabaseConfig {
+            path: path.to_string_lossy().into_owned(),
+            ..DatabaseConfig::default()
+        };
+        let database = Database::open_with_toggles(config.clone(), false, true, false)
+            .await
+            .expect("isolated candidate opens");
+        let snapshot = database
+            .qualification_snapshot()
+            .expect("qualification snapshot");
+        assert_eq!(
+            snapshot.effective.journal_mode.to_ascii_lowercase(),
+            "persist"
+        );
+        assert_eq!(snapshot.effective.synchronous, "EXTRA");
+        assert!(!snapshot.worker_io_attribution.enabled);
+        database
+            .with_transaction(|connection| {
+                connection.execute_batch("CREATE TABLE persist_probe (id INTEGER PRIMARY KEY)")?;
+                connection.execute("INSERT INTO persist_probe VALUES (1)", [])?;
+                Ok(())
+            })
+            .await
+            .expect("candidate transaction commits");
+        assert!(!std::path::PathBuf::from(format!("{}-wal", path.display())).exists());
+        assert!(!std::path::PathBuf::from(format!("{}-shm", path.display())).exists());
+        assert!(
+            database
+                .with_transaction(|connection| {
+                    connection.execute_batch(
+                    "INSERT INTO persist_probe VALUES (2); INSERT INTO missing_table VALUES (1)",
+                )
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(database.quick_check().await.unwrap(), ());
+        let foreign_key_violations = database
+            .call(|connection| {
+                let mut statement = connection.prepare("PRAGMA foreign_key_check")?;
+                let rows = statement.query_map([], |_| Ok(()))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .await
+            .unwrap();
+        assert!(foreign_key_violations.is_empty());
+        let outcome = database
+            .checkpoint_maintenance(CheckpointMaintenancePolicy::effective(), &AtomicU64::new(0))
+            .await
+            .expect("maintenance is not applicable");
+        assert_eq!(outcome, CheckpointMaintenanceOutcome::NotApplicable);
+        database.close().await.expect("candidate closes");
+        let reopened = Database::open_with_toggles(config.clone(), false, true, false)
+            .await
+            .expect("candidate mode is reapplied after reopen");
+        let value = reopened
+            .call(|connection| {
+                connection.query_row("SELECT id FROM persist_probe", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+            })
+            .await
+            .expect("committed state survives reopen");
+        assert_eq!(value, 1);
+        assert_eq!(
+            reopened
+                .qualification_snapshot()
+                .unwrap()
+                .effective
+                .synchronous,
+            "EXTRA"
+        );
+        reopened.close().await.expect("reopened database closes");
+        let ordinary = Database::open(config).await.expect("ordinary WAL reopen");
+        assert_eq!(
+            ordinary
+                .qualification_snapshot()
+                .unwrap()
+                .effective
+                .journal_mode
+                .to_ascii_lowercase(),
+            "wal"
+        );
+        ordinary.close().await.expect("ordinary database closes");
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let mut candidate = path.as_os_str().to_owned();
+            candidate.push(suffix);
+            let _ = std::fs::remove_file(std::path::Path::new(&candidate));
+        }
+    }
+
+    #[cfg(feature = "qualification-persist-journal")]
+    #[test]
+    fn persist_candidate_rejects_non_file_and_non_baseline_configurations() {
+        assert!(
+            validate_persist_journal_candidate(&DatabaseConfig::default(), true, false).is_err()
+        );
+        let memory_uri = DatabaseConfig {
+            path: "file:eggpool?mode=memory&cache=shared".to_owned(),
+            ..DatabaseConfig::default()
+        };
+        assert!(validate_persist_journal_candidate(&memory_uri, true, false).is_err());
+        let mut config = DatabaseConfig {
+            path: "persist-test.db".to_owned(),
+            ..DatabaseConfig::default()
+        };
+        config.synchronous = "FULL".to_owned();
+        assert!(validate_persist_journal_candidate(&config, true, false).is_err());
+        config.synchronous = "NORMAL".to_owned();
+        assert!(validate_persist_journal_candidate(&config, true, true).is_err());
+        assert!(validate_persist_journal_candidate(&config, false, true).is_ok());
+    }
+
+    #[cfg(feature = "qualification-persist-journal")]
+    #[test]
+    fn worker_io_parser_extracts_only_write_bytes_and_fails_closed() {
+        assert_eq!(
+            parse_worker_write_bytes(
+                "rchar: 10\nwchar: 20\nsyscr: 3\nwrite_bytes: 4096\ncancelled_write_bytes: 0\n"
+            )
+            .unwrap(),
+            4096
+        );
+        for malformed in [
+            "rchar: 1",
+            "write_bytes: nope",
+            "write_bytes: 1\nwrite_bytes: 2",
+        ] {
+            assert!(parse_worker_write_bytes(malformed).is_err());
+        }
+        assert!(!parse_qualification_persist_journal_toggle("0").unwrap());
+        assert!(parse_qualification_persist_journal_toggle("1").unwrap());
+        assert!(!parse_qualification_worker_io_toggle("0").unwrap());
+        assert!(parse_qualification_worker_io_toggle("1").unwrap());
+        assert!(parse_qualification_persist_journal_toggle("true").is_err());
+        assert!(parse_qualification_worker_io_toggle("-1").is_err());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn transaction_records_capture_success_and_rollback_phases() {
         let database = Database::open(DatabaseConfig::default())
@@ -2218,12 +2634,14 @@ mod maintenance_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn dedicated_topology_has_private_pragmas_and_successful_commit_wakes_only() {
         let path = unique_temp_path("dedicated-topology");
-        let database = Database::open_with_dedicated_toggle(
+        let database = Database::open_with_toggles(
             DatabaseConfig {
                 path: path.to_string_lossy().into_owned(),
                 ..DatabaseConfig::default()
             },
             true,
+            false,
+            false,
         )
         .await
         .expect("feature mode opens the dedicated connection");
@@ -2359,11 +2777,13 @@ mod maintenance_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn m007_feature_with_toggle_disabled_stays_single_connection() {
         let path = unique_temp_path("dedicated-disabled");
-        let database = Database::open_with_dedicated_toggle(
+        let database = Database::open_with_toggles(
             DatabaseConfig {
                 path: path.to_string_lossy().into_owned(),
                 ..DatabaseConfig::default()
             },
+            false,
+            false,
             false,
         )
         .await
@@ -2390,12 +2810,14 @@ mod maintenance_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn dedicated_worker_runs_while_primary_gate_is_owned() {
         let path = unique_temp_path("dedicated-concurrency");
-        let database = Database::open_with_dedicated_toggle(
+        let database = Database::open_with_toggles(
             DatabaseConfig {
                 path: path.to_string_lossy().into_owned(),
                 ..DatabaseConfig::default()
             },
             true,
+            false,
+            false,
         )
         .await
         .expect("feature mode opens the dedicated connection");
@@ -2441,12 +2863,14 @@ mod maintenance_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn primary_writer_progresses_while_dedicated_worker_is_occupied() {
         let path = unique_temp_path("dedicated-independent-worker");
-        let database = Database::open_with_dedicated_toggle(
+        let database = Database::open_with_toggles(
             DatabaseConfig {
                 path: path.to_string_lossy().into_owned(),
                 ..DatabaseConfig::default()
             },
             true,
+            false,
+            false,
         )
         .await
         .expect("feature mode opens the dedicated connection");

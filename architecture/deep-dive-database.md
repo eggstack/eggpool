@@ -42,6 +42,19 @@ closure record for evidence and disposition.
 
 Plan 238's `scripts/qualification_sbc.py --diagnose-publication-storage` waits for task quiescence, runs bounded sequential native finite requests, and retains only scalar page-size/checkpoint-sequence facts. Plan 239's `qualification-db-diagnostics` feature adds a bounded 256-entry in-memory collector (`RECORD_CAPACITY`, `sqlite-db-phase.v1`) keyed by transaction kind with monotonic sequence numbers; `EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES` (`0..=100000`) applies once at startup and never enters `Config`, reload policy, or production defaults. The authenticated `/api/stats/runtime` projection exposes the snapshot only in feature builds. Plan 240 authorizes no runtime change: single connection/gate, WAL/NORMAL, existing ownership, and the passive maintenance boundary stay as-is pending a reviewed design.
 
+Persistence M008 adds the non-default `qualification-persist-journal`
+qualification build and startup-only `EGGPOOL_QUALIFICATION_PERSIST_JOURNAL`
+toggle. In candidate mode it requires a file-backed writable WAL/NORMAL
+baseline, selects PERSIST directly, applies EXTRA, and makes the existing
+checkpoint task return `not_applicable` without querying WAL. The feature and
+toggle do not change ordinary configuration or storage defaults. The SBC
+runner requires a fresh child database under `--diagnostic-database-dir` for
+both control and candidate; this remains physical qualification tooling only.
+Its separate `EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION` cohort reads only
+the SQLite worker's `/proc/thread-self/io` `write_bytes` scalar around each
+transaction and retains bounded kind aggregates; the result is excluded from
+latency acceptance.
+
 ## M004 checkpoint context
 
 Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accepted Pi 5 / ext4 / MMC artifacts and rejected the periodic 60s/256 strategy on the target class: three 60-request phase runs showed maxima of 1709 ms, 561 ms, and 10 943 ms with foreground publication `COMMIT` owning 522 ms–10.9 s of automatic-checkpoint work, and ordinary 30-sample benchmarks cannot complete against the runner's 5 s per-request timeout. The M001 mechanism is retained as additive-safe with no retune; persistence M003's event-assisted wake was separately rejected and reverted after transferring 1.88–3.30 s stalls into finalization gate wait. Persistence M007 is registered as a qualification-only experiment of a dedicated checkpoint connection/worker; the production invariant below remains one connection/gate/worker until target evidence and a separate architecture decision justify otherwise.

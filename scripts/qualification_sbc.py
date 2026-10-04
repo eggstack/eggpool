@@ -34,14 +34,12 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FIXTURE = ROOT / "tests/tooling/fixtures/qualification/sbc.toml"
@@ -191,7 +189,7 @@ class CommandResult:
             return "infrastructure-error"
         return "pass" if self.returncode == 0 else "fail"
 
-    def as_dict(self, root: Path, binary: Path) -> dict[str, Any]:
+    def as_dict(self, root: Path, binary: Path, database: Path) -> dict[str, Any]:
         command: list[str] = []
         for value in self.argv:
             text = str(value).replace(str(root), "<TEMP_ROOT>")
@@ -204,7 +202,7 @@ class CommandResult:
             "returncode": self.returncode,
             "timed_out": self.timed_out,
             "duration_ms": self.duration_ms,
-            "reason": bounded(self.reason),
+            "reason": bounded(self.reason.replace(str(database), "<DATABASE>")),
         }
 
 
@@ -528,6 +526,7 @@ class LoopbackProvider:
     def __init__(self) -> None:
         self.requests = 0
         self._lock = threading.Lock()
+        self._diagnostic_condition = threading.Condition(self._lock)
         self._path_counts = {
             "/chat/completions": 0,
             "/responses": 0,
@@ -585,12 +584,20 @@ class LoopbackProvider:
 
     def diagnostic_end(self, sequence: int, received_ns: int, finished_ns: int) -> None:
         """Retain one bounded timing tuple of integers only."""
-        with self._lock:
+        with self._diagnostic_condition:
             if not self._diagnostic_enabled:
                 return
             self._diagnostic_timings.append((sequence, received_ns, finished_ns))
             while len(self._diagnostic_timings) > self._diagnostic_capacity:
                 self._diagnostic_timings.pop(0)
+            self._diagnostic_condition.notify_all()
+
+    def wait_for_diagnostic_count(self, count: int, timeout: float) -> bool:
+        """Wait for an observable fixture boundary, bounded by ``timeout``."""
+        with self._diagnostic_condition:
+            return self._diagnostic_condition.wait_for(
+                lambda: len(self._diagnostic_timings) >= count, timeout
+            )
 
     def diagnostic_timings(self) -> list[tuple[int, int, int]]:
         with self._lock:
@@ -827,6 +834,31 @@ def _db_counts(database: Path) -> dict[str, Any]:
     return counts
 
 
+def _sqlite_integrity_checks(database: Path) -> dict[str, Any]:
+    """Run read-only SQLite integrity and foreign-key checks after shutdown."""
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=2)
+        try:
+            quick_check = [
+                str(row[0]) for row in connection.execute("PRAGMA quick_check")
+            ]
+            if len(quick_check) != 1 or quick_check[0].lower() != "ok":
+                raise QualificationError("SQLite quick_check failed")
+            foreign_key_violations = sum(
+                1 for _ in connection.execute("PRAGMA foreign_key_check")
+            )
+            if foreign_key_violations:
+                raise QualificationError("SQLite foreign_key_check found violations")
+            return {
+                "quick_check": "ok",
+                "foreign_key_violations": foreign_key_violations,
+            }
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise QualificationError("SQLite integrity check could not complete") from error
+
+
 def _runtime_observations(value: Mapping[str, Any]) -> dict[str, Any]:
     manager = value.get("runtime_manager")
     manager_map: dict[str, Any] = (
@@ -996,6 +1028,19 @@ def _wal_snapshot(database: Path) -> dict[str, Any]:
     snapshot["wal_page_size"] = page_size
     snapshot["wal_checkpoint_sequence"] = int.from_bytes(header[12:16], "big")
     return snapshot
+
+
+def _database_file_sizes(database: Path) -> dict[str, int]:
+    """Return fixed-name SQLite file sizes without retaining filesystem paths."""
+    return {
+        name: (path.stat().st_size if path.exists() else 0)
+        for name, path in (
+            ("database", database),
+            ("journal", Path(f"{database}-journal")),
+            ("wal", Path(f"{database}-wal")),
+            ("shm", Path(f"{database}-shm")),
+        )
+    }
 
 
 def resource_sample(
@@ -1390,6 +1435,7 @@ def _qualification_database_snapshot(value: Mapping[str, Any]) -> dict[str, Any]
         "page_size": effective.get("page_size"),
         "wal_autocheckpoint_pages": effective.get("wal_autocheckpoint_pages"),
     }
+
     if not isinstance(required_effective["journal_mode"], str) or not isinstance(
         required_effective["synchronous"], str
     ):
@@ -1418,6 +1464,99 @@ def _qualification_database_snapshot(value: Mapping[str, Any]) -> dict[str, Any]
         "effective": required_effective,
         "latest_record_seq": latest,
     }
+
+
+def _qualification_worker_io_attribution(value: Mapping[str, Any]) -> dict[str, Any]:
+    snapshot = value.get("database_qualification")
+    if not isinstance(snapshot, Mapping):
+        raise QualificationError("M008 worker I/O attribution snapshot is missing")
+    snapshot = cast("Mapping[str, Any]", snapshot)
+    raw = snapshot.get("worker_io_attribution")
+    if not isinstance(raw, Mapping):
+        raise QualificationError("M008 worker I/O attribution projection is invalid")
+    raw = cast("Mapping[str, Any]", raw)
+    if not isinstance(raw.get("enabled"), bool) or not isinstance(
+        raw.get("failed"), bool
+    ):
+        raise QualificationError("M008 worker I/O attribution projection is invalid")
+    if raw["failed"]:
+        raise QualificationError("M008 worker I/O attribution collection failed")
+    expected_bounds = [0, 4096, 16384, 65536, 262144, 1048576, 4194304, None]
+    bounds = raw.get("histogram_upper_bounds_bytes")
+    if bounds != expected_bounds:
+        raise QualificationError("M008 worker I/O histogram bounds are invalid")
+    result: dict[str, Any] = {
+        "enabled": raw["enabled"],
+        "histogram_upper_bounds_bytes": expected_bounds,
+    }
+    for kind in ("publication", "finalization", "other"):
+        bucket = raw.get(kind)
+        if not isinstance(bucket, Mapping):
+            raise QualificationError("M008 worker I/O bucket is invalid")
+        bucket = cast("Mapping[str, Any]", bucket)
+        fields: dict[str, Any] = {
+            name: bucket.get(name)
+            for name in ("count", "sum_write_bytes", "max_write_bytes")
+        }
+        histogram = bucket.get("histogram")
+        if not all(isinstance(item, int) and item >= 0 for item in fields.values()):
+            raise QualificationError("M008 worker I/O bucket is not scalar")
+        if not isinstance(histogram, list):
+            raise QualificationError("M008 worker I/O histogram is invalid")
+        histogram = cast("list[Any]", histogram)
+        if len(histogram) != 8 or not all(
+            isinstance(item, int) and item >= 0 for item in histogram
+        ):
+            raise QualificationError("M008 worker I/O histogram is invalid")
+        fields["histogram"] = cast("list[int]", histogram)
+        if sum(cast("list[int]", histogram)) != fields["count"]:
+            raise QualificationError("M008 worker I/O histogram count does not match")
+        result[kind] = fields
+    return result
+
+
+def _worker_io_attribution_deltas(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> dict[str, Any]:
+    if before.get("enabled") != after.get("enabled"):
+        raise QualificationError("M008 worker I/O attribution state changed mid-run")
+    result: dict[str, Any] = {
+        "enabled": after["enabled"],
+        "histogram_upper_bounds_bytes": after["histogram_upper_bounds_bytes"],
+    }
+    for kind in ("publication", "finalization", "other"):
+        prior = cast("Mapping[str, int]", before[kind])
+        current = cast("Mapping[str, int]", after[kind])
+        delta: dict[str, Any] = {}
+        for name in ("count", "sum_write_bytes"):
+            value = current[name] - prior[name]
+            if value < 0:
+                raise QualificationError("M008 worker I/O aggregate decreased")
+            delta[name] = value
+        prior_histogram = cast("list[int]", prior["histogram"])
+        current_histogram = cast("list[int]", current["histogram"])
+        histogram_delta = [
+            after_count - before_count
+            for before_count, after_count in zip(
+                prior_histogram, current_histogram, strict=True
+            )
+        ]
+        if any(item < 0 for item in histogram_delta):
+            raise QualificationError("M008 worker I/O histogram decreased")
+        if sum(histogram_delta) != delta["count"]:
+            raise QualificationError("M008 worker I/O histogram delta does not match")
+        delta["histogram"] = histogram_delta
+        upper_bounds = [0, 4096, 16384, 65536, 262144, 1048576, 4194304, None]
+        delta["max_write_bytes_upper_bound"] = next(
+            (
+                upper_bounds[index]
+                for index in range(7, -1, -1)
+                if histogram_delta[index]
+            ),
+            0,
+        )
+        result[kind] = delta
+    return result
 
 
 def _qualification_checkpoint_maintenance(
@@ -1979,6 +2118,7 @@ def _diagnostic_finite_batch(
     *,
     timeout: float = DIAGNOSTIC_TIMEOUT,
     warmup: bool = True,
+    wal_diagnostics: bool = True,
 ) -> dict[str, Any]:
     """Run a sequential native-finite diagnostic batch with phase attribution.
 
@@ -1998,7 +2138,9 @@ def _diagnostic_finite_batch(
         _diagnostic_finite_warmup(port)
     provider.start_diagnostic(capacity=samples)
     observations: list[DiagnosticSample] = []
-    wal_before = _wal_snapshot(database) if database is not None else None
+    wal_before = (
+        _wal_snapshot(database) if database is not None and wal_diagnostics else None
+    )
     first_cpu = _proc_cpu(process.pid) if process is not None else None
     started = time.monotonic()
     try:
@@ -2009,7 +2151,11 @@ def _diagnostic_finite_batch(
             )
             new_timings = _drain_new_provider_timings(provider, before)
             provider_timing = new_timings[-1] if new_timings else None
-            wal_after = _wal_snapshot(database) if database is not None else None
+            wal_after = (
+                _wal_snapshot(database)
+                if database is not None and wal_diagnostics
+                else None
+            )
             observations.append(
                 _combine_diagnostic_sample(
                     sequence,
@@ -2029,7 +2175,10 @@ def _diagnostic_finite_batch(
         provider.stop_diagnostic()
     elapsed_seconds = max(time.monotonic() - started, 0.001)
     second_cpu = _proc_cpu(process.pid) if process is not None else None
-    summary = _diagnostic_phase_summary(observations, include_wal=database is not None)
+    summary = _diagnostic_phase_summary(
+        observations,
+        include_wal=database is not None and wal_diagnostics,
+    )
     return {
         "status": "measured",
         "model": MODELS["responses"],
@@ -2318,6 +2467,30 @@ def _dedicated_checkpointer_server_environment(
     return server_environment
 
 
+def _persist_journal_server_environment(
+    environment: Mapping[str, str], mode: str | None, attribution: bool = False
+) -> dict[str, str]:
+    """Set M008 toggles for processes that open the benchmark database writable."""
+    server_environment = dict(environment)
+    if mode is not None:
+        server_environment["EGGPOOL_QUALIFICATION_PERSIST_JOURNAL"] = (
+            "1" if mode == "candidate" else "0"
+        )
+    if attribution:
+        server_environment["EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION"] = "1"
+    return server_environment
+
+
+def _persist_journal_read_only_environment(
+    environment: Mapping[str, str],
+) -> dict[str, str]:
+    """Keep read-only backup verification outside candidate startup mode."""
+    read_only_environment = dict(environment)
+    read_only_environment.pop("EGGPOOL_QUALIFICATION_PERSIST_JOURNAL", None)
+    read_only_environment.pop("EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION", None)
+    return read_only_environment
+
+
 def _request_timed(
     port: int, surface: str, model: str, streaming: bool
 ) -> tuple[int, bytes, int, int | None]:
@@ -2367,6 +2540,9 @@ def run_qualification(
     diagnose_checkpoint_maintenance: bool = False,
     qualification_dedicated_checkpointer_mode: str | None = None,
     diagnose_dedicated_checkpointer_steady_state: bool = False,
+    qualification_persist_journal_mode: str | None = None,
+    diagnose_persist_journal_steady_state: bool = False,
+    diagnose_worker_io_attribution: bool = False,
     diagnostic_database_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
@@ -2447,6 +2623,35 @@ def run_qualification(
     ):
         raise ValueError(
             "M007 steady-state mode requires the enabled candidate topology"
+        )
+    if qualification_persist_journal_mode not in {None, "control", "candidate"}:
+        raise ValueError("M008 journal mode must be control or candidate")
+    if qualification_persist_journal_mode is not None:
+        if not diagnose_publication_phases:
+            raise ValueError("M008 journal runs require publication phase diagnostics")
+        if diagnostic_database_dir is None:
+            raise ValueError("M008 journal runs require --diagnostic-database-dir")
+        if qualification_dedicated_checkpointer_mode is not None:
+            raise ValueError("M007 and M008 qualification modes are mutually exclusive")
+        if qualification_wal_autocheckpoint_pages not in {None, 1000}:
+            raise ValueError("M008 requires the configured 1000-page WAL control")
+        if (
+            qualification_checkpoint_interval_s is not None
+            or qualification_checkpoint_soft_frames not in {None, M007_SOFT_WAL_FRAMES}
+        ):
+            raise ValueError("M008 uses the existing production checkpoint policy")
+    if (
+        diagnose_persist_journal_steady_state
+        and qualification_persist_journal_mode != "candidate"
+    ):
+        raise ValueError("M008 steady-state mode requires the candidate")
+    if diagnose_worker_io_attribution and qualification_persist_journal_mode is None:
+        raise ValueError("worker I/O attribution requires an M008 mode")
+    if diagnose_worker_io_attribution and (
+        not diagnose_publication_phases or diagnose_persist_journal_steady_state
+    ):
+        raise ValueError(
+            "worker I/O attribution is limited to a separate 60-request M008 phase"
         )
     if diagnose_publication_storage is not None and benchmark_samples > 0:
         raise ValueError(
@@ -2542,7 +2747,12 @@ def run_qualification(
         recovery_root = root / "recovery"
         recovery_root.mkdir(exist_ok=True)
         port = free_port()
-        env = _environment(root, config)
+        base_env = _environment(root, config)
+        env = _persist_journal_server_environment(
+            base_env,
+            qualification_persist_journal_mode,
+            diagnose_worker_io_attribution,
+        )
         if qualification_wal_autocheckpoint_pages is not None:
             env["EGGPOOL_QUALIFICATION_WAL_AUTOCHECKPOINT_PAGES"] = str(
                 qualification_wal_autocheckpoint_pages
@@ -2766,7 +2976,9 @@ def run_qualification(
                         "sample_count": PUBLICATION_PHASE_SAMPLES,
                         "config_fixture": Path(config_fixture).name,
                         "diagnostic_mode": (
-                            "persistence_m007_dedicated_checkpointer"
+                            "persistence_m008_persist_journal"
+                            if qualification_persist_journal_mode is not None
+                            else "persistence_m007_dedicated_checkpointer"
                             if qualification_dedicated_checkpointer_mode is not None
                             else "publication_commit_checkpoint_phase"
                         ),
@@ -2790,6 +3002,26 @@ def run_qualification(
                                 "M007 concurrency-4 benchmark did not complete"
                             )
                         benchmark["runs"]["concurrency_4"] = concurrency
+                    if qualification_persist_journal_mode is not None:
+                        benchmark["persist_journal_mode"] = (
+                            qualification_persist_journal_mode
+                        )
+                        benchmark["sqlite_topology"] = {
+                            "connections": 1,
+                            "application_gates": 1,
+                            "workers": 1,
+                        }
+                        benchmark["paired_binary_sha256"] = candidate_hash
+                        benchmark["worker_io_attribution"] = (
+                            diagnose_worker_io_attribution
+                        )
+                        if diagnose_persist_journal_steady_state:
+                            concurrency = _concurrent_finite_benchmark(process, port)
+                            if concurrency["status"] != "measured":
+                                raise QualificationError(
+                                    "M008 concurrency-4 workload did not complete"
+                                )
+                            benchmark["runs"]["concurrency_4"] = concurrency
                     diagnostic_runtime_url = (
                         f"http://127.0.0.1:{port}/api/stats/runtime"
                     )
@@ -2819,6 +3051,20 @@ def run_qualification(
                     baseline_database = _qualification_database_snapshot(
                         baseline_runtime
                     )
+                    file_sizes_before = (
+                        _database_file_sizes(database)
+                        if qualification_persist_journal_mode is not None
+                        else None
+                    )
+                    baseline_worker_io = (
+                        _qualification_worker_io_attribution(baseline_runtime)
+                        if qualification_persist_journal_mode is not None
+                        else {"enabled": False}
+                    )
+                    if qualification_persist_journal_mode is not None and (
+                        baseline_worker_io["enabled"] != diagnose_worker_io_attribution
+                    ):
+                        raise QualificationError("M008 attribution toggle mismatch")
                     baseline_sequence = baseline_database["latest_record_seq"]
                     baseline_maintenance = _qualification_checkpoint_maintenance(
                         baseline_runtime
@@ -2845,6 +3091,9 @@ def run_qualification(
                         benchmark_process,
                         database,
                         warmup=False,
+                        wal_diagnostics=(
+                            qualification_persist_journal_mode != "candidate"
+                        ),
                     )
                     if (
                         phase_run["completed_count"] != PUBLICATION_PHASE_SAMPLES
@@ -2866,6 +3115,11 @@ def run_qualification(
                             "runtime snapshot was unavailable after Plan 239 batch"
                         )
                     final_database = _qualification_database_snapshot(final_runtime)
+                    final_worker_io = (
+                        _qualification_worker_io_attribution(final_runtime)
+                        if qualification_persist_journal_mode is not None
+                        else {"enabled": False}
+                    )
                     final_maintenance = _qualification_checkpoint_maintenance(
                         final_runtime
                     )
@@ -2890,7 +3144,42 @@ def run_qualification(
                         if qualification_dedicated_checkpointer_mode is not None
                         else None
                     )
+                    file_sizes_after = _database_file_sizes(database)
                     benchmark["effective"] = final_database["effective"]
+                    if qualification_persist_journal_mode is not None:
+                        expected_mode = (
+                            "persist"
+                            if qualification_persist_journal_mode == "candidate"
+                            else "wal"
+                        )
+                        expected_sync = (
+                            "EXTRA"
+                            if qualification_persist_journal_mode == "candidate"
+                            else "NORMAL"
+                        )
+                        actual = final_database["effective"]
+                        if (
+                            str(actual["journal_mode"]).lower() != expected_mode
+                            or str(actual["synchronous"]).upper() != expected_sync
+                        ):
+                            raise QualificationError(
+                                "M008 effective journal/synchronous pragmas "
+                                "do not match mode"
+                            )
+                        benchmark["wal_checkpoint_metrics"] = (
+                            "not_applicable"
+                            if qualification_persist_journal_mode == "candidate"
+                            else "applicable"
+                        )
+                        assert file_sizes_before is not None
+                        benchmark["journal_file_bytes"] = {
+                            "before": file_sizes_before,
+                            "after_60_request_phase": file_sizes_after,
+                            "delta": {
+                                name: file_sizes_after[name] - file_sizes_before[name]
+                                for name in file_sizes_after
+                            },
+                        }
                     benchmark["collector"] = {
                         "schema_version": final_database["schema_version"],
                         "capacity": final_database["collector_capacity"],
@@ -2898,10 +3187,57 @@ def run_qualification(
                         "final_record_seq": final_database["latest_record_seq"],
                         "records_after_baseline": len(records),
                     }
+                    if qualification_persist_journal_mode is not None:
+                        attribution = _worker_io_attribution_deltas(
+                            baseline_worker_io, final_worker_io
+                        )
+                        benchmark["worker_io_attribution"] = attribution
                     benchmark["runs"]["publication_phase_diagnostic"] = {
                         **phase_run,
                         **correlation,
                     }
+                    if (
+                        qualification_persist_journal_mode == "candidate"
+                        and not diagnose_worker_io_attribution
+                    ):
+                        publication = correlation["publication_phase_summary"]
+                        finalization = correlation["finalization_phase_summary"]
+                        max_gate_wait = max(
+                            publication["maximum_gate_wait_us"] or 0,
+                            finalization["maximum_gate_wait_us"] or 0,
+                        )
+                        gates: dict[str, bool] = {
+                            "request_p95_below_100_ms": (
+                                isinstance(phase_run.get("p95_total_ms"), int)
+                                and phase_run["p95_total_ms"] < 100
+                            ),
+                            "request_max_below_500_ms": (
+                                isinstance(phase_run.get("maximum_total_ms"), int)
+                                and phase_run["maximum_total_ms"] < 500
+                            ),
+                            "publication_commit_max_below_500_ms": (
+                                (publication["maximum_commit_us"] or 0) < 500_000
+                            ),
+                            "finalization_commit_max_below_500_ms": (
+                                (finalization["maximum_commit_us"] or 0) < 500_000
+                            ),
+                            "foreground_gate_wait_max_below_50_ms": (
+                                max_gate_wait < 50_000
+                            ),
+                            "no_candidate_wal_or_shm": (
+                                qualification_persist_journal_mode != "candidate"
+                                or (
+                                    file_sizes_after["wal"] == 0
+                                    and file_sizes_after["shm"] == 0
+                                )
+                            ),
+                        }
+                        benchmark["candidate_phase_gates"] = gates
+                        if not all(gates.values()):
+                            report["findings"].append(
+                                "M008 60-request candidate phase missed "
+                                "one or more gates"
+                            )
                     if baseline_m007 is not None and final_m007 is not None:
                         m007_deltas = _dedicated_checkpointer_deltas(
                             baseline_m007, final_m007
@@ -3079,6 +3415,104 @@ def run_qualification(
                                     "M007 300-request steady-state corpus missed "
                                     "one or more stated gates"
                                 )
+                    if diagnose_persist_journal_steady_state:
+                        windows: list[dict[str, Any]] = [
+                            {
+                                "window": 1,
+                                "summary": phase_run,
+                                "file_bytes": file_sizes_after,
+                            }
+                        ]
+                        for _ in range(4):
+                            window = _diagnostic_finite_batch(
+                                port,
+                                provider,
+                                PUBLICATION_PHASE_SAMPLES,
+                                benchmark_process,
+                                database,
+                                warmup=False,
+                                wal_diagnostics=False,
+                            )
+                            if (
+                                window["completed_count"] != PUBLICATION_PHASE_SAMPLES
+                                or window["timeout_count"] != 0
+                                or window["failed_count"] != 0
+                            ):
+                                raise QualificationError(
+                                    "M008 300-request steady-state corpus "
+                                    "did not complete"
+                                )
+                            windows.append(
+                                {
+                                    "window": len(windows) + 1,
+                                    "summary": window,
+                                    "file_bytes": _database_file_sizes(database),
+                                }
+                            )
+                        stabilized = resource_sample(
+                            "m008-after-300-request-stabilization",
+                            benchmark_process,
+                            database,
+                            diagnostic_runtime_url,
+                            duration=STABILIZATION_SECONDS,
+                            include_peak=True,
+                        )
+                        samples.append(stabilized)
+                        steady_gates = {
+                            "five_60_request_windows": len(windows) == 5,
+                            "all_window_p95_below_100_ms": all(
+                                isinstance(item["summary"].get("p95_total_ms"), int)
+                                and item["summary"]["p95_total_ms"] < 100
+                                for item in windows
+                            ),
+                            "all_requests_below_500_ms": all(
+                                isinstance(item["summary"].get("maximum_total_ms"), int)
+                                and item["summary"]["maximum_total_ms"] < 500
+                                for item in windows
+                            ),
+                            "requests_and_reservations_converged": (
+                                stabilized["pending_requests"] in {0, None}
+                                and stabilized["active_reservations"] in {0, None}
+                            ),
+                            "no_wal_or_shm_workload_path": all(
+                                item["file_bytes"]["wal"] == 0
+                                and item["file_bytes"]["shm"] == 0
+                                for item in windows
+                            ),
+                            "rollback_journal_not_monotonically_growing": not all(
+                                prior["file_bytes"]["journal"]
+                                < current["file_bytes"]["journal"]
+                                for prior, current in zip(
+                                    windows, windows[1:], strict=False
+                                )
+                            ),
+                        }
+                        benchmark["steady_state_300_requests"] = {
+                            "window_count": len(windows),
+                            "request_count": sum(
+                                item["summary"]["completed_count"] for item in windows
+                            ),
+                            "windows": windows,
+                            "journal_max_bytes": max(
+                                item["file_bytes"]["journal"] for item in windows
+                            ),
+                            "journal_final_bytes": windows[-1]["file_bytes"]["journal"],
+                            "stabilized_resources": {
+                                "thread_count": stabilized["thread_count"],
+                                "rss_bytes": stabilized["rss_bytes"],
+                                "peak_rss_bytes": stabilized.get("peak_rss_bytes"),
+                                "pending_requests": stabilized["pending_requests"],
+                                "active_reservations": stabilized[
+                                    "active_reservations"
+                                ],
+                            },
+                            "gates": steady_gates,
+                        }
+                        if not all(steady_gates.values()):
+                            report["findings"].append(
+                                "M008 300-request steady-state corpus "
+                                "missed a stated gate"
+                            )
                     if diagnose_checkpoint_maintenance:
                         benchmark["checkpoint_tuning"] = {
                             "poll_interval_s": qualification_checkpoint_interval_s,
@@ -3100,6 +3534,7 @@ def run_qualification(
                         {"checkpoint"}
                         if diagnose_checkpoint_maintenance
                         or qualification_dedicated_checkpointer_mode is not None
+                        or qualification_persist_journal_mode is not None
                         else set()
                     )
                     benchmark["task_quiescence"] = {
@@ -3398,7 +3833,7 @@ def run_qualification(
                     "backup",
                     binary,
                     config,
-                    env,
+                    _persist_journal_read_only_environment(env),
                     ("backup", "--output-dir", str(backup_dir)),
                     timeout,
                 )
@@ -3539,6 +3974,8 @@ def run_qualification(
                 report["functional"].append(
                     {"id": "graceful-shutdown", "status": "pass"}
                 )
+                if qualification_persist_journal_mode is not None:
+                    report["database_integrity"] = _sqlite_integrity_checks(database)
                 counts = _db_counts(database)
                 if counts.get("pending_requests") not in {0, None} or counts.get(
                     "active_reservations"
@@ -3599,7 +4036,7 @@ def run_qualification(
             if benchmark_mode:
                 environment["loopback_provider_path_counts"] = provider.path_counts()
         report["resource_samples"] = samples
-        report["commands"] = [item.as_dict(root, binary) for item in commands]
+        report["commands"] = [item.as_dict(root, binary, database) for item in commands]
         report["isolated_temporary_root"] = True
         if benchmark_mode:
             end_board, _ = board_metadata()
@@ -3625,6 +4062,29 @@ def run_qualification(
         )
     ):
         report["status"] = "fail"
+    if (
+        qualification_persist_journal_mode == "candidate"
+        and not diagnose_worker_io_attribution
+    ):
+        benchmark_report = cast("Mapping[str, Any]", report.get("benchmark", {}))
+        raw_phase_gates = benchmark_report.get("candidate_phase_gates", {})
+        phase_gates: Mapping[str, Any] = (
+            cast("Mapping[str, Any]", raw_phase_gates)
+            if isinstance(raw_phase_gates, Mapping)
+            else {}
+        )
+        steady_report = cast("Any", benchmark_report.get("steady_state_300_requests"))
+        steady_gates: Mapping[str, Any] = {}
+        if isinstance(steady_report, Mapping):
+            raw_steady_gates = cast("Any", steady_report).get("gates", {})
+            if isinstance(raw_steady_gates, Mapping):
+                steady_gates = cast("Mapping[str, Any]", raw_steady_gates)
+        if not phase_gates or not all(value is True for value in phase_gates.values()):
+            report["status"] = "fail"
+        if diagnose_persist_journal_steady_state and (
+            not all(value is True for value in steady_gates.values())
+        ):
+            report["status"] = "fail"
     return report
 
 
@@ -3739,6 +4199,21 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--diagnose-persist-journal",
+        choices=("control", "candidate"),
+        help="Run one isolated M008 WAL/NORMAL control or PERSIST/EXTRA phase.",
+    )
+    parser.add_argument(
+        "--diagnose-persist-journal-steady-state",
+        action="store_true",
+        help="Run five bounded 60-request windows for an M008 candidate.",
+    )
+    parser.add_argument(
+        "--diagnose-worker-io-attribution",
+        action="store_true",
+        help="Enable supplemental worker write_bytes attribution.",
+    )
+    parser.add_argument(
         "--diagnostic-database-dir",
         type=Path,
         default=None,
@@ -3783,6 +4258,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             diagnose_dedicated_checkpointer_steady_state=(
                 args.diagnose_dedicated_checkpointer_steady_state
             ),
+            qualification_persist_journal_mode=args.diagnose_persist_journal,
+            diagnose_persist_journal_steady_state=args.diagnose_persist_journal_steady_state,
+            diagnose_worker_io_attribution=args.diagnose_worker_io_attribution,
             diagnostic_database_dir=args.diagnostic_database_dir,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:

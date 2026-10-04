@@ -1,6 +1,6 @@
 # Persistence Milestone 008 — Rollback-Journal PERSIST Qualification and Write-Amplification Attribution
 
-Status: ready
+Status: active
 
 Repository baseline: `849dfd5fd26afc027fc1f00316dea70d62973a52`
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import sqlite3
 import stat
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from scripts.qualification_sbc import (
     SCHEMA_V2,
     SCHEMA_VERSION,
     TRANSLATED_STREAMING_CASE,
+    CommandResult,
     DiagnosticSample,
     LoopbackProvider,
     QualificationError,
@@ -44,6 +46,8 @@ from scripts.qualification_sbc import (
     _m007_candidate_gates_pass,
     _ns_to_ms,
     _percentile,
+    _persist_journal_read_only_environment,
+    _persist_journal_server_environment,
     _publication_storage_sample_count,
     _qualification_checkpoint_interval_s,
     _qualification_checkpoint_maintenance,
@@ -52,13 +56,16 @@ from scripts.qualification_sbc import (
     _qualification_dedicated_checkpointer,
     _qualification_records_after,
     _qualification_wal_autocheckpoint_pages,
+    _qualification_worker_io_attribution,
     _root_block_device,
     _runtime_task_snapshot,
+    _sqlite_integrity_checks,
     _storage_device_class,
     _task_tick_deltas,
     _timed_http,
     _timing_summary,
     _wal_snapshot,
+    _worker_io_attribution_deltas,
     benchmark_cadence_facts,
     bounded,
     main,
@@ -95,6 +102,21 @@ def test_q008_redacts_credentials_and_bounds_diagnostics() -> None:
     assert "q008-provider-key" not in value
     assert "user:pass" not in value
     assert len(value.encode()) <= 768
+
+
+def test_q008_command_result_redacts_diagnostic_database_path(tmp_path: Path) -> None:
+    database = tmp_path / "db" / "usage.sqlite3"
+    result = CommandResult(
+        command_id="check-config",
+        argv=("eggpool", "check-config"),
+        returncode=1,
+        timed_out=False,
+        duration_ms=1,
+        reason=f"Database path {database} failed",
+    )
+    report = json.dumps(result.as_dict(tmp_path, Path("/tmp/eggpool"), database))
+    assert str(database) not in report
+    assert "<DATABASE>" in report
 
 
 def test_q008_storage_metadata_uses_root_device_without_identity() -> None:
@@ -455,6 +477,7 @@ def test_237_timing_queues_retain_only_bounded_scalar_tuples() -> None:
             )
             with urllib.request.urlopen(request, timeout=5) as response:
                 response.read()
+            assert provider.wait_for_diagnostic_count(1, timeout=5)
             timings = provider.diagnostic_timings()
             assert len(timings) == 1
             sequence, received_ns, finished_ns = timings[0]
@@ -602,6 +625,141 @@ def test_239_phase_mode_is_bounded_and_feature_only(tmp_path: Path) -> None:
             binary=Path("/not/a/candidate"),
             diagnostic_database_dir=tmp_path,
         )
+
+
+def test_m008_runner_requires_isolated_phase_and_projects_server_toggle(
+    tmp_path: Path,
+) -> None:
+    candidate_environment = _persist_journal_server_environment(
+        {"PATH": "/bin"}, "candidate", True
+    )
+    backup_environment = _persist_journal_read_only_environment(candidate_environment)
+    assert backup_environment == {"PATH": "/bin"}
+    assert candidate_environment["EGGPOOL_QUALIFICATION_PERSIST_JOURNAL"] == "1"
+    assert candidate_environment["EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION"] == "1"
+    assert (
+        _persist_journal_server_environment({}, "control")[
+            "EGGPOOL_QUALIFICATION_PERSIST_JOURNAL"
+        ]
+        == "0"
+    )
+    assert (
+        _persist_journal_server_environment({}, "candidate")[
+            "EGGPOOL_QUALIFICATION_PERSIST_JOURNAL"
+        ]
+        == "1"
+    )
+    assert (
+        _persist_journal_server_environment({}, "candidate", True)[
+            "EGGPOOL_QUALIFICATION_WORKER_IO_ATTRIBUTION"
+        ]
+        == "1"
+    )
+    with pytest.raises(ValueError, match="publication phase diagnostics"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            qualification_persist_journal_mode="candidate",
+            diagnostic_database_dir=tmp_path,
+        )
+    with pytest.raises(ValueError, match="diagnostic-database-dir"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            config_fixture=BENCHMARK_FIXTURE,
+            diagnose_publication_phases=True,
+            qualification_persist_journal_mode="candidate",
+        )
+    with pytest.raises(ValueError, match="M007 and M008"):
+        run_qualification(
+            binary=Path("/not/a/candidate"),
+            config_fixture=BENCHMARK_FIXTURE,
+            diagnose_publication_phases=True,
+            qualification_dedicated_checkpointer_mode="control",
+            qualification_persist_journal_mode="control",
+            diagnostic_database_dir=tmp_path,
+        )
+
+
+def test_m008_worker_io_attribution_is_bounded_and_differenced() -> None:
+    before = {
+        "database_qualification": {
+            "worker_io_attribution": {
+                "enabled": True,
+                "failed": False,
+                "histogram_upper_bounds_bytes": [
+                    0,
+                    4096,
+                    16384,
+                    65536,
+                    262144,
+                    1048576,
+                    4194304,
+                    None,
+                ],
+                "publication": {
+                    "count": 0,
+                    "sum_write_bytes": 0,
+                    "max_write_bytes": 0,
+                    "histogram": [0] * 8,
+                },
+                "finalization": {
+                    "count": 0,
+                    "sum_write_bytes": 0,
+                    "max_write_bytes": 0,
+                    "histogram": [0] * 8,
+                },
+                "other": {
+                    "count": 2,
+                    "sum_write_bytes": 8,
+                    "max_write_bytes": 4,
+                    "histogram": [0, 2, 0, 0, 0, 0, 0, 0],
+                },
+            }
+        }
+    }
+    after = json.loads(json.dumps(before))
+    after["database_qualification"]["worker_io_attribution"]["publication"] = {
+        "count": 60,
+        "sum_write_bytes": 600,
+        "max_write_bytes": 20,
+        "histogram": [0, 60, 0, 0, 0, 0, 0, 0],
+    }
+    after["database_qualification"]["worker_io_attribution"]["finalization"] = {
+        "count": 60,
+        "sum_write_bytes": 300,
+        "max_write_bytes": 12,
+        "histogram": [0, 60, 0, 0, 0, 0, 0, 0],
+    }
+    result = _worker_io_attribution_deltas(
+        _qualification_worker_io_attribution(before),
+        _qualification_worker_io_attribution(after),
+    )
+    assert result["publication"]["count"] == 60
+    assert result["publication"]["sum_write_bytes"] == 600
+    assert result["finalization"]["count"] == 60
+    assert result["finalization"]["max_write_bytes_upper_bound"] == 4096
+
+
+def test_m008_sqlite_integrity_checks_are_read_only_and_fail_on_foreign_key_rows(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "integrity.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))"
+        )
+        connection.execute("INSERT INTO parent VALUES (1)")
+        connection.execute("INSERT INTO child VALUES (1)")
+    assert _sqlite_integrity_checks(database) == {
+        "quick_check": "ok",
+        "foreign_key_violations": 0,
+    }
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("INSERT INTO child VALUES (2)")
+    with pytest.raises(QualificationError, match="foreign_key_check"):
+        _sqlite_integrity_checks(database)
 
 
 def _maintenance_runtime(

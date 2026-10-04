@@ -15,6 +15,17 @@ use super::connection::TransactionKind;
 
 pub(crate) const RECORD_CAPACITY: usize = 256;
 pub(crate) const SCHEMA_VERSION: &str = "sqlite-db-phase.v1";
+#[cfg(feature = "qualification-persist-journal")]
+pub(crate) const WORKER_IO_HISTOGRAM_UPPER_BOUNDS_BYTES: [Option<u64>; 8] = [
+    Some(0),
+    Some(4096),
+    Some(16_384),
+    Some(65_536),
+    Some(262_144),
+    Some(1_048_576),
+    Some(4_194_304),
+    None,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct QualificationEffectivePragmas {
@@ -46,9 +57,31 @@ pub struct QualificationDbSnapshot {
     pub latest_record_seq: u64,
     pub records: Vec<QualificationTransactionRecord>,
     pub dropped_records: u64,
+    #[cfg(feature = "qualification-persist-journal")]
+    pub worker_io_attribution: QualificationWorkerIoAttribution,
     pub checkpoint_maintenance: QualificationCheckpointMaintenance,
     #[cfg(feature = "qualification-dedicated-checkpointer")]
     pub dedicated_checkpointer: QualificationDedicatedCheckpointer,
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct QualificationWorkerIoBucket {
+    pub count: u64,
+    pub sum_write_bytes: u64,
+    pub max_write_bytes: u64,
+    pub histogram: [u64; 8],
+}
+
+#[cfg(feature = "qualification-persist-journal")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct QualificationWorkerIoAttribution {
+    pub enabled: bool,
+    pub failed: bool,
+    pub histogram_upper_bounds_bytes: [Option<u64>; 8],
+    pub publication: QualificationWorkerIoBucket,
+    pub finalization: QualificationWorkerIoBucket,
+    pub other: QualificationWorkerIoBucket,
 }
 
 #[cfg(feature = "qualification-dedicated-checkpointer")]
@@ -109,12 +142,16 @@ struct CollectorState {
     effective: Option<QualificationEffectivePragmas>,
     next_record_seq: u64,
     records: VecDeque<QualificationTransactionRecord>,
+    #[cfg(feature = "qualification-persist-journal")]
+    worker_io_attribution: QualificationWorkerIoAttribution,
 }
 
 #[derive(Debug)]
 pub(crate) struct QualificationCollector {
     state: Mutex<CollectorState>,
     dropped_records: AtomicU64,
+    #[cfg(feature = "qualification-persist-journal")]
+    worker_io_failure: AtomicU64,
 }
 
 impl QualificationCollector {
@@ -124,8 +161,15 @@ impl QualificationCollector {
                 effective: None,
                 next_record_seq: 0,
                 records: VecDeque::with_capacity(RECORD_CAPACITY),
+                #[cfg(feature = "qualification-persist-journal")]
+                worker_io_attribution: QualificationWorkerIoAttribution {
+                    histogram_upper_bounds_bytes: WORKER_IO_HISTOGRAM_UPPER_BOUNDS_BYTES,
+                    ..QualificationWorkerIoAttribution::default()
+                },
             }),
             dropped_records: AtomicU64::new(0),
+            #[cfg(feature = "qualification-persist-journal")]
+            worker_io_failure: AtomicU64::new(0),
         }
     }
 
@@ -163,6 +207,39 @@ impl QualificationCollector {
         });
     }
 
+    #[cfg(feature = "qualification-persist-journal")]
+    pub(crate) fn enable_worker_io_attribution(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .worker_io_attribution
+            .enabled = true;
+    }
+
+    #[cfg(feature = "qualification-persist-journal")]
+    pub(crate) fn record_worker_io(&self, kind: TransactionKind, delta: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let bucket = match kind {
+            TransactionKind::Publication => &mut state.worker_io_attribution.publication,
+            TransactionKind::Finalization => &mut state.worker_io_attribution.finalization,
+            TransactionKind::Other => &mut state.worker_io_attribution.other,
+        };
+        bucket.count = bucket.count.saturating_add(1);
+        bucket.sum_write_bytes = bucket.sum_write_bytes.saturating_add(delta);
+        bucket.max_write_bytes = bucket.max_write_bytes.max(delta);
+        let index = WORKER_IO_HISTOGRAM_UPPER_BOUNDS_BYTES
+            .iter()
+            .position(|bound| bound.is_some_and(|bound| delta <= bound))
+            .unwrap_or(7);
+        bucket.histogram[index] = bucket.histogram[index].saturating_add(1);
+    }
+
+    #[cfg(feature = "qualification-persist-journal")]
+    #[cfg(feature = "qualification-persist-journal")]
+    pub(crate) fn record_worker_io_failure(&self) {
+        self.worker_io_failure.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(&self) -> Option<QualificationDbSnapshot> {
         // Poison indicates a prior holder panicked: rebuild rather than hide
         // effective pragmas. `None` is reserved for "pragmas not captured yet".
@@ -174,6 +251,12 @@ impl QualificationCollector {
             latest_record_seq: state.next_record_seq,
             records: state.records.iter().cloned().collect(),
             dropped_records: self.dropped_records.load(Ordering::Relaxed),
+            #[cfg(feature = "qualification-persist-journal")]
+            #[cfg(feature = "qualification-persist-journal")]
+            worker_io_attribution: QualificationWorkerIoAttribution {
+                failed: self.worker_io_failure.load(Ordering::Relaxed) > 0,
+                ..state.worker_io_attribution.clone()
+            },
             checkpoint_maintenance: QualificationCheckpointMaintenance {
                 soft_threshold_frames: 0,
                 not_due: 0,
@@ -275,5 +358,34 @@ mod tests {
         assert_eq!(record.kind, "finalization");
         assert_eq!(record.commit_us, None);
         assert!(!record.success);
+    }
+
+    #[cfg(feature = "qualification-persist-journal")]
+    #[test]
+    fn worker_io_aggregates_are_bounded_by_transaction_kind() {
+        let collector = QualificationCollector::new();
+        collector.enable_worker_io_attribution();
+        collector.record_worker_io(TransactionKind::Publication, 12);
+        collector.record_worker_io(TransactionKind::Publication, 4096);
+        collector.record_worker_io(TransactionKind::Finalization, 20);
+        collector.set_effective(QualificationEffectivePragmas {
+            journal_mode: "persist".to_owned(),
+            synchronous: "EXTRA".to_owned(),
+            page_size: 4096,
+            wal_autocheckpoint_pages: 1000,
+        });
+        let snapshot = collector.snapshot().expect("effective pragmas exist");
+        assert_eq!(snapshot.worker_io_attribution.publication.count, 2);
+        assert_eq!(
+            snapshot.worker_io_attribution.publication.sum_write_bytes,
+            4108
+        );
+        assert_eq!(
+            snapshot.worker_io_attribution.publication.max_write_bytes,
+            4096
+        );
+        assert_eq!(snapshot.worker_io_attribution.publication.histogram[1], 2);
+        assert_eq!(snapshot.worker_io_attribution.finalization.count, 1);
+        assert!(snapshot.records.is_empty());
     }
 }
