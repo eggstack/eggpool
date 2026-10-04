@@ -1,6 +1,8 @@
 # Persistence Milestone 008 — Rollback-Journal PERSIST Qualification and Write-Amplification Attribution
 
-Status: active
+Status: implemented
+
+Closure record: `plans/closure/persistence/008-status.md` (closed; PERSIST/EXTRA adoption rejected on physical Pi 5/MMC request-p95 gates).
 
 Repository baseline: `849dfd5fd26afc027fc1f00316dea70d62973a52`
 

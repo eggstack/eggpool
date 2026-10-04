@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M008 active — PERSIST/EXTRA journal qualification + worker-I/O attribution | M007 rejection and M006 engine baseline satisfy hard dependencies; physical Pi 5/MMC target is required for closure. Production remains WAL/NORMAL. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M008 closed — PERSIST/EXTRA rejected on request-p95 gates | No registered successor depends on M008; no blocked Persistence work to promote. Production remains WAL/NORMAL; the storage tail remains unresolved. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -52,7 +52,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M008 — rollback-journal PERSIST qualification and write-amplification attribution | active | `plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md` | Hard: M006 + M007 closed. Operational: physical Pi 5/MMC target required for closure. Same-binary isolated qualification only; no production journal-mode change. |
 
 
 
@@ -67,6 +66,8 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Blocker |
 |---|---|---|
 
+Persistence M008 closure audit: searched the registered Persistence plans and dependency tables; no future plan depends on M008 and the blocked-work table has no Persistence entry. Nothing was unblocked or promoted. A production storage split or further journal experiment requires a separately approved bounded plan.
+
 
 Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persistence/007-status.md`) predates the scope revision that allowed implementation and local qualification. The implementation disposition is in `plans/closure/persistence/007-implementation-status.md`; current Pi 5/MMC physical closure is `plans/closure/persistence/007-pi5-qualification.md` (rejected; production unchanged).
 
@@ -74,6 +75,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Persistence M008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA failed request-p95 gates on Pi 5/MMC; worker-I/O proxy was about 2.04× control; production remains WAL/NORMAL; no registered successor unblocked | `plans/closure/persistence/008-status.md`, implementation `fac930b9`, physical corpus `artifacts/qualification/m008-pi5-2026-10-03/` |
 | Routing selection M003 — bounded exact affinity LRU | closed — slot-indexed exact LRU preserves behavior; 4,096-entry Pi 5 p95 improved about 90×; full default/no-default, strict Clippy, and fmt pass | `plans/closure/routing-selection/003-status.md`, implementation `dc6ea713`
 | Routing selection M002 — semantic-affinity exact-LRU cost qualification | closed — Pi 5 evidence showed O(n) hit cost reaches 92.056 μs p95 at 4,096 entries; M003 follow-up qualified and closed | `plans/closure/routing-selection/002-affinity-lru-qualification.md`
 | Persistence M007 — dedicated checkpointer qualification experiment | closed — rejected on Pi 5/MMC WAL progress and convergence gates; production topology unchanged | `plans/closure/persistence/007-pi5-qualification.md`, binary `6f0cfd53`, runner corrections `a7ee7a4a`/`6c068681`/`ed3a01a7`/`79f678f5` |

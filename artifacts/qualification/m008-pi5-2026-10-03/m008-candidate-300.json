@@ -1,0 +1,1961 @@
+{
+  "backup": {
+    "archive_sha256": "a29851e09b4632dd674c47e8589c134882315d051da656bc2f15b1311585845d",
+    "archive_size_bytes": 1474147,
+    "elapsed_ms": 358,
+    "member_count": 3
+  },
+  "benchmark": {
+    "cadence": {
+      "backup_enabled": "false",
+      "backup_interval_s": "86400",
+      "database_busy_timeout_ms": "10000",
+      "database_synchronous": "\"NORMAL\"",
+      "database_wal": "true",
+      "database_worker_threads": "1",
+      "metrics_aggregate_only": "true",
+      "metrics_cleanup_interval_s": "86400",
+      "metrics_event_loop_lag_enabled": "false",
+      "metrics_flush_interval_s": "120",
+      "metrics_max_buffered_events": "250",
+      "metrics_write_mode": "\"low_wear\"",
+      "model_info_enabled": "false",
+      "model_info_startup_refresh": "false",
+      "models_refresh_interval_s": "300",
+      "models_startup_refresh": "true",
+      "routing_trace_mode": "\"off\"",
+      "routing_trace_sample_rate": "0.0",
+      "server_access_log": "false",
+      "server_threads": "1"
+    },
+    "candidate_phase_gates": {
+      "finalization_commit_max_below_500_ms": true,
+      "foreground_gate_wait_max_below_50_ms": true,
+      "no_candidate_wal_or_shm": true,
+      "publication_commit_max_below_500_ms": true,
+      "request_max_below_500_ms": true,
+      "request_p95_below_100_ms": false
+    },
+    "collector": {
+      "baseline_record_seq": 92,
+      "capacity": 256,
+      "final_record_seq": 212,
+      "records_after_baseline": 120,
+      "schema_version": "sqlite-db-phase.v1"
+    },
+    "config_fixture": "sbc-benchmark.toml",
+    "diagnostic_mode": "persistence_m008_persist_journal",
+    "effective": {
+      "journal_mode": "persist",
+      "page_size": 4096,
+      "synchronous": "EXTRA",
+      "wal_autocheckpoint_pages": 1000
+    },
+    "interpretation": "qualification-only transaction phase correlation; no production SQLite policy or performance threshold applied",
+    "journal_file_bytes": {
+      "after_60_request_phase": {
+        "database": 753664,
+        "journal": 168776,
+        "shm": 0,
+        "wal": 0
+      },
+      "before": {
+        "database": 638976,
+        "journal": 168776,
+        "shm": 0,
+        "wal": 0
+      },
+      "delta": {
+        "database": 114688,
+        "journal": 0,
+        "shm": 0,
+        "wal": 0
+      }
+    },
+    "paired_binary_sha256": "8a5c44f0877c9710b4ed54008d424485fff6bb8692df4629ce24f215e8a3d6cf",
+    "persist_journal_mode": "candidate",
+    "resource_summary": {
+      "final_active_reservations": 0,
+      "final_finalization_jobs": 0,
+      "final_peak_rss_bytes": 20557824,
+      "final_pending_requests": 0,
+      "final_rss_bytes": 20557824
+    },
+    "runs": {
+      "concurrency_4": {
+        "batch_elapsed_ms": 3959,
+        "client_concurrency": 4,
+        "completed_count": 32,
+        "cpu": {
+          "cpu_percent": 4.29,
+          "cpu_ticks": 17,
+          "cpu_time_ms": 170
+        },
+        "failed_count": 0,
+        "request_count": 32,
+        "requests_per_second": 8.082,
+        "status": "measured",
+        "timings": {
+          "maximum_elapsed_ms": 773,
+          "minimum_elapsed_ms": 309,
+          "p50_elapsed_ms": 447,
+          "p50_ttft_ms": 447,
+          "p95_elapsed_ms": 772,
+          "p95_ttft_ms": 771,
+          "sample_count": 32
+        }
+      },
+      "direct_provider_control": {
+        "completed_count": 30,
+        "failed_count": 0,
+        "fixture_path_suffix": "/responses",
+        "interpretation": "fixture/host control only; do not compare absolute latency to EggPool as a benchmark score",
+        "maximum_client_body_ms": 0,
+        "maximum_post_provider_ttft_ms": 0,
+        "maximum_pre_provider_ms": 1,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 1,
+        "p50_client_body_ms": 0,
+        "p50_post_provider_ttft_ms": 0,
+        "p50_pre_provider_ms": 0,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 1,
+        "p95_client_body_ms": 0,
+        "p95_post_provider_ttft_ms": 0,
+        "p95_pre_provider_ms": 1,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 1,
+        "request_target": "fixture-provider-direct",
+        "sample_count": 30,
+        "slowest_five": [
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 0,
+            "pre_provider_ms": 0,
+            "provider_service_ms": 0,
+            "sequence": 1,
+            "timed_out": false,
+            "total_ms": 1
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 0,
+            "pre_provider_ms": 0,
+            "provider_service_ms": 0,
+            "sequence": 2,
+            "timed_out": false,
+            "total_ms": 1
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 0,
+            "pre_provider_ms": 0,
+            "provider_service_ms": 0,
+            "sequence": 3,
+            "timed_out": false,
+            "total_ms": 1
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 0,
+            "pre_provider_ms": 0,
+            "provider_service_ms": 0,
+            "sequence": 4,
+            "timed_out": false,
+            "total_ms": 1
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 0,
+            "pre_provider_ms": 0,
+            "provider_service_ms": 0,
+            "sequence": 5,
+            "timed_out": false,
+            "total_ms": 1
+          }
+        ],
+        "status": "measured",
+        "timeout_count": 0,
+        "warmup_count": 5
+      },
+      "publication_phase_diagnostic": {
+        "batch_elapsed_ms": 7005,
+        "client_surface": "responses",
+        "completed_count": 60,
+        "cpu": {
+          "cpu_percent": 5.0,
+          "cpu_ticks": 35,
+          "cpu_time_ms": 350
+        },
+        "failed_count": 0,
+        "finalization_phase_summary": {
+          "maximum_begin_us": 127,
+          "maximum_body_us": 677,
+          "maximum_commit_us": 117311,
+          "maximum_gate_wait_us": 1,
+          "maximum_total_us": 118029,
+          "maximum_worker_queue_us": 44,
+          "maximum_worker_return_us": 56,
+          "p50_begin_us": 107,
+          "p50_body_us": 533,
+          "p50_commit_us": 35541,
+          "p50_gate_wait_us": 1,
+          "p50_total_us": 36293,
+          "p50_worker_queue_us": 19,
+          "p50_worker_return_us": 32,
+          "p95_begin_us": 118,
+          "p95_body_us": 619,
+          "p95_commit_us": 94423,
+          "p95_gate_wait_us": 1,
+          "p95_total_us": 95104,
+          "p95_worker_queue_us": 23,
+          "p95_worker_return_us": 37,
+          "sample_count": 60
+        },
+        "foreground_record_count": 120,
+        "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+        "maximum_client_body_ms": 0,
+        "maximum_post_provider_ttft_ms": 119,
+        "maximum_pre_provider_ms": 229,
+        "maximum_provider_service_ms": 0,
+        "maximum_total_ms": 348,
+        "model": "q008-responses",
+        "p50_client_body_ms": 0,
+        "p50_post_provider_ttft_ms": 37,
+        "p50_pre_provider_ms": 59,
+        "p50_provider_service_ms": 0,
+        "p50_total_ms": 99,
+        "p95_client_body_ms": 0,
+        "p95_post_provider_ttft_ms": 96,
+        "p95_pre_provider_ms": 126,
+        "p95_provider_service_ms": 0,
+        "p95_total_ms": 166,
+        "publication_phase_summary": {
+          "maximum_begin_us": 128,
+          "maximum_body_us": 865,
+          "maximum_commit_us": 225999,
+          "maximum_gate_wait_us": 1,
+          "maximum_total_us": 226916,
+          "maximum_worker_queue_us": 39,
+          "maximum_worker_return_us": 50,
+          "p50_begin_us": 95,
+          "p50_body_us": 791,
+          "p50_commit_us": 56676,
+          "p50_gate_wait_us": 0,
+          "p50_total_us": 57594,
+          "p50_worker_queue_us": 17,
+          "p50_worker_return_us": 33,
+          "p95_begin_us": 109,
+          "p95_body_us": 853,
+          "p95_commit_us": 123723,
+          "p95_gate_wait_us": 1,
+          "p95_total_us": 124647,
+          "p95_worker_queue_us": 24,
+          "p95_worker_return_us": 40,
+          "sample_count": 60
+        },
+        "sample_count": 60,
+        "sequential": true,
+        "slowest_five": [
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 119,
+            "pre_provider_ms": 229,
+            "provider_service_ms": 0,
+            "sequence": 59,
+            "timed_out": false,
+            "total_ms": 348
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 34,
+            "pre_provider_ms": 163,
+            "provider_service_ms": 0,
+            "sequence": 22,
+            "timed_out": false,
+            "total_ms": 198
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 41,
+            "pre_provider_ms": 129,
+            "provider_service_ms": 0,
+            "sequence": 8,
+            "timed_out": false,
+            "total_ms": 170
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 42,
+            "pre_provider_ms": 123,
+            "provider_service_ms": 0,
+            "sequence": 47,
+            "timed_out": false,
+            "total_ms": 166
+          },
+          {
+            "client_body_ms": 0,
+            "http_status": 200,
+            "last_phase": "completed",
+            "post_provider_ttft_ms": 41,
+            "pre_provider_ms": 124,
+            "provider_service_ms": 0,
+            "sequence": 5,
+            "timed_out": false,
+            "total_ms": 165
+          }
+        ],
+        "slowest_five_correlated": [
+          {
+            "finalization": {
+              "begin_us": 112,
+              "body_us": 551,
+              "commit_us": 117311,
+              "gate_wait_us": 1,
+              "kind": "finalization",
+              "record_seq": 210,
+              "success": true,
+              "total_us": 118029,
+              "worker_queue_us": 15,
+              "worker_return_us": 35
+            },
+            "post_provider_ttft_ms": 119,
+            "post_provider_unattributed_us": 971,
+            "pre_provider_ms": 229,
+            "pre_provider_unattributed_us": 2084,
+            "provider_service_ms": 0,
+            "publication": {
+              "begin_us": 99,
+              "body_us": 752,
+              "commit_us": 225999,
+              "gate_wait_us": 1,
+              "kind": "publication",
+              "record_seq": 209,
+              "success": true,
+              "total_us": 226916,
+              "worker_queue_us": 22,
+              "worker_return_us": 40
+            },
+            "request_sequence": 59,
+            "total_ms": 348,
+            "wal_checkpoint_sequence_changed": null
+          },
+          {
+            "finalization": {
+              "begin_us": 92,
+              "body_us": 466,
+              "commit_us": 32792,
+              "gate_wait_us": 1,
+              "kind": "finalization",
+              "record_seq": 136,
+              "success": true,
+              "total_us": 33398,
+              "worker_queue_us": 12,
+              "worker_return_us": 30
+            },
+            "post_provider_ttft_ms": 34,
+            "post_provider_unattributed_us": 602,
+            "pre_provider_ms": 163,
+            "pre_provider_unattributed_us": 1400,
+            "provider_service_ms": 0,
+            "publication": {
+              "begin_us": 88,
+              "body_us": 768,
+              "commit_us": 160694,
+              "gate_wait_us": 0,
+              "kind": "publication",
+              "record_seq": 135,
+              "success": true,
+              "total_us": 161600,
+              "worker_queue_us": 15,
+              "worker_return_us": 31
+            },
+            "request_sequence": 22,
+            "total_ms": 198,
+            "wal_checkpoint_sequence_changed": null
+          },
+          {
+            "finalization": {
+              "begin_us": 121,
+              "body_us": 532,
+              "commit_us": 39628,
+              "gate_wait_us": 1,
+              "kind": "finalization",
+              "record_seq": 108,
+              "success": true,
+              "total_us": 40335,
+              "worker_queue_us": 19,
+              "worker_return_us": 31
+            },
+            "post_provider_ttft_ms": 41,
+            "post_provider_unattributed_us": 665,
+            "pre_provider_ms": 129,
+            "pre_provider_unattributed_us": 1808,
+            "provider_service_ms": 0,
+            "publication": {
+              "begin_us": 89,
+              "body_us": 795,
+              "commit_us": 126251,
+              "gate_wait_us": 1,
+              "kind": "publication",
+              "record_seq": 107,
+              "success": true,
+              "total_us": 127192,
+              "worker_queue_us": 16,
+              "worker_return_us": 36
+            },
+            "request_sequence": 8,
+            "total_ms": 170,
+            "wal_checkpoint_sequence_changed": null
+          },
+          {
+            "finalization": {
+              "begin_us": 112,
+              "body_us": 564,
+              "commit_us": 40550,
+              "gate_wait_us": 1,
+              "kind": "finalization",
+              "record_seq": 186,
+              "success": true,
+              "total_us": 41290,
+              "worker_queue_us": 20,
+              "worker_return_us": 40
+            },
+            "post_provider_ttft_ms": 42,
+            "post_provider_unattributed_us": 710,
+            "pre_provider_ms": 123,
+            "pre_provider_unattributed_us": 1380,
+            "provider_service_ms": 0,
+            "publication": {
+              "begin_us": 96,
+              "body_us": 865,
+              "commit_us": 120600,
+              "gate_wait_us": 1,
+              "kind": "publication",
+              "record_seq": 185,
+              "success": true,
+              "total_us": 121620,
+              "worker_queue_us": 19,
+              "worker_return_us": 37
+            },
+            "request_sequence": 47,
+            "total_ms": 166,
+            "wal_checkpoint_sequence_changed": null
+          },
+          {
+            "finalization": {
+              "begin_us": 114,
+              "body_us": 548,
+              "commit_us": 39035,
+              "gate_wait_us": 1,
+              "kind": "finalization",
+              "record_seq": 102,
+              "success": true,
+              "total_us": 39757,
+              "worker_queue_us": 22,
+              "worker_return_us": 34
+            },
+            "post_provider_ttft_ms": 41,
+            "post_provider_unattributed_us": 1243,
+            "pre_provider_ms": 124,
+            "pre_provider_unattributed_us": 1689,
+            "provider_service_ms": 0,
+            "publication": {
+              "begin_us": 82,
+              "body_us": 730,
+              "commit_us": 121443,
+              "gate_wait_us": 0,
+              "kind": "publication",
+              "record_seq": 101,
+              "success": true,
+              "total_us": 122311,
+              "worker_queue_us": 13,
+              "worker_return_us": 39
+            },
+            "request_sequence": 5,
+            "total_ms": 165,
+            "wal_checkpoint_sequence_changed": null
+          }
+        ],
+        "status": "measured",
+        "streaming": false,
+        "timeout_count": 0,
+        "warmup_count": 5
+      }
+    },
+    "sample_count": 60,
+    "sqlite_topology": {
+      "application_gates": 1,
+      "connections": 1,
+      "workers": 1
+    },
+    "steady_state_300_requests": {
+      "gates": {
+        "all_requests_below_500_ms": true,
+        "all_window_p95_below_100_ms": false,
+        "five_60_request_windows": true,
+        "no_wal_or_shm_workload_path": true,
+        "requests_and_reservations_converged": true,
+        "rollback_journal_not_monotonically_growing": true
+      },
+      "journal_final_bytes": 275480,
+      "journal_max_bytes": 275480,
+      "request_count": 300,
+      "stabilized_resources": {
+        "active_reservations": 0,
+        "peak_rss_bytes": 20553728,
+        "pending_requests": 0,
+        "rss_bytes": 20553728,
+        "thread_count": 3
+      },
+      "window_count": 5,
+      "windows": [
+        {
+          "file_bytes": {
+            "database": 753664,
+            "journal": 168776,
+            "shm": 0,
+            "wal": 0
+          },
+          "summary": {
+            "batch_elapsed_ms": 7005,
+            "client_surface": "responses",
+            "completed_count": 60,
+            "cpu": {
+              "cpu_percent": 5.0,
+              "cpu_ticks": 35,
+              "cpu_time_ms": 350
+            },
+            "failed_count": 0,
+            "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+            "maximum_client_body_ms": 0,
+            "maximum_post_provider_ttft_ms": 119,
+            "maximum_pre_provider_ms": 229,
+            "maximum_provider_service_ms": 0,
+            "maximum_total_ms": 348,
+            "model": "q008-responses",
+            "p50_client_body_ms": 0,
+            "p50_post_provider_ttft_ms": 37,
+            "p50_pre_provider_ms": 59,
+            "p50_provider_service_ms": 0,
+            "p50_total_ms": 99,
+            "p95_client_body_ms": 0,
+            "p95_post_provider_ttft_ms": 96,
+            "p95_pre_provider_ms": 126,
+            "p95_provider_service_ms": 0,
+            "p95_total_ms": 166,
+            "sample_count": 60,
+            "sequential": true,
+            "slowest_five": [
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 119,
+                "pre_provider_ms": 229,
+                "provider_service_ms": 0,
+                "sequence": 59,
+                "timed_out": false,
+                "total_ms": 348
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 34,
+                "pre_provider_ms": 163,
+                "provider_service_ms": 0,
+                "sequence": 22,
+                "timed_out": false,
+                "total_ms": 198
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 41,
+                "pre_provider_ms": 129,
+                "provider_service_ms": 0,
+                "sequence": 8,
+                "timed_out": false,
+                "total_ms": 170
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 42,
+                "pre_provider_ms": 123,
+                "provider_service_ms": 0,
+                "sequence": 47,
+                "timed_out": false,
+                "total_ms": 166
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 41,
+                "pre_provider_ms": 124,
+                "provider_service_ms": 0,
+                "sequence": 5,
+                "timed_out": false,
+                "total_ms": 165
+              }
+            ],
+            "status": "measured",
+            "streaming": false,
+            "timeout_count": 0,
+            "warmup_count": 5
+          },
+          "window": 1
+        },
+        {
+          "file_bytes": {
+            "database": 1024000,
+            "journal": 185192,
+            "shm": 0,
+            "wal": 0
+          },
+          "summary": {
+            "batch_elapsed_ms": 7650,
+            "client_surface": "responses",
+            "completed_count": 60,
+            "cpu": {
+              "cpu_percent": 4.58,
+              "cpu_ticks": 35,
+              "cpu_time_ms": 350
+            },
+            "failed_count": 0,
+            "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+            "maximum_client_body_ms": 0,
+            "maximum_post_provider_ttft_ms": 102,
+            "maximum_pre_provider_ms": 138,
+            "maximum_provider_service_ms": 0,
+            "maximum_total_ms": 178,
+            "model": "q008-responses",
+            "p50_client_body_ms": 0,
+            "p50_post_provider_ttft_ms": 40,
+            "p50_pre_provider_ms": 69,
+            "p50_provider_service_ms": 0,
+            "p50_total_ms": 111,
+            "p95_client_body_ms": 0,
+            "p95_post_provider_ttft_ms": 98,
+            "p95_pre_provider_ms": 128,
+            "p95_provider_service_ms": 0,
+            "p95_total_ms": 170,
+            "sample_count": 60,
+            "sequential": true,
+            "slowest_five": [
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 40,
+                "pre_provider_ms": 138,
+                "provider_service_ms": 0,
+                "sequence": 59,
+                "timed_out": false,
+                "total_ms": 178
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 96,
+                "pre_provider_ms": 78,
+                "provider_service_ms": 0,
+                "sequence": 56,
+                "timed_out": false,
+                "total_ms": 174
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 100,
+                "pre_provider_ms": 69,
+                "provider_service_ms": 0,
+                "sequence": 21,
+                "timed_out": false,
+                "total_ms": 170
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 42,
+                "pre_provider_ms": 128,
+                "provider_service_ms": 0,
+                "sequence": 27,
+                "timed_out": false,
+                "total_ms": 170
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 35,
+                "pre_provider_ms": 134,
+                "provider_service_ms": 0,
+                "sequence": 54,
+                "timed_out": false,
+                "total_ms": 169
+              }
+            ],
+            "status": "measured",
+            "streaming": false,
+            "timeout_count": 0,
+            "warmup_count": 5
+          },
+          "window": 2
+        },
+        {
+          "file_bytes": {
+            "database": 1150976,
+            "journal": 201608,
+            "shm": 0,
+            "wal": 0
+          },
+          "summary": {
+            "batch_elapsed_ms": 8427,
+            "client_surface": "responses",
+            "completed_count": 60,
+            "cpu": {
+              "cpu_percent": 4.51,
+              "cpu_ticks": 38,
+              "cpu_time_ms": 380
+            },
+            "failed_count": 0,
+            "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+            "maximum_client_body_ms": 0,
+            "maximum_post_provider_ttft_ms": 192,
+            "maximum_pre_provider_ms": 148,
+            "maximum_provider_service_ms": 0,
+            "maximum_total_ms": 327,
+            "model": "q008-responses",
+            "p50_client_body_ms": 0,
+            "p50_post_provider_ttft_ms": 39,
+            "p50_pre_provider_ms": 79,
+            "p50_provider_service_ms": 0,
+            "p50_total_ms": 120,
+            "p95_client_body_ms": 0,
+            "p95_post_provider_ttft_ms": 98,
+            "p95_pre_provider_ms": 137,
+            "p95_provider_service_ms": 0,
+            "p95_total_ms": 180,
+            "sample_count": 60,
+            "sequential": true,
+            "slowest_five": [
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 192,
+                "pre_provider_ms": 135,
+                "provider_service_ms": 0,
+                "sequence": 57,
+                "timed_out": false,
+                "total_ms": 327
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 36,
+                "pre_provider_ms": 148,
+                "provider_service_ms": 0,
+                "sequence": 36,
+                "timed_out": false,
+                "total_ms": 184
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 42,
+                "pre_provider_ms": 141,
+                "provider_service_ms": 0,
+                "sequence": 59,
+                "timed_out": false,
+                "total_ms": 183
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 101,
+                "pre_provider_ms": 79,
+                "provider_service_ms": 0,
+                "sequence": 41,
+                "timed_out": false,
+                "total_ms": 180
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 42,
+                "pre_provider_ms": 137,
+                "provider_service_ms": 0,
+                "sequence": 34,
+                "timed_out": false,
+                "total_ms": 178
+              }
+            ],
+            "status": "measured",
+            "streaming": false,
+            "timeout_count": 0,
+            "warmup_count": 5
+          },
+          "window": 3
+        },
+        {
+          "file_bytes": {
+            "database": 1294336,
+            "journal": 275480,
+            "shm": 0,
+            "wal": 0
+          },
+          "summary": {
+            "batch_elapsed_ms": 8430,
+            "client_surface": "responses",
+            "completed_count": 60,
+            "cpu": {
+              "cpu_percent": 4.39,
+              "cpu_ticks": 37,
+              "cpu_time_ms": 370
+            },
+            "failed_count": 0,
+            "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+            "maximum_client_body_ms": 0,
+            "maximum_post_provider_ttft_ms": 105,
+            "maximum_pre_provider_ms": 141,
+            "maximum_provider_service_ms": 0,
+            "maximum_total_ms": 182,
+            "model": "q008-responses",
+            "p50_client_body_ms": 0,
+            "p50_post_provider_ttft_ms": 41,
+            "p50_pre_provider_ms": 79,
+            "p50_provider_service_ms": 0,
+            "p50_total_ms": 123,
+            "p95_client_body_ms": 0,
+            "p95_post_provider_ttft_ms": 100,
+            "p95_pre_provider_ms": 139,
+            "p95_provider_service_ms": 0,
+            "p95_total_ms": 181,
+            "sample_count": 60,
+            "sequential": true,
+            "slowest_five": [
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 43,
+                "pre_provider_ms": 139,
+                "provider_service_ms": 0,
+                "sequence": 30,
+                "timed_out": false,
+                "total_ms": 182
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 96,
+                "pre_provider_ms": 86,
+                "provider_service_ms": 0,
+                "sequence": 53,
+                "timed_out": false,
+                "total_ms": 182
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 44,
+                "pre_provider_ms": 137,
+                "provider_service_ms": 0,
+                "sequence": 33,
+                "timed_out": false,
+                "total_ms": 181
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 105,
+                "pre_provider_ms": 76,
+                "provider_service_ms": 0,
+                "sequence": 35,
+                "timed_out": false,
+                "total_ms": 181
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 41,
+                "pre_provider_ms": 139,
+                "provider_service_ms": 0,
+                "sequence": 51,
+                "timed_out": false,
+                "total_ms": 181
+              }
+            ],
+            "status": "measured",
+            "streaming": false,
+            "timeout_count": 0,
+            "warmup_count": 5
+          },
+          "window": 4
+        },
+        {
+          "file_bytes": {
+            "database": 1470464,
+            "journal": 275480,
+            "shm": 0,
+            "wal": 0
+          },
+          "summary": {
+            "batch_elapsed_ms": 8036,
+            "client_surface": "responses",
+            "completed_count": 60,
+            "cpu": {
+              "cpu_percent": 4.36,
+              "cpu_ticks": 35,
+              "cpu_time_ms": 350
+            },
+            "failed_count": 0,
+            "interpretation": "bounded provider-boundary phase attribution; T0 client start, T1 provider receive, T2 provider finish, T3 first byte, T4 done",
+            "maximum_client_body_ms": 0,
+            "maximum_post_provider_ttft_ms": 103,
+            "maximum_pre_provider_ms": 169,
+            "maximum_provider_service_ms": 0,
+            "maximum_total_ms": 212,
+            "model": "q008-responses",
+            "p50_client_body_ms": 0,
+            "p50_post_provider_ttft_ms": 41,
+            "p50_pre_provider_ms": 68,
+            "p50_provider_service_ms": 0,
+            "p50_total_ms": 117,
+            "p95_client_body_ms": 0,
+            "p95_post_provider_ttft_ms": 101,
+            "p95_pre_provider_ms": 139,
+            "p95_provider_service_ms": 0,
+            "p95_total_ms": 181,
+            "sample_count": 60,
+            "sequential": true,
+            "slowest_five": [
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 43,
+                "pre_provider_ms": 169,
+                "provider_service_ms": 0,
+                "sequence": 28,
+                "timed_out": false,
+                "total_ms": 212
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 41,
+                "pre_provider_ms": 147,
+                "provider_service_ms": 0,
+                "sequence": 4,
+                "timed_out": false,
+                "total_ms": 188
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 98,
+                "pre_provider_ms": 84,
+                "provider_service_ms": 0,
+                "sequence": 15,
+                "timed_out": false,
+                "total_ms": 182
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 41,
+                "pre_provider_ms": 139,
+                "provider_service_ms": 0,
+                "sequence": 13,
+                "timed_out": false,
+                "total_ms": 181
+              },
+              {
+                "client_body_ms": 0,
+                "http_status": 200,
+                "last_phase": "completed",
+                "post_provider_ttft_ms": 37,
+                "pre_provider_ms": 141,
+                "provider_service_ms": 0,
+                "sequence": 6,
+                "timed_out": false,
+                "total_ms": 179
+              }
+            ],
+            "status": "measured",
+            "streaming": false,
+            "timeout_count": 0,
+            "warmup_count": 5
+          },
+          "window": 5
+        }
+      ]
+    },
+    "task_quiescence": {
+      "background_db_activity": false,
+      "baseline": {
+        "catalog_refresh": {
+          "in_tick": false,
+          "tick_count": 0
+        },
+        "checkpoint": {
+          "in_tick": false,
+          "tick_count": 1
+        },
+        "metrics_flush": {
+          "in_tick": false,
+          "tick_count": 1
+        },
+        "retention_cleanup": {
+          "in_tick": false,
+          "tick_count": 0
+        }
+      },
+      "deltas": {
+        "catalog_refresh": {
+          "baseline_tick_count": 0,
+          "final_in_tick": false,
+          "final_tick_count": 0,
+          "tick_count_delta": 0
+        },
+        "checkpoint": {
+          "baseline_tick_count": 1,
+          "final_in_tick": false,
+          "final_tick_count": 1,
+          "tick_count_delta": 0
+        },
+        "metrics_flush": {
+          "baseline_tick_count": 1,
+          "final_in_tick": false,
+          "final_tick_count": 1,
+          "tick_count_delta": 0
+        },
+        "retention_cleanup": {
+          "baseline_tick_count": 0,
+          "final_in_tick": false,
+          "final_tick_count": 0,
+          "tick_count_delta": 0
+        }
+      },
+      "final": {
+        "catalog_refresh": {
+          "in_tick": false,
+          "tick_count": 0
+        },
+        "checkpoint": {
+          "in_tick": false,
+          "tick_count": 1
+        },
+        "metrics_flush": {
+          "in_tick": false,
+          "tick_count": 1
+        },
+        "retention_cleanup": {
+          "in_tick": false,
+          "tick_count": 0
+        }
+      },
+      "fixed_task_names": [
+        "checkpoint",
+        "metrics_flush",
+        "catalog_refresh",
+        "retention_cleanup",
+        "automatic_backup"
+      ],
+      "wait_timeout_s": 15.0
+    },
+    "wal_autocheckpoint_override_pages": null,
+    "wal_checkpoint_metrics": "not_applicable",
+    "worker_io_attribution": {
+      "enabled": false,
+      "finalization": {
+        "count": 0,
+        "histogram": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "max_write_bytes_upper_bound": 0,
+        "sum_write_bytes": 0
+      },
+      "histogram_upper_bounds_bytes": [
+        0,
+        4096,
+        16384,
+        65536,
+        262144,
+        1048576,
+        4194304,
+        null
+      ],
+      "other": {
+        "count": 0,
+        "histogram": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "max_write_bytes_upper_bound": 0,
+        "sum_write_bytes": 0
+      },
+      "publication": {
+        "count": 0,
+        "histogram": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "max_write_bytes_upper_bound": 0,
+        "sum_write_bytes": 0
+      }
+    }
+  },
+  "candidate": {
+    "binary_size_bytes": 32573296,
+    "build_mode": "q005-qualified-aarch64-copy",
+    "build_profile": "release",
+    "repository_commit_sha": "7d0ef4c2d9664c8a3fc12c2d5ef2e46a4bb894a3",
+    "rust_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "sha256": "8a5c44f0877c9710b4ed54008d424485fff6bb8692df4629ce24f215e8a3d6cf"
+  },
+  "commands": [
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "version"
+      ],
+      "duration_ms": 5,
+      "id": "version",
+      "reason": "0.8.1",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "--help"
+      ],
+      "duration_ms": 6,
+      "id": "help",
+      "reason": "EggPool - aggregate OpenCode Go subscriptions. Usage: eggpool-m008-7d0ef4c2 [OPTIONS] [COMMAND] Commands: serve connect logout check-config edit getkey newkey configsetup configremote deploy accounts dashboard db models modelinfo stats onboard croncheck ensure-running migrate stop restart init-config help recover uninstall update set rehash runtime-status status backup version Options: --config <PATH> Path to the TOML configuration file. Falls back to $EGGPOOL_CONFIG, then ~/.config/eggpool/config.toml, then ./config.toml. -h, --help Print help -V, --version Print version",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "check-config"
+      ],
+      "duration_ms": 7,
+      "id": "check-config",
+      "reason": "Configuration loaded successfully from /tmp/eggpool-q008-bw23no43/config.toml Server: 127.0.0.1:60247 Accounts: 1 Database: <DATABASE>/eggpool-q008-db-vitur7ze/usage.sqlite3 Content digest: daf4bebef2c5002a953836c058363ba34a774cbdcdd6f99d7b4996d4d56c05df",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "migrate"
+      ],
+      "duration_ms": 212,
+      "id": "migrate",
+      "reason": "Migrations completed successfully Applied migrations: 54 Current schema: 54",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "accounts",
+        "list"
+      ],
+      "duration_ms": 6,
+      "id": "accounts-list",
+      "reason": "Configured accounts: fixture/q008-account Total: 1 accounts",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "modelinfo",
+        "list"
+      ],
+      "duration_ms": 10,
+      "id": "modelinfo-list",
+      "reason": "No model-info rows found.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "explain-dashboard",
+        "--json"
+      ],
+      "duration_ms": 9,
+      "id": "operator-stats",
+      "reason": "{ \"period\": \"24h\", \"bucket\": \"hour\", \"group_by\": \"provider_model\", \"queries\": [ { \"name\": \"fetch_timeseries\", \"plan\": [ \"SEARCH r USING COVERING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_grouped_timeseries\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_summary\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\" ] }, { \"name\": \"fetch_account_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (started_at>? AND started_at<?)\", \"USE TEMP B-TREE FOR GROUP BY\" ] }, { \"name\": \"fetch_model_stats\", \"plan\": [ \"SEARCH r USING INDEX idx_requests_started (starte",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stats",
+        "transcoding",
+        "--json"
+      ],
+      "duration_ms": 9,
+      "id": "transcoding-stats",
+      "reason": "{ \"total\": 1, \"native_count\": 1, \"transcoded_count\": 0, \"per_direction\": {}, \"top_loss_warnings\": [], \"period\": \"24h\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "runtime-status",
+        "--json"
+      ],
+      "duration_ms": 6,
+      "id": "runtime-status",
+      "reason": "{ \"status\": \"ok\", \"degraded\": false, \"server\": { \"pid\": 130441, \"ppid\": 130425, \"uptime_seconds\": 3.383790376, \"configured_server_threads\": 1, \"python_version\": null, \"rust_version\": \"0.8.1\" }, \"memory\": { \"rss_bytes\": null, \"vms_bytes\": null, \"open_fd_count\": null, \"thread_count\": 1 }, \"processes\": { \"eggpool_process_count\": 1, \"expected_worker_process_count\": 1, \"process_count_warning\": false }, \"background_tasks\": [ { \"name\": \"catalog_refresh\", \"running\": true, \"enabled\": true, \"tick_count\": 0, \"last_outcome\": null, \"in_tick\": false }, { \"name\": \"checkpoint\", \"running\": true, \"enabled\": true, \"tick_count\": 1, \"last_outcome\": \"success\", \"in_tick\": false }, { \"name\": \"metrics_flush\", \"running\": true, \"enabled\": true, \"tick_count\": 0, \"last_outcome\": null, \"",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "rehash",
+        "--json"
+      ],
+      "duration_ms": 8,
+      "id": "rehash",
+      "reason": "{ \"ok\": true, \"stage\": \"commit\", \"exit_code\": 0, \"generation\": 1, \"changed_sections\": [], \"warnings\": [], \"restart_required\": [], \"retirement_pending\": false, \"message\": \"no changes\" }",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "backup",
+        "--output-dir",
+        "<TEMP_ROOT>/backups"
+      ],
+      "duration_ms": 358,
+      "id": "backup",
+      "reason": "Wrote backup: /tmp/eggpool-q008-bw23no43/backups/eggpool-backup-20261004-041746.zip included: config.toml included: usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stop",
+        "--timeout",
+        "30"
+      ],
+      "duration_ms": 58,
+      "id": "stop-before-recovery",
+      "reason": "Stopping server (PID 130441)... Server stopped.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/recovery/config.toml",
+        "recover",
+        "<TEMP_ROOT>/recovery/recovered.zip"
+      ],
+      "duration_ms": 394,
+      "id": "recover",
+      "reason": "Overwrite current configuration and database? [y/N] Restore complete. Restart the server to load the new config. config: /tmp/eggpool-q008-bw23no43/recovery/config.toml db: /tmp/eggpool-q008-bw23no43/recovery/usage.sqlite3",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "db",
+        "vacuum"
+      ],
+      "duration_ms": 251,
+      "id": "vacuum",
+      "reason": "Database vacuum completed successfully",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "<CANDIDATE>",
+        "--config",
+        "<TEMP_ROOT>/config.toml",
+        "stop",
+        "--timeout",
+        "30"
+      ],
+      "duration_ms": 59,
+      "id": "stop",
+      "reason": "Stopping server (PID 130941)... Server stopped.",
+      "returncode": 0,
+      "status": "pass",
+      "timed_out": false
+    }
+  ],
+  "database_integrity": {
+    "foreign_key_violations": 0,
+    "quick_check": "ok"
+  },
+  "durable": {
+    "active_reservations": 0,
+    "attempts": 345,
+    "pending_requests": 0,
+    "request_statuses": {
+      "completed": 345
+    },
+    "requests": 345,
+    "reservations": 345
+  },
+  "environment": {
+    "architecture": "aarch64",
+    "attestation": "Linux aarch64 plus device-tree board model",
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "cpu_frequency_policy": "2400000",
+    "cpu_frequency_policy_end": "1600000",
+    "cpu_governor": "ondemand",
+    "cpu_governor_end": "ondemand",
+    "filesystem": "ext4",
+    "kernel": "6.8.0-1065-raspi",
+    "loopback_provider_path_counts": {
+      "/chat/completions": 3,
+      "/messages": 2,
+      "/responses": 375
+    },
+    "loopback_provider_requests": 380,
+    "os": "Ubuntu 24.04.4 LTS",
+    "os_version_id": "24.04",
+    "power_thermal_mode_celsius": 44.1,
+    "power_thermal_mode_celsius_end": 41.9,
+    "ram_bytes": 8322752512,
+    "root_storage_device_class": "mmc",
+    "soc_cpu_core_count": 4,
+    "storage_medium_class": "non-rotational"
+  },
+  "findings": [
+    "M008 60-request candidate phase missed one or more gates",
+    "M008 300-request steady-state corpus missed a stated gate"
+  ],
+  "functional": [
+    {
+      "body_bytes": 15,
+      "http_status": 200,
+      "id": "startup-readyz",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 272,
+      "http_status": 200,
+      "id": "model-listing",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 225,
+      "elapsed_ms": 93,
+      "http_status": 200,
+      "id": "chat_completions-finite",
+      "status": "pass",
+      "ttft_ms": 93
+    },
+    {
+      "body_bytes": 309,
+      "elapsed_ms": 157,
+      "http_status": 200,
+      "id": "responses-finite",
+      "status": "pass",
+      "ttft_ms": 157
+    },
+    {
+      "body_bytes": 213,
+      "elapsed_ms": 93,
+      "http_status": 200,
+      "id": "messages-finite",
+      "status": "pass",
+      "ttft_ms": 93
+    },
+    {
+      "body_bytes": 145,
+      "elapsed_ms": 89,
+      "http_status": 200,
+      "id": "chat_completions-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 51
+    },
+    {
+      "body_bytes": 270,
+      "elapsed_ms": 152,
+      "http_status": 200,
+      "id": "responses-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 114
+    },
+    {
+      "body_bytes": 432,
+      "elapsed_ms": 94,
+      "http_status": 200,
+      "id": "messages-stream",
+      "status": "pass",
+      "terminal_evidence": true,
+      "ttft_ms": 57
+    },
+    {
+      "id": "accounts-list",
+      "status": "pass"
+    },
+    {
+      "id": "modelinfo-list",
+      "status": "pass"
+    },
+    {
+      "id": "operator-stats",
+      "status": "pass"
+    },
+    {
+      "id": "transcoding-stats",
+      "status": "pass"
+    },
+    {
+      "id": "runtime-status",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 22767,
+      "http_status": 200,
+      "id": "dashboard-page",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 34203,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.css",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 45019,
+      "http_status": 200,
+      "id": "dashboard-static-dashboard.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 131072,
+      "http_status": 200,
+      "id": "dashboard-static-chart.js",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 1203,
+      "http_status": 200,
+      "id": "dashboard-static-favicon.svg",
+      "status": "pass"
+    },
+    {
+      "body_bytes": 1264,
+      "http_status": 200,
+      "id": "dashboard-static-theme.css?theme=Nord",
+      "status": "pass"
+    },
+    {
+      "id": "rehash-runtime-status",
+      "status": "pass"
+    },
+    {
+      "id": "graceful-stop-before-recovery",
+      "status": "pass"
+    },
+    {
+      "id": "backup-recover-isolated",
+      "recovered_database": true,
+      "status": "pass"
+    },
+    {
+      "id": "bounded-maintenance",
+      "status": "pass"
+    },
+    {
+      "id": "restart-reconcile",
+      "status": "pass"
+    },
+    {
+      "id": "graceful-shutdown",
+      "status": "pass"
+    }
+  ],
+  "isolated_temporary_root": true,
+  "manifest": "runtime-q001.v1",
+  "plan": "SBC qualification",
+  "python_reference": {
+    "reason": "optional same-board comparison was not supplied",
+    "status": "not-run"
+  },
+  "repeated_run_stability": {
+    "fd_counts": [
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12,
+      12
+    ],
+    "interpretation": "bounded samples for release characterization; no fixed performance threshold applied",
+    "logical_leaks": false,
+    "rss_bytes": [
+      17416192,
+      17424384,
+      19107840,
+      19394560,
+      20553728,
+      20557824,
+      20557824,
+      20570112,
+      18513920
+    ],
+    "samples": 9,
+    "status": "pass",
+    "thread_counts": [
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3,
+      3
+    ]
+  },
+  "request_workload_timings": {
+    "elapsed_ms": {
+      "finite_elapsed_ms": [
+        93,
+        157,
+        93
+      ],
+      "finite_ttft_ms": [
+        93,
+        157,
+        93
+      ],
+      "second_workload_elapsed_ms": [
+        128,
+        186
+      ],
+      "second_workload_ttft_ms": [
+        128,
+        185
+      ],
+      "streaming_elapsed_ms": [
+        89,
+        152,
+        94
+      ],
+      "streaming_ttft_ms": [
+        51,
+        114,
+        57
+      ]
+    },
+    "interpretation": "bounded client-observed timings; first-byte values are diagnostic characterization, not an SLA",
+    "sample_count": 16
+  },
+  "resource_samples": [
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 561152,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "before-warmup",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 17416192,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17416192,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 165797888,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 0,
+      "cpu_percent": 0.0,
+      "db_bytes": 561152,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-warmup",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 17424384,
+      "pending_requests": 0,
+      "request_statuses": {},
+      "requests": 0,
+      "reservations": 0,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 17424384,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 165797888,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 6,
+      "cpu_percent": 0.0,
+      "db_bytes": 569344,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-first-workload",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 19107840,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 6
+      },
+      "requests": 6,
+      "reservations": 6,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 19107840,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 165998592,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 38,
+      "cpu_percent": 0.0,
+      "db_bytes": 622592,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "publication-phases-before-quiescence",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 19394560,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 38
+      },
+      "requests": 38,
+      "reservations": 38,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 19394560,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 166273024,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 343,
+      "cpu_percent": 0.0,
+      "db_bytes": 1470464,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "m008-after-300-request-stabilization",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 20553728,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 343
+      },
+      "requests": 343,
+      "reservations": 343,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 20553728,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 3000,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 168591360,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 343,
+      "cpu_percent": 0.0,
+      "db_bytes": 1470464,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-publication-phases-diagnostic",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 20557824,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 343
+      },
+      "requests": 343,
+      "reservations": 343,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 20557824,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 168591360,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 343,
+      "cpu_percent": 0.0,
+      "db_bytes": 1470464,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-publication-phases-stabilization",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 20557824,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 343
+      },
+      "requests": 343,
+      "reservations": 343,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 20557824,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 3000,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 168591360,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 343,
+      "cpu_percent": 0.0,
+      "db_bytes": 1470464,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-rehash-backup",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 20570112,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 343
+      },
+      "requests": 343,
+      "reservations": 343,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 20570112,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 168591360,
+      "wal_bytes": 0,
+      "wire_flights": null
+    },
+    {
+      "active_generation_id": 1,
+      "active_leases": 0,
+      "active_reservations": 0,
+      "attempts": 345,
+      "cpu_percent": 0.0,
+      "db_bytes": 1474560,
+      "finalization_capacity": 256,
+      "finalization_jobs": 0,
+      "generation_count": 1,
+      "label": "after-second-workload",
+      "open_fd_count": 12,
+      "peak_rss_bytes": 18513920,
+      "pending_requests": 0,
+      "request_statuses": {
+        "completed": 345
+      },
+      "requests": 345,
+      "reservations": 345,
+      "retiring_generations": 0,
+      "retiring_leases": 0,
+      "rss_bytes": 18513920,
+      "running_tasks": 4,
+      "runtime_read_error": false,
+      "runtime_tasks": 4,
+      "sample_window_ms": 200,
+      "terminal_references": 0,
+      "thread_count": 3,
+      "virtual_bytes": 165949440,
+      "wal_bytes": 0,
+      "wire_flights": null
+    }
+  ],
+  "schema_version": "runtime-q008.v2",
+  "startup_to_ready_ms": 107,
+  "status": "fail"
+}
