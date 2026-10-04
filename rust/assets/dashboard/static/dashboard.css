@@ -141,6 +141,7 @@ nav.topnav a {
   border-radius: 3px;
   font-size: 0.9rem;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 nav.topnav a:hover {
@@ -967,6 +968,12 @@ label.trace-limit {
   .topnav-menu {
     display: none;
     flex-direction: column;
+    /* The base rule wraps because the desktop menu is a row that must break
+       onto a second line. Inherited into this column, `wrap` means the
+       opposite: once the menu is height-constrained, flex starts a *new
+       column beside* the last item that fit — which is how the theme picker
+       ended up beside the links and clipped. */
+    flex-wrap: nowrap;
     align-items: stretch;
     gap: 0.25rem;
     width: 100%;
@@ -1011,11 +1018,40 @@ label.trace-limit {
      a no-op. */
   .topnav-menu .theme-selector {
     margin-top: auto;
+    /* Full-bleed inside the dropdown: the base `margin-left` is a gap from the
+       desktop row, and the base `inline-flex` shrink-to-fit would otherwise
+       leave the picker narrower than the panel it sits in. */
+    margin-left: 0;
+    width: 100%;
     padding-top: 0.5rem;
   }
 
   .topnav-menu .theme-selector select {
     width: 100%;
+  }
+
+  /* Thirteen links at a 44px tap height plus the theme picker stack to
+     ~694px, which is taller than a typical phone viewport (~660px). The
+     picker sits last, so on a phone it landed below the fold and the one
+     control the operator most wants to reach was the one they could not.
+     Cap the dropdown to the space actually below the sticky topbar and let
+     it scroll. `dvh` tracks the collapsing browser chrome on mobile; the
+     plain `vh` line is the fallback, and browsers that know neither keep
+     today's behaviour. Scrolling the menu would otherwise chain to the
+     page behind it, hence `overscroll-behavior: contain`. */
+  nav.topnav.topnav-open .topnav-menu {
+    max-height: calc(100vh - 4.5rem);
+    max-height: calc(100dvh - 4.5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* 0.3rem of vertical padding on 0.85rem text renders a ~31px pill, under
+     the 44px a fingertip needs. Grow the hit area without changing the
+     pill's look on wider viewports. */
+  .show-disabled-toggle {
+    min-height: 44px;
   }
 }
 
@@ -1102,6 +1138,59 @@ label.trace-limit {
      item that wraps. `flex-shrink: 0` keeps it on the menu's first row. */
   .topnav-refresh {
     flex: 0 0 auto;
+  }
+}
+
+/* ---- Desktop: one line for links, theme picker, and reload button ----
+
+   Thirteen uppercase nav links plus a theme `<select>` plus the reload
+   button need roughly 1710px at the default metrics, so the topbar fell to
+   three rows (brand / links / theme+reload) and wasted most of a laptop
+   screen before any content appeared. These values keep the whole group on
+   a single row down to about 1280px without shrinking the labels below
+   0.82rem, which is the point where uppercase nav text stops being
+   comfortable to read. Below that width the group wraps as a unit — the
+   links stay together and the theme picker drops to the next line, but the
+   reload button is never orphaned on a line of its own.
+
+   The theme `<select>` is the one element that gives width cheaply: it sizes
+   to its longest option ("black but with important highlights"), so it is
+   capped and ellipsised instead. The full name is still in the option list
+   and the picker carries a tooltip naming its purpose. */
+@media (min-width: 1280px) {
+  header.topbar {
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+    gap: 0.5rem 0.75rem;
+  }
+
+  /* The brand shares the single row with the nav group, so trim it to the
+     intrinsic width of its text instead of a share of the bar. */
+  header.topbar h1 {
+    font-size: 1rem;
+    flex: 0 0 auto;
+  }
+
+  nav.topnav {
+    flex-wrap: nowrap;
+    gap: 0.35rem;
+  }
+
+  .topnav-menu {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+  }
+
+  nav.topnav a {
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
+    font-size: 0.82rem;
+  }
+
+  .topnav-menu .theme-selector select {
+    width: 9rem;
+    max-width: 9rem;
+    text-overflow: ellipsis;
   }
 }
 

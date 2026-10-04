@@ -1,6 +1,6 @@
 [
   {"path":"static/chart.umd.min.js","sha256":"206b6e8bb00fc7bba2c7ee80ca41db3e9e05ba7be0aa35abeba9cfd5357f5d0e"},
-  {"path":"static/dashboard.css","sha256":"a445565f71d6b7e27b387740f717663757d0809916f24ab27ac296c8aab86ece"},
+  {"path":"static/dashboard.css","sha256":"c2aa7d8c7889f646298b7095adc2eb721402f5703efbe7018bb370a284c256dd"},
   {"path":"static/dashboard.js","sha256":"22375b498e2a62c7c1908db8ef12268b6c18cba20672cad6876667c25217663f"},
   {"path":"static/favicon.svg","sha256":"593a7d0f464160e832f62399cf224a04dda68a55f3a6ce847dffb62016d37653"},
   {"path":"themes/Booberry.toml","sha256":"ca0588275bd2c59de561633c2dc7e2b7f95d183a7fd918a10d00dfff5ca96871"},

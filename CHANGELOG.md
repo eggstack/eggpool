@@ -98,6 +98,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anchored above a cell were cut off with no way to scroll to them. They now
   render over their own row.
 
+- **The topbar no longer spends three rows on desktop.** Thirteen uppercase nav
+  links, the theme picker, and the reload button need roughly 1710px at the
+  default metrics, so the bar wrapped to brand / links / theme+reload and pushed
+  the whole page down before any content appeared. At 1280px and above the
+  group now holds a single row: the brand shrinks to its text, the link row
+  stops wrapping, and the theme `<select>` — which sizes itself to its longest
+  option ("black but with important highlights") — is capped and ellipsised
+  instead. Between 1280px and 1366px the group wraps as a unit, but the reload
+  button is never orphaned on a line of its own. Phone and tablet layouts are
+  unchanged: below 761px the nav is still behind the burger, which carries the
+  theme picker in its dropdown.
+
+- **The mobile nav dropdown now fits the screen it opens on.** Thirteen links
+  at a 44px tap height plus the theme picker stack to ~694px, which is taller
+  than a typical phone viewport, and the picker — the control an operator most
+  wants on a phone — sat last, below the fold. The dropdown is now capped to
+  the space below the sticky topbar (`dvh`, with a `vh` fallback) and scrolls,
+  with `overscroll-behavior: contain` so scrolling the menu no longer chains
+  to the page behind it. Capping the height also exposed a latent bug: the
+  menu inherited `flex-wrap: wrap` from the desktop rule, which in a
+  `flex-direction: column` container means *wrap into a new column beside* the
+  last item that fit — so the theme picker was laid out next to the links
+  rather than under them, and clipped. The mobile menu now sets
+  `flex-wrap: nowrap` and the picker spans the dropdown's full width.
+
+- **The "show disabled accounts" pill is a real tap target on phones.** Its
+  0.3rem vertical padding on 0.85rem text rendered a ~31px control, under the
+  44px a fingertip needs; it now carries a 44px minimum height below 761px
+  without changing its appearance on wider viewports.
+
 - **Theme page and card surfaces are forced opaque.** A theme-supplied alpha
   channel on a consumed background key (for example `plum`'s `#27273DE2`) let
   the canvas show through the page and card fills.
