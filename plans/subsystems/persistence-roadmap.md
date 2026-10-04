@@ -337,9 +337,11 @@ Exit conditions:
 
 ### Milestone 008 — Rollback-journal PERSIST qualification and write-amplification attribution
 
+Status: closed — rejected on Pi 5/MMC request-p95 gates; production remains WAL/NORMAL.
+
 Class: infrastructure
 
-Status: ready
+Status: closed — rejected
 
 Implementation plan:
 
@@ -377,7 +379,7 @@ Exit conditions:
 
 Class: polish
 
-Status: ready
+Status: active
 
 Implementation plan:
 
@@ -503,5 +505,5 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 006 — SQLite NOOP and WAL-reset safety baseline | closed | plans/implementation/persistence/006-sqlite-noop-and-wal-reset-safety-baseline.md | plans/closure/persistence/006-status.md | none |
 | 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
 | 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
-| 009 — M008 documentation reconciliation corrective pass | ready | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | — | hard dependency M008 closure satisfied; no runtime/hardware blocker |
+| 009 — M008 documentation reconciliation corrective pass | active | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | — | hard dependency M008 closure satisfied; no runtime/hardware blocker |
 | 010 — control/projection storage boundary architecture investigation | ready | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | hard dependency M008 closure satisfied; M009 is soft/parallel; no production split authorized |

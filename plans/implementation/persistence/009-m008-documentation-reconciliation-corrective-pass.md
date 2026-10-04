@@ -1,6 +1,6 @@
 # Persistence Milestone 009 — M008 Documentation Reconciliation Corrective Pass
 
-Status: ready
+Status: active
 
 Repository baseline: `f02b5b8484a0d25ad29d7bdf0dec5c178b703d26`
 

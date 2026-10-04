@@ -52,7 +52,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M009 — M008 documentation reconciliation corrective pass | ready | `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md` | Hard: M008 closure accepted. Documentation/tooling only; no physical target required. |
 | Persistence | M010 — control/projection storage boundary architecture investigation | ready | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Hard: M008 closure accepted. Soft: M009 may run in parallel. Investigation/test-only prototype only; any production split requires ADR acceptance and separate plans. |
 
 
@@ -61,6 +60,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Persistence | M009 — M008 documentation reconciliation corrective pass | active | `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md` | Documentation/tooling only; M010 may proceed independently. |
 
 
 ## Blocked work
