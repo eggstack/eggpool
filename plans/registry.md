@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M010 closing — control/projection split rejected under current history/outage contract | M007–M009 are closed; foreground SQLite checkpoint/storage tail remains unresolved. M010 closure audits whether any successor is registered; split follow-up needs an explicit retention and analytics-outage admission policy. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M010 closed — control/projection split rejected under current history/outage contract | M007–M010 are closed; foreground SQLite checkpoint/storage tail remains unresolved. No successor is registered; split follow-up needs an explicit retention and analytics-outage admission policy. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -59,7 +59,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Persistence | M010 — control/projection storage boundary architecture investigation | closing | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Architecture investigation/test-only prototype; split rejected under current history/outage contract; no production storage change. |
 
 
 ## Blocked work
@@ -69,6 +68,8 @@ pair is a known numbering accident.
 
 Persistence M008 closure audit: searched the registered Persistence plans and dependency tables; no future plan depends on M008 and the blocked-work table has no Persistence entry. Nothing was unblocked or promoted. A production storage split or further journal experiment requires a separately approved bounded plan.
 
+Persistence M010 closure audit: searched `plans/implementation/persistence/`, the persistence roadmap dependency graph, and the ready/active/blocked registry tables. No M011 or other registered Persistence successor exists, no plan depends on M010, and the blocked-work table remains empty. Nothing is promoted; no other Persistence plan is eligible. A future split investigation requires an explicit finite history-retention and prolonged analytics-outage admission contract before new work is registered.
+
 
 Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persistence/007-status.md`) predates the scope revision that allowed implementation and local qualification. The implementation disposition is in `plans/closure/persistence/007-implementation-status.md`; current Pi 5/MMC physical closure is `plans/closure/persistence/007-pi5-qualification.md` (rejected; production unchanged).
 
@@ -76,6 +77,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Persistence M010 — control/projection storage boundary architecture investigation | closed — schema-54 ownership/index inventory and test-only replay prototype complete; 12-to-2 modeled explicit secondary indexes, but 700-to-800 foreground row mutations and no lossless finite outage policy; no ADR or production split | `plans/closure/persistence/010-status.md`, implementation `dfa2a2ab` |
 | Persistence M009 — M008 documentation reconciliation corrective pass | closed — current lifecycle docs agree; focused guard 3 passed and full tooling suite 164 passed, 3 skipped; zero production/source/schema diff; M010 subsequently activated | `plans/closure/persistence/009-status.md`, implementation `4bff728c` |
 | Persistence M008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA failed request-p95 gates on Pi 5/MMC; worker-I/O proxy was about 2.04× control; production remains WAL/NORMAL; no registered successor unblocked | `plans/closure/persistence/008-status.md`, implementation `fac930b9`, physical corpus `artifacts/qualification/m008-pi5-2026-10-03/` |
 | Routing selection M003 — bounded exact affinity LRU | closed — slot-indexed exact LRU preserves behavior; 4,096-entry Pi 5 p95 improved about 90×; full default/no-default, strict Clippy, and fmt pass | `plans/closure/routing-selection/003-status.md`, implementation `dc6ea713`

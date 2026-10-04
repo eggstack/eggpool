@@ -1,6 +1,6 @@
 # Persistence Milestone 010 — Control/Projection Storage Boundary Architecture Investigation
 
-Status: closing
+Status: implemented
 
 Repository baseline: `3efd650e63eef4999e450bdef738af9e54971d4b`
 
