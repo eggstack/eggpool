@@ -1,4 +1,4 @@
-const DEFAULT_THEME: &str = "Cyber Red";
+pub(super) const DEFAULT_THEME: &str = "Cyber Red";
 const MAX_THEME_NAME_BYTES: usize = 128;
 
 pub(super) const THEME_NAMES: &[&str] = &[
@@ -287,11 +287,18 @@ pub(super) fn theme_variables(name: &str) -> String {
     let buffer_title = get(&["buffer", "background_title_bar"], "#181825");
     let buffer_url = get(&["buffer", "url"], "#89b4fa");
     let buffer_action = get(&["buffer", "action"], "#fab387");
-    let page_background = if theme_lightness(general_background).is_some_and(|value| value < 0.5) {
-        buffer_background.to_owned()
-    } else {
-        general_background.to_owned()
-    };
+    // Page and card surfaces must be opaque. `body` paints its gradient via
+    // `background-image` with no `background-color` behind it, and the card
+    // fill is what separates a panel from the watermark behind it, so a
+    // theme-supplied alpha channel here (e.g. plum's `#27273DE2`) let the
+    // canvas through. Drop the alpha rather than trusting it.
+    let page_background = opaque_hex(
+        if theme_lightness(general_background).is_some_and(|value| value < 0.5) {
+            buffer_background
+        } else {
+            general_background
+        },
+    );
     let info = buffer_url;
     let warning = buffer_action;
     let primary_button = get(&["buttons", "primary", "background_selected"], "#313244");
@@ -309,7 +316,7 @@ pub(super) fn theme_variables(name: &str) -> String {
         }
     };
     let page_border = get(&["general", "border"], "#45475a");
-    let card_background = buffer_background;
+    let card_background = opaque_hex(buffer_background);
     let button_primary_background = {
         let selected = get(&["buttons", "primary", "background_selected"], "");
         if !selected.is_empty() {
@@ -366,17 +373,17 @@ pub(super) fn theme_variables(name: &str) -> String {
         ("--button-bg", card_background.to_owned()),
         (
             "--button-border",
-            mix_theme_colors(card_background, text_primary, 0.18)
+            mix_theme_colors(&card_background, text_primary, 0.18)
                 .unwrap_or_else(|| page_border.to_owned()),
         ),
         (
             "--button-bg-hover",
-            mix_theme_colors(card_background, text_primary, 0.08)
+            mix_theme_colors(&card_background, text_primary, 0.08)
                 .unwrap_or_else(|| card_background.to_owned()),
         ),
         (
             "--button-bg-active",
-            mix_theme_colors(card_background, info, 0.20)
+            mix_theme_colors(&card_background, info, 0.20)
                 .unwrap_or_else(|| card_background.to_owned()),
         ),
         ("--link-color", info.to_owned()),
@@ -440,6 +447,11 @@ pub(super) fn theme_variables(name: &str) -> String {
 
 pub(super) fn theme_bytes(name: &str) -> Option<&'static [u8]> {
     Some(match name {
+        // `default` is the first entry in `THEME_NAMES` and the value the theme
+        // picker offers, but it has no TOML of its own. Alias it to the same
+        // theme the config path falls back to so selecting it renders a fully
+        // styled dashboard instead of an unstyled one.
+        "default" => theme_bytes(DEFAULT_THEME)?,
         "Booberry" => include_bytes!("../../../assets/dashboard/themes/Booberry.toml"),
         "Catppuccin Latte" => {
             include_bytes!("../../../assets/dashboard/themes/Catppuccin Latte.toml")
@@ -517,4 +529,16 @@ pub(super) fn theme_value<'a>(value: &'a toml::Value, path: &[&str], fallback: &
         .try_fold(value, |current, key| current.get(*key))
         .and_then(toml::Value::as_str)
         .unwrap_or(fallback)
+}
+
+/// Strip an 8-digit hex alpha channel, yielding the fully opaque colour. Any
+/// other shape (6-digit hex, non-hex, empty) is returned untouched so the
+/// existing `theme_value` fallbacks still apply.
+fn opaque_hex(color: &str) -> String {
+    let trimmed = color.strip_prefix('#').unwrap_or(color);
+    if trimmed.len() == 8 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        color[..7].to_owned()
+    } else {
+        color.to_owned()
+    }
 }

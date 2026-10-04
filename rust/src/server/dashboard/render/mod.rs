@@ -91,7 +91,7 @@ pub(in crate::server::dashboard) fn render_dashboard_page_body(
         "routing" => body.push_str(&render_routing_page(data, period, theme, routing_trace)),
         "traces" => body.push_str(&render_traces_page(
             data,
-            "recent",
+            period,
             theme,
             model_filters.trace_limit.unwrap_or(50).clamp(10, 500),
         )),

@@ -28,11 +28,14 @@ pub(in crate::server) async fn static_favicon() -> Response {
     static_response(FAVICON_SVG, "image/svg+xml", "public, max-age=86400")
 }
 
+/// Always serves a complete variable set. `dashboard.css` declares no custom
+/// properties of its own, so an empty body here renders the whole page
+/// unstyled — every `var()` goes invalid, panels lose their backgrounds and
+/// the `.egg-background` watermark falls back to the SVG initial fill. Unknown
+/// names resolve through `selected_theme` to `DEFAULT_THEME` for the same
+/// reason; `theme=default` is a real alias for it (see `theme_bytes`).
 pub(in crate::server) async fn theme_css(Query(query): Query<ThemeQuery>) -> Response {
-    let requested = query.theme.unwrap_or_else(|| "default".to_owned());
-    if requested == "default" || !THEME_NAMES.contains(&requested.as_str()) {
-        return static_response(b"", "text/css", "public, max-age=300");
-    }
-    let css = theme_variables(&requested);
+    let requested = query.theme.as_deref().unwrap_or("default");
+    let css = theme_variables(selected_theme(requested));
     static_response(css.as_bytes(), "text/css", "public, max-age=300")
 }

@@ -171,6 +171,98 @@ pub(in crate::server::dashboard) fn render_timeseries_page(
     } else {
         ""
     };
+    // The controls previously carried hardcoded `selected` attributes and the
+    // canvas hardcoded `data-*` values, so submitting the form left the page
+    // claiming "Auto" / "Provider / model" regardless of what was chosen.
+    // Drive both from the projection the server actually built.
+    let active_bucket = grouped["bucket"].as_str().unwrap_or("hour").to_owned();
+    let active_group_by = grouped["group_by"]
+        .as_str()
+        .unwrap_or("provider_model")
+        .to_owned();
+    let active_metric = grouped["metric"].as_str().unwrap_or("tokens").to_owned();
+    let active_limit = grouped["limit"].as_u64().unwrap_or(12);
+    // Match `period_options`, which marks the active entry
+    // `selected="selected"` rather than a bare `selected`.
+    let selected = |value: &str, active: &str| {
+        if value == active {
+            " selected=\"selected\""
+        } else {
+            ""
+        }
+    };
+    let bucket_options = format!(
+        "<option value=\"auto\"{}>Auto (period-aware)</option><option value=\"hour\"{}>Hour</option><option value=\"day\"{}>Day</option>",
+        if active_bucket == "auto" {
+            " selected=\"selected\""
+        } else {
+            ""
+        },
+        selected("hour", &active_bucket),
+        selected("day", &active_bucket)
+    );
+    let group_by_options = format!(
+        "<option value=\"provider_model\"{}>Provider / model</option><option value=\"provider\"{}>Provider</option><option value=\"model\"{}>Model</option><option value=\"account\"{}>Account</option>",
+        selected("provider_model", &active_group_by),
+        selected("provider", &active_group_by),
+        selected("model", &active_group_by),
+        selected("account", &active_group_by)
+    );
+    let metric_options = ["tokens", "requests", "cost", "errors", "bytes"]
+        .iter()
+        .map(|value| {
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                value,
+                selected(value, &active_metric),
+                {
+                    match *value {
+                        "tokens" => "Tokens",
+                        "requests" => "Requests",
+                        "cost" => "Cost",
+                        "errors" => "Errors",
+                        _ => "Bandwidth",
+                    }
+                }
+            )
+        })
+        .collect::<String>();
+    let limit_options = [6_u64, 8, 12, 16, 20, 25]
+        .iter()
+        .map(|value| {
+            format!(
+                "<option value=\"{value}\"{}>Top {value}</option>",
+                if *value == active_limit {
+                    " selected=\"selected\""
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect::<String>();
+    let bucket_label = if active_bucket == "auto" {
+        "auto buckets".to_owned()
+    } else {
+        format!("{active_bucket} buckets")
+    };
+    let heading = format!(
+        "Timeseries ({} · group by {active_group_by})",
+        html_escape(&bucket_label)
+    );
+    // The page-level period selector is a separate GET form, so navigating it
+    // would otherwise drop the filters chosen above. Carry them across.
+    let carried_filters = format!(
+        "<input type=\"hidden\" name=\"bucket\" value=\"{}\"><input type=\"hidden\" name=\"group_by\" value=\"{}\"><input type=\"hidden\" name=\"metric\" value=\"{}\"><input type=\"hidden\" name=\"limit\" value=\"{}\">",
+        query_component(&active_bucket),
+        query_component(&active_group_by),
+        query_component(&active_metric),
+        active_limit
+    );
+    let period_form = dashboard_period_selector(period, theme).replacen(
+        "</form>",
+        &format!("{carried_filters}</form>"),
+        1,
+    );
     let account_options = data
         .accounts
         .iter()
@@ -244,8 +336,8 @@ pub(in crate::server::dashboard) fn render_timeseries_page(
         )
     };
     format!(
-        "<h2>Timeseries (hour buckets, group by provider_model)</h2>{}<form method=\"get\" class=\"filter-form timeseries-controls\" data-timeseries-controls aria-label=\"Timeseries filters\"><label>Bucket: <select name=\"bucket\"><option value=\"auto\" selected>Auto (period-aware)</option><option value=\"hour\">Hour</option><option value=\"day\">Day</option></select></label><label>Group by: <select name=\"group_by\"><option value=\"provider_model\" selected>Provider / model</option><option value=\"provider\">Provider</option><option value=\"model\">Model</option><option value=\"account\">Account</option></select></label><label>Metric: <select name=\"metric\"><option value=\"tokens\" selected>Tokens</option><option value=\"requests\">Requests</option><option value=\"cost\">Cost</option><option value=\"errors\">Errors</option><option value=\"bytes\">Bandwidth</option></select></label><label>Limit: <select name=\"limit\"><option value=\"6\">Top 6</option><option value=\"8\">Top 8</option><option value=\"12\" selected>Top 12</option><option value=\"16\">Top 16</option><option value=\"20\">Top 20</option><option value=\"25\">Top 25</option></select></label><label>Account: <select name=\"account\"><option value=\"\" selected>(any account)</option>{account_options}</select></label><label>Model: <select name=\"model\"><option value=\"\" selected>(any model)</option>{model_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><section class=\"panel timeseries-chart-panel\"><h3>Usage breakdown</h3><div class=\"chart-container\"{chart_display}><canvas class=\"grouped-timeseries-chart\" data-chart-id=\"grouped-timeseries-chart\" data-period=\"{}\" data-bucket=\"hour\" data-group-by=\"provider_model\" data-metric=\"tokens\" data-limit=\"12\" data-account=\"\" data-model=\"\"></canvas></div><p class=\"empty grouped-timeseries-empty\"{empty_display}>No requests in this window.</p><script type=\"application/json\" class=\"grouped-timeseries-data\" data-chart-id=\"grouped-timeseries-chart\">{grouped_json}</script></section><section class=\"panel\"><h3>Usage breakdown</h3>{usage_table}</section><section class=\"panel\"><h3>Aggregate per bucket</h3>{aggregate_table}</section>",
-        dashboard_period_selector(period, theme),
+        "<h2>{heading}</h2>{}<form method=\"get\" class=\"filter-form timeseries-controls\" data-timeseries-controls aria-label=\"Timeseries filters\"><label>Bucket: <select name=\"bucket\">{bucket_options}</select></label><label>Group by: <select name=\"group_by\">{group_by_options}</select></label><label>Metric: <select name=\"metric\">{metric_options}</select></label><label>Limit: <select name=\"limit\">{limit_options}</select></label><label>Account: <select name=\"account\"><option value=\"\" selected>(any account)</option>{account_options}</select></label><label>Model: <select name=\"model\"><option value=\"\" selected>(any model)</option>{model_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form><section class=\"panel timeseries-chart-panel\"><h3>Usage breakdown</h3><div class=\"chart-container\"{chart_display}><canvas class=\"grouped-timeseries-chart\" data-chart-id=\"grouped-timeseries-chart\" data-period=\"{}\" data-bucket=\"{active_bucket}\" data-group-by=\"{active_group_by}\" data-metric=\"{active_metric}\" data-limit=\"{active_limit}\" data-account=\"\" data-model=\"\"></canvas></div><p class=\"empty grouped-timeseries-empty\"{empty_display}>No requests in this window.</p><script type=\"application/json\" class=\"grouped-timeseries-data\" data-chart-id=\"grouped-timeseries-chart\">{grouped_json}</script></section><section class=\"panel\"><h3>Grouped detail</h3>{usage_table}</section><section class=\"panel\"><h3>Aggregate per bucket</h3>{aggregate_table}</section>",
+        period_form,
         html_escape(period),
         html_escape(theme),
         html_escape(period),

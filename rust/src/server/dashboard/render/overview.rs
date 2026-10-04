@@ -27,7 +27,7 @@ pub(in crate::server::dashboard) fn overview_metric_card(
             "Provider-reported prompt-cache read tokens. The subtext shows the bounded read share cache_read / (input + cache_read + cache_write) and the cache write volume.",
         ),
         "Provider cache hit rate" => Some(
-            "Protocol-aware cache hit rate: cache_read_tokens / cache_eligible_input_tokens. For OpenAI-compatible providers the denominator is total billed prompt tokens; for Anthropic it is fresh input + cache read + cache creation. Cache writes/creation are warmup, not hits.",
+            "Overview summary estimate: cache-read tokens as a share of total input tokens. The cache page reports the protocol-aware rate (cache_read / cache_eligible_input), which this page does not load.",
         ),
         "Cache write/warmup rate" => Some(
             "Cache write (creation) tokens as a share of eligible input. These populate cache entries and are not cache hits.",
@@ -346,18 +346,25 @@ pub(in crate::server::dashboard) fn render_overview(
         .iter()
         .map(|row| row.retry_outcomes)
         .sum::<i64>();
-    let success_attempts = page_data
+    // "First-attempt success" has to be measured on first attempts only.
+    // Dividing every success by every attempt counted a request that failed
+    // twice and then succeeded on its third try as a first-attempt success,
+    // which contradicted the card's own tooltip. `request_attempts` tags the
+    // opening try with `retry_category = 'initial'`, so use that bucket.
+    let (initial_attempts, initial_successes) = page_data
         .retries
         .iter()
-        .map(|row| row.successes)
-        .sum::<i64>();
-    let first_attempt_success = if retry_attempts > 0 {
+        .filter(|row| row.category == "initial")
+        .fold((0_i64, 0_i64), |(attempts, successes), row| {
+            (attempts + row.attempts, successes + row.successes)
+        });
+    let first_attempt_success = if initial_attempts > 0 {
         format!(
             "{:.1}%",
-            success_attempts as f64 / retry_attempts as f64 * 100.0
+            initial_successes as f64 / initial_attempts as f64 * 100.0
         )
     } else {
-        "0.0%".to_owned()
+        "—".to_owned()
     };
     let pending_subtext = if page_data.pending_requests == 0 {
         "oldest — · stale 0"
@@ -391,7 +398,20 @@ pub(in crate::server::dashboard) fn render_overview(
             format!("{:.2}%", variance.sqrt() / mean * 100.0)
         }
     };
-    let cache_hit_rate = "—";
+    // Cache-page hit rate is scoped to the canonical cache counters, which
+    // this page does not load. Derive the summary-level read share instead of
+    // hardcoding a placeholder that could never populate.
+    let cache_input_denominator = summary
+        .total_cache_read_tokens
+        .saturating_add(summary.total_input_tokens);
+    let cache_hit_rate = if cache_input_denominator > 0 {
+        format!(
+            "{:.1}%",
+            summary.total_cache_read_tokens as f64 / cache_input_denominator as f64 * 100.0
+        )
+    } else {
+        "—".to_owned()
+    };
     let cards_second = format!(
         "<section class=\"cards system-health\">{}{}{}{}{}</section>",
         overview_metric_card(
@@ -455,7 +475,7 @@ pub(in crate::server::dashboard) fn render_overview(
         overview_metric_card(
             "Provider cache hit rate",
             cache_hit_rate,
-            "legacy summary estimate"
+            "cache reads / total input"
         ),
         overview_metric_card(
             "Reasoning tokens",
@@ -484,6 +504,21 @@ pub(in crate::server::dashboard) fn render_overview(
             )
         ),
     );
+    // Time-to-first-byte is only defined for streamed requests. The summary
+    // coalesces "no streamed requests" to 0.0, which rendered as "Avg TTFT
+    // 0.0 ms / P50 0.0 ms · P99 0.0 ms" — a plausible-looking instant TTFT.
+    let (ttft_value, ttft_subtext) = if summary.streamed_requests > 0 {
+        (
+            format_latency(summary.avg_ttft_ms),
+            format!(
+                "P50 {} · P99 {}",
+                format_latency(summary.p50_ttft_ms),
+                format_latency(summary.p99_ttft_ms)
+            ),
+        )
+    } else {
+        ("—".to_owned(), "no streamed requests".to_owned())
+    };
     let cards_fourth = format!(
         "<section class=\"cards\">{}{}{}</section>",
         overview_metric_card(
@@ -496,15 +531,7 @@ pub(in crate::server::dashboard) fn render_overview(
             format_bytes(summary.total_bytes_emitted),
             "upstream → proxy"
         ),
-        overview_metric_card(
-            "Avg TTFT (streamed)",
-            format_latency(summary.avg_ttft_ms),
-            &format!(
-                "P50 {} · P99 {}",
-                format_latency(summary.p50_ttft_ms),
-                format_latency(summary.p99_ttft_ms)
-            )
-        ),
+        overview_metric_card("Avg TTFT (streamed)", ttft_value, &ttft_subtext),
     );
     let token_activity = format!(
         "<section class=\"panel\"><h3>Token activity (last 180 days)</h3>{}</section>",

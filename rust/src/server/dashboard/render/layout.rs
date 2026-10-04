@@ -36,6 +36,7 @@ pub(in crate::server::dashboard) fn dashboard_page_with_body(
     active_nav: &str,
     period: Option<String>,
     theme: Option<String>,
+    refresh_interval_s: u64,
     body: String,
 ) -> Response {
     let period = period.as_deref().unwrap_or("24h");
@@ -46,17 +47,12 @@ pub(in crate::server::dashboard) fn dashboard_page_with_body(
     let theme = selected_theme(theme.as_deref().unwrap_or(configured_theme));
     let include_chart_js =
         body_requires_chart_runtime(&body) || matches!(active_nav, "reliability" | "routing");
-    let shell_period = match active_nav {
-        "runtime" => "runtime",
-        "traces" => "recent",
-        _ => period,
-    };
     html_response(render_dashboard_layout(
         title,
         active_nav,
-        shell_period,
+        period,
         theme,
-        15,
+        refresh_interval_s,
         body,
         include_chart_js,
     ))
@@ -147,16 +143,27 @@ pub(in crate::server::dashboard) fn render_dashboard_layout(
         theme_options,
         html_escape(period)
     );
+    // Only advertise auto-refresh on the pages that actually get the polling
+    // script. Claiming it everywhere told operators to expect live data on
+    // pages that render once and never update.
+    let refresh_note = if refresh_script.is_empty() {
+        String::new()
+    } else {
+        format!(" &middot; auto-refresh {}s", refresh_interval_s.max(1))
+    };
+    let footer = format!(
+        "<footer><small>Period: <span class=\"period-label\">{}</span>{} &middot; <span id=\"dashboard-updated\">ready</span></small></footer>",
+        html_escape(period),
+        refresh_note
+    );
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30\n           C82 30 55 88 57 145\n           C59 202 89 231 128 231\n           C167 231 197 202 199 145\n           C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" data-tooltip=\"Reload this page\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n<footer><small>Period: <span class=\"period-label\">{}</span> &middot; auto-refresh {}s &middot; <span id=\"dashboard-updated\">ready</span></small></footer>\n{}<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<link rel=\"icon\" type=\"image/svg+xml\" href=\"/static/favicon.svg\">\n<link rel=\"preload\" href=\"/static/dashboard.css\" as=\"style\">\n<link rel=\"stylesheet\" href=\"/static/dashboard.css\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?theme={}\">\n{}\n</head>\n<body>\n<svg class=\"egg-background\" viewBox=\"0 0 256 256\" preserveAspectRatio=\"xMidYMid meet\" aria-hidden=\"true\" focusable=\"false\"><path class=\"shape\" d=\"M128 30\n           C82 30 55 88 57 145\n           C59 202 89 231 128 231\n           C167 231 197 202 199 145\n           C201 88 174 30 128 30 Z\" /><path class=\"thin\" d=\"M86 132 H112 L126 111 L144 158 L159 132 H174\" /><circle class=\"shape\" cx=\"85\" cy=\"132\" r=\"5\" /><circle class=\"shape\" cx=\"174\" cy=\"132\" r=\"5\" /></svg>\n<header class=\"topbar\"><button class=\"topnav-burger\" type=\"button\" aria-label=\"Open page menu\" aria-expanded=\"false\" aria-controls=\"topnav-menu\"><svg class=\"topnav-burger-icon\" viewBox=\"0 0 24 24\" width=\"24\" height=\"24\" aria-hidden=\"true\" focusable=\"false\"><rect class=\"bar bar-1\" x=\"0\" y=\"0\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-2\" x=\"0\" y=\"11\" width=\"24\" height=\"2\" rx=\"1\"/><rect class=\"bar bar-3\" x=\"0\" y=\"22\" width=\"24\" height=\"2\" rx=\"1\"/></svg></button><h1><a href=\"/?{}\">EggPool</a></h1><nav class=\"topnav\">{}<button type=\"button\" class=\"topnav-refresh\" data-tooltip=\"Reload this page\" aria-label=\"Reload this page\" onclick=\"window.location.reload()\">↻</button></nav></header>\n<main id=\"dashboard-content\">\n{}\n</main>\n{footer}\n{}<script defer src=\"/static/dashboard.js\"></script>{}\n</body>\n</html>",
         html_escape(title),
         query_component(theme),
         chart_preload,
         query,
         navigation_markup,
         body,
-        html_escape(period),
-        refresh_interval_s,
         refresh_script,
         chart_script
     )

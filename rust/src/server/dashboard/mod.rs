@@ -24,6 +24,25 @@ pub(super) struct ModelFilters {
     availability: Option<String>,
     event_type: Option<String>,
     trace_limit: Option<usize>,
+    /// Grouped-timeseries controls from the `/timeseries` filter form. These
+    /// were previously rendered but never read, so submitting the form
+    /// produced a byte-identical page while the controls looked live. Nested
+    /// rather than a separate parameter so the page helpers stay within the
+    /// clippy argument budget.
+    timeseries: Option<TimeseriesFilters>,
+}
+
+/// Grouped-timeseries controls from the `/timeseries` filter form. These were
+/// previously rendered but never read, so submitting the form produced a
+/// byte-identical page while the controls appeared to be live.
+#[derive(Debug, Default, Clone)]
+pub(super) struct TimeseriesFilters {
+    bucket: Option<String>,
+    group_by: Option<String>,
+    metric: Option<String>,
+    limit: Option<usize>,
+    account: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +81,7 @@ pub(super) struct TimeseriesQuery {
     group_by: Option<String>,
     metric: Option<String>,
     limit: Option<usize>,
+    theme: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,7 +111,7 @@ mod theme;
 
 use api::{
     escape_script_end_tags, grouped_timeseries_json, grouped_timeseries_projection,
-    normalize_period,
+    normalize_period, normalized_bucket, normalized_group_by,
 };
 use format::*;
 use render::{

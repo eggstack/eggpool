@@ -98,7 +98,7 @@ pub(in crate::server::dashboard) fn render_models_page(
         })
         .collect::<Vec<_>>();
     let model_info_warning = if model_info.is_empty() {
-        "<p class=\"empty\" role=\"status\">Model info unavailable: service not attached. Check `app.state.model_info` and server logs.</p>"
+        "<p class=\"empty\" role=\"status\">Model catalog metadata is unavailable. Check the server logs for catalog refresh failures.</p>"
     } else {
         ""
     };
@@ -129,7 +129,7 @@ pub(in crate::server::dashboard) fn render_models_page(
             "No models discovered from configured providers."
         };
         return format!(
-            "<h2>Models</h2><p class=\"empty\" role=\"status\">Model info unavailable: service not attached. Check `app.state.model_info` and server logs.</p>{controls}<section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>"
+            "<h2>Models</h2>{model_info_warning}{controls}<section class=\"panel\"><p class=\"empty\">{empty_message}</p></section>"
         );
     }
     let rows = models
@@ -277,11 +277,12 @@ pub(in crate::server::dashboard) fn render_model_info_detail(
         "source_unavailable" | "source-unavailable" => "pill-source-unavailable",
         _ => "pill-unknown",
     };
+    // A sparse model with a non-sparse status still renders the "fresh" pill
+    // even though the label reads "fresh (sparse)". This used to be an
+    // identity `match` that assigned `status_pill_class` to itself, so the
+    // sparse styling never applied.
     if sparse && !matches!(status, "sparse" | "sparse_new") {
-        status_pill_class = match status_pill_class {
-            "pill-fresh" => "pill-fresh",
-            other => other,
-        };
+        status_pill_class = "pill-sparse";
     }
     let benchmarks = detail.get("benchmarks").and_then(Value::as_array);
     let benchmark_brief = benchmarks.map_or_else(String::new, |rows| {

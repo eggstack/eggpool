@@ -1087,24 +1087,47 @@ label.trace-limit {
     gap: 0.5rem;
     width: auto;
     margin-top: 0;
+    /* A zero flex-basis is required here, not `auto`. With `flex: 1 1 auto`
+       the menu's hypothetical main size is its full content width (13 links
+       plus the theme selector), which exceeds the topbar, so `flex-wrap`
+       broke the line *before* any shrinking happened — the menu took a line
+       by itself and the refresh button wrapped onto a row of its own. With
+       a 0% basis both items fit on the first line; the menu then grows into
+       the free space and wraps its own trailing items internally. */
+    flex: 1 1 0%;
+    min-width: 0;
+  }
+
+  /* The refresh button is a sibling of the menu, so it must never be the
+     item that wraps. `flex-shrink: 0` keeps it on the menu's first row. */
+  .topnav-refresh {
+    flex: 0 0 auto;
   }
 }
 
-/* Heatmap container anchors the absolute-positioned overlay grid. */
+/* Heatmap container anchors the absolute-positioned overlay grid and
+   scrolls the pair together.
+
+   The overlay hitboxes are a pixel-sized CSS grid (13px cells, 3px gaps)
+   registered to the SVG's own coordinates. Letting the SVG scale down with
+   `max-width: 100%` desynced the two: below ~480px the cells shrank to
+   ~0.67x while the overlay kept its 13px track, so hover reported the
+   wrong date and the overlay overflowed the container — which
+   `html { overflow-x: hidden }` then clipped, putting the most recent
+   weeks out of reach. Scrolling instead of scaling keeps the registration
+   exact at every viewport. */
 .heatmap {
   position: relative;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   max-width: 100%;
 }
 
-/* The heatmap SVG carries an explicit `width` attribute derived from
-   the date range (~460px for 180 days). Without `max-width: 100%` it
-   can overflow narrow viewports because the parent .panel scrolls
-   only when its content's intrinsic width exceeds the panel — a fixed
-   inline `width` attribute bypasses that check. */
+/* The SVG must keep its intrinsic width so the overlay stays registered to
+   it. A fixed inline `width` attribute also bypasses intrinsic sizing, which
+   is why the scroll container above is required rather than optional. */
 .heatmap svg {
-  max-width: 100%;
-  height: auto;
+  display: block;
 }
 
 /* SVG cells must not capture hover so the CSS tooltip (anchored to the
@@ -1219,7 +1242,23 @@ label.trace-limit {
   border-bottom-color: var(--card-border);
 }
 
-/* The top navigation sits inside header.topbar at the top of the
+/* A scroll container cannot let an absolutely-positioned tooltip escape
+   vertically: per CSS Overflow, `overflow-y: visible` computes to `auto`
+   as soon as the inline axis scrolls, so `.table-scroll` clips in both
+   axes and a tooltip anchored above the cell was cut off. Render the
+   tooltip over its own row inside the scroll area instead, which keeps it
+   fully visible without a JS positioning layer. */
+.table-scroll [data-tooltip]::after {
+  top: 50%;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+
+.table-scroll [data-tooltip]::before {
+  display: none;
+}
+
+/* Top navigation sits inside header.topbar at the top of the
    viewport, so tooltips anchored to elements inside nav.topnav render
    below their anchor by default to avoid being clipped by the
    viewport's top edge. The data-tooltip-pos="bottom" attribute still
@@ -1227,6 +1266,7 @@ label.trace-limit {
 nav.topnav [data-tooltip]::after {
   top: calc(100% + 8px);
   bottom: auto;
+  transform: translateX(-50%);
 }
 
 nav.topnav [data-tooltip]::before {
@@ -1244,6 +1284,21 @@ nav.topnav [data-tooltip]::before {
 @media (prefers-reduced-motion: reduce) {
   [data-tooltip]::after,
   [data-tooltip]::before {
+    transition: none;
+  }
+
+  /* The chart spinner is an infinite rotation and the burger morphs its
+     bars into an X; both are decorative and have a static equivalent. */
+  .chart-spin {
+    animation: none;
+  }
+
+  .topnav-burger-icon .bar {
+    transition: none;
+  }
+
+  .show-disabled-toggle,
+  .disabled-toggle-icon {
     transition: none;
   }
 }

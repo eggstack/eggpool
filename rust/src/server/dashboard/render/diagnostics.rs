@@ -24,8 +24,18 @@ pub(in crate::server::dashboard) fn render_reliability_page(
         })
         .collect::<String>();
     let retry_attempts: i64 = data.retries.iter().map(|row| row.retry_outcomes).sum();
-    let first_attempt_rate = if attempts > 0 {
-        successes as f64 * 100.0 / attempts as f64
+    // Scoped to the `initial` bucket for the same reason as the overview card:
+    // successes/attempts across every category counted retried requests that
+    // eventually succeeded as first-attempt successes.
+    let (initial_attempts, initial_successes) = data
+        .retries
+        .iter()
+        .filter(|row| row.category == "initial")
+        .fold((0_i64, 0_i64), |(attempts, successes), row| {
+            (attempts + row.attempts, successes + row.successes)
+        });
+    let first_attempt_rate = if initial_attempts > 0 {
+        initial_successes as f64 * 100.0 / initial_attempts as f64
     } else {
         0.0
     };
@@ -74,10 +84,16 @@ pub(in crate::server::dashboard) fn render_reliability_page(
             "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Category</th><th data-priority=\"1\">Attempts</th><th data-priority=\"2\">Retry outcomes</th><th data-priority=\"2\">Successes</th><th data-priority=\"2\">Failures</th><th data-priority=\"3\">Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
         )
     };
+    let pending_subtext = if data.pending_requests == 0 {
+        "oldest — · stale 0"
+    } else {
+        "oldest — · stale count unavailable"
+    };
     format!(
-        "<h2>Reliability</h2>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total upstream attempts in the selected period, including retries.\" data-tooltip-pos=\"bottom\" aria-label=\"Total upstream attempts in the selected period, including retries.\"><h3>Total attempts</h3><p class=\"metric\">{attempts}</p><p class=\"sub\">{period}</p></div><div class=\"card\" data-tooltip=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\"><h3>Success attempts</h3><p class=\"metric\">{successes}</p><p class=\"sub\">first-attempt success rate {first_attempt_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that were retries rather than initial tries.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that were retries rather than initial tries.\"><h3>Retry attempts</h3><p class=\"metric\">{retry_attempts}</p><p class=\"sub\">retry rate {retry_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that ended in failure. The subtext shows average attempt latency.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that ended in failure. The subtext shows average attempt latency.\"><h3>Failed attempts</h3><p class=\"metric\">{failures}</p><p class=\"sub\">avg attempt latency {average_attempt_latency:.1} ms</p></div></section><section class=\"panel\"><h3>Attempts by provider (aggregated)</h3>{attempts_chart}</section><section class=\"cards system-health\"><div class=\"card\" data-tooltip=\"Requests still in progress. Subtext shows the oldest pending age.\" data-tooltip-pos=\"bottom\" aria-label=\"Requests still in progress. Subtext shows the oldest pending age.\"><h3>Pending requests</h3><p class=\"metric\">{}</p><p class=\"sub\">oldest — · stale 0</p></div><div class=\"card\" data-tooltip=\"Active quota or spend reservations for in-flight work.\" data-tooltip-pos=\"bottom\" aria-label=\"Active quota or spend reservations for in-flight work.\"><h3>Active reservations</h3><p class=\"metric\">{}</p><p class=\"sub\">reserved {} · oldest —</p></div><div class=\"card\" data-tooltip=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\" data-tooltip-pos=\"bottom\" aria-label=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\"><h3>Pending window</h3><p class=\"sub\">stale &amp;gt; 15 minutes are flagged for cleanup</p><p class=\"sub\">snapshot is instantaneous; reload to refresh</p></div></section><section class=\"panel\"><h3>Retry distribution</h3>{distribution}</section><section class=\"panel\"><h3>Operational events (summary)</h3>{operational_summary}</section><section class=\"panel\"><h3>Operational events (recent)</h3>{recent_operational_events}</section>",
+        "<h2>Reliability</h2>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total upstream attempts in the selected period, including retries.\" data-tooltip-pos=\"bottom\" aria-label=\"Total upstream attempts in the selected period, including retries.\"><h3>Total attempts</h3><p class=\"metric\">{attempts}</p><p class=\"sub\">{period}</p></div><div class=\"card\" data-tooltip=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that completed successfully. The subtext highlights the first-attempt success rate.\"><h3>Success attempts</h3><p class=\"metric\">{successes}</p><p class=\"sub\">first-attempt success rate {first_attempt_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that were retries rather than initial tries.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that were retries rather than initial tries.\"><h3>Retry attempts</h3><p class=\"metric\">{retry_attempts}</p><p class=\"sub\">retry rate {retry_rate:.1}%</p></div><div class=\"card\" data-tooltip=\"Attempts that ended in failure. The subtext shows average attempt latency.\" data-tooltip-pos=\"bottom\" aria-label=\"Attempts that ended in failure. The subtext shows average attempt latency.\"><h3>Failed attempts</h3><p class=\"metric\">{failures}</p><p class=\"sub\">avg attempt latency {average_attempt_latency:.1} ms</p></div></section><section class=\"panel\"><h3>Attempts by provider (aggregated)</h3>{attempts_chart}</section><section class=\"cards system-health\"><div class=\"card\" data-tooltip=\"Requests still in progress. Subtext shows the oldest pending age.\" data-tooltip-pos=\"bottom\" aria-label=\"Requests still in progress. Subtext shows the oldest pending age.\"><h3>Pending requests</h3><p class=\"metric\">{}</p><p class=\"sub\">{}</p></div><div class=\"card\" data-tooltip=\"Active quota or spend reservations for in-flight work.\" data-tooltip-pos=\"bottom\" aria-label=\"Active quota or spend reservations for in-flight work.\"><h3>Active reservations</h3><p class=\"metric\">{}</p><p class=\"sub\">reserved {} · oldest —</p></div><div class=\"card\" data-tooltip=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\" data-tooltip-pos=\"bottom\" aria-label=\"Explanation of the pending-request snapshot and stale threshold used by the reliability view.\"><h3>Pending window</h3><p class=\"sub\">stale &gt; 15 minutes are flagged for cleanup</p><p class=\"sub\">snapshot is instantaneous; reload to refresh</p></div></section><section class=\"panel\"><h3>Retry distribution</h3>{distribution}</section><section class=\"panel\"><h3>Operational events (summary)</h3>{operational_summary}</section><section class=\"panel\"><h3>Operational events (recent)</h3>{recent_operational_events}</section>",
         dashboard_period_selector(period, theme),
         data.pending_requests,
+        pending_subtext,
         data.active_reservations,
         format_microdollars(data.active_reserved_microdollars),
     )

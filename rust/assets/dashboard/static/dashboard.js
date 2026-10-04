@@ -954,41 +954,31 @@
       const form = forms[i];
       if (form.__eggpoolTimeseriesWired) continue;
       form.__eggpoolTimeseriesWired = true;
-      const onChange = function () {
-        namespace.refreshGroupedTimeseriesChart(form);
-      };
-      const selects = form.querySelectorAll("select");
-      for (let s = 0; s < selects.length; s++) {
-        selects[s].addEventListener("change", onChange);
-      }
+      // The server now reads bucket/group_by/metric/limit/account/model, and
+      // this page's two tables plus the heading are all rendered from the
+      // resulting projection. Refreshing only the chart on `change` (the
+      // previous behaviour) left the chart showing the new grouping while
+      // both tables kept the old rows and the URL carried no filters. Submit
+      // natively so the chart, the tables, the heading, and the URL are all
+      // driven by the same query.
       const accountInput = form.querySelector(
         'input[name="account"], select[name="account"]'
       );
       const modelInput = form.querySelector(
         'input[name="model"], select[name="model"]'
       );
-      if (accountInput && accountInput.tagName === "INPUT") {
-        let lastValue = accountInput.value;
-        accountInput.addEventListener("input", function () {
-          const value = accountInput.value;
+      const textFilter = function (input) {
+        if (!input || input.tagName !== "INPUT") return;
+        let lastValue = input.value;
+        input.addEventListener("input", function () {
+          const value = input.value;
           if (value === lastValue) return;
           lastValue = value;
-          onChange();
+          form.submit();
         });
-      }
-      if (modelInput && modelInput.tagName === "INPUT") {
-        let lastValue = modelInput.value;
-        modelInput.addEventListener("input", function () {
-          const value = modelInput.value;
-          if (value === lastValue) return;
-          lastValue = value;
-          onChange();
-        });
-      }
-      form.addEventListener("submit", function (event) {
-        event.preventDefault();
-        namespace.refreshGroupedTimeseriesChart(form);
-      });
+      };
+      textFilter(accountInput);
+      textFilter(modelInput);
     }
 
     const periodForms = document.querySelectorAll(
@@ -1054,6 +1044,30 @@
           }
         });
       }
+    }
+
+    // Filter forms that carry a `data-auto-submit` select but no period
+    // selector (Events "Type", Bandwidth "Account") are plain GET forms whose
+    // only submit control lives inside <noscript>. The loop above never saw
+    // them, so with scripting enabled changing the select did nothing at all.
+    // Submit the owning form natively on change; these forms already carry
+    // hidden `period` and `theme` inputs, so the navigation preserves
+    // context. Forms that do have a period selector are skipped here and keep
+    // the richer behaviour handled above.
+    const standaloneAutoSubmits = document.querySelectorAll(
+      "form select[data-auto-submit]"
+    );
+    for (let a = 0; a < standaloneAutoSubmits.length; a++) {
+      const autoSelect = standaloneAutoSubmits[a];
+      const owningForm = autoSelect.form;
+      if (!owningForm || owningForm.hasAttribute("data-period-selector")) {
+        continue;
+      }
+      if (autoSelect.__eggpoolStandaloneAutoSubmitWired) continue;
+      autoSelect.__eggpoolStandaloneAutoSubmitWired = true;
+      autoSelect.addEventListener("change", function () {
+        autoSelect.form.submit();
+      });
     }
   };
 

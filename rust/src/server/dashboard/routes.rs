@@ -130,6 +130,7 @@ pub(in crate::server) async fn model_detail_page(
         "models",
         Some(period.to_owned()),
         Some(theme.to_owned()),
+        state.server.dashboard_refresh_interval_s,
         body,
     )
 }
@@ -162,14 +163,26 @@ pub(in crate::server) async fn events_page(
 
 pub(in crate::server) async fn timeseries_page(
     State(state): State<AppState>,
-    Query(query): Query<PeriodQuery>,
+    Query(query): Query<TimeseriesQuery>,
 ) -> Response {
-    dashboard_data_page(
+    dashboard_data_page_with_options(
         &state,
         "Timeseries",
         "timeseries",
         query.period,
         query.theme,
+        false,
+        ModelFilters {
+            timeseries: Some(TimeseriesFilters {
+                bucket: query.bucket,
+                group_by: query.group_by,
+                metric: query.metric,
+                limit: query.limit,
+                account: query.account,
+                model: query.model,
+            }),
+            ..ModelFilters::default()
+        },
     )
     .await
 }
@@ -384,22 +397,35 @@ pub(super) async fn dashboard_data_page_with_options(
     } else {
         std::collections::BTreeMap::new()
     };
+    // The `/timeseries` filter form was rendered with six controls but these
+    // values were hardcoded, so submitting it re-rendered the identical page.
+    // Normalize the submitted controls and drive the projection from them.
+    let ts_filters = model_filters.timeseries.clone().unwrap_or_default();
+    let ts_bucket = normalized_bucket(ts_filters.bucket.as_deref(), period);
+    let ts_group_by =
+        normalized_group_by(ts_filters.group_by.as_deref().unwrap_or("provider_model"));
+    let ts_limit = ts_filters.limit.unwrap_or(12).clamp(1, 25);
+    let ts_metric = ts_filters
+        .metric
+        .as_deref()
+        .filter(|value| matches!(*value, "tokens" | "requests" | "cost" | "errors" | "bytes"))
+        .unwrap_or("tokens");
     let timeseries_projection = if active_nav == "timeseries" {
         match db::DashboardRepository::new(&state.database)
             .grouped_timeseries_json(
                 period.to_owned(),
-                "hour".to_owned(),
-                "provider_model".to_owned(),
-                None,
-                None,
+                ts_bucket.to_owned(),
+                ts_group_by.to_owned(),
+                ts_filters.account,
+                ts_filters.model,
             )
             .await
         {
             Ok((rows, _from_rollups)) if rows.is_empty() => Some(json!({
-                "bucket": "hour",
-                "group_by": "provider_model",
-                "metric": "requests",
-                "limit": 12,
+                "bucket": ts_bucket,
+                "group_by": ts_group_by,
+                "metric": ts_metric,
+                "limit": ts_limit,
                 "source": "empty",
                 "degraded_reason": "rollup_empty",
                 "buckets": [],
@@ -407,13 +433,19 @@ pub(super) async fn dashboard_data_page_with_options(
                 "points": [],
                 "bucket_totals": [],
             })),
-            Ok((rows, from_rollups)) => Some(grouped_timeseries_projection(
-                &rows,
-                "hour",
-                "provider_model",
-                12,
-                from_rollups,
-            )),
+            Ok((rows, from_rollups)) => {
+                let mut projection = grouped_timeseries_projection(
+                    &rows,
+                    ts_bucket,
+                    ts_group_by,
+                    ts_limit,
+                    from_rollups,
+                );
+                if let Some(object) = projection.as_object_mut() {
+                    object.insert("metric".to_owned(), Value::String(ts_metric.to_owned()));
+                }
+                Some(projection)
+            }
             Err(error) => {
                 eprintln!("dashboard timeseries read failed: {error}");
                 return degraded("dashboard data unavailable");
@@ -480,6 +512,7 @@ pub(super) async fn dashboard_data_page_with_options(
         active_nav,
         Some(period.to_owned()),
         Some(theme.to_owned()),
+        state.server.dashboard_refresh_interval_s,
         body,
     )
 }

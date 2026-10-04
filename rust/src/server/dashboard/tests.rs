@@ -86,6 +86,72 @@ fn theme_variables_match_dashboard_translation_contract() {
 }
 
 #[test]
+fn every_selectable_theme_resolves_to_a_full_variable_set() {
+    // `default` is the first entry in the theme picker but has no TOML of its
+    // own. It used to serve an empty stylesheet, and because dashboard.css
+    // declares no custom properties of its own that left the whole page
+    // unstyled (and the SVG watermark on its initial fill).
+    for name in super::THEME_NAMES {
+        let css = super::theme_variables(name);
+        assert!(
+            css.starts_with(":root {"),
+            "theme {name:?} produced no :root block"
+        );
+        assert!(
+            css.contains("--page-bg:")
+                && css.contains("--card-bg:")
+                && css.contains("--page-text:"),
+            "theme {name:?} is missing a core variable"
+        );
+    }
+    assert_eq!(
+        super::theme_variables("default"),
+        super::theme_variables(super::DEFAULT_THEME),
+        "the `default` alias must match the configured default theme"
+    );
+    // A theme name outside the allowlist must still resolve rather than
+    // degrade to an unstyled page.
+    assert_eq!(super::selected_theme("not-a-theme"), super::DEFAULT_THEME);
+}
+
+#[test]
+fn shell_navigation_only_ever_links_real_periods() {
+    // The shell used to substitute sentinel values ("runtime", "recent") for
+    // the period, which every page rejected with 400 — so on /runtime and
+    // /traces all 13 nav links, the logo, and the theme selector were dead.
+    for active_nav in ["runtime", "traces", "overview", "accounts"] {
+        let html = super::render::render_dashboard_layout(
+            "Page",
+            active_nav,
+            "24h",
+            "Nord",
+            15,
+            "<p>body</p>".to_owned(),
+            false,
+        );
+        // No non-canonical period token may appear in any generated link.
+        for bad in ["period=runtime", "period=recent"] {
+            assert!(
+                !html.contains(bad),
+                "{active_nav} shell emitted a rejected period token: {bad}"
+            );
+        }
+        assert!(html.contains("period=24h"));
+    }
+}
+
+#[test]
+fn traces_form_submits_a_canonical_period() {
+    // The traces page passed "recent" as the period argument, which landed in
+    // the limit form's hidden input and the period selector, so Apply always
+    // returned 400.
+    let html = super::render_traces_page(&crate::db::DashboardData::default(), "24h", "Nord", 50);
+    assert!(html.contains("name=\"period\" value=\"24h\""));
+    assert!(!html.contains("value=\"recent\""));
+    assert!(html.contains("<option value=\"24h\" selected=\"selected\">"));
+}
+
+#[test]
 fn timeseries_chart_contract_uses_a_canvas_even_without_rows() {
     let empty = serde_json::json!({
         "bucket": "hour",
@@ -214,7 +280,11 @@ fn model_detail_uses_canonical_info_and_escapes_values() {
     assert!(html.contains("&lt;display&gt;"));
     assert!(html.contains("&lt;catalog&gt;"));
     assert!(!html.contains("<display>"));
-    assert!(html.contains("pill-fresh"));
+    // A sparse model with a non-sparse status takes the sparse pill; the label
+    // still carries the underlying status, so both must be present.
+    assert!(html.contains("pill-sparse"));
+    assert!(html.contains("fresh (sparse)"));
+    assert!(!html.contains("pill-fresh"));
     assert!(html.contains("Last seen"));
 }
 

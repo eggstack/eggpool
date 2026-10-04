@@ -9,6 +9,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `default` theme no longer renders an unstyled dashboard.** `default` is
+  the first entry in the theme picker but had no palette of its own, so
+  `/static/theme.css?theme=default` served an empty stylesheet. Because
+  `dashboard.css` declares no custom properties itself, every `var()` went
+  invalid: panels lost their backgrounds, borders and status colors collapsed,
+  and the `.egg-background` watermark fell back to the SVG initial fill and
+  painted a solid shape over the page. `default` is now an alias for the
+  configured default theme, and an unrecognised theme name resolves to it
+  rather than to an empty body.
+
+- **The Runtime and Traces pages are no longer navigation dead ends.** The page
+  shell substituted sentinel period values (`runtime`, `recent`) for those two
+  views and used them to build the navigation links, the brand link, the theme
+  form, and the Traces limit form. Every one of those targets rejected the value
+  and answered `400 {"detail":"Invalid period"}`, so all thirteen nav links, the
+  logo, the theme selector, and the Traces "Apply" button were dead. The shell
+  now always carries a canonical period.
+
+- **The footer no longer advertises polling that does not happen.** Every page
+  printed `auto-refresh 15s`, but only Overview, Runtime, and Cache ever
+  received the refresh script. The claim is now emitted only where the script is,
+  and the interval comes from `dashboard.refresh_interval_s` instead of a
+  hardcoded `15`, so the Runtime and Cache pages honour the configured value.
+
+- **The Timeseries filter controls now do something.** The six rendered
+  controls (bucket, group by, metric, limit, account, model) were ignored
+  server-side — submitting them produced a byte-identical page — while the
+  client script suppressed the form submit and refreshed only the chart, so the
+  chart showed the new grouping while both tables kept the old rows and the URL
+  carried no filters. The route now normalizes and honors the controls, the
+  selects, canvas, and heading render from the projection that was actually
+  built, submitting navigates, and the period selector carries the active
+  filters across.
+
+- **The Events and Bandwidth filter selects are no longer inert.** Both forms
+  carried a `data-auto-submit` select but no period selector, and their only
+  submit control lived inside `<noscript>`, so with scripting enabled changing
+  the select did nothing. Those forms now submit on change.
+
+- **"First-attempt success" measures first attempts.** The card divided total
+  successes by total attempts, so a request that failed twice and then succeeded
+  on its third try counted as a first-attempt success — contradicting the card's
+  own tooltip. Both the Overview and Reliability views now use the `initial`
+  attempt bucket, and show `—` when the period has no first attempts.
+
+- **Missing latency is no longer reported as `0.0 ms`.** Time-to-first-byte and
+  the P50/P99 percentiles are undefined without streamed requests, but the
+  summary coalesced "none" to zero, so a quiet period rendered as an
+  instant-looking `Avg TTFT 0.0 ms / P50 0.0 ms · P99 0.0 ms`. The card now
+  shows `—` and says there were no streamed requests.
+
+- **The Overview cache-hit card is no longer permanently `—`.** It was a
+  hardcoded placeholder with a subtext promising an estimate. It now computes
+  cache reads as a share of total input, and its label, subtext, and tooltip all
+  describe that summary-level figure and point at the Cache page for the
+  protocol-aware rate.
+
+- **The Reliability pending subtext no longer asserts `stale 0`
+  unconditionally.** It now matches the Overview branch, which reports the stale
+  count only when there are no pending requests.
+
+- **The Models page no longer exposes an internal field name.** An empty
+  catalog, and the empty-list branch, printed
+  ``Check `app.state.model_info` and server logs`` — Python-era vocabulary in
+  the Rust runtime. The empty-list branch also blamed the catalog service even
+  when filters simply matched nothing; it now uses the computed warning.
+
+- **Sparse models no longer keep non-sparse styling.** A `match` that assigned
+  the status pill class to itself meant a sparse model still rendered the
+  `fresh` pill while its label read `fresh (sparse)`.
+
+- **A double-escaped entity no longer prints as literal text.** The Reliability
+  pending-window note rendered `&amp;gt;`, which the browser decoded once and
+  displayed as the characters `&gt;`.
+
+- **The Timeseries page had two panels with the same heading.** The grouped
+  detail table is now labelled distinctly from the chart panel.
+
+- **Heatmap tooltips can no longer report the wrong date.** The pixel-sized
+  overlay grid was pinned to unscaled coordinates while the SVG scaled down with
+  `max-width: 100%`, so below roughly 480px every hitbox drifted off its cell and
+  the most recent weeks overflowed the container. The heatmap now scrolls as a
+  unit instead of scaling, keeping the registration exact at any width.
+
+- **Tooltips inside scrolling tables are no longer clipped.** A scroll container
+  cannot let an absolutely positioned tooltip escape vertically, so tooltips
+  anchored above a cell were cut off with no way to scroll to them. They now
+  render over their own row.
+
+- **Theme page and card surfaces are forced opaque.** A theme-supplied alpha
+  channel on a consumed background key (for example `plum`'s `#27273DE2`) let
+  the canvas show through the page and card fills.
+
+- **`prefers-reduced-motion` now covers more than tooltips.** The infinite chart
+  spinner, the burger's bar-to-X morph, and the disabled-account toggle
+  transitions are gated too.
+
 - **SSE keep-alive frames no longer abort a stream.** An empty `data` buffer
   (the common provider heartbeat `data:\n\n`) is now a no-op frame instead of
   a malformed-event abort, in both the public decoder and native observation.
