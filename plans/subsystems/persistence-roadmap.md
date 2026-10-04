@@ -414,7 +414,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: ready
+Status: active
 
 Implementation plan:
 
@@ -506,4 +506,4 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
 | 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
 | 009 — M008 documentation reconciliation corrective pass | closed | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | plans/closure/persistence/009-status.md | no runtime/hardware blocker; M010 remains eligible |
-| 010 — control/projection storage boundary architecture investigation | ready | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | hard dependency M008 closure satisfied; M009 is soft/parallel; no production split authorized |
+| 010 — control/projection storage boundary architecture investigation | active | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | hard dependency M008 closure satisfied; M009 is closed; no production split authorized |

@@ -52,7 +52,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M010 — control/projection storage boundary architecture investigation | ready | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Hard: M008 closure accepted. M009 is closed. Investigation/test-only prototype only; any production split requires ADR acceptance and separate plans. |
 
 
 
@@ -60,6 +59,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| Persistence | M010 — control/projection storage boundary architecture investigation | active | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Architecture investigation/test-only prototype; zero production storage split. |
 
 
 ## Blocked work
