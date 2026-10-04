@@ -11,7 +11,7 @@ Long-term references:
 Related ADRs:
 
 - M008 required no ADR because PERSIST/EXTRA was qualification-only; it is now closed rejected and production remains WAL/NORMAL.
-- M010 investigates a possible control/outbox/analytics storage boundary. No split-storage ADR is accepted at start. If M010 converges on a viable contract it may create ADR-0002 with status proposed only; production adoption still requires explicit acceptance and separate implementation milestones.
+- M010 investigated a possible control/outbox/analytics storage boundary and rejected a split under the current history/outage contract. No split-storage ADR was proposed. A future investigation requires an explicit finite history-retention and prolonged-analytics-outage policy before an implementation can be considered.
 
 ## 1. Purpose and ownership boundary
 
@@ -96,7 +96,7 @@ Request publication/finalization continue to own their current transactions. Det
 - M007 is closed rejected after Pi 5/MMC qualification: its second PASSIVE worker removed foreground latency but failed WAL progress/convergence. This is the hard evidence dependency for M008.
 - M008 has no remaining hard dependency. It preserves one connection/gate/worker and tests a different SQLite journal architecture under a non-default qualification feature. Physical Linux/aarch64 Pi 5-class ext4/MMC evidence is an operational closure dependency, not an implementation blocker.
 - M008 is closed rejected. M009 is a documentation-only corrective pass and has no runtime dependency.
-- M010 is dependency-ready from M008's accepted physical evidence. It is an architecture investigation only; M009 is a soft parallel dependency. A production control/outbox/analytics split still requires a proposed/accepted ADR and separate implementation/physical-qualification milestones.
+- M010 has completed its technical investigation and is closing rejected after the schema/index/consumer inventory, failure and backup/read-plane analysis, and isolated transaction-shape prototype. No registered successor depends on it. Any future split remains unready until the product contract explicitly resolves finite history retention and analytics-outage admission behavior; a separate architecture/ADR and implementation/physical-qualification plan would then be required.
 
 ## 7. Milestones
 
@@ -414,7 +414,7 @@ Exit conditions:
 
 Class: infrastructure
 
-Status: active
+Status: closing
 
 Implementation plan:
 
@@ -491,7 +491,7 @@ Run strict formatting/clippy, default and no-default serial workspace suites, an
 
 ## 11. Completion definition
 
-This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, M007 rejected a separate PASSIVE worker, and M008 rejected PERSIST/EXTRA after physical Pi 5/MMC qualification. Production remains WAL/NORMAL. M009 reconciled current documentation and is closed; M010 is the active architecture investigation: derive whether a minimal correctness control database plus durable outbox and replayable analytics/history projection can reduce critical-path writes without weakening retry, finalization, recovery, backup, bounded-resource, or API semantics. Neither milestone changes production storage.
+This roadmap remains active while the foreground SQLite checkpoint/storage tail is unresolved. M004 rejected timer-only scheduling, M003 rejected same-gate event-assisted scheduling, M007 rejected a separate PASSIVE worker, and M008 rejected PERSIST/EXTRA after physical Pi 5/MMC qualification. Production remains WAL/NORMAL. M009 reconciled current documentation and is closed; M010 is closing with the control/outbox/analytics split rejected under the current history/outage contract. No successor is registered or promoted. Any further split work first needs an explicit product decision on finite history retention and request admission during prolonged analytics outages, followed by a separately registered plan.
 
 ## 12. Milestone status
 
@@ -506,4 +506,4 @@ This roadmap remains active while the foreground SQLite checkpoint/storage tail 
 | 007 — dedicated checkpointer qualification experiment | closed — rejected by Pi 5/MMC WAL progress/convergence gates; qualification-only implementation not adopted | plans/implementation/persistence/007-dedicated-checkpointer-qualification-experiment.md | plans/closure/persistence/007-pi5-qualification.md | none; M008 is the separately bounded successor experiment |
 | 008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA rejected on request-p95 gates; production remains WAL/NORMAL | plans/implementation/persistence/008-persist-journal-mode-qualification-and-write-amplification.md | plans/closure/persistence/008-status.md | none |
 | 009 — M008 documentation reconciliation corrective pass | closed | plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md | plans/closure/persistence/009-status.md | no runtime/hardware blocker; M010 remains eligible |
-| 010 — control/projection storage boundary architecture investigation | active | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | hard dependency M008 closure satisfied; M009 is closed; no production split authorized |
+| 010 — control/projection storage boundary architecture investigation | closing — split rejected under current history/outage contract | plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md | — | no successor registered; future split work needs an explicit retention/outage policy |

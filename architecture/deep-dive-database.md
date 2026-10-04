@@ -2,6 +2,8 @@
 
 Back to [Architecture](README.md). See also [overview.md §9](overview.md), [Runtime](deep-dive-runtime.md), and [Background](deep-dive-background.md).
 
+The completed control/projection storage investigation, including the schema-54 ownership census and the test-only transaction-shape result, is recorded in [Persistence M010](persistence-control-projection-investigation.md). It rejects a production split under the current history and bounded-outage contract; WAL/NORMAL remains the production configuration.
+
 ## Ownership
 
 `rust/src/db/` is the five-file persistence boundary: `connection.rs` (serialized `Database` gate, caller-owned transactions), `migrations.rs` (checksum-validated runner), `repositories.rs` (typed account/catalog/model/request/ping/dashboard/usage access), `mod.rs` (facade), and feature-gated `qualification.rs` (dependency-free tooling-only in-memory collector — `std` + `serde` + `TransactionKind` only, no new Cargo deps — compiled only with non-default `qualification-db-diagnostics`). `db/` owns only the `backup_to` snapshot primitive; orchestration lives in `operations/backup.rs`, and crash repair lives in `runtime_lifecycle/recovery.rs` plus coordinator reconciliation (`coordinator/reconciliation.rs`). `Database::open` is pinned to `tokio-rusqlite 0.8.0` (`bundled`, `backup` features) over `rusqlite 0.40.2` / `libsqlite3-sys 0.38.2`. `Database::open` never creates directories: server startup (`server::run_with_digest`) and CLI maintenance opens (`runtime::open_maintenance_database` when the database may be created) ensure the database parent first via `operations::paths::ensure_parent_dir`, which creates missing parents and never modifies existing directories (installers own ownership and mode).

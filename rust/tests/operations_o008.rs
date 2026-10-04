@@ -298,6 +298,12 @@ async fn verified_replacement_self_checks_and_preserves_other_files() {
     let database = root.path().join("usage.sqlite3");
     let old = b"old executable";
     fs::write(&executable, old).expect("old executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o600))
+            .expect("private old executable mode");
+    }
     fs::write(&config, b"config = 1\n").expect("config");
     fs::write(&database, b"database bytes\n").expect("database");
     let target = ReleaseVersion::parse("0.7.5").expect("version");
@@ -326,6 +332,12 @@ async fn bad_digest_and_non_matching_version_fail_without_replacement() {
     let root = tempfile::tempdir().expect("temp root");
     let executable = root.path().join("eggpool");
     fs::write(&executable, b"old executable").expect("old executable");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o600))
+            .expect("private old executable mode");
+    }
     let target = ReleaseVersion::parse("0.7.5").expect("version");
     let service = UpdateService::new().expect("service");
     let error = service
