@@ -44,7 +44,7 @@ pair is a known numbering accident.
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
-| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M009/M010 ready — docs reconciliation + control/projection architecture investigation | M008 closure accepted. M009 and M010 may run in parallel; M010 is research/prototype only and cannot authorize production split storage. |
+| Persistence | active | `plans/subsystems/persistence-roadmap.md` | M010 ready — control/projection architecture investigation | M008 closure accepted; M009 is closed. M010 is research/prototype only and cannot authorize production split storage. |
 | Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
@@ -52,7 +52,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Persistence | M010 — control/projection storage boundary architecture investigation | ready | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Hard: M008 closure accepted. Soft: M009 may run in parallel. Investigation/test-only prototype only; any production split requires ADR acceptance and separate plans. |
+| Persistence | M010 — control/projection storage boundary architecture investigation | ready | `plans/implementation/persistence/010-control-outbox-analytics-storage-architecture-investigation.md` | Hard: M008 closure accepted. M009 is closed. Investigation/test-only prototype only; any production split requires ADR acceptance and separate plans. |
 
 
 
@@ -60,7 +60,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Persistence | M009 — M008 documentation reconciliation corrective pass | active | `plans/implementation/persistence/009-m008-documentation-reconciliation-corrective-pass.md` | Documentation/tooling only; M010 may proceed independently. |
 
 
 ## Blocked work
@@ -77,6 +76,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Persistence M009 — M008 documentation reconciliation corrective pass | closed — current lifecycle docs agree; focused guard 3 passed and full tooling suite 164 passed, 3 skipped; zero production/source/schema diff; M010 remains ready | `plans/closure/persistence/009-status.md`, implementation `4bff728c` |
 | Persistence M008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA failed request-p95 gates on Pi 5/MMC; worker-I/O proxy was about 2.04× control; production remains WAL/NORMAL; no registered successor unblocked | `plans/closure/persistence/008-status.md`, implementation `fac930b9`, physical corpus `artifacts/qualification/m008-pi5-2026-10-03/` |
 | Routing selection M003 — bounded exact affinity LRU | closed — slot-indexed exact LRU preserves behavior; 4,096-entry Pi 5 p95 improved about 90×; full default/no-default, strict Clippy, and fmt pass | `plans/closure/routing-selection/003-status.md`, implementation `dc6ea713`
 | Routing selection M002 — semantic-affinity exact-LRU cost qualification | closed — Pi 5 evidence showed O(n) hit cost reaches 92.056 μs p95 at 4,096 entries; M003 follow-up qualified and closed | `plans/closure/routing-selection/002-affinity-lru-qualification.md`
