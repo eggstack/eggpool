@@ -93,3 +93,106 @@ async fn blank_timeseries_filters_mean_no_filter() {
 
     database.close().await.expect("database closes");
 }
+
+/// A model whose per-status group rows straddle the projection's 100-row limit
+/// used to be reported with only part of its traffic: the limit was applied to
+/// `(entity, status)` groups instead of to whole entities.
+#[tokio::test]
+async fn observability_projection_never_reports_a_partially_counted_model() {
+    let directory = tempfile::tempdir().expect("temporary dashboard database");
+    let database = open_database(&directory, "truncation").await;
+    // More `(model, status)` groups than the projection keeps. The split model
+    // sorts last among the one-request groups, so a group-wise limit drops its
+    // single `segmented` request while keeping its bulk `not_collected` group.
+    let model_count = 150_i64;
+    let bulk = 200_i64;
+    let split_model = "model-zzz-split";
+    database
+        .call(move |connection| {
+            for index in 0..model_count {
+                let model = format!("model-{index:03}");
+                connection.execute(
+                    &format!("INSERT INTO models (model_id) VALUES ('{model}')"),
+                    [],
+                )?;
+                connection.execute(
+                    &format!(
+                        "INSERT INTO requests (account_id, model_id, provider_id, upstream_protocol, status, segmentation_status, stable_prefix_estimated_tokens, volatile_estimated_tokens, started_at) \
+                         VALUES (1, '{model}', 'provider-a', 'openai', 'completed', 'segmented', 10, 5, datetime('now','-1 minute'))"
+                    ),
+                    [],
+                )?;
+            }
+            connection.execute(
+                &format!("INSERT INTO models (model_id) VALUES ('{split_model}')"),
+                [],
+            )?;
+            connection.execute(
+                &format!(
+                    "INSERT INTO requests (account_id, model_id, provider_id, upstream_protocol, status, segmentation_status, started_at) \
+                     VALUES (1, '{split_model}', 'provider-a', 'openai', 'completed', 'segmented', datetime('now','-1 minute'))"
+                ),
+                [],
+            )?;
+            for _ in 0..bulk {
+                connection.execute(
+                    &format!(
+                        "INSERT INTO requests (account_id, model_id, provider_id, upstream_protocol, status, segmentation_status, stable_prefix_estimated_tokens, volatile_estimated_tokens, started_at) \
+                         VALUES (1, '{split_model}', 'provider-a', 'openai', 'completed', 'not_collected', 10, 5, datetime('now','-1 minute'))"
+                    ),
+                    [],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .expect("fixture rows insert");
+
+    let stats = DashboardRepository::new(&database)
+        .observability_stats("24h")
+        .await
+        .expect("observability stats project");
+    let per_model = &stats["canonical_request_segmentation"]["per_model_status"];
+    let split = &per_model[split_model];
+    assert_eq!(
+        split["total_requests"].as_i64(),
+        Some(bulk + 1),
+        "a retained model is reported in full, not up to the group limit: {split}"
+    );
+    assert_eq!(split["not_collected"].as_i64(), Some(bulk));
+    assert_eq!(split["segmented"].as_i64(), Some(1));
+    assert_eq!(
+        split["stable_prefix_estimated_tokens"].as_i64(),
+        Some(10 * bulk)
+    );
+
+    // No retained entity may be a partial count: its statuses always sum back
+    // to its total.
+    for (model, entry) in per_model.as_object().expect("per_model_status object") {
+        let statuses: i64 = [
+            "segmented",
+            "not_collected",
+            "empty_request",
+            "parse_failure",
+        ]
+        .iter()
+        .map(|status| {
+            entry
+                .get(*status)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0)
+        })
+        .sum();
+        assert_eq!(
+            entry["total_requests"].as_i64(),
+            Some(statuses),
+            "model {model} is reported partially"
+        );
+    }
+
+    let per_provider = &stats["canonical_request_segmentation"]["per_provider_status"];
+    let pair = &per_provider["provider-a->openai"];
+    assert_eq!(pair["segmented"].as_i64(), Some(model_count + 1));
+    assert_eq!(pair["not_collected"].as_i64(), Some(bulk));
+    database.close().await.expect("database closes");
+}

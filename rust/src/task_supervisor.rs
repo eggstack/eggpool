@@ -537,8 +537,16 @@ impl TaskCallbackRegistry {
                         model_info_observation_days: config.model_info.known_ttl_s,
                         max_rows_per_batch: config.maintenance.max_rows_per_batch,
                         max_batches: config.maintenance.max_batches_per_tick,
+                        // `Duration::from_secs_f64` panics on a non-finite or
+                        // negative argument. `Config::validate` already rejects
+                        // those, and the clamps below keep the retention task
+                        // fail-safe if an unvalidated candidate ever reaches it.
                         max_tick_duration: Duration::from_secs_f64(
-                            config.maintenance.max_tick_duration_ms.max(1.0) / 1000.0,
+                            config
+                                .maintenance
+                                .max_tick_duration_ms
+                                .clamp(1.0, 86_400_000.0)
+                                / 1000.0,
                         ),
                     };
                     database

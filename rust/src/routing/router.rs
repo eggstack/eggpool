@@ -13,13 +13,14 @@ use crate::{
     catalog::ModelCatalogCache,
     health::{BackoffReason, HealthManager, ModelQuarantine},
     quota::QuotaEstimator,
+    wire::ir::CanonicalUsage,
 };
 
 use super::{
     claim::{self, ClaimError, SelectionClaim},
     eligibility::{
         self, EligibilityPolicy, FairnessMode, FairnessScope, RoutingCandidate, RoutingPlan,
-        RoutingRequestFacts,
+        RoutingRequestFacts, epoch_seconds,
     },
     fairness::{
         DeterministicFairnessRandom, FairnessDecision, FairnessKey, FairnessRandom, FairnessRotor,
@@ -464,6 +465,36 @@ impl RoutingRouter {
         if let Some(health) = self.state.health.as_ref() {
             health.record_success(claim.account_name(), Some(claim.canonical_model_id()));
         }
+    }
+
+    /// Fold one completed attempt's usage into the account's rolling quota
+    /// window.
+    ///
+    /// The estimator only ever sees usage recorded here, so without this call
+    /// the rolling window stayed empty for a whole process lifetime:
+    /// `quota_score` never moved off its empty-window baseline and the hard-cap
+    /// admission check had nothing to compare. Tokens are recorded on the same
+    /// clock the scorer reads.
+    pub fn record_usage(&self, claim: &SelectionClaim, usage: &CanonicalUsage) {
+        let bounded = |value: Option<u64>| {
+            value
+                .and_then(|value| i64::try_from(value).ok())
+                .unwrap_or_default()
+        };
+        let tokens = bounded(usage.input_tokens)
+            .saturating_add(bounded(usage.output_tokens))
+            .saturating_add(bounded(usage.cache_read_input_tokens))
+            .saturating_add(bounded(usage.cache_write_input_tokens));
+        self.state.estimator.record_usage(
+            claim.account_name(),
+            tokens,
+            // No attempt carries cost provenance, so none is invented here. A
+            // zero cost contributes tokens to the rolling window and leaves the
+            // per-token cost estimate alone.
+            0,
+            Some(claim.canonical_model_id()),
+            epoch_seconds() as f64,
+        );
     }
 
     /// Apply the bounded, typed portion of C005 effects available at the M5

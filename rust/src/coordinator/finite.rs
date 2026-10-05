@@ -1172,6 +1172,9 @@ impl FiniteCoordinator {
                             Instant::now(),
                         );
                         self.router.record_success(&published.claim);
+                        if let Some(usage) = decoded.usage.as_ref() {
+                            self.router.record_usage(&published.claim, usage);
+                        }
                         let client_body = decoded
                             .client_body
                             .as_ref()
@@ -1423,6 +1426,9 @@ impl FiniteCoordinator {
                         Instant::now(),
                     );
                     self.router.record_success(&published.claim);
+                    if let Some(usage) = decoded.usage.as_ref() {
+                        self.router.record_usage(&published.claim, usage);
+                    }
                     let client_body = decoded
                         .client_body
                         .as_ref()

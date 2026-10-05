@@ -8,7 +8,7 @@ mod router;
 pub use claim::{ClaimError, ClaimTransition, SelectionClaim, SelectionSnapshot};
 pub use eligibility::{
     EligibilityPolicy, FairnessMode, FairnessScope, LocalQuotaMode, RoutingCandidate,
-    RoutingExclusion, RoutingPlan, RoutingRequestFacts, ThinkingRequirement,
+    RoutingExclusion, RoutingPlan, RoutingRequestFacts, ThinkingRequirement, epoch_seconds,
 };
 pub use fairness::{
     DeterministicFairnessRandom, FAIRNESS_KEY_HARD_CAP, FairnessDecision, FairnessKey,

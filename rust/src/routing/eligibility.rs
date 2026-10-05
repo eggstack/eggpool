@@ -27,6 +27,20 @@ pub struct RoutingRequestFacts {
     pub now: i64,
 }
 
+/// The wall clock routing facts are stamped with.
+///
+/// Quota windows, catalog freshness, and cost observations all have to share
+/// one clock: a scorer reading a different base than the one the observer
+/// stamped cannot drain a rolling window, and hard-cap admission then judges a
+/// different window than the score reports. Returns 0 only if the host clock is
+/// before the Unix epoch.
+#[must_use]
+pub fn epoch_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs() as i64)
+}
+
 impl RoutingRequestFacts {
     pub fn new(model_id: impl Into<String>) -> Self {
         Self {
@@ -255,6 +269,7 @@ pub fn build_eligible_candidates(
         &names,
         active_requests,
         facts.projected_tokens.max(0),
+        facts.now as f64,
     );
     let mut scored = Vec::with_capacity(eligible.len());
     for (mut candidate, score) in eligible.into_iter().zip(scores) {

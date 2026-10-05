@@ -92,6 +92,7 @@ impl QuotaFairScorer {
         active_requests: &BTreeMap<String, i64>,
         projected_tokens: &BTreeMap<String, i64>,
         health_penalties: &BTreeMap<String, f64>,
+        now: f64,
     ) -> Vec<RoutingScore> {
         let snapshots = estimator.snapshot(account_names);
         let mut scores = Vec::with_capacity(account_names.len());
@@ -106,6 +107,7 @@ impl QuotaFairScorer {
                 *active_requests.get(name).unwrap_or(&0),
                 *projected_tokens.get(name).unwrap_or(&0),
                 *health_penalties.get(name).unwrap_or(&0.0),
+                now,
             ));
         }
         scores
@@ -125,6 +127,7 @@ impl QuotaFairScorer {
         account_names: &[&str],
         active_requests: &BTreeMap<String, i64>,
         projected_tokens: i64,
+        now: f64,
     ) -> Vec<RoutingScore> {
         let snapshots = estimator.snapshot_ordered(account_names.iter().copied());
         let mut scores = Vec::with_capacity(account_names.len());
@@ -139,6 +142,7 @@ impl QuotaFairScorer {
                 active_requests.get(*name).copied().unwrap_or(0),
                 projected_tokens,
                 0.0,
+                now,
             ));
         }
         scores
@@ -188,11 +192,14 @@ impl QuotaFairScorer {
         active_requests: i64,
         projected_tokens: i64,
         health_penalty: f64,
+        now: f64,
     ) -> RoutingScore {
-        let now = snapshot
-            .quota
-            .persisted_snapshot
-            .map_or(0.0, |snapshot| snapshot.loaded_at);
+        // `now` is the request's own clock, the same one the admission check in
+        // `is_within_limits` uses. Reading it from the hydration timestamp
+        // instead froze every rolling window at the moment the estimator was
+        // last loaded: on the production path, where no snapshot is
+        // persisted, `now` was `0.0`, so a live window kept every observation
+        // it had ever recorded and `utilization` never fell again.
         let p5 = snapshot.quota.utilization(
             QuotaWindowName::FiveHour,
             snapshot
@@ -439,10 +446,11 @@ mod ordered_scoring_tests {
                         &legacy_active,
                         &legacy_projected,
                         &BTreeMap::new(),
+                        0.0,
                     );
                     let borrowed: Vec<&str> = names.iter().map(String::as_str).collect();
                     let ordered =
-                        scorer.score_ordered(&estimator, &borrowed, &active, projected_tokens);
+                        scorer.score_ordered(&estimator, &borrowed, &active, projected_tokens, 0.0);
                     assert_scores_equal(&public, &ordered);
                     let ghost = ordered.last().expect("ghost score");
                     assert_eq!(ghost.account_name, "ghost-999");

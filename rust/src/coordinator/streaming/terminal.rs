@@ -308,6 +308,10 @@ pub(crate) fn store_forwarded_terminal(
         .as_mut()
         .and_then(|stream| stream.wire.as_mut())
         .and_then(|wire| wire.usage());
+    // No further canonical event can arrive on this path, so a client-stream
+    // terminator the encoder still holds back belongs to this ending rather
+    // than to transport EOF, which this path never reaches.
+    let terminator = flush_client_terminator(parts);
     match terminal {
         ForwardedTerminal::Completed => {
             wire_resolver.accept(
@@ -319,6 +323,9 @@ pub(crate) fn store_forwarded_terminal(
             );
             if let Some(claim) = parts.claim.as_ref() {
                 router.record_success(claim);
+                if let Some(usage) = usage.as_ref() {
+                    router.record_usage(claim, usage);
+                }
             }
             parts.diagnostics_record(
                 OUTCOME_COMPLETED_CANONICAL,
@@ -332,7 +339,7 @@ pub(crate) fn store_forwarded_terminal(
             parts.terminal_stored = true;
             parts.data = data;
             parts.exhausted = true;
-            None
+            terminator.map(Ok)
         }
         ForwardedTerminal::Incomplete | ForwardedTerminal::Failed => {
             let failed = matches!(terminal, ForwardedTerminal::Failed);
@@ -354,9 +361,26 @@ pub(crate) fn store_forwarded_terminal(
             parts.exhausted = true;
             // The provider terminal event was already forwarded; the stream
             // ends cleanly from the caller's view.
-            None
+            terminator.map(Ok)
         }
     }
+}
+
+/// Client bytes a translated client-stream encoder is still holding back.
+///
+/// The Messages grammar requires `message_delta` to precede `message_stop`, so
+/// the encoder records the stop reason and emits that pair only once no further
+/// canonical event can arrive. Both stream endings have to release it: a
+/// provider terminal already forwarded downstream, and transport EOF.
+fn flush_client_terminator(
+    parts: &mut PendingStreamFinalizationParts,
+) -> Option<axum::body::Bytes> {
+    parts
+        .stream
+        .as_mut()
+        .and_then(|stream| stream.wire.as_mut())
+        .and_then(|wire| wire.flush_client_stream().ok())
+        .filter(|bytes| !bytes.is_empty())
 }
 
 pub(crate) fn store_eof(
@@ -392,6 +416,13 @@ pub(crate) fn store_eof(
                             stream.events_forwarded = stream.events_forwarded.saturating_add(1);
                             tail_bytes.extend_from_slice(&bytes);
                         }
+                    }
+                    // No further canonical event can arrive, so a client-stream
+                    // terminator the encoder is still holding belongs here.
+                    if let Ok(bytes) = wire.flush_client_stream()
+                        && !bytes.is_empty()
+                    {
+                        tail_bytes.extend_from_slice(&bytes);
                     }
                     if !tail_bytes.is_empty() {
                         stream.client_bytes = stream.client_bytes.saturating_add(tail_bytes.len());
@@ -448,6 +479,9 @@ pub(crate) fn store_eof(
             );
             if let Some(claim) = parts.claim.as_ref() {
                 router.record_success(claim);
+                if let Some(usage) = tail_usage.as_ref() {
+                    router.record_usage(claim, usage);
+                }
             }
             let outcome = if compat {
                 OUTCOME_COMPLETED_COMPATIBILITY

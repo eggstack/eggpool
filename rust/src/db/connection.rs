@@ -1355,7 +1355,18 @@ impl Database {
                         connection,
                         "requests",
                         "id",
-                        "status != 'pending' AND started_at < datetime('now', ?1)",
+                        // `reservations.request_id` is a foreign key into
+                        // `requests(id)`, so a request may only be deleted once
+                        // it has no remaining reservation rows. Deleting the
+                        // oldest request ids by age alone can select rows whose
+                        // reservations are not in the same `row_limit` batch,
+                        // which fails the whole tick with an FK error and
+                        // wedges every later retention run. Excluding requests
+                        // that still hold a reservation makes this order
+                        // independent: a request becomes eligible in the same
+                        // or the next batch, once its reservations are gone.
+                        "status != 'pending' AND started_at < datetime('now', ?1)
+                         AND id NOT IN (SELECT request_id FROM reservations)",
                         policy.request_days,
                         row_limit,
                     )?;

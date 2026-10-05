@@ -36,6 +36,7 @@ use crate::{
     catalog::{CatalogService, ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     config::{Config, ProviderConfig},
     db::{Account, Database},
+    health::HealthManager,
     model_router::{
         AffinitySelection, CompiledModelRouter, ModelRouterAffinity, ModelRouterRegistry,
     },
@@ -516,7 +517,11 @@ fn static_routing_facts(
         transcode_protocols: vec!["openai".into(), "anthropic".into(), "gemini".into()],
         catalog_stale_after_s: None,
         capability_policy: BTreeMap::new(),
-        now: 0,
+        // The real clock, not a zero placeholder: quota windows, hard-cap
+        // admission, and the observations the quota estimator records all
+        // share this base. A zero base freezes every rolling window at the
+        // moment its first observation landed.
+        now: crate::routing::epoch_seconds(),
     }
 }
 
@@ -1096,7 +1101,13 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         }
     }
     let mut quotas = Vec::new();
+    // The health gate resolves accounts by name and treats an unregistered
+    // account as unhealthy, so every routable account is registered here. The
+    // router is otherwise constructed without a manager and no cooldown,
+    // circuit-breaker, or model-withdrawal effect ever runs in production.
+    let health = HealthManager::new();
     for account in registry.all() {
+        health.register_account(account.account_id, &account.account_name);
         let mut quota = AccountQuota::new(account.account_name.clone());
         // The operator-configured weight and window offsets are routing state,
         // not decoration: without them `utilization` cannot scale capacity by
@@ -1122,7 +1133,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         registry,
         shared_catalog,
         estimator,
-        None,
+        Some(health),
         EligibilityPolicy::from_config(config),
     );
     let wire = WireRuntime::embedded().map_err(|error| format!("wire runtime failed: {error}"))?;

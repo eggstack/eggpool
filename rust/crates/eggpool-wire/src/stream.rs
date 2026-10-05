@@ -432,13 +432,23 @@ pub struct StreamEventDecoder {
     post_terminal_data: bool,
     finalized: bool,
     framing_error: bool,
-    responses: Option<ResponsesDecoderState>,
+    source_identity: Option<SourceIdentityState>,
 }
 
+/// Stream-scoped source identity that canonical events must agree on.
+///
+/// Both halves of one provider-side call (the start event and its argument
+/// deltas) have to resolve to a single identity, otherwise the client
+/// encoder opens a separate tool item for each half. State exists only for
+/// the dialects that stream a call identity across frames.
 #[derive(Debug, Default)]
-struct ResponsesDecoderState {
+struct SourceIdentityState {
+    /// Responses `response.output_item` identity to `function_call` identity.
     item_to_call: BTreeMap<String, String>,
+    /// Responses item identities already closed by a `*.output_item.done`.
     completed_calls: BTreeMap<String, bool>,
+    /// Next synthetic call identity for sources that omit the identity.
+    next_synthetic_call: usize,
 }
 
 impl fmt::Debug for StreamEventDecoder {
@@ -474,8 +484,11 @@ impl StreamEventDecoder {
             post_terminal_data: false,
             finalized: false,
             framing_error: false,
-            responses: (adapter == StreamAdapterKind::OpenaiResponsesSse)
-                .then(ResponsesDecoderState::default),
+            source_identity: matches!(
+                adapter,
+                StreamAdapterKind::OpenaiResponsesSse | StreamAdapterKind::GeminiGenerateContentSse
+            )
+            .then(SourceIdentityState::default),
         }
     }
 
@@ -598,7 +611,7 @@ impl StreamEventDecoder {
             let decoded = match decode_stream_event_with_state(
                 self.adapter,
                 &Value::Object(frame_value),
-                self.responses.as_mut(),
+                self.source_identity.as_mut(),
             ) {
                 Ok(decoded) => decoded.value,
                 Err(error) => {
@@ -634,21 +647,34 @@ impl StreamEventDecoder {
             if self.saw_terminal_event && !frame.data.is_empty() {
                 self.post_terminal_data = true;
             }
+            // Observation records exactly two kinds of fact: the terminal
+            // outcome and final usage. A frame that cannot carry either is
+            // never parsed, and a parse failure is recorded against that one
+            // frame instead of failing the call. The caller owns these bytes
+            // and forwards them unchanged, so propagating the error would
+            // discard a valid chunk of a live client stream over one frame the
+            // decoder does not model. The recorded error still classifies the
+            // stream as malformed when it is finalized.
+            if !carries_observable_facts(self.adapter, &frame) {
+                continue;
+            }
             let mut frame_value = Map::new();
             frame_value.insert("data".into(), Value::String(frame.data.clone()));
             if let Some(event) = &frame.event {
                 frame_value.insert("event".into(), Value::String(event.clone()));
             }
             let mut sink = NativeObservationSink::default();
-            if let Err(error) = decode_stream_event_into(
+            if decode_stream_event_into(
                 self.adapter,
                 &Value::Object(frame_value),
-                self.responses.as_mut(),
+                self.source_identity.as_mut(),
                 &mut sink,
-            ) {
+            )
+            .is_err()
+            {
                 self.parser_error_count += 1;
                 self.framing_error = true;
-                return Err(StreamError::MalformedEvent(error.reason));
+                continue;
             }
             self.usage.absorb(&sink.usage);
             let observed = self.observe_native_terminal(&frame, sink.saw_error);
@@ -890,6 +916,28 @@ fn carries_decodable_payload(frame: &SseFrame) -> bool {
     !frame.data.trim().is_empty()
 }
 
+/// Whether parsing this frame can still change a native observation.
+///
+/// The Responses dialect states its terminal outcome and its final usage in
+/// the frame's own `event:` name, so a frame under any other name carries
+/// neither. Those frames are not parsed at all: an unknown vendor event, or a
+/// known event whose payload the decoder cannot read, must not be reported as
+/// a parse error and must never cost a live stream its bytes. A frame without
+/// an `event:` line is always parsed because its name lives in the payload.
+/// Other dialects derive every fact from the payload, so they always parse.
+fn carries_observable_facts(adapter: StreamAdapterKind, frame: &SseFrame) -> bool {
+    if adapter != StreamAdapterKind::OpenaiResponsesSse {
+        return true;
+    }
+    match frame.event.as_deref() {
+        None => true,
+        // Exactly the names `observe_native_terminal` maps, plus frames with
+        // no `event:` line.
+        Some("response.completed" | "response.incomplete" | "response.failed" | "error") => true,
+        Some(_) => false,
+    }
+}
+
 fn array(value: Option<&Value>) -> Option<&Vec<Value>> {
     value.and_then(Value::as_array)
 }
@@ -1072,17 +1120,17 @@ pub fn decode_stream_event(
 fn decode_stream_event_with_state(
     adapter: StreamAdapterKind,
     frame: &Value,
-    responses: Option<&mut ResponsesDecoderState>,
+    source_identity: Option<&mut SourceIdentityState>,
 ) -> Result<CodecOutput<Vec<CanonicalEvent>>, CodecError> {
     let mut events = Vec::new();
-    decode_stream_event_into(adapter, frame, responses, &mut events)?;
+    decode_stream_event_into(adapter, frame, source_identity, &mut events)?;
     Ok(CodecOutput::new(events))
 }
 
 fn decode_stream_event_into<S: CanonicalEventSink>(
     adapter: StreamAdapterKind,
     frame: &Value,
-    responses: Option<&mut ResponsesDecoderState>,
+    source_identity: Option<&mut SourceIdentityState>,
     events: &mut S,
 ) -> Result<(), CodecError> {
     let frame_object = frame
@@ -1099,13 +1147,15 @@ fn decode_stream_event_into<S: CanonicalEventSink>(
     match adapter {
         StreamAdapterKind::OpenaiChatSse => decode_openai_chat(frame_object, &payload, events),
         StreamAdapterKind::OpenaiResponsesSse => {
-            decode_openai_responses(frame_object, &payload, events, responses)
+            decode_openai_responses(frame_object, &payload, events, source_identity)
         }
         StreamAdapterKind::AnthropicMessagesSse => decode_anthropic(frame_object, &payload, events),
         StreamAdapterKind::GeminiInteractionsSse => {
             decode_interactions(frame_object, &payload, events)
         }
-        StreamAdapterKind::GeminiGenerateContentSse => decode_generate_content(&payload, events),
+        StreamAdapterKind::GeminiGenerateContentSse => {
+            decode_generate_content(&payload, events, source_identity)
+        }
     }
     let _ = name;
     Ok(())
@@ -1199,7 +1249,7 @@ fn decode_openai_responses<S: CanonicalEventSink>(
     _frame: &Map<String, Value>,
     payload: &Map<String, Value>,
     events: &mut S,
-    state: Option<&mut ResponsesDecoderState>,
+    state: Option<&mut SourceIdentityState>,
 ) {
     let name = string(_frame.get("event"))
         .or_else(|| string(payload.get("type")))
@@ -1465,7 +1515,11 @@ fn decode_interactions<S: CanonicalEventSink>(
     }
 }
 
-fn decode_generate_content<S: CanonicalEventSink>(payload: &Map<String, Value>, events: &mut S) {
+fn decode_generate_content<S: CanonicalEventSink>(
+    payload: &Map<String, Value>,
+    events: &mut S,
+    mut source_identity: Option<&mut SourceIdentityState>,
+) {
     if let Some(candidate) = array(payload.get("candidates"))
         .and_then(|items| items.first())
         .and_then(Value::as_object)
@@ -1486,12 +1540,25 @@ fn decode_generate_content<S: CanonicalEventSink>(payload: &Map<String, Value>, 
                 });
             }
             if let Some(call) = object(part.get("functionCall")) {
+                // `generateContent` omits `id` on many `functionCall` parts.
+                // The start and its argument delta must carry one identity:
+                // the client encoder opens a separate tool item per identity,
+                // so two identities here render one call as a name-only item
+                // plus a nameless arguments-only item. The stream-scoped
+                // counter keeps synthesized identities unique across frames,
+                // not only within one part list.
+                let call_id = string(call.get("id")).or_else(|| {
+                    let state = source_identity.as_deref_mut()?;
+                    let call_id = format!("call_eggpool_{}", state.next_synthetic_call);
+                    state.next_synthetic_call += 1;
+                    Some(call_id)
+                });
                 let mut start = canonical_event(CanonicalEventType::ToolCallStart);
-                start.call_id = string(call.get("id"));
+                start.call_id = call_id.clone();
                 start.name = string(call.get("name"));
                 events.push(start);
                 let mut args = canonical_event(CanonicalEventType::ToolCallArgumentsDelta);
-                args.call_id = string(call.get("id"));
+                args.call_id = call_id;
                 let arguments = string(call.get("args")).or_else(|| {
                     serde_json::to_string(call.get("args").unwrap_or(&Value::Null)).ok()
                 });
@@ -1744,6 +1811,25 @@ impl ResponsesEncoderState {
 pub struct ClientStreamEncoder {
     surface: ClientSurface,
     responses: Option<ResponsesEncoderState>,
+    terminal: ClientTerminalState,
+}
+
+/// Terminal placement for the client grammars that end with a terminator
+/// frame.
+///
+/// The canonical event stream is not a frame-for-frame transcript of any one
+/// upstream dialect: an Anthropic upstream closes with `message_delta` and
+/// then `message_stop`, and both decode to one terminal event, while an
+/// OpenAI chat upstream reports its stop in a `finish_reason` chunk that can
+/// precede the trailing usage frame. Encoding a terminator per event put two
+/// `data: [DONE]` frames on one chat stream and a `message_delta` after
+/// `message_stop`. The encoder therefore owns exactly one terminator per
+/// stream: chat closes on its first terminal event, and Messages holds the stop
+/// reason back until the final usage fact is known.
+#[derive(Debug, Default)]
+struct ClientTerminalState {
+    emitted: bool,
+    deferred_stop: Option<String>,
 }
 
 impl fmt::Debug for ClientStreamEncoder {
@@ -1768,14 +1854,73 @@ impl ClientStreamEncoder {
             surface,
             responses: (surface == ClientSurface::Responses)
                 .then(|| ResponsesEncoderState::new(tools)),
+            terminal: ClientTerminalState::default(),
         }
     }
 
     pub fn encode(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
-        if self.surface != ClientSurface::Responses {
-            return encode_client_event(self.surface, event);
+        match self.surface {
+            ClientSurface::Responses => self.encode_responses(event),
+            ClientSurface::ChatCompletions => self.encode_chat(event),
+            ClientSurface::Messages => self.encode_messages(event),
         }
-        self.encode_responses(event)
+    }
+
+    /// Close a deferred Messages terminator once the upstream stream ends.
+    ///
+    /// [`Self::encode`] holds the Messages stop reason back because
+    /// `message_delta` must precede `message_stop` and a trailing usage frame
+    /// can still arrive. End of stream is the last point at which no further
+    /// frame can, so it is where a still-deferred terminator is emitted.
+    pub fn flush(&mut self) -> Result<Vec<u8>, CodecError> {
+        if self.surface != ClientSurface::Messages || self.terminal.emitted {
+            return Ok(Vec::new());
+        }
+        let Some(stop_reason) = self.terminal.deferred_stop.take() else {
+            return Ok(Vec::new());
+        };
+        self.terminal.emitted = true;
+        Ok(anthropic_terminator(&stop_reason, None))
+    }
+
+    fn encode_chat(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
+        // `data: [DONE]` closes the client stream, so nothing may follow it.
+        if self.terminal.emitted {
+            return Ok(Vec::new());
+        }
+        let bytes = encode_chat_event(event)?;
+        if event.event_type == CanonicalEventType::ResponseComplete {
+            self.terminal.emitted = true;
+        }
+        Ok(bytes)
+    }
+
+    fn encode_messages(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
+        if self.terminal.emitted {
+            return Ok(Vec::new());
+        }
+        match event.event_type {
+            CanonicalEventType::ResponseComplete => {
+                // Recorded rather than sent: `message_stop` has to be the last
+                // frame and a usage frame can still follow the stop.
+                if self.terminal.deferred_stop.is_none() {
+                    self.terminal.deferred_stop =
+                        Some(event.finish_reason.clone().unwrap_or_default());
+                }
+                Ok(Vec::new())
+            }
+            CanonicalEventType::Usage => {
+                let Some(stop_reason) = self.terminal.deferred_stop.take() else {
+                    return encode_anthropic_event(event);
+                };
+                // The grammar closes with one `message_delta` carrying the stop
+                // reason and the final usage. The trailing usage frame merges
+                // into it instead of arriving after `message_stop`.
+                self.terminal.emitted = true;
+                Ok(anthropic_terminator(&stop_reason, event.usage.as_ref()))
+            }
+            _ => encode_anthropic_event(event),
+        }
     }
 
     fn encode_responses(&mut self, event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
@@ -2253,6 +2398,31 @@ pub fn encode_client_event(
     Ok(bytes)
 }
 
+/// The closing Messages pair: `message_delta` with the recorded stop reason
+/// and, when known, the final usage, then `message_stop`.
+fn anthropic_terminator(stop_reason: &str, usage: Option<&CanonicalUsage>) -> Vec<u8> {
+    let usage = usage.map_or(Value::Object(Map::new()), |usage| {
+        json!({
+            "input_tokens": usage.input_tokens.unwrap_or(0),
+            "output_tokens": usage.output_tokens.unwrap_or(0),
+            "cache_read_input_tokens": usage.cache_read_input_tokens.unwrap_or(0),
+            "cache_creation_input_tokens": usage.cache_creation_input_tokens.unwrap_or(0),
+        })
+    });
+    let mut delta = Map::new();
+    if !stop_reason.is_empty() {
+        delta.insert("stop_reason".into(), Value::String(stop_reason.into()));
+    }
+    [
+        sse(
+            Some("message_delta"),
+            &json!({"type":"message_delta","delta":Value::Object(delta),"usage":usage}),
+        ),
+        sse(Some("message_stop"), &json!({"type":"message_stop"})),
+    ]
+    .concat()
+}
+
 fn encode_chat_event(event: &CanonicalEvent) -> Result<Vec<u8>, CodecError> {
     if event.event_type == CanonicalEventType::ResponseComplete {
         return Ok(b"data: [DONE]\n\n".to_vec());
@@ -2441,7 +2611,11 @@ impl fmt::Display for TerminalEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{StreamAdapterKind, StreamEventDecoder, StreamTerminalOutcome, TerminalEvidence};
+    use super::{
+        CanonicalEvent, CanonicalEventType, ClientStreamEncoder, ClientSurface, StreamAdapterKind,
+        StreamEventDecoder, StreamTerminalOutcome, TerminalEvidence, canonical_event,
+    };
+    use crate::ir::CanonicalUsage;
 
     #[test]
     fn empty_data_buffer_is_a_no_op_frame_not_a_malformed_event() {
@@ -2463,6 +2637,31 @@ mod tests {
             events.iter().filter(|event| event.delta.is_some()).count(),
             1
         );
+    }
+
+    fn canonical_text() -> CanonicalEvent {
+        CanonicalEvent {
+            delta: Some("hi".into()),
+            ..canonical_event(CanonicalEventType::TextDelta)
+        }
+    }
+
+    fn canonical_response_complete(finish_reason: Option<&str>) -> CanonicalEvent {
+        CanonicalEvent {
+            finish_reason: finish_reason.map(str::to_owned),
+            ..canonical_event(CanonicalEventType::ResponseComplete)
+        }
+    }
+
+    fn canonical_usage() -> CanonicalEvent {
+        CanonicalEvent {
+            usage: Some(CanonicalUsage {
+                input_tokens: Some(2),
+                output_tokens: Some(3),
+                ..CanonicalUsage::default()
+            }),
+            ..canonical_event(CanonicalEventType::Usage)
+        }
     }
 
     #[test]
@@ -2513,5 +2712,190 @@ mod tests {
         let native_summary = native.finalize_observed().expect("native finalize");
         assert_eq!(public_summary.outcome, StreamTerminalOutcome::Success);
         assert_eq!(native_summary, public_summary);
+    }
+
+    #[test]
+    fn native_observation_never_costs_the_caller_its_bytes() {
+        // The observation contract is "caller-owned bytes, kernel-observed
+        // facts". A frame the decoder does not model must not be reported as a
+        // parse error, and a parse error must not abort observation: the caller
+        // forwards its chunk either way, so propagating the failure here
+        // discarded a valid chunk of a live client stream.
+        let unknown_event = concat!(
+            "event: response.future_event\n",
+            "data: {not json at all\n\n",
+        );
+        let mut observer = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+        for chunk in unknown_event.as_bytes().chunks(5) {
+            assert!(
+                observer.observe_native_push(chunk).is_ok(),
+                "an unmodelled frame must not abort observation"
+            );
+        }
+        let observed = observer.finalize_observed().expect("finalize");
+        assert_eq!(
+            observed.parser_error_count, 0,
+            "no parse error for an unknown frame"
+        );
+        assert!(observed.saw_payload, "an unmodelled frame is still payload");
+    }
+
+    #[test]
+    fn native_observation_still_reports_a_malformed_terminal_frame() {
+        // Skipping frames that cannot carry an observation must not hide a
+        // broken terminal: a `response.completed` frame whose payload cannot be
+        // read is still classified as malformed.
+        let source = concat!("event: response.completed\n", "data: {{{not json\n\n",);
+        let mut observer = StreamEventDecoder::new(StreamAdapterKind::OpenaiResponsesSse);
+        assert!(observer.observe_native_push(source.as_bytes()).is_ok());
+        let observed = observer.finalize_observed().expect("finalize");
+        assert_eq!(observed.outcome, StreamTerminalOutcome::Malformed);
+        assert!(observed.parser_error_count > 0);
+    }
+
+    #[test]
+    fn a_function_call_without_a_source_id_keeps_one_identity_across_events() {
+        // `generateContent` omits `id` on many `functionCall` parts. The client
+        // encoder opens one tool item per identity, so two identities here
+        // rendered one call as a name-only item plus a nameless
+        // arguments-only item. Both events must agree on one identity, and the
+        // identity has to stay unique across frames.
+        let first = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"city\":\"Zürich\"}}}]}}]}\n\n";
+        let second = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"other\",\"args\":{}}}]}}]}\n\n";
+        let mut decoder = StreamEventDecoder::new(StreamAdapterKind::GeminiGenerateContentSse);
+        let mut events = Vec::new();
+        events.extend(decoder.push(first.as_bytes()).expect("first frame"));
+        events.extend(decoder.push(second.as_bytes()).expect("second frame"));
+        let identities: Vec<Option<String>> = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.event_type,
+                    CanonicalEventType::ToolCallStart | CanonicalEventType::ToolCallArgumentsDelta
+                )
+            })
+            .map(|event| event.call_id.clone())
+            .collect();
+        assert_eq!(identities.len(), 4, "one start and one delta per call");
+        assert!(
+            identities.iter().all(|id| id.is_some()),
+            "every call has an identity"
+        );
+        assert_eq!(identities[0], identities[1], "one call, one identity");
+        assert_eq!(identities[2], identities[3], "one call, one identity");
+        assert_ne!(
+            identities[0], identities[2],
+            "two calls in different frames are distinct"
+        );
+
+        // The client view is the invariant that matters: two function-call
+        // items, each with a name and arguments.
+        let mut encoder = ClientStreamEncoder::new(ClientSurface::Responses);
+        let mut out = Vec::new();
+        for event in &events {
+            out.extend(encoder.encode(event).expect("encode"));
+        }
+        let text = String::from_utf8(out).expect("utf-8 client stream");
+        let function_calls = text.matches("\"type\":\"function_call\"").count();
+        assert_eq!(
+            function_calls, 2,
+            "one output item per source call, not per event: {text}"
+        );
+    }
+
+    #[test]
+    fn chat_and_messages_encode_exactly_one_terminator() {
+        // An Anthropic upstream closes with `message_delta` and then
+        // `message_stop`, and both decode to one terminal event. Encoding per
+        // event produced two `data: [DONE]` frames on one chat stream and two
+        // `message_stop` frames on a Messages stream.
+        let chat_events = vec![
+            canonical_text(),
+            canonical_response_complete(Some("end_turn")),
+            canonical_usage(),
+            canonical_response_complete(None),
+        ];
+        let mut chat = ClientStreamEncoder::new(ClientSurface::ChatCompletions);
+        let mut chat_bytes = Vec::new();
+        for event in &chat_events {
+            chat_bytes.extend(chat.encode(event).expect("chat encode"));
+        }
+        let chat_text = String::from_utf8(chat_bytes).expect("utf-8 chat stream");
+        assert_eq!(
+            chat_text.matches("data: [DONE]").count(),
+            1,
+            "one [DONE] per chat stream: {chat_text}"
+        );
+
+        let mut messages = ClientStreamEncoder::new(ClientSurface::Messages);
+        let mut messages_bytes = Vec::new();
+        for event in &chat_events {
+            messages_bytes.extend(messages.encode(event).expect("messages encode"));
+        }
+        messages_bytes.extend(messages.flush().expect("messages flush"));
+        let messages_text = String::from_utf8(messages_bytes).expect("utf-8 messages stream");
+        assert_eq!(
+            messages_text.matches("\"type\":\"message_stop\"").count(),
+            1,
+            "one message_stop per messages stream: {messages_text}"
+        );
+        // `message_delta` carries the stop reason and must precede the stop.
+        let delta_at = messages_text
+            .find("\"type\":\"message_delta\"")
+            .expect("message_delta");
+        let stop_at = messages_text
+            .find("\"type\":\"message_stop\"")
+            .expect("message_stop");
+        assert!(delta_at < stop_at, "message_delta precedes message_stop");
+    }
+
+    #[test]
+    fn messages_merges_a_trailing_usage_frame_into_the_terminator() {
+        // An OpenAI chat upstream reports its stop in a `finish_reason` chunk
+        // that can precede the trailing usage frame, which used to put
+        // `message_delta` after `message_stop`.
+        let mut messages = ClientStreamEncoder::new(ClientSurface::Messages);
+        let mut bytes = messages
+            .encode(&canonical_response_complete(Some("stop")))
+            .expect("stop encode")
+            .to_vec();
+        bytes.extend(messages.encode(&canonical_usage()).expect("usage encode"));
+        bytes.extend(messages.flush().expect("flush"));
+        let text = String::from_utf8(bytes).expect("utf-8");
+        assert_eq!(text.matches("\"type\":\"message_delta\"").count(), 1);
+        assert_eq!(text.matches("\"type\":\"message_stop\"").count(), 1);
+        let delta_at = text
+            .find("\"type\":\"message_delta\"")
+            .expect("message_delta");
+        let stop_at = text
+            .find("\"type\":\"message_stop\"")
+            .expect("message_stop");
+        assert!(delta_at < stop_at, "usage merges into the closing frame");
+        assert!(
+            text.contains("\"output_tokens\":3"),
+            "the observed usage reaches the client: {text}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_terminator_is_released_at_end_of_stream() {
+        // No usage frame follows this terminal, so end of stream is the only
+        // point at which the deferred pair can be emitted.
+        let mut messages = ClientStreamEncoder::new(ClientSurface::Messages);
+        let bytes = messages.encode(&canonical_text()).expect("text encode");
+        assert!(
+            bytes.is_empty() || !String::from_utf8_lossy(&bytes).contains("message_stop"),
+            "nothing may close the stream before end of stream"
+        );
+        let terminal = messages
+            .encode(&canonical_response_complete(Some("end_turn")))
+            .expect("terminal encode");
+        assert!(terminal.is_empty(), "the terminator is deferred");
+        let flushed = messages.flush().expect("flush");
+        assert!(String::from_utf8_lossy(&flushed).contains("message_stop"));
+        assert!(
+            messages.flush().expect("second flush").is_empty(),
+            "one terminator per stream"
+        );
     }
 }

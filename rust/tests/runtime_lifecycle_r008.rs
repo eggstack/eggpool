@@ -238,3 +238,100 @@ async fn retention_cleanup_is_bounded_and_preserves_pending_requests() {
     assert_eq!(counts, (0, 1));
     database.close().await.expect("database close");
 }
+
+#[tokio::test]
+async fn retention_cleanup_never_wedges_on_request_reservations() {
+    // `reservations.request_id` is a foreign key into `requests(id)` with no
+    // cascade. Selecting the oldest request ids by age alone can pick a request
+    // whose reservations are not all in the same batch, which fails the whole
+    // tick and leaves every later retention run wedged.
+    let database = database().await;
+    database
+        .with_transaction(|connection| {
+            connection.execute(
+                "INSERT INTO providers (provider_id, base_url, protocols) VALUES ('fixture', 'https://fixture.invalid', '[\"openai\"]')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO accounts (name, api_key_env, enabled, weight, provider_id) VALUES ('fixture-account', 'FIXTURE_KEY', 1, 1.0, 'fixture')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO models (model_id, protocol, provider_id) VALUES ('fixture-model', 'openai', 'fixture')",
+                [],
+            )?;
+            for (index, reservation_count) in [(1, 2), (2, 1)] {
+                connection.execute(
+                    &format!(
+                        "INSERT INTO requests (id, account_id, model_id, status, started_at) VALUES ({index}, 1, 'fixture-model', 'completed', datetime('now', '-100 days'))"
+                    ),
+                    [],
+                )?;
+                for reservation in 0..reservation_count {
+                    connection.execute(
+                        &format!(
+                            "INSERT INTO reservations (request_id, account_id, model_id, reserved_microdollars, created_at) VALUES ({index}, 1, 'fixture-model', {reservation}, datetime('now', '-100 days'))"
+                        ),
+                        [],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .expect("seed historical rows with reservations");
+
+    // A single row per batch is the smallest budget that used to select a
+    // request whose reservations could not all be removed with it.
+    let narrow = database
+        .cleanup_retention(RetentionCleanupPolicy {
+            request_days: 30,
+            event_days: 30,
+            ping_days: 30,
+            operational_event_days: 30,
+            routing_decision_days: 30,
+            rollup_days: 30,
+            price_snapshot_days: 30,
+            model_info_observation_days: 30,
+            max_rows_per_batch: 1,
+            max_batches: 1,
+            max_tick_duration: std::time::Duration::from_secs(1),
+        })
+        .await
+        .expect("bounded retention tick does not fail");
+    assert!(narrow.rows_changed > 0);
+    assert!(narrow.budget_exhausted);
+
+    // The batch that deleted reservations leaves the request itself for the
+    // next tick; a wider tick then clears both requests and their reservations.
+    let wide = database
+        .cleanup_retention(RetentionCleanupPolicy {
+            request_days: 30,
+            event_days: 30,
+            ping_days: 30,
+            operational_event_days: 30,
+            routing_decision_days: 30,
+            rollup_days: 30,
+            price_snapshot_days: 30,
+            model_info_observation_days: 30,
+            max_rows_per_batch: 500,
+            max_batches: 4,
+            max_tick_duration: std::time::Duration::from_secs(5),
+        })
+        .await
+        .expect("retention cleanup");
+    assert!(wide.rows_changed > 0);
+
+    let (requests, reservations) = database
+        .call(|connection| {
+            let requests: i64 =
+                connection.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get(0))?;
+            let reservations: i64 =
+                connection.query_row("SELECT COUNT(*) FROM reservations", [], |row| row.get(0))?;
+            Ok((requests, reservations))
+        })
+        .await
+        .expect("read cleanup result");
+    assert_eq!((requests, reservations), (0, 0));
+    database.close().await.expect("database close");
+}

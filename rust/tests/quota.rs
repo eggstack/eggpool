@@ -10,8 +10,9 @@ use std::{
 use eggpool::{
     db::{Database, DatabaseConfig, MigrationRunner, UsageWindowRepository},
     quota::{
-        AccountQuota, DEFAULT_REQUEST_CAPACITY_5H, PersistedWindowSnapshot, QuotaEstimator,
-        QuotaFairScorer, QuotaPolicy, QuotaWindow,
+        AccountQuota, DEFAULT_REQUEST_CAPACITY_5H, DEFAULT_TOKEN_CAPACITY_5H,
+        PersistedWindowSnapshot, QuotaEstimator, QuotaFairScorer, QuotaPolicy, QuotaWindow,
+        QuotaWindowName,
     },
 };
 
@@ -78,6 +79,7 @@ fn d001_quota_score_uses_request_and_token_pressure_not_cost() {
         &BTreeMap::new(),
         &BTreeMap::from([("account-a".to_owned(), 200), ("account-b".to_owned(), 200)]),
         &BTreeMap::new(),
+        0.0,
     );
     assert!((scores[0].quota_score - 0.3378125).abs() < 1e-12);
     assert!((scores[1].quota_score - 0.16075).abs() < 1e-12);
@@ -118,6 +120,7 @@ fn defaults_weight_offsets_and_hard_cap_boundaries_are_explicit() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        0.0,
     )[0]
     .clone();
     assert_eq!(score.capacity_5h_requests, 1);
@@ -261,6 +264,7 @@ fn malformed_capacity_is_ineligible_and_window_backfill_is_ordered() {
         &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
+        0.0,
     )[0]
     .clone();
     assert!(!score.is_eligible);
@@ -337,4 +341,67 @@ async fn usage_hydration_reads_schema54_rows_in_one_batch() {
     assert_eq!(database.stats().calls - before, 1);
     database.close().await.expect("database closes");
     fs::remove_file(PathBuf::from(&path)).expect("temporary database removed");
+}
+
+#[test]
+fn rolling_quota_window_drains_on_the_request_clock() {
+    // The scorer used to read `now` from the hydration timestamp, which is
+    // `0.0` whenever no snapshot is persisted — the production case. Every
+    // observation then sat inside its own window forever, so `utilization`
+    // could not fall and an account stayed loaded forever after one historical
+    // request. The scorer has to read the clock the request carries.
+    let estimator = QuotaEstimator::default();
+    estimator
+        .configure_policy("account", 1.0, QuotaPolicy::default())
+        .expect("policy");
+    let recorded_at = 1_000_000.0_f64;
+    let tokens = DEFAULT_TOKEN_CAPACITY_5H / 2;
+    estimator.record_usage("account", tokens, 5_000, Some("model"), recorded_at);
+
+    let names = vec!["account".to_owned()];
+    let windowed_tokens = |now: f64| {
+        estimator
+            .get_account_quota("account")
+            .expect("quota account")
+            .get_persisted_tokens(QuotaWindowName::FiveHour, now)
+    };
+    let score_at = |now: f64| {
+        QuotaFairScorer::default().score_accounts(
+            &estimator,
+            &names,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            now,
+        )[0]
+        .clone()
+    };
+
+    assert_eq!(windowed_tokens(recorded_at), tokens);
+    let loaded = score_at(recorded_at);
+    assert!(
+        loaded.quota_score >= 0.5,
+        "observed usage must load the account: {}",
+        loaded.quota_score
+    );
+
+    // Past the five-hour window the observation no longer counts, and the score
+    // recovers on the same clock.
+    assert_eq!(windowed_tokens(recorded_at + 86_400.0), 0);
+    let drained = score_at(recorded_at + 86_400.0);
+    assert!(
+        drained.quota_score < loaded.quota_score,
+        "a windowed observation must drain: {} -> {}",
+        loaded.quota_score,
+        drained.quota_score
+    );
+
+    // A clock frozen at the hydration instant (0.0) is exactly the defect: it
+    // can never drain anything, so the score never recovers.
+    assert_eq!(windowed_tokens(0.0), tokens);
+    let frozen = score_at(0.0);
+    assert_eq!(
+        frozen.quota_score, loaded.quota_score,
+        "the frozen clock must not drain the window"
+    );
 }

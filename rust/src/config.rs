@@ -1046,10 +1046,28 @@ pub fn is_loopback_host(host: &str) -> bool {
         if let Ok(addr) = mapped.parse::<std::net::IpAddr>() {
             return addr.is_loopback();
         }
-        return mapped.split('.').next() == Some("127");
+        return is_dotted_quad_first_octet(mapped, 127);
     }
-    lower.split('.').next().is_some_and(|first| first == "127")
-        && without_zone.split('.').count() == 4
+    // Textual `127/8` fallback for forms the strict parse above rejected
+    // (zone IDs, unusual bracketing). It must stay anchored to a real
+    // dotted-quad: a bare string-shape match treats any four-label hostname
+    // starting with `127` (`127.attacker.example.com`) as loopback, which
+    // would silently skip the bind-address API-key gate. A host that does
+    // not parse as an address literal is never loopback.
+    is_dotted_quad_first_octet(&lower, 127)
+}
+
+/// Whether `host` is exactly four decimal octets whose first octet is
+/// `expected`. Anything else (a hostname, a different label count, a
+/// non-numeric or out-of-range octet) is not a dotted quad.
+fn is_dotted_quad_first_octet(host: &str, expected: u8) -> bool {
+    let octets: Vec<&str> = host.split('.').collect();
+    octets.len() == 4
+        && octets
+            .iter()
+            .all(|octet| !octet.is_empty() && octet.bytes().all(|byte| byte.is_ascii_digit()))
+        && octets[0].parse::<u8>().is_ok_and(|first| first == expected)
+        && octets[1..].iter().all(|octet| octet.parse::<u8>().is_ok())
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1593,6 +1611,53 @@ impl Config {
             ],
             "routing.fairness_scope",
         )?;
+        // Both fairness band edges must be finite: a non-finite epsilon makes
+        // `(score - best).abs() >= epsilon` false for every candidate, so
+        // load-based selection silently degrades to round-robin while the
+        // routing trace still reports the fairness band as applied.
+        if !self.routing.near_tie_epsilon.is_finite()
+            || self.routing.near_tie_epsilon < 0.0
+            || self
+                .routing
+                .fairness_epsilon
+                .is_some_and(|epsilon| !epsilon.is_finite() || epsilon < 0.0)
+        {
+            return Err(ConfigError::validation(
+                "routing.near_tie_epsilon and routing.fairness_epsilon must be finite and non-negative",
+            ));
+        }
+        // The maintenance budget is read straight into `Duration`
+        // arithmetic; a non-finite millisecond budget would panic
+        // `Duration::from_secs_f64` inside the retention task instead of
+        // failing startup with a named cause.
+        for (name, value, maximum) in [
+            (
+                "maintenance.max_tick_duration_ms",
+                self.maintenance.max_tick_duration_ms,
+                86_400_000.0,
+            ),
+            (
+                "maintenance.p0_max_tick_duration_ms",
+                self.maintenance.p0_max_tick_duration_ms,
+                86_400_000.0,
+            ),
+            (
+                "maintenance.contention_defer_above_lock_wait_p95_ms",
+                self.maintenance.contention_defer_above_lock_wait_p95_ms,
+                86_400_000.0,
+            ),
+            (
+                "maintenance.max_deferral_age_s",
+                self.maintenance.max_deferral_age_s,
+                604_800.0,
+            ),
+        ] {
+            if !value.is_finite() || value < 0.0 || value > maximum {
+                return Err(ConfigError::validation(format!(
+                    "{name} must be finite and within its supported bounds"
+                )));
+            }
+        }
         validate_enum(
             &self.pricing.fallback,
             &["generic_estimate", "off"],
@@ -2343,6 +2408,85 @@ mod tests {
         assert!(config.validate().is_ok());
         config.server.max_request_body_bytes += 1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn loopback_detection_never_fails_open_on_a_hostname() {
+        // The bind-address API-key gate skips the key only for a loopback
+        // bind address. A four-label hostname whose first label is `127` must
+        // not satisfy that test.
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.0.0.53"));
+        assert!(is_loopback_host("127.1.2.3"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("::ffff:127.0.0.1"));
+        assert!(!is_loopback_host("127.attacker.example.com"));
+        assert!(!is_loopback_host("127.0.0.example.com"));
+        assert!(!is_loopback_host("127.0.0.1.example.com"));
+        assert!(!is_loopback_host("0127.0.0.1.example"));
+        assert!(!is_loopback_host("127.0.0"));
+        assert!(!is_loopback_host("127.0.0.1.4"));
+        assert!(!is_loopback_host("127.0.0.999"));
+        assert!(!is_loopback_host("128.0.0.1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("LocalHost"));
+        assert!(!is_loopback_host("localhost.attacker.example.com"));
+        assert!(!is_loopback_host("0.0.0.0"));
+    }
+
+    #[test]
+    fn non_finite_routing_band_edges_are_rejected() {
+        // A non-finite epsilon makes the near-tie comparison false for every
+        // candidate, silently degrading fairness to round-robin while the trace
+        // still claims the band was applied.
+        for epsilon in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let mut config = Config::default();
+            config.routing.near_tie_epsilon = epsilon;
+            assert!(config.validate().is_err(), "near_tie_epsilon {epsilon}");
+
+            let mut config = Config::default();
+            config.routing.fairness_epsilon = Some(epsilon);
+            assert!(config.validate().is_err(), "fairness_epsilon {epsilon}");
+        }
+        let mut config = Config::default();
+        config.routing.near_tie_epsilon = -0.1;
+        assert!(config.validate().is_err());
+        config.routing.near_tie_epsilon = 0.1;
+        config.routing.fairness_epsilon = Some(-0.1);
+        assert!(config.validate().is_err());
+        config.routing.fairness_epsilon = None;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn non_finite_maintenance_budgets_are_rejected() {
+        // These reach `Duration::from_secs_f64` inside the retention task,
+        // which panics on a non-finite argument.
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let mut config = Config::default();
+            config.maintenance.max_tick_duration_ms = value;
+            assert!(config.validate().is_err(), "max_tick_duration_ms {value}");
+
+            let mut config = Config::default();
+            config.maintenance.p0_max_tick_duration_ms = value;
+            assert!(
+                config.validate().is_err(),
+                "p0_max_tick_duration_ms {value}"
+            );
+
+            let mut config = Config::default();
+            config.maintenance.max_deferral_age_s = value;
+            assert!(config.validate().is_err(), "max_deferral_age_s {value}");
+
+            let mut config = Config::default();
+            config.maintenance.contention_defer_above_lock_wait_p95_ms = value;
+            assert!(
+                config.validate().is_err(),
+                "contention_defer_above_lock_wait_p95_ms {value}"
+            );
+        }
+        assert!(Config::default().validate().is_ok());
     }
 
     #[test]

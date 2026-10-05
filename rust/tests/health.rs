@@ -471,3 +471,100 @@ fn backoff_hydration_uses_remaining_wall_duration_and_caps_it() {
     assert!(snapshot.cooldown_until <= 1_810.0);
     assert!(snapshot.cooldown_until > 10.0);
 }
+
+#[tokio::test]
+async fn production_generation_connects_the_health_manager_to_its_router() {
+    // The production router used to be constructed without a health manager at
+    // all, so no cooldown, circuit-breaker, or model-withdrawal effect ever
+    // ran and the status projection reported nothing. This goes through the
+    // real generation factory rather than a hand-built router.
+    use eggpool::{
+        Config,
+        config::{AccountConfig, ProviderAuthConfig, ProviderConfig},
+        runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory},
+    };
+
+    let directory = tempfile::tempdir().expect("temporary health database");
+    let database = Database::open(DatabaseConfig {
+        path: directory
+            .path()
+            .join("health.sqlite3")
+            .to_string_lossy()
+            .into_owned(),
+        ..DatabaseConfig::default()
+    })
+    .await
+    .expect("database opens");
+    MigrationRunner::new(&database)
+        .run()
+        .await
+        .expect("migrations run");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO providers (provider_id, base_url, protocols) VALUES ('provider-a', 'https://provider-a.invalid', '[\"openai\"]')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO accounts (id, name, api_key_env, enabled, provider_id) VALUES (1, 'account-a', 'UNUSED', 1, 'provider-a')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("durable account rows insert");
+
+    let mut config = Config::default();
+    let mut provider = ProviderConfig {
+        id: "provider-a".to_owned(),
+        base_url: "https://provider-a.invalid".to_owned(),
+        protocols: vec!["openai".to_owned()],
+        auth: ProviderAuthConfig {
+            mode: "none".to_owned(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    provider.accounts.push(AccountConfig {
+        name: "account-a".to_owned(),
+        ..Default::default()
+    });
+    config.providers.insert("provider-a".to_owned(), provider);
+    config.validate().expect("config validates");
+
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime builds");
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config,
+        "health-production-wiring".to_owned(),
+        1,
+    )
+    .await
+    .expect("generation prepares");
+    let generation = candidate.transfer().expect("generation transfers");
+    let router = generation.inference().router_handle();
+
+    assert!(
+        router.health_manager().is_some(),
+        "the production router must carry a health manager"
+    );
+    let snapshots = router.health_snapshots();
+    let account = snapshots
+        .iter()
+        .find(|snapshot| snapshot.account_name == "account-a")
+        .expect("every routable account is registered with the health gate");
+    assert_eq!(account.health_state, "healthy");
+    assert_eq!(
+        account.circuit.state,
+        CircuitState::Closed,
+        "a freshly registered account starts closed"
+    );
+
+    // Unregistered accounts are rejected by the gate, so registration is what
+    // keeps a configured account routable rather than an accidental pass.
+    let unregistered = HealthManager::new();
+    assert!(!unregistered.is_model_healthy_read_only("account-a", "model-a"));
+
+    generation.close().await;
+    database.close().await.expect("database closes");
+}

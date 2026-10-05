@@ -1481,6 +1481,19 @@ impl WireStream {
             .map(Bytes::from)
             .map_err(WireRuntimeError::ResponseAdaptation)
     }
+
+    /// Close a client-stream terminator the encoder is still holding.
+    ///
+    /// The Messages grammar requires `message_delta` to precede `message_stop`,
+    /// so the encoder records the stop reason and emits the closing pair once
+    /// no further event can arrive. Call this at end of stream, after the final
+    /// canonical event has been encoded.
+    pub fn flush_client_stream(&mut self) -> Result<Bytes, WireRuntimeError> {
+        self.encoder
+            .flush()
+            .map(Bytes::from)
+            .map_err(WireRuntimeError::ResponseAdaptation)
+    }
 }
 
 fn stream_adapter(codec: WireCodecId) -> Result<StreamAdapterKind, ProfileMismatchReason> {

@@ -38,7 +38,7 @@ use eggpool::{
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     providers::ProviderClientPool,
-    quota::{AccountQuota, QuotaEstimator},
+    quota::{AccountQuota, QuotaEstimator, QuotaWindowName},
     request::StaticRoutingFacts,
     routing::{EligibilityPolicy, RoutingRouter},
     wire::{
@@ -2574,4 +2574,68 @@ fn stream_timeout_policy_follows_provider_config() {
     let unset = StreamTimeoutPolicy::from_provider(&ProviderConfig::default());
     assert_eq!(unset.first_byte_timeout, None);
     assert_eq!(unset.idle_timeout, None);
+}
+
+#[tokio::test]
+async fn completed_stream_records_usage_in_the_routing_quota_estimator() {
+    // The estimator only learns about traffic when a completed attempt folds
+    // its usage into the account's rolling window. Without that call the
+    // window stays empty for the life of the process, so `quota_score` never
+    // moved and the hard-cap admission check had nothing to compare.
+    let body = upstream_success_stream(WireSurface::OpenaiChatCompletions);
+    let server = StreamingProvider::start(vec![SseScript {
+        header_delay: Duration::ZERO,
+        extra_headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
+        framing: Framing::Raw,
+        chunks: vec![(Duration::ZERO, body)],
+        finish: Finish::CleanEof,
+    }]);
+    let fixture = build_fixture(
+        "openai",
+        &[ProviderSpec {
+            name: "account-a".to_owned(),
+            provider_id: "provider-a".to_owned(),
+            account_id: 1,
+            base_url: server.base_url(),
+            surfaces: vec![WireSurface::OpenaiChatCompletions],
+        }],
+        RetryPolicy::default(),
+        &StreamOptions::default(),
+    )
+    .await;
+    let before = fixture
+        .estimator
+        .get_account_quota("account-a")
+        .expect("quota account")
+        .get_persisted_tokens(QuotaWindowName::FiveHour, 0.0);
+
+    let mut execution = fixture
+        .coordinator
+        .execute(stream_request(
+            ClientSurface::ChatCompletions,
+            "proxy-quota-usage",
+        ))
+        .await
+        .expect("stream executes");
+    execution.mark_started();
+    let (chunks, error) = drain_stream(&mut execution).await;
+    assert_eq!(error, None);
+    assert!(!chunks.is_empty());
+    let result = execution
+        .complete(DownstreamResult::Delivered)
+        .await
+        .expect("completion converges");
+    assert!(result.progress.completed);
+
+    let after = fixture
+        .estimator
+        .get_account_quota("account-a")
+        .expect("quota account")
+        .get_persisted_tokens(QuotaWindowName::FiveHour, 0.0);
+    assert!(
+        after > before,
+        "a completed stream must move the rolling window: {before} -> {after}"
+    );
+    server.join().await;
+    fixture.database.close().await.expect("database closes");
 }
