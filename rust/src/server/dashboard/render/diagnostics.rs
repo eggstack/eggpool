@@ -61,7 +61,7 @@ pub(in crate::server::dashboard) fn render_reliability_page(
             html_escape(&row.event_type), row.event_count, html_escape(&row.last_seen),
             row.interrupted_requests, row.released_reservations)).collect::<String>();
         format!(
-            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Event type</th><th data-priority=\"1\">Count</th><th data-priority=\"2\">Last seen</th><th data-priority=\"2\">Interrupted</th><th data-priority=\"3\">Released</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Event type</th><th data-priority=\"1\">Count</th><th data-priority=\"2\">Last seen</th><th data-priority=\"2\">Interrupted</th><th data-priority=\"3\">Released</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
     let recent_operational_events = if data.recent_operational_events.is_empty() {
@@ -71,7 +71,7 @@ pub(in crate::server::dashboard) fn render_reliability_page(
             "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\">{}</td><td data-priority=\"2\">{}</td></tr>",
             html_escape(&row.occurred_at), html_escape(&row.event_type), html_escape(row.details.chars().take(200).collect::<String>()))).collect::<String>();
         format!(
-            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
     let attempts_chart = format!(
@@ -81,7 +81,7 @@ pub(in crate::server::dashboard) fn render_reliability_page(
         "<p class=\"empty\">No attempt data for this period.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Category</th><th data-priority=\"1\">Attempts</th><th data-priority=\"2\">Retry outcomes</th><th data-priority=\"2\">Successes</th><th data-priority=\"2\">Failures</th><th data-priority=\"3\">Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Category</th><th data-priority=\"1\">Attempts</th><th data-priority=\"2\">Retry outcomes</th><th data-priority=\"2\">Successes</th><th data-priority=\"2\">Failures</th><th data-priority=\"3\">Avg attempt latency</th></tr></thead><tbody>{retry_rows}</tbody></table></div>"
         )
     };
     let pending_subtext = if data.pending_requests == 0 {
@@ -148,7 +148,7 @@ pub(in crate::server::dashboard) fn render_routing_page(
         "<p class=\"empty\">No routing decisions in this period.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Decisions</th><th data-priority=\"2\">Avg eligible</th><th data-priority=\"2\">Avg scored</th><th data-priority=\"2\">Avg excluded</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Distinct accounts</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Decisions</th><th data-priority=\"2\">Avg eligible</th><th data-priority=\"2\">Avg scored</th><th data-priority=\"2\">Avg excluded</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Distinct accounts</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
     let mut selected_by_account = std::collections::BTreeMap::<&str, i64>::new();
@@ -208,7 +208,7 @@ pub(in crate::server::dashboard) fn render_routing_page(
         "<p class=\"empty\">No selection data in this period.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Selections</th><th data-priority=\"2\">Last score</th><th data-priority=\"2\">Last tier</th><th data-priority=\"3\">Avg tier</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Avg eligible</th><th data-priority=\"3\">Last selected</th></tr></thead><tbody>{selection_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Selections</th><th data-priority=\"2\">Last score</th><th data-priority=\"2\">Last tier</th><th data-priority=\"3\">Avg tier</th><th data-priority=\"3\">Avg score</th><th data-priority=\"3\">Avg eligible</th><th data-priority=\"3\">Last selected</th></tr></thead><tbody>{selection_rows}</tbody></table></div>"
         )
     };
     let trace_status = format!(
@@ -299,7 +299,7 @@ pub(in crate::server::dashboard) fn render_traces_page(
         })
         .collect::<String>();
     format!(
-        "<h2>Traces</h2><p class=\"sub\">Auth-gated; does not include error_detail or client_ip; for incident debugging only.</p><form method=\"get\" class=\"filter-form\"><label class=\"trace-limit\">Limit: <span class=\"number-stepper\" data-stepper-for=\"limit\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"dec\" aria-label=\"Decrease limit\">−</button><input type=\"number\" name=\"limit\" id=\"limit\" value=\"{}\" min=\"10\" max=\"500\" data-stepper-input=\"1\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"inc\" aria-label=\"Increase limit\">+</button></span></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form>{}<section class=\"panel\"><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Time</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Status</th><th data-priority=\"1\">Latency</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Protocol</th><th data-priority=\"2\">Error class</th><th data-priority=\"2\">In</th><th data-priority=\"2\">Out</th><th data-priority=\"3\">Thinking</th><th data-priority=\"3\">ID</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Traces</h2><p class=\"sub\">Auth-gated; does not include error_detail or client_ip; for incident debugging only.</p><form method=\"get\" class=\"filter-form\"><label class=\"trace-limit\">Limit: <span class=\"number-stepper\" data-stepper-for=\"limit\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"dec\" aria-label=\"Decrease limit\">−</button><input type=\"number\" name=\"limit\" id=\"limit\" value=\"{}\" min=\"10\" max=\"500\" data-stepper-input=\"1\"><button type=\"button\" class=\"number-stepper-btn\" data-stepper-action=\"inc\" aria-label=\"Increase limit\">+</button></span></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><button type=\"submit\">Apply</button></form>{}<section class=\"panel\"><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Time</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Status</th><th data-priority=\"1\">Latency</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Protocol</th><th data-priority=\"2\">Error class</th><th data-priority=\"2\">In</th><th data-priority=\"2\">Out</th><th data-priority=\"3\">Thinking</th><th data-priority=\"3\">ID</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
         limit,
         html_escape(period),
         html_escape(theme),

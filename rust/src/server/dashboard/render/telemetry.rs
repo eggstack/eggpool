@@ -89,7 +89,7 @@ pub(in crate::server::dashboard) fn render_latency_page(
         })
         .collect::<String>();
     format!(
-        "{header}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Per-model breakdown</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Avg TTFT</th><th data-priority=\"2\">P50 TTFT</th><th data-priority=\"2\">P99 TTFT</th><th data-priority=\"3\">Phases ms (c/r/o)</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
+        "{header}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Per-model breakdown</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Avg TTFT</th><th data-priority=\"2\">P50 TTFT</th><th data-priority=\"2\">P99 TTFT</th><th data-priority=\"3\">Phases ms (c/r/o)</th></tr></thead><tbody>{rows}</tbody></table></div></section>"
     )
 }
 
@@ -121,7 +121,7 @@ pub(in crate::server::dashboard) fn render_events_page(
             })
             .collect::<String>();
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
     };
     let types = data
@@ -309,7 +309,7 @@ pub(in crate::server::dashboard) fn render_timeseries_page(
         "<p class=\"empty\">No requests in this window.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th></tr></thead><tbody>{aggregate_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th></tr></thead><tbody>{aggregate_rows}</tbody></table></div>"
         )
     };
     let usage_rows = data.timeseries.iter().map(|row| {
@@ -332,7 +332,7 @@ pub(in crate::server::dashboard) fn render_timeseries_page(
         "<p class=\"empty\">No requests in this window.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Series</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"2\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Cache read</th><th data-priority=\"3\">Cache write</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Avg TTFT</th></tr></thead><tbody>{usage_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Bucket</th><th data-priority=\"1\">Series</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Model</th><th data-priority=\"1\">Requests</th><th data-priority=\"2\">Cost</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Cache read</th><th data-priority=\"3\">Cache write</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Avg TTFT</th></tr></thead><tbody>{usage_rows}</tbody></table></div>"
         )
     };
     format!(
@@ -487,7 +487,7 @@ pub(in crate::server::dashboard) fn render_pings_page(
         })
         .collect::<String>();
     format!(
-        "<h2>Provider Pings</h2>{}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Recent pings</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Time</th><th data-priority=\"1\">Latency</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Account</th><th data-priority=\"2\">Models</th><th data-priority=\"3\">Error</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "<h2>Provider Pings</h2>{}<section class=\"cards\">{cards}</section><section class=\"panel\"><h3>Recent pings</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Time</th><th data-priority=\"1\">Latency</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Account</th><th data-priority=\"2\">Models</th><th data-priority=\"3\">Error</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
         dashboard_period_selector(period, theme)
     )
 }
@@ -600,7 +600,7 @@ pub(in crate::server::dashboard) fn render_token_heatmap(
         }
     }
     format!(
-        "<div class=\"heatmap\"><svg width=\"{svg_width}\" height=\"{svg_height}\" viewBox=\"0 0 {svg_width} {svg_height}\" role=\"img\" aria-label=\"Token activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
+        "<div class=\"heatmap\" tabindex=\"0\" role=\"region\" aria-label=\"Token activity heatmap, scroll horizontally for older weeks\"><svg width=\"{svg_width}\" height=\"{svg_height}\" viewBox=\"0 0 {svg_width} {svg_height}\" role=\"img\" aria-label=\"Token activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
     )
 }
 
@@ -720,6 +720,6 @@ pub(in crate::server::dashboard) fn render_bandwidth_heatmap(
         }
     }
     format!(
-        "<div class=\"heatmap\"><svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"Bandwidth activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
+        "<div class=\"heatmap\" tabindex=\"0\" role=\"region\" aria-label=\"Bandwidth activity heatmap, scroll horizontally for older weeks\"><svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"Bandwidth activity (last 180 days)\">{cells}</svg><div class=\"heatmap-overlay\" style=\"--heatmap-weeks: {weeks}\" aria-hidden=\"true\">{hitboxes}</div></div>"
     )
 }

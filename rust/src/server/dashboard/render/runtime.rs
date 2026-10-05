@@ -93,7 +93,7 @@ pub(in crate::server::dashboard) fn render_runtime_page(
         "<p class=\"empty\">No background tasks registered.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Task</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Restarts</th><th data-priority=\"2\">Max restarts</th><th data-priority=\"2\">Interval</th><th data-priority=\"3\">Next run</th><th data-priority=\"3\">Done</th><th data-priority=\"4\">Success/Fail</th><th data-priority=\"4\">Last error</th></tr></thead><tbody>{}</tbody></table></div>",
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Task</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Restarts</th><th data-priority=\"2\">Max restarts</th><th data-priority=\"2\">Interval</th><th data-priority=\"3\">Next run</th><th data-priority=\"3\">Done</th><th data-priority=\"4\">Success/Fail</th><th data-priority=\"4\">Last error</th></tr></thead><tbody>{}</tbody></table></div>",
             tasks
         )
     };

@@ -123,6 +123,12 @@ header.topbar h1 {
 header.topbar h1 a {
   color: inherit;
   text-decoration: none;
+  /* The brand is a link, and as bare inline text it measured 67x19px — under
+     the 24px minimum target at every viewport. `inline-flex` + centring keeps
+     the glyph optically identical while giving the hit area a floor. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
 }
 
 nav.topnav {
@@ -344,10 +350,50 @@ h3 {
   font-weight: 600;
 }
 
+/* Standalone, not `.card .sub`. Renderers also emit `<p class="sub">` as a
+   direct child of `<section class="panel">` (8 such paragraphs on /cache
+   alone). Scoping the rule to `.card` left those at the inherited 1rem
+   `--page-text`, so the long explanatory notes rendered at the same weight as
+   the numbers they were annotating and outweighed the `h3` above them. */
+.sub {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
 .card .sub {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+/* Card and panel prose carries runtime identifiers verbatim: dotted
+   attribute paths ("TranscodeContext.cache_boundary_tracker;"), snake_case
+   enum values ("reporting_only"), and call names
+   ("threading.active_count()"). `runtime_metric_card` is the shared emitter
+   for /cache and /runtime, so this hits every such card at once.
+
+   Those runs are unbreakable by default and the monospace face offers no soft
+   break opportunities, so a 40-character token outgrew the card holding it. On
+   /cache at 320px the token overran the card's content box by 95px and
+   `html { overflow-x: hidden }` cut it mid-identifier, and the "Mode" metric
+   rendered as "reporting_onl" on /cache at 768px and 1024px. Both were text
+   the operator needed to read a mode name or an attribute path.
+
+   `break-word` is the load-bearing keyword rather than `anywhere`: it only
+   breaks a run once that run would otherwise overflow, and — unlike
+   `anywhere` — it does not contribute to the element's min-content size, so it
+   cannot disturb the `min-width: 0` / `max-width: 100%` shrink rules that the
+   timeseries filter form, the model `<select>`, and the mobile panels rely on
+   to stay inside a narrow viewport. It is inert under `white-space: nowrap`,
+   so the nav links, `.pill`, and `.exactness-badge` keep their existing
+   behaviour and remain clipped inside `.table-scroll`. */
+.sub,
+.card .metric,
+.card h3,
+.empty,
+.status {
+  overflow-wrap: break-word;
 }
 
 .cards.system-health {
@@ -522,6 +568,17 @@ td.no { color: var(--color-error); font-weight: 600; }
   gap: 0.5rem;
   align-items: center;
   margin: 0 0 1rem;
+  /* `inline-flex` shrink-wraps to max-content, so the form's own width was
+     the sum of its controls' max-content sizes and `flex-wrap` never engaged
+     — the wrap threshold and the box being wrapped were the same number. On
+     /timeseries that made the form as wide as its widest option: one
+     50-character model id produced a 462px form inside a 296px content box at
+     320px, and because `main` is `overflow: visible` the second column of
+     controls plus the Apply button were clipped off-screen by
+     `html { overflow-x: hidden }` with no scroll container to recover them.
+     Capping the form at the containing block lets the items wrap and the
+     per-label `min-width: 0` below take effect. */
+  max-width: 100%;
 }
 
 .timeseries-chart-panel {
@@ -595,11 +652,26 @@ td.no { color: var(--color-error); font-weight: 600; }
   margin: 0 0 1rem;
 }
 
+/* `min-width: 0` on the label and `max-width: 100%` on the control are both
+   load-bearing. A `<select>` is sized by its widest option and, as a replaced
+   form control, will not shrink below that min-content width on its own. The
+   label is a flex item, so its default `min-width: auto` propagated the
+   select's min-content floor up to the `.timeseries-controls` row: one
+   OpenRouter-style model id ("openai/gpt-5-mini-2025-08-07-high-reasoning-
+   effort", 50 chars ≈ 450px at the 0.85rem control font) made the row ~450px
+   wide inside a 296px content box on a 320px phone. `main` and
+   `.timeseries-controls` are both `overflow: visible`, so the second column
+   of controls — including the Apply button — was pushed past the viewport
+   and permanently clipped by `html { overflow-x: hidden }` with no scroll
+   container to recover it. Capping the control at the label's width lets the
+   browser ellipsise the option text instead. */
 .timeseries-controls label {
   display: inline-flex;
   flex-direction: column;
   font-size: 0.85rem;
   color: var(--text-muted);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .timeseries-period-selector label {
@@ -607,12 +679,16 @@ td.no { color: var(--color-error); font-weight: 600; }
   flex-direction: column;
   font-size: 0.85rem;
   color: var(--text-muted);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .timeseries-controls label > select,
 .timeseries-controls label > input,
 .timeseries-period-selector label > select {
   margin-top: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .period-selector select,
@@ -654,6 +730,11 @@ td.no { color: var(--color-error); font-weight: 600; }
   vertical-align: middle;
 }
 
+/* `min-width` alone left these at 28x36px (measured on /traces at 320px),
+   the only interactive control in the sheet with no explicit target box —
+   the burger, the mobile nav links, and the disabled-account toggle all get
+   44px below 760px. Raised to a 44px square at touch widths below; 36px is
+   the pointer-sized floor in between. */
 .number-stepper-btn {
   font: inherit;
   padding: 0 0.55rem;
@@ -662,7 +743,8 @@ td.no { color: var(--color-error); font-weight: 600; }
   color: var(--page-text);
   cursor: pointer;
   line-height: 1;
-  min-width: 1.75rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
 }
 
 .number-stepper-btn[data-stepper-action="dec"] {
@@ -766,8 +848,16 @@ label.trace-limit {
   background: var(--topbar-bg);
   color: var(--topbar-text);
   cursor: pointer;
+  /* 28px tall at the default padding; the inline topbar is a pointer surface
+     but this is the one control in it an operator reaches for repeatedly. */
+  min-height: 32px;
 }
 
+/* The glyph alone sized this to 29x26px on tablet and desktop, and 29x44 on
+   mobile — under the 44px minimum target in the inline axis at every width,
+   and under it in both axes wherever the burger is hidden. The reload button
+   is the only control in the topbar, so it needs a real target box; the
+   padding is symmetric so the glyph stays optically centred. */
 .topnav-refresh {
   font: inherit;
   font-size: 1rem;
@@ -779,6 +869,8 @@ label.trace-limit {
   background: var(--topbar-bg);
   color: var(--topbar-text);
   cursor: pointer;
+  min-width: 44px;
+  min-height: 32px;
 }
 
 .topnav-refresh:hover {
@@ -1011,6 +1103,32 @@ label.trace-limit {
     min-height: 44px;
   }
 
+  /* Touch-width target sizes. The nav links above already reach 44px; these
+     three were the remaining undersized controls at 320-430px — the reload
+     button (29px wide), the theme picker in the dropdown (28px tall), and the
+     +/- steppers on /traces (28x36px). */
+  .topnav-refresh {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .topnav-menu .theme-selector select,
+  .filter-form select,
+  .period-selector select {
+    min-height: 44px;
+  }
+
+  .number-stepper-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* The brand wordmark is the page's "go home" control; at the base 24px it
+     clears the pointer minimum but not the touch one. */
+  header.topbar h1 a {
+    min-height: 44px;
+  }
+
   /* The theme selector sits inside the .topnav-menu flex column on
      narrow viewports; pushing it to the bottom keeps the page links
      grouped together at the top of the dropdown.  On wide viewports
@@ -1139,32 +1257,30 @@ label.trace-limit {
   .topnav-refresh {
     flex: 0 0 auto;
   }
-}
 
-/* ---- Desktop: one line for links, theme picker, and reload button ----
+  /* ---- Compact metrics for the inline (non-burger) topbar ----
 
-   Thirteen uppercase nav links plus a theme `<select>` plus the reload
-   button need roughly 1710px at the default metrics, so the topbar fell to
-   three rows (brand / links / theme+reload) and wasted most of a laptop
-   screen before any content appeared. These values keep the whole group on
-   a single row down to about 1280px without shrinking the labels below
-   0.82rem, which is the point where uppercase nav text stops being
-   comfortable to read. Below that width the group wraps as a unit — the
-   links stay together and the theme picker drops to the next line, but the
-   reload button is never orphaned on a line of its own.
+     Thirteen uppercase nav links plus a theme `<select>` plus the reload
+     button need roughly 1710px at the default metrics. At full size the
+     group fell to three or four rows from 761px all the way to 1279px —
+     measured at 768px the sticky topbar was 175px tall (brand / two nav rows
+     / theme picker alone on a 325px row), permanently occupying 23% of a
+     1024x768 tablet viewport before any content appeared. The compact tier
+     therefore starts where the inline row starts, not at 1280px.
 
-   The theme `<select>` is the one element that gives width cheaply: it sizes
-   to its longest option ("black but with important highlights"), so it is
-   capped and ellipsised instead. The full name is still in the option list
-   and the picker carries a tooltip naming its purpose. */
-@media (min-width: 1280px) {
+     The theme `<select>` is the one element that gives width cheaply: it
+     sizes to its longest option ("black but with important highlights"), so
+     it is capped and ellipsised instead. That alone is worth ~180px. The
+     full name stays in the option list and the picker carries a tooltip
+     naming its purpose. */
+
   header.topbar {
     padding-left: 1.1rem;
     padding-right: 1.1rem;
     gap: 0.5rem 0.75rem;
   }
 
-  /* The brand shares the single row with the nav group, so trim it to the
+  /* The brand shares the row with the nav group, so trim it to the
      intrinsic width of its text instead of a share of the bar. */
   header.topbar h1 {
     font-size: 1rem;
@@ -1172,13 +1288,7 @@ label.trace-limit {
   }
 
   nav.topnav {
-    flex-wrap: nowrap;
     gap: 0.35rem;
-  }
-
-  .topnav-menu {
-    flex-wrap: nowrap;
-    gap: 0.25rem;
   }
 
   nav.topnav a {
@@ -1191,6 +1301,28 @@ label.trace-limit {
     width: 9rem;
     max-width: 9rem;
     text-overflow: ellipsis;
+  }
+}
+
+/* ---- Wide: one line for links, theme picker, and reload button ----
+
+   `nowrap` is the last step, layered on the compact metrics above. Measured
+   against the real topbar the group needs ~1360px to truly fit one row, so
+   this is not the breakpoint where the bar becomes a single row — it is where
+   forcing one stops costing more height than wrapping does. Between 1280 and
+   1359 the rows measured 88px with `nowrap` against 129px with the wrap
+   inherited from the 761px block, so `nowrap` starts at 1280 and the bar is a
+   single 57px row from ~1340px. The 761-1279 range keeps the wrap: thirteen
+   links plus the picker do not fit a tablet, but the compact metrics above
+   hold that range to 129px instead of the 175px it measured before. */
+@media (min-width: 1280px) {
+  nav.topnav {
+    flex-wrap: nowrap;
+  }
+
+  .topnav-menu {
+    flex-wrap: nowrap;
+    gap: 0.25rem;
   }
 }
 
@@ -1258,6 +1390,77 @@ label.trace-limit {
   height: 13px;
   border-radius: 2px;
   background: transparent;
+}
+
+/* `max-width` alone never engages against a 13px anchor. The tooltip is
+   absolutely positioned with `left: 50%` and `right: auto`, so its available
+   width is the containing block minus 50% of it — 6.5px inside a heatmap
+   hitbox. CSS shrink-to-fit then floors the used width at the *min-content*
+   width, the longest unbreakable word ("requests"), so the box measured
+   60x101px and painted as an unreadable sliver — "Sun, Apr / 12 2026 / 0 B
+   in · / 0 B out / · 0 / requests" — with its last line clipped by the
+   scroller. `max-width` is a ceiling, not a target, so it cannot lift that
+   floor, and the sliver was three lines tall instead of the ~48.5px the row
+   rules below assume, so it overflowed the scroller in whichever direction it
+   was anchored.
+
+   `max-content` sizes the box to its natural single-line width, still capped
+   by the inherited `max-width`, restoring the intended ~218px two-line, 48.5px
+   box. With that height the row corrections below are exact: rows 0-2
+   flipped below land at 73..121 against the 142px content height, and rows
+   3-6 anchored above clear the top edge at +11.5px.
+
+   Scoped to the heatmap on purpose. A global `width: max-content` also widens
+   tooltips on wide anchors whose available width already exceeded their text:
+   the topbar reload button went 45px -> 120px and overhung the right edge of
+   a 1440px viewport, and a model-id link overhung the left edge — neither has
+   a scroll range to recover. This defect is specific to the 13px cell. */
+.heatmap-overlay .heatmap-hitbox::after {
+  width: max-content;
+}
+
+/* The heatmap never scales — `.heatmap` scrolls — and it clips vertically.
+   `overflow-y: hidden` is not a recovery path here: once the inline axis
+   scrolls, `overflow-y: visible` computes to `auto` (CSS Overflow), so a
+   visible vertical axis would be clipped regardless. Two consequences, both
+   measured against the real 180-day grid (189 hitboxes, 27 weeks × 7 days):
+
+   1. The default `[data-tooltip]::after` anchor sits *above* its cell
+      (`bottom: calc(100% + 8px)`, i.e. 8px clear of the cell's top edge),
+      and the overlay starts 20px down. Against the ~48.5px two-line box that
+      puts the tooltip's top edge above the scroller's content edge for the
+      first three day-rows: -36.5px for row 0 (Sunday), -20.5px for row 1
+      (Monday), -4.5px for row 2 (Tuesday) — so 3 of every 7 days across all
+      26 populated weeks lost part of the box, and the first two lost enough
+      to be unreadable. `nth-child(7n+1|2|3)` are rows 0-2 of every week
+      because hitboxes are appended in column-major order (see above). Flip
+      exactly those three below their cell, where the overlay has room: row 2
+      lands at 60..108.5 against a 142px content height. Row 3 already clears
+      the top edge at +11.5px and stays above, as do rows 4-6.
+
+   2. Centring the tooltip on a cell in the earliest weeks put its left edge
+      before the scroller's content edge, and browsers create no scroll range
+      in the negative inline direction — so on viewports where the heatmap
+      fits outright (>=761px) those tooltips were clipped with no way to
+      recover them. `left: -36px` walks the box back to the scroller's content
+      edge, which is exactly the overlay's own 36px inset (the `Mon/Wed/Fri`
+      row-label gutter). Six weeks (42 hitboxes) is enough to clear the widest
+      tooltip at every desktop width; past that the cell is far enough from
+      the edge for centring to fit.
+
+   Both rules outrank `[data-tooltip]::after` (0,3,1 vs 0,1,1) and set
+   disjoint properties, so a first-week Sunday gets both corrections. */
+.heatmap-overlay .heatmap-hitbox:nth-child(7n + 1)::after,
+.heatmap-overlay .heatmap-hitbox:nth-child(7n + 2)::after,
+.heatmap-overlay .heatmap-hitbox:nth-child(7n + 3)::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.heatmap-overlay .heatmap-hitbox:nth-child(-n + 42)::after {
+  left: -36px;
+  right: auto;
+  transform: none;
 }
 
 /* CSS tooltip system — opt in by adding a `data-tooltip` attribute to
@@ -1468,4 +1671,33 @@ nav.topnav [data-tooltip]::before {
 .pill-unknown {
   background: color-mix(in srgb, var(--text-muted) 15%, transparent);
   color: var(--text-muted);
+}
+
+/* A "no data" placeholder inside a table cell. `muted` is emitted by the
+   renderers but had no rule here, so it silently inherited the table's primary
+   text. Defining it makes the placeholder explicit and pins it against drift.
+
+   The colour is the primary text on purpose, and that is worth not "fixing"
+   later. Measured across all 50 bundled themes, against the panel background
+   the cell actually sits on, for a 0.72rem placeholder glyph:
+
+     var(--text-muted)                        33/50 pass, worst 1.96:1 (Nord)
+     --page-text 92% mixed into --card-bg     46/50 pass, worst 2.27:1
+     --page-text 85% mixed into --card-bg     44/50 pass, worst 2.13:1
+     --page-text 70% mixed into --card-bg     36/50 pass, worst 1.84:1
+     var(--page-text)                         48/50 pass, worst 2.45:1
+
+   WCAG AA for normal text is 4.5:1. `--text-muted` is a low-contrast token in
+   this theme set — it clears 4.5:1 on the *page* background, which is why
+   `p.sub` prose passes everywhere, but not on the panel background, so it
+   cannot carry a placeholder glyph. De-emphasising toward the card only makes
+   it worse, monotonically. The two remaining themes (Rose Pine Dawn 2.45:1,
+   Cyber Red 4.34:1) fail for *every* glyph in the table, primary text
+   included, so they are theme-token issues rather than a placeholder issue.
+
+   This element is not a `.pill` for the same reason. The pill tints its own
+   background, so the em-dash sat in a filled chip that read as an empty cell
+   rather than a value. The Benchmarks column renders the identical em-dash. */
+.muted {
+  color: var(--page-text);
 }
