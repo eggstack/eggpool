@@ -386,8 +386,13 @@ pub fn write_atomic(path: &Path, content: &[u8], mode: u32) -> Result<(), Deploy
         file.sync_all()?;
         fs::rename(&temporary, path)?;
         // Fsync the parent directory so the rename itself survives a crash;
-        // without it a deployed binary or restored config can revert.
-        File::open(parent)?.sync_all()?;
+        // without it a deployed binary or restored config can revert. The
+        // content is already committed by the rename, so a filesystem that
+        // rejects directory fsync costs durability, not the deploy: it is
+        // reported instead of failing an install that succeeded.
+        if let Err(error) = File::open(parent).and_then(|directory| directory.sync_all()) {
+            tracing::warn!("parent directory fsync failed after atomic rename: {error}");
+        }
         Ok::<(), io::Error>(())
     })();
     if result.is_err() {

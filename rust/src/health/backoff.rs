@@ -271,7 +271,7 @@ pub fn compute_backoff_seconds_with_rng(
     if matches!(
         reason,
         BackoffReason::QuotaExhausted | BackoffReason::RateLimited
-    ) && retry_after.is_some_and(|value| value.is_finite() && value >= 0.0)
+    ) && retry_after.is_some_and(|value| value.is_finite() && value > 0.0)
     {
         let mut delay = retry_after
             .unwrap_or_default()
@@ -279,7 +279,11 @@ pub fn compute_backoff_seconds_with_rng(
         if jitter {
             delay *= 1.0 - source.next_unit() * policy.jitter;
         }
-        return Some(delay.clamp(0.0, MAX_NONTERMINAL_BACKOFF_SECONDS));
+        // A provider hint is never allowed to back off less than the policy
+        // base delay, and a zero hint is not a hint at all: it would leave the
+        // account immediately re-admittable while the provider is still
+        // limiting us, and it skips escalation entirely.
+        return Some(delay.clamp(policy.base_delay, MAX_NONTERMINAL_BACKOFF_SECONDS));
     }
     let doublings = consecutive_failures
         .saturating_sub(1)

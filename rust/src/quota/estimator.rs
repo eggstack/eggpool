@@ -254,7 +254,7 @@ impl QuotaEstimator {
             .entry(account_name.to_owned())
             .or_insert_with(|| AccountQuota::new(account_name));
         quota
-            .hourly_window
+            .five_hour_window
             .add_observation(_now, tokens, cost_microdollars);
         quota
             .daily_window

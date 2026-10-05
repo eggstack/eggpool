@@ -1025,7 +1025,12 @@ async fn stalled_stream_reader_is_forced_closed_before_shared_resources() {
         .await
         .expect("stream producer observes downstream cancellation")
         .expect("provider connection closes");
-    let _ = tokio::time::timeout(Duration::from_secs(2), provider).await;
+    // The stop signal above already proves the producer observed cancellation;
+    // this asserts the task really finished instead of discarding a timeout.
+    let _ = tokio::time::timeout(Duration::from_secs(2), provider)
+        .await
+        .expect("stream producer stops within the deadline")
+        .expect("stream producer task does not panic");
     let mut eof = Vec::new();
     tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut eof))
         .await
@@ -1480,7 +1485,12 @@ async fn eggserve_040_streaming_stays_incremental_without_trailers() {
         .await
         .expect("stream producer observes downstream cancellation")
         .expect("provider connection closes");
-    let _ = tokio::time::timeout(Duration::from_secs(2), provider).await;
+    // The stop signal above already proves the producer observed cancellation;
+    // this asserts the task really finished instead of discarding a timeout.
+    let _ = tokio::time::timeout(Duration::from_secs(2), provider)
+        .await
+        .expect("stream producer stops within the deadline")
+        .expect("stream producer task does not panic");
     database
         .close()
         .await
@@ -1688,7 +1698,10 @@ async fn body_limit_rejections_use_the_surfaces_error_envelope() {
     }
 
     assert!(handle.request_shutdown(ShutdownReason::Requested));
-    let _ = tokio::time::timeout(Duration::from_secs(11), task).await;
+    let _ = tokio::time::timeout(Duration::from_secs(11), task)
+        .await
+        .expect("server shutdown stays within one deadline")
+        .expect("server task joins");
     database
         .close()
         .await

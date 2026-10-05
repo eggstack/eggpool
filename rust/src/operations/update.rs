@@ -1756,7 +1756,10 @@ where
                 return Err(UpdateError::RestartFailed);
             }
         }
-        fs::remove_file(&rollback).map_err(|_| UpdateError::ReplacementFailed)?;
+        // The update is already committed here: the new binary passed its
+        // self-check and the service restarted, so leftover rollback bytes are
+        // cleanup, not a failed replacement.
+        let _ = fs::remove_file(&rollback);
         Ok(ApplyReport {
             target_version: target.as_str().to_owned(),
             restarted: was_running,

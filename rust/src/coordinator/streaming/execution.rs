@@ -603,6 +603,10 @@ impl PendingStreamFinalization {
         }
         parts.data.downstream_started = handoff_started;
         parts.data.latency_ms = duration_i64(parts.elapsed());
+        // Client cancellation is an ordinary terminal path, so midstream usage
+        // must be folded here too; the provider bills the request regardless
+        // of whether the downstream consumed the terminal block.
+        parts.fold_midstream_usage();
         parts.stream = None;
         parts.phase = StreamPhase::RetainedFinalization;
         let command = FinalizationCommand::Request {
@@ -658,6 +662,19 @@ impl PendingStreamFinalizationParts {
             .as_ref()
             .and_then(|stream| stream.wire.as_ref())
             .and_then(|wire| wire.usage())
+    }
+
+    /// Folds usage already observed by the wire decoder into the finalization
+    /// payload while the decoder is still owned. A stored natural terminal is
+    /// authoritative, so the fold is skipped once one has been recorded.
+    fn fold_midstream_usage(&mut self) {
+        if !self.terminal_stored
+            && let Some(usage) = self.midstream_usage()
+        {
+            self.data.input_tokens = bounded_i64(usage.input_tokens);
+            self.data.output_tokens = bounded_i64(usage.output_tokens);
+            self.data.cache_counter_status = Some(cache_status(usage.cache_counter_status).into());
+        }
     }
 
     fn attempt_number(&self) -> u32 {
@@ -719,13 +736,7 @@ impl Drop for PendingStreamFinalization {
         }
         parts.data.downstream_started = parts.handoff.started();
         parts.data.latency_ms = duration_i64(parts.elapsed());
-        if !parts.terminal_stored
-            && let Some(usage) = parts.midstream_usage()
-        {
-            parts.data.input_tokens = bounded_i64(usage.input_tokens);
-            parts.data.output_tokens = bounded_i64(usage.output_tokens);
-            parts.data.cache_counter_status = Some(cache_status(usage.cache_counter_status).into());
-        }
+        parts.fold_midstream_usage();
         parts.stream = None;
         let supervisor = parts.supervisor;
         let Ok(handle) = Handle::try_current() else {

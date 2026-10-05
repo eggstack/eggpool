@@ -1570,14 +1570,17 @@ impl CatalogRepository {
                             old.protocol.as_str(),
                             canonical_stored(&old.capabilities),
                             canonical_stored(&old.source_metadata),
-                            old.protocol_source.as_ref(),
+                            old.protocol_source.as_deref(),
                             old.resolution_status.as_str(),
                         ) != (
                             row.display_name.as_ref(),
                             row.protocol.as_str(),
                             capabilities.clone(),
                             source_metadata.clone(),
-                            row.protocol_source.as_ref(),
+                            // Compared against the same stored projection the
+                            // write applies, so a persistently unresolved source
+                            // is not rewritten as a permanent no-op update.
+                            row.protocol_source.as_deref().filter(|value| *value != "unresolved"),
                             "resolved",
                         ) =>
                     {
@@ -1678,6 +1681,13 @@ impl CatalogRepository {
                     connection.execute("DELETE FROM account_models WHERE model_id = ?1", [&model_id])?;
                     connection.execute(
                         "DELETE FROM provider_model_metadata WHERE model_id = ?1",
+                        [&model_id],
+                    )?;
+                    // `model_price_snapshots.model_id` is NO ACTION, so the
+                    // withdraw deletes the snapshots of a model that no longer
+                    // exists instead of failing the whole persistence batch.
+                    connection.execute(
+                        "DELETE FROM model_price_snapshots WHERE model_id = ?1",
                         [&model_id],
                     )?;
                     connection.execute("DELETE FROM models WHERE model_id = ?1", [&model_id])?;

@@ -43,6 +43,10 @@ pub struct AccountHealth {
     pub disabled_models: BTreeMap<String, Option<f64>>,
     pub terminal_models: BTreeSet<String>,
     pub circuit_breaker: CircuitBreaker,
+    /// Per-model consecutive-failure rung. A model-scoped failure never
+    /// advances the account counter, so backoff escalation needs its own
+    /// counter; it is reset by a success for the same model.
+    model_failures: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,6 +177,7 @@ impl HealthManager {
                 cooldown_until: 0.0,
                 disabled_models: BTreeMap::new(),
                 terminal_models: BTreeSet::new(),
+                model_failures: BTreeMap::new(),
                 circuit_breaker: CircuitBreaker::with_clock(move || clock(), 5, 300.0, 1),
             });
         if let Some(account) = accounts.get_mut(account_name) {
@@ -331,10 +336,11 @@ impl HealthManager {
             account.health_state = "healthy".to_owned();
             account.cooldown_until = 0.0;
         }
-        if let Some(model_id) = model_id
-            && !account.terminal_models.contains(model_id)
-        {
-            account.disabled_models.remove(model_id);
+        if let Some(model_id) = model_id {
+            if !account.terminal_models.contains(model_id) {
+                account.disabled_models.remove(model_id);
+            }
+            account.model_failures.remove(model_id);
         }
         account.circuit_breaker.record_success();
     }
@@ -359,6 +365,25 @@ impl HealthManager {
             account.disabled_reason = reason.to_string();
             account.disabled_until = None;
         }
+    }
+
+    /// Advances the per-model failure rung and returns the new count.
+    /// Model-scoped effects never touch the account counters, so this is the
+    /// only counter that can escalate their backoff delay.
+    pub fn record_model_failure(&self, account_name: &str, model_id: &str) -> u32 {
+        let mut accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(account) = accounts.get_mut(account_name) else {
+            return 1;
+        };
+        let failures = account
+            .model_failures
+            .entry(model_id.to_owned())
+            .or_default();
+        *failures = failures.saturating_add(1);
+        *failures
     }
 
     pub fn record_cooldown(&self, account_name: &str, reason: BackoffReason, delay: f64) {
@@ -492,6 +517,7 @@ impl HealthManager {
         for model in &stale {
             account.disabled_models.remove(model);
             account.terminal_models.remove(model);
+            account.model_failures.remove(model);
         }
         stale.len()
     }
@@ -537,12 +563,28 @@ impl HealthManager {
                     });
                 };
                 self.disable_model(account_name, model_id, Some(remaining), false);
+                // The durable rung restores the escalation the process-local
+                // counter would otherwise forget across a restart.
+                self.seed_model_failure(account_name, model_id, record.consecutive_failures.max(1));
             } else {
                 self.record_cooldown(account_name, reason, remaining);
             }
             applied += 1;
         }
         Ok(applied)
+    }
+
+    fn seed_model_failure(&self, account_name: &str, model_id: &str, consecutive_failures: u32) {
+        if let Some(account) = self
+            .accounts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(account_name)
+        {
+            account
+                .model_failures
+                .insert(model_id.to_owned(), consecutive_failures);
+        }
     }
 
     pub fn now(&self) -> f64 {

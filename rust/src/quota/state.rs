@@ -189,7 +189,10 @@ pub struct AccountQuota {
     pub weight: f64,
     pub policy: QuotaPolicy,
     pub persisted_snapshot: Option<PersistedWindowSnapshot>,
-    pub hourly_window: QuotaWindow,
+    /// Rolling fallback that answers the 5h horizon. It must cover the same
+    /// span the persisted snapshot reports, otherwise the fallback under-counts
+    /// usage against the 5h caps and scores an account as unloaded.
+    pub five_hour_window: QuotaWindow,
     pub daily_window: QuotaWindow,
     pub reserved_cost: i64,
     pub reserved_requests: i64,
@@ -203,7 +206,7 @@ impl AccountQuota {
             weight: 1.0,
             policy: QuotaPolicy::default(),
             persisted_snapshot: None,
-            hourly_window: QuotaWindow::new(3_600),
+            five_hour_window: QuotaWindow::new(18_000),
             daily_window: QuotaWindow::new(86_400),
             reserved_cost: 0,
             reserved_requests: 0,
@@ -219,7 +222,7 @@ impl AccountQuota {
                 QuotaWindowName::Monthly => snapshot.cost_30d,
             },
             None => match window {
-                QuotaWindowName::FiveHour => self.hourly_window.usage(now).1,
+                QuotaWindowName::FiveHour => self.five_hour_window.usage(now).1,
                 QuotaWindowName::Weekly | QuotaWindowName::Monthly => 0,
             },
         }
@@ -241,7 +244,7 @@ impl AccountQuota {
                 QuotaWindowName::Monthly => snapshot.token_count_30d,
             },
             None => match window {
-                QuotaWindowName::FiveHour => self.hourly_window.usage(now).0,
+                QuotaWindowName::FiveHour => self.five_hour_window.usage(now).0,
                 QuotaWindowName::Weekly | QuotaWindowName::Monthly => 0,
             },
         }

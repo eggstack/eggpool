@@ -262,6 +262,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded per path, and an unrecorded or stale divergence fails loudly
   instead of being mislabelled.
 
+- **A client that leaves mid-stream no longer loses the provider's token
+  usage.** The stream decoder already folds bounded terminal/usage facts while
+  it owns the connection, but the finalization payload only read them from the
+  `Drop` panic path. `complete()` cleared the decoder and finalized with zero
+  tokens, so every client cancellation after the provider had reported usage
+  was persisted as free traffic that upstream still billed. Client cancellation
+  now folds midstream usage on the same guard as a stored natural terminal, and
+  a new `coordinator_c008` test pins the cancelled-after-usage case.
+
+- **A withdrawn model no longer wedges catalog persistence.** Durable
+  withdrawal deleted the `models` row while `model_price_snapshots.model_id`
+  references it with NO ACTION, so an account with any price snapshot failed
+  its entire persist batch. The account could never apply a withdrawal again:
+  the event was emitted, the durable state was not updated, and the next tick
+  repeated the same failure. The withdrawal now deletes the dependent price
+  snapshots in the same transaction.
+
+- **A `Retry-After` hint can no longer bypass backoff escalation.** A
+  `Retry-After: 0` satisfied the "honor the header" branch and produced a zero
+  delay, leaving a limited account immediately re-admittable, and any hint below
+  the policy base delay skipped the escalation rungs. A zero hint is now treated
+  as absent and every honored hint is floored at the policy base delay.
+
+- **A model-scoped backoff now escalates.** `ModelUnavailable` disables a model
+  without touching the account counters, but it computed its delay from the
+  account's `consecutive_failures`, which that path never advances: every
+  occurrence got the same first rung and a persistently failing model was
+  retried forever at a fixed delay. Model-scoped effects advance a dedicated
+  per-model rung, seeded from the durable rung on hydration and cleared by a
+  success for the same model.
+
+- **The 5h quota fallback window is five hours wide.** With no persisted
+  snapshot, the 5h horizon was answered from a one-hour rolling window, so the
+  fallback under-counted usage against the 5h caps and scored a busy account as
+  unloaded. The fallback window now covers the horizon it answers.
+
+- **A refused claim release no longer strands the claim.** `release_active_claim`
+  and `rollback_claim` released the estimator's pending reservation before
+  decrementing the active count, so a failed decrement left a `Pending` claim
+  holding no ownership: nothing was finalized, and a later release or rollback
+  double-decremented. Active-count ownership is now checked before any estimator
+  mutation, under the same lock.
+
+- **A refused claim publication compensates its reservation.** `select_and_claim_for_account`
+  added a pending quota claim and acquired the circuit-breaker probe before
+  `publish`, and `publish` fails on a poisoned claim book. Nothing was released
+  on that path, so a poisoned book grew `pending_requests` monotonically and made
+  every later account look quota-exhausted. The pending claim and the probe are
+  now compensated before the error returns.
+
+- **A persistently unresolved model protocol stops rewriting the row.** The
+  persist comparison compared a stored `NULL` against the literal `"unresolved"`,
+  so a model that never resolved a protocol was rewritten as a permanent no-op
+  update on every tick. The comparison now uses the same stored projection the
+  write applies.
+
+- **A quarantined model stays bounded across process restarts.** Inserting a
+  new quarantine entry during hydration skipped the capacity prune that every
+  other insert path runs, so a restart could leave the map above its cap.
+
+- **An idle timeout is recorded as one outcome.** A single idle-timeout terminal
+  incremented both `stream_idle_timeout` and `upstream_midstream_error`, so
+  transport-failure rates double-counted stalls and the last diagnostic was
+  overwritten with the second label.
+
+- **A successful update and install are no longer reported as failures.** The
+  post-update cleanup returned `ReplacementFailed` when the committed binary's
+  rollback copy could not be unlinked, and a parent-directory fsync failure
+  after an atomic rename failed the whole deploy — both after the content was
+  already committed. Rollback cleanup is now best effort and a rejected
+  directory fsync is a durability warning.
+
+- **Config key matching no longer allocates per candidate.** The case-insensitive
+  prefix scan lowercased the remaining key for every offset, so each comparison
+  allocated a `String`; it now compares ASCII case-insensitively in place.
+
+- **Test fixtures tear down on an observable signal.** The local provider and
+  stream fixtures were driven by a script count and joined behind a discarded
+  timeout, so a test that consumed fewer requests than it scripted paid the full
+  join window and a hung task passed silently. The accept loops now run on an
+  explicit shutdown signal (including the scripted stream stalls), and `join`
+  asserts the task actually stopped. The `coordinator_c009` suite drops from
+  62 s to under 2 s and `coordinator_c011` from 49 s to 4 s.
+
 ## [0.8.0] - 2026-09-11
 
 ### Changed

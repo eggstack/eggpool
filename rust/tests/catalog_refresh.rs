@@ -364,6 +364,72 @@ async fn authoritative_withdrawal_emits_exact_event_and_updates_durable_state() 
     server.finish().await;
 }
 
+#[tokio::test]
+async fn withdrawal_deletes_price_snapshots_instead_of_failing_the_batch() {
+    // `model_price_snapshots.model_id` is NO ACTION. A withdrawn model that
+    // still has a price snapshot used to fail the whole `DELETE FROM models`
+    // inside the persist batch, so the refresh could never apply a withdrawal
+    // again for that account.
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server = FixtureServer::start_sequence(
+        vec![
+            (200, r#"{"data":[{"id":"gpt-old"}]}"#),
+            (200, r#"{"data":[{"id":"gpt-replacement"}]}"#),
+        ],
+        requests.clone(),
+    )
+    .await;
+    let (database, _directory) = database().await;
+    let mut config = config(server.address.clone());
+    config.models.catalog_withdrawal_policy = "confirmed_once".into();
+    let service = service(config, &database, CredentialStore::default()).await;
+    service.refresh().await.expect("first refresh");
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO model_price_snapshots
+                    (model_id, input_price_per_1k, output_price_per_1k)
+                 VALUES ('gpt-old', 0.000_25, 0.000_75)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("price snapshot seeds");
+    let result = service.refresh().await.expect("withdrawal refresh");
+    assert_eq!(
+        result.outcomes["account-a"],
+        RefreshOutcome::SuccessAuthoritative
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, CatalogModelEvent::Withdrawn(row) if row.canonical_model_id == "gpt-old")),
+        "the withdrawal applies despite the price snapshot"
+    );
+    let rows = eggpool::db::CatalogRepository::new(&database)
+        .list_models()
+        .await
+        .expect("models");
+    assert!(!rows.iter().any(|row| row.model_id == "gpt-old"));
+    let snapshots: i64 = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT COUNT(*) FROM model_price_snapshots WHERE model_id = 'gpt-old'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .expect("snapshot count");
+    assert_eq!(
+        snapshots, 0,
+        "the price snapshot of a withdrawn model is deleted, not stranded"
+    );
+    server.finish().await;
+}
+
 #[test]
 fn durable_model_rows_seed_additively_per_account() {
     // Generation build hydrates every durable `models` row into the shared

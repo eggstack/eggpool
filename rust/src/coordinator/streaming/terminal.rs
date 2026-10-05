@@ -172,14 +172,10 @@ pub(crate) fn store_idle_timeout(
     if first {
         apply_effects(router, parts, &effects);
     }
+    // One terminal event, one outcome counter: an idle timeout is not also an
+    // upstream midstream transport error.
     parts.diagnostics_record(
         OUTCOME_IDLE_TIMEOUT,
-        facts.attempt_number,
-        parts.stream_bytes(),
-        parts.elapsed(),
-    );
-    parts.diagnostics_record(
-        OUTCOME_UPSTREAM_MIDSTREAM_ERROR,
         facts.attempt_number,
         parts.stream_bytes(),
         parts.elapsed(),

@@ -33,7 +33,8 @@ remaining durations; unknown accounts are skipped with a warning, never fail-clo
 `classify_failure_category`, `BackoffPolicy`, `get_backoff_policy`,
 `compute_backoff_seconds`, and `MAX_NONTERMINAL_BACKOFF_SECONDS` (1,800 s).
 Authentication yields no delay (sticky disable via the zero `BackoffPolicy`); quota/rate-limit honor
-`retry_after` when finite; model-unavailable is account/model-scoped; unknown and
+`retry_after` when finite, never below the policy base delay and never for a zero hint, so a
+provider cannot bypass escalation; model-unavailable is account/model-scoped; unknown and
 context-limit carry no delay (`get_backoff_policy` returns `None`).
 
 `circuit_breaker.rs` implements a synchronous three-state breaker (`CircuitState::Closed`,
@@ -50,7 +51,9 @@ diagnostic (`CircuitStats`).
 `HealthEffect::account` plus optional `model`) to the narrowest safe mutation.
 Account-wide failures advance the breaker/cooldown; `ModelUnavailable` with a model key
 writes the exact quarantine partition and calls `disable_model` only, never advancing the
-account circuit; `ContextLimitExceeded` and `Unknown` only release the probe. The returned `HealthEffectOutcome` records
+account circuit, and escalates its own per-model rung (`record_model_failure`, seeded from
+the durable rung on hydration, cleared by a success for the same model) so a persistently
+failing model reaches the later policy rungs; `ContextLimitExceeded` and `Unknown` only release the probe. The returned `HealthEffectOutcome` records
 `account_changed`, `model_changed`, `circuit_penalized`, `probe_released`,
 `backoff_seconds`, and `terminal_withdrawal`. Optional repositories persist the same
 bounded facts; no credentials, prompts, bodies, or cache keys cross this boundary.

@@ -59,6 +59,7 @@ struct LocalProvider {
     #[allow(dead_code)]
     observed_requests: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
     request_count: Arc<AtomicUsize>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -73,9 +74,18 @@ impl LocalProvider {
         let observed = Arc::clone(&observed_requests);
         let counted = Arc::clone(&request_count);
         let expected = responses.len().max(1);
+        let (shutdown, mut stop) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            for _ in 0..expected {
-                let Ok((mut socket, _)) = listener.accept().await else {
+            'serving: for _ in 0..expected {
+                // A test that consumes fewer requests than the script is
+                // scripted for is the normal case, so the accept wait is
+                // driven by the shutdown signal rather than by a script count.
+                let accepted = tokio::select! {
+                    biased;
+                    _ = &mut stop => break 'serving,
+                    accepted = listener.accept() => accepted,
+                };
+                let Ok((mut socket, _)) = accepted else {
                     return;
                 };
                 let mut request = Vec::new();
@@ -140,6 +150,7 @@ impl LocalProvider {
             port,
             observed_requests,
             request_count,
+            shutdown: Some(shutdown),
             task: Some(task),
         }
     }
@@ -152,10 +163,20 @@ impl LocalProvider {
         self.request_count.load(Ordering::SeqCst)
     }
 
+    /// Signal the accept loop, then assert the task really finished. The
+    /// signal replaces a discarded fixed sleep: it synchronizes on the
+    /// observable fixture boundary instead of waiting out a script count.
     async fn join(mut self) {
-        if let Some(task) = self.task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(10), task).await;
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap_or_else(|_| panic!("LocalProvider fixture did not stop within 10s"))
+            .unwrap_or_else(|_| panic!("LocalProvider fixture task panicked"));
     }
 }
 

@@ -277,6 +277,7 @@ impl SelectionClaim {
         if state != ClaimState::Pending {
             return Ok(ClaimTransition::AlreadyTransitioned);
         }
+        ensure_active_ownership(&book, &self.account_name)?;
         self.estimator.release_pending_claim(
             &self.account_name,
             self.projected_tokens,
@@ -335,6 +336,7 @@ impl SelectionClaim {
             return Ok(ClaimTransition::AlreadyTransitioned);
         }
         if claim.state == ClaimState::Pending {
+            ensure_active_ownership(&book, &self.account_name)?;
             self.estimator.release_pending_claim(
                 &self.account_name,
                 self.projected_tokens,
@@ -392,13 +394,22 @@ impl SelectionClaim {
     }
 }
 
-fn decrement_active(book: &mut ClaimBook, account_name: &str) -> Result<(), ClaimError> {
-    let count = book.active_requests.get(account_name).copied().unwrap_or(0);
-    if count < 1 {
+/// Fails before any estimator mutation when the active count cannot absorb one
+/// decrement. Callers hold the book lock across this check and the matching
+/// `decrement_active`, so the two cannot diverge; checking first keeps a
+/// stranded `Pending` claim from decrementing the estimator a second time.
+fn ensure_active_ownership(book: &ClaimBook, account_name: &str) -> Result<(), ClaimError> {
+    if book.active_requests.get(account_name).copied().unwrap_or(0) < 1 {
         return Err(ClaimError::ActiveOwnershipUnderflow {
             account_name: account_name.into(),
         });
     }
+    Ok(())
+}
+
+fn decrement_active(book: &mut ClaimBook, account_name: &str) -> Result<(), ClaimError> {
+    ensure_active_ownership(book, account_name)?;
+    let count = book.active_requests.get(account_name).copied().unwrap_or(0);
     book.active_requests.insert(account_name.into(), count - 1);
     Ok(())
 }

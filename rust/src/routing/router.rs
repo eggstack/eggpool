@@ -398,7 +398,7 @@ impl RoutingRouter {
             }
             return Err(ClaimError::Quota(error));
         }
-        let mut selection = SelectionClaim::new(
+        let selection = SelectionClaim::new(
             account_id,
             candidate.account_name.clone(),
             candidate.provider_id.clone(),
@@ -415,14 +415,35 @@ impl RoutingRouter {
             self.state.estimator.clone(),
             self.state.health.clone(),
         );
-        selection = claim::publish(&self.state.claims, selection)?;
+        let published = match claim::publish(&self.state.claims, selection) {
+            Ok(published) => published,
+            Err(error) => {
+                // `publish` refuses before the claim exists in the book, so
+                // nothing downstream can release what was reserved above. The
+                // pending quota claim and the half-open probe are compensated
+                // here so a poisoned book cannot grow `pending_*` forever.
+                if let Err(quota) = self.state.estimator.release_pending_claim(
+                    &candidate.account_name,
+                    facts.projected_tokens.max(0),
+                    projected_cost,
+                ) {
+                    tracing::error!(
+                        "routing claim publish failed and pending compensation failed: {quota}"
+                    );
+                }
+                if owns_probe {
+                    self.release_probe(&candidate.account_name);
+                }
+                return Err(error);
+            }
+        };
         // Fairness is committed only after the candidate owns all local
         // state, so a failed claim does not consume a rotor position.
         if let Some(fairness) = accepted_fairness.filter(|decision| decision.applied) {
             self.commit_fairness(facts, &candidate, fairness.candidate_count);
         }
         drop(catalog);
-        Ok(Some(selection))
+        Ok(Some(published))
     }
 
     pub fn trace_for(

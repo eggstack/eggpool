@@ -92,6 +92,9 @@ impl<'a> HealthEffectApplier<'a> {
             .map_or(1, |state| state.consecutive_cooldowns + 1);
         let model_scoped =
             effect.category == BackoffReason::ModelUnavailable && effect.model_id.is_some();
+        // Model-scoped effects advance their own per-model rung, so the
+        // durable mirror records the rung it actually backed off on.
+        let mut escalated_failures = next_failure;
         let mut outcome = HealthEffectOutcome {
             category: effect.category,
             account_changed: false,
@@ -156,7 +159,10 @@ impl<'a> HealthEffectApplier<'a> {
                     )
                 };
                 let delay = if entry.expiry.is_some() {
-                    super::compute_backoff_seconds(effect.category, next_failure, None, false)
+                    escalated_failures = self
+                        .health
+                        .record_model_failure(&effect.account_name, model_id);
+                    super::compute_backoff_seconds(effect.category, escalated_failures, None, false)
                 } else {
                     None
                 };
@@ -205,7 +211,7 @@ impl<'a> HealthEffectApplier<'a> {
                         reason: effect.category,
                         status_code: effect.status_code,
                         error_class: effect.error_class.clone(),
-                        consecutive_failures: next_failure.max(next_cooldown),
+                        consecutive_failures: escalated_failures.max(next_cooldown),
                         backoff_until_epoch: Some(effect.wall_now + delay),
                         last_failure_epoch: effect.wall_now,
                         updated_epoch: effect.wall_now,

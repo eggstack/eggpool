@@ -114,7 +114,10 @@ paths are `rollback_claim`, `convert_claim_after_durable_publication`,
 durable publication via `trace_for`; request bodies, credentials, and provider error text
 never enter it. `publish` fails closed on a poisoned claim book (`ClaimError::Poisoned`);
 duplicate finalization returns `ClaimTransition::AlreadyTransitioned` instead of double
-subtracting. `record_success` and `apply_failure_effects` apply only the narrow typed
+subtracting. A pending reservation and its half-open probe are acquired before `publish`,
+so a refused publication compensates both before returning. The active-count decrement is
+checked before the estimator is mutated under the same book lock, so a claim can never be
+left `Pending` after a failed release. `record_success` and `apply_failure_effects` apply only the narrow typed
 health transitions owned at that boundary; model-scoped failures never advance the account
 circuit.
 

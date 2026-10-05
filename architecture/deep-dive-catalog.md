@@ -55,7 +55,10 @@ cache before its database await and publishes the hydrated value only after the 
 Outcomes are `RefreshOutcome` (`SuccessAuthoritative`, `SuccessEmpty`, `SuccessPartial`,
 `Failed`, `Skipped`). Only fully protocol-resolved observations are destructive:
 `authoritative && catalog_withdrawal_policy != "preserve_until_health"` permits withdrawal;
-empty/partial/failed/skipped and malformed inputs preserve support. `seed_from_account`
+empty/partial/failed/skipped and malformed inputs preserve support. A durable withdrawal
+deletes the withdrawn model's dependent rows (account links, provider metadata, price
+snapshots) in the same transaction, because `model_price_snapshots.model_id` is NO ACTION
+and a stranded snapshot would fail the whole persist batch. `seed_from_account`
 adds durable knowledge without claiming freshness; `seed_static_models` and
 `set_account_provider` register configuration before first provider contact.
 `ModelsConfig` controls `refresh_interval_s`, `startup_refresh`, `stale_after_s`,

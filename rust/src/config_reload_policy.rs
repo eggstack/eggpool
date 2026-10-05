@@ -501,12 +501,17 @@ pub fn sanitize_text_for_audit(value: &str, context: &str) -> String {
     output
 }
 
+/// First byte offset of `needle` in `value`, compared ASCII-case-insensitively
+/// without allocating. Scanning one byte at a time is correct because a UTF-8
+/// continuation byte can never begin an ASCII needle.
 fn find_ascii_case_insensitive(value: &str, needle: &str) -> Option<usize> {
-    value.char_indices().map(|(index, _)| index).find(|index| {
-        value[*index..]
-            .to_ascii_lowercase()
-            .starts_with(&needle.to_ascii_lowercase())
-    })
+    if needle.is_empty() || needle.len() > value.len() {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let needle = needle.as_bytes();
+    (0..=value.len() - needle.len())
+        .find(|index| bytes[*index..*index + needle.len()].eq_ignore_ascii_case(needle))
 }
 
 const DYNAMIC_RULES: &[(&str, ReloadDisposition)] = &[

@@ -54,6 +54,17 @@ use tokio::{
 
 const MODEL: &str = "fixture-model";
 
+/// Sleep for `delay`, or return early when the fixture is shut down. The
+/// result is `true` when the shutdown signal won the race, so a scripted
+/// stall never outlives the assertion it exists to provoke.
+async fn stopped(stop: &mut tokio::sync::oneshot::Receiver<()>, delay: Duration) -> bool {
+    tokio::select! {
+        biased;
+        _ = &mut *stop => true,
+        _ = sleep(delay) => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Wire profiles and streaming payloads
 // ---------------------------------------------------------------------------
@@ -289,6 +300,7 @@ async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
 struct FiniteStub {
     port: u16,
     request_count: Arc<AtomicUsize>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -303,9 +315,18 @@ impl FiniteStub {
         let request_count = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&request_count);
         let expected = responses.len().max(1);
+        let (shutdown, mut stop) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            for _ in 0..expected {
-                let Ok((mut socket, _)) = listener.accept().await else {
+            'serving: for _ in 0..expected {
+                // A test that consumes fewer requests than the script is
+                // scripted for is the normal case, so the accept wait is
+                // driven by the shutdown signal rather than by a script count.
+                let accepted = tokio::select! {
+                    biased;
+                    _ = &mut stop => break 'serving,
+                    accepted = listener.accept() => accepted,
+                };
+                let Ok((mut socket, _)) = accepted else {
                     return;
                 };
                 let request = read_http_request(&mut socket).await;
@@ -334,6 +355,7 @@ impl FiniteStub {
         Self {
             port,
             request_count,
+            shutdown: Some(shutdown),
             task: Some(task),
         }
     }
@@ -346,10 +368,20 @@ impl FiniteStub {
         self.request_count.load(Ordering::SeqCst)
     }
 
+    /// Signal the accept loop, then assert the task really finished. The
+    /// signal replaces a discarded fixed sleep: it synchronizes on the
+    /// observable fixture boundary instead of waiting out a script count.
     async fn join(mut self) {
-        if let Some(task) = self.task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(15), task).await;
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
+        tokio::time::timeout(Duration::from_secs(15), task)
+            .await
+            .unwrap_or_else(|_| panic!("FiniteStub fixture did not stop within 15s"))
+            .unwrap_or_else(|_| panic!("FiniteStub fixture task panicked"));
     }
 }
 
@@ -395,6 +427,7 @@ impl SseScript {
 struct StreamingProvider {
     port: u16,
     request_count: Arc<AtomicUsize>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -407,16 +440,28 @@ impl StreamingProvider {
         let request_count = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&request_count);
         let expected = scripts.len().max(1);
+        let (shutdown, mut stop) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            for _ in 0..expected {
-                let Ok((mut socket, _)) = listener.accept().await else {
+            'serving: for _ in 0..expected {
+                // A test that consumes fewer requests than the script is
+                // scripted for is the normal case, so the accept wait is
+                // driven by the shutdown signal rather than by a script count.
+                let accepted = tokio::select! {
+                    biased;
+                    _ = &mut stop => break 'serving,
+                    accepted = listener.accept() => accepted,
+                };
+                let Ok((mut socket, _)) = accepted else {
                     return;
                 };
                 let _ = read_http_request(&mut socket).await;
                 let index = counted.fetch_add(1, Ordering::SeqCst);
                 let script = &scripts[index.min(scripts.len() - 1)];
-                if !script.header_delay.is_zero() {
-                    sleep(script.header_delay).await;
+                // Scripted stalls yield to shutdown: a test that already
+                // asserted its terminal must not wait out a stall it
+                // deliberately overrode with a shorter product timeout.
+                if !script.header_delay.is_zero() && stopped(&mut stop, script.header_delay).await {
+                    return;
                 }
                 let mut head = String::from("HTTP/1.1 200 OK\r\n");
                 for (name, value) in &script.extra_headers {
@@ -430,8 +475,8 @@ impl StreamingProvider {
                     continue;
                 }
                 for (delay, bytes) in &script.chunks {
-                    if !delay.is_zero() {
-                        sleep(*delay).await;
+                    if !delay.is_zero() && stopped(&mut stop, *delay).await {
+                        return;
                     }
                     let framed = match script.framing {
                         Framing::Chunked => {
@@ -465,14 +510,17 @@ impl StreamingProvider {
                 // `HoldOpen` keeps the connection open past the proxy's idle
                 // timer so a test can prove the proxy closed the stream on the
                 // forwarded terminal instead of waiting for transport EOF.
-                if let Finish::HoldOpen(hold) = script.finish {
-                    sleep(hold).await;
+                if let Finish::HoldOpen(hold) = script.finish
+                    && stopped(&mut stop, hold).await
+                {
+                    return;
                 }
             }
         });
         Self {
             port,
             request_count,
+            shutdown: Some(shutdown),
             task: Some(task),
         }
     }
@@ -485,10 +533,20 @@ impl StreamingProvider {
         self.request_count.load(Ordering::SeqCst)
     }
 
+    /// Signal the accept loop, then assert the task really finished. The
+    /// signal replaces a discarded fixed sleep: it synchronizes on the
+    /// observable fixture boundary instead of waiting out a script count.
     async fn join(mut self) {
-        if let Some(task) = self.task.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(15), task).await;
+        let Some(task) = self.task.take() else {
+            return;
+        };
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
         }
+        tokio::time::timeout(Duration::from_secs(15), task)
+            .await
+            .unwrap_or_else(|_| panic!("StreamingProvider fixture did not stop within 15s"))
+            .unwrap_or_else(|_| panic!("StreamingProvider fixture task panicked"));
     }
 }
 
@@ -1235,7 +1293,8 @@ async fn stream_idle_timeout_is_terminal_without_retry() {
         fixture
             .coordinator
             .diagnostic_count(OUTCOME_UPSTREAM_MIDSTREAM_ERROR),
-        1
+        0,
+        "an idle timeout is one outcome, not also a midstream transport error"
     );
     let (status, _, _, _, _) = db_request_row(&fixture.database, proxy_id).await;
     assert_eq!(status, "error");
@@ -1247,10 +1306,70 @@ async fn stream_idle_timeout_is_terminal_without_retry() {
     fixture.database.close().await.expect("database closes");
 }
 
+#[tokio::test]
+async fn stream_client_cancellation_after_usage_still_bills_observed_tokens() {
+    // The provider reports usage and then stalls with no terminal: the client
+    // leaves in the window after usage is observed but before any terminal is
+    // stored, and the provider bills the request either way.
+    let stalled = StreamingProvider::start(vec![SseScript {
+        header_delay: Duration::ZERO,
+        extra_headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
+        framing: Framing::Raw,
+        chunks: vec![(Duration::ZERO, usage_without_terminal())],
+        finish: Finish::HoldOpen(Duration::from_secs(30)),
+    }]);
+    let fixture = build_fixture(
+        "openai",
+        &[ProviderSpec {
+            name: "account-a".to_owned(),
+            provider_id: "provider-a".to_owned(),
+            account_id: 1,
+            base_url: stalled.base_url(),
+            surfaces: vec![WireSurface::OpenaiChatCompletions],
+        }],
+        RetryPolicy::default(),
+        &StreamOptions::default(),
+    )
+    .await;
+    let proxy_id = "proxy-cancel-after-usage";
+    let mut execution = fixture
+        .coordinator
+        .execute(stream_request(ClientSurface::ChatCompletions, proxy_id))
+        .await
+        .expect("stream executes");
+    execution.mark_started();
+    // One forwarded record proves the whole upstream write was decoded, so the
+    // usage record inside it is already folded. The stream then stays open:
+    // from here the client is gone and only the cancel path can terminal.
+    let forwarded = tokio::time::timeout(Duration::from_secs(5), execution.next_chunk())
+        .await
+        .expect("the first record arrives within the deadline")
+        .expect("the stream stays open until the client leaves")
+        .expect("the first record forwards cleanly");
+    assert!(!forwarded.is_empty(), "the first record reaches the client");
+    let result = execution
+        .complete(DownstreamResult::Cancelled)
+        .await
+        .expect("cancelled completion converges");
+    assert!(result.progress.completed);
+    let (status, input_tokens, output_tokens, _, _) =
+        db_request_row(&fixture.database, proxy_id).await;
+    assert_eq!(status, "cancelled");
+    assert_eq!(
+        (input_tokens, output_tokens),
+        (Some(10), Some(4)),
+        "a cancel after observed usage still records the billed tokens"
+    );
+    let (_, terminal_attempts, active) = count_rows(&fixture.database).await;
+    assert_eq!(terminal_attempts, 1);
+    assert_eq!(active, 0);
+    stalled.join().await;
+    fixture.database.close().await.expect("database closes");
+}
+
 // ---------------------------------------------------------------------------
 // EOF classification: complete, compatibility, empty, partial, malformed
 // ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn stream_compatibility_eof_succeeds_when_policy_allows() {
     let server = StreamingProvider::start(vec![SseScript::sse(usage_without_terminal())]);

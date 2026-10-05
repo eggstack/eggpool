@@ -450,6 +450,7 @@ impl ModelQuarantine {
             .unwrap_or_else(|error| error.into_inner());
         let Some(existing) = entries.get(&entry.key) else {
             entries.insert(entry.key.clone(), entry);
+            prune_to_cap(&mut entries, now);
             return;
         };
         if matches!(
