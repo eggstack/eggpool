@@ -487,7 +487,13 @@ fn token_heatmap_emits_bounded_theme_aware_calendar_markup() {
         bytes_emitted: 4096,
     }];
     let html = super::render_token_heatmap(&rows, "Cyber Red");
-    assert!(html.starts_with("<div class=\"heatmap\"><svg"));
+    // The container is a horizontal scroller, so it carries the region role
+    // and a focusable target — without them a keyboard user cannot reach the
+    // weeks scrolled off the inline end. See the `.heatmap` rules in
+    // `static/dashboard.css`.
+    assert!(html.starts_with(
+        "<div class=\"heatmap\" tabindex=\"0\" role=\"region\" aria-label=\"Token activity heatmap, scroll horizontally for older weeks\"><svg"
+    ));
     assert!(html.contains("class=\"heatmap-cell\""));
     assert!(html.contains("fill=\"#16090c\""));
     assert!(html.contains("data-tooltip=\""));

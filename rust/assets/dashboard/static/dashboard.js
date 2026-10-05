@@ -764,6 +764,25 @@
   };
 
   namespace.bootstrap = function bootstrap() {
+    // Park the 180-day heatmaps on the newest week before anything can
+    // measure or hover them. The scroller starts at `scrollLeft: 0`, which is
+    // the *oldest* week (the leftmost tooltip is the start of the window, the
+    // rightmost is today), so on a phone — where the grid is 499px of content
+    // in a 309px box and only ~62% is visible — the panel opened on data six
+    // months stale with the current week off-screen and no scroll affordance on
+    // touch. Gated on `scrollLeft === 0` so it never fights an operator who has
+    // deliberately scrolled back, and so an auto-refresh tick that swaps in a
+    // fresh node re-lands on the newest week without yanking a scrolled view.
+    try {
+      var heatmaps = document.querySelectorAll(".heatmap");
+      for (var h = 0; h < heatmaps.length; h++) {
+        if (heatmaps[h].scrollLeft === 0) {
+          heatmaps[h].scrollLeft = heatmaps[h].scrollWidth;
+        }
+      }
+    } catch (err) {
+      console.error("EggPoolDashboard: heatmap scroll failed", err);
+    }
     // Hydrate API-backed chart shells immediately. Chart.js is independent
     // work, so its download must not delay the data request.
     try {
@@ -1187,6 +1206,48 @@
         }
       }
     });
+
+    // Escape also has to work when focus is on `<body>`. Safari does not focus
+    // a `<button>` on click, so opening the menu from the burger leaves focus
+    // on the body and the `nav` listener above never fires — the one dismissal
+    // route a phone user is most likely to try did nothing. The burger is a
+    // *sibling* of `nav.topnav`, not a descendant, so this cannot be handled by
+    // moving the existing listener onto the topbar without also catching
+    // unrelated keys. Gated on `aria-expanded` so it is inert while closed.
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape" && event.key !== "Esc") return;
+      if (burger.getAttribute("aria-expanded") !== "true") return;
+      event.preventDefault();
+      setOpen(false);
+      try {
+        burger.focus();
+      } catch (_err) {
+        /* ignore */
+      }
+    });
+
+    // Collapse the dropdown when the viewport leaves the burger range.
+    // `.topnav-open` is only ever removed by a user event, so rotating a
+    // tablet or dragging a desktop window down past 761px left the menu
+    // stuck open: measured at 320px -> 900px -> 320px the panel came back at
+    // 320x648 with `aria-expanded="true"` and the burger still drawing the X
+    // glyph, with no user action to explain it. The wide layout shows the menu
+    // unconditionally, so the class is harmless while it is offscreen — but it
+    // has to be cleared before the viewport comes back down.
+    if (window.matchMedia) {
+      const wide = window.matchMedia("(min-width: 761px)");
+      const onBreakpointChange = function (event) {
+        if (event.matches) {
+          setOpen(false);
+        }
+      };
+      if (typeof wide.addEventListener === "function") {
+        wide.addEventListener("change", onBreakpointChange);
+      } else if (typeof wide.addListener === "function") {
+        // Safari < 14 and other pre-`change`-listeners UAs.
+        wide.addListener(onBreakpointChange);
+      }
+    }
 
     const links = menu.querySelectorAll("a");
     for (let i = 0; i < links.length; i++) {

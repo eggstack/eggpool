@@ -1,7 +1,7 @@
 [
   {"path":"static/chart.umd.min.js","sha256":"206b6e8bb00fc7bba2c7ee80ca41db3e9e05ba7be0aa35abeba9cfd5357f5d0e"},
-  {"path":"static/dashboard.css","sha256":"c2aa7d8c7889f646298b7095adc2eb721402f5703efbe7018bb370a284c256dd"},
-  {"path":"static/dashboard.js","sha256":"22375b498e2a62c7c1908db8ef12268b6c18cba20672cad6876667c25217663f"},
+  {"path":"static/dashboard.css","sha256":"cff5c47ee79691f339e915eb2cb957ab9787d2555852252fa8a441570018502c"},
+  {"path":"static/dashboard.js","sha256":"e801eca08461c88250934ef04e87c6d94fed9c381e460808e5378bc76c156b0d"},
   {"path":"static/favicon.svg","sha256":"593a7d0f464160e832f62399cf224a04dda68a55f3a6ce847dffb62016d37653"},
   {"path":"themes/Booberry.toml","sha256":"ca0588275bd2c59de561633c2dc7e2b7f95d183a7fd918a10d00dfff5ca96871"},
   {"path":"themes/Catppuccin Latte.toml","sha256":"fb76636c8da045d190fbd722890f4ecac38de081c98545eb75e8e53ae510cc20"},

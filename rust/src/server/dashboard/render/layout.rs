@@ -180,7 +180,24 @@ pub(in crate::server::dashboard) fn auto_refresh_script(refresh_interval_s: u64)
   if (!content || !updated || !window.DOMParser) {{
     return;
   }}
+  // The region is replaced wholesale on every tick, and the period/theme
+  // selectors are rendered *inside* it (`dashboard_header`), so a tick that
+  // lands while the operator is reading a control destroyed the focused node:
+  // the native `<select>` popup closed under them and focus fell to `<body>`,
+  // costing keyboard position once per `intervalMs`. Measured at a 3s
+  // interval: the select was a different node after two ticks and
+  // `document.activeElement` was `BODY`. Rather than try to restore focus
+  // around a node swap — which cannot re-open a native popup anyway — hold the
+  // tick while focus sits on an interactive control inside the region. The
+  // data goes one tick stale for as long as the operator is mid-interaction,
+  // which is the cheaper trade, and the footer says so.
+  const INTERACTIVE = "a[href], button, input, select, textarea, summary, [tabindex]";
   const refresh = async () => {{
+    const active = document.activeElement;
+    if (active && content.contains(active) && active.matches(INTERACTIVE)) {{
+      updated.textContent = "paused";
+      return;
+    }}
     try {{
       const response = await fetch(window.location.href, {{
         cache: "no-store",

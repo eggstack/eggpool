@@ -243,7 +243,7 @@ pub(in crate::server::dashboard) fn render_overview(
         "<p class=\"empty\">No accounts configured.</p>".to_owned()
     } else {
         format!(
-            "<div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th><th data-priority=\"3\">Reserved</th><th data-priority=\"3\">Resv.</th><th data-priority=\"3\">5h rate</th><th data-priority=\"3\">7d rate</th><th data-priority=\"3\">30d rate</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Over budget</th><th data-priority=\"3\">Upstream backoff</th><th data-priority=\"3\">Backoff until</th><th data-priority=\"3\">Failures</th><th data-priority=\"3\">Auth fail</th><th data-priority=\"3\">Disabled</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th></tr></thead><tbody>{account_rows}</tbody></table></div>"
+            "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Account</th><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Enabled</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Health</th><th data-priority=\"2\">Errors</th><th data-priority=\"2\">Input tokens</th><th data-priority=\"2\">Output tokens</th><th data-priority=\"2\">Total tokens</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">TPS</th><th data-priority=\"2\">Exactness</th><th data-priority=\"3\">Reserved</th><th data-priority=\"3\">Resv.</th><th data-priority=\"3\">5h rate</th><th data-priority=\"3\">7d rate</th><th data-priority=\"3\">30d rate</th><th data-priority=\"3\">BW received</th><th data-priority=\"3\">BW emitted</th><th data-priority=\"3\">Over budget</th><th data-priority=\"3\">Upstream backoff</th><th data-priority=\"3\">Backoff until</th><th data-priority=\"3\">Failures</th><th data-priority=\"3\">Auth fail</th><th data-priority=\"3\">Disabled</th><th data-priority=\"3\">Est. cost</th><th data-priority=\"3\">Cache R</th><th data-priority=\"3\">Cache W</th><th data-priority=\"3\">Reasoning</th><th data-priority=\"3\">Avg cost/req</th><th data-priority=\"3\">Avg cost/1k tok</th></tr></thead><tbody>{account_rows}</tbody></table></div>"
         )
     };
     let mut glance_models = page_data
@@ -304,14 +304,14 @@ pub(in crate::server::dashboard) fn render_overview(
             "<p class=\"empty\">No model activity in this period.</p>".to_owned()
         } else {
             format!(
-                "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Reqs</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Errs</th><th data-priority=\"2\">Latency</th><th data-priority=\"3\">Total tokens</th></tr></thead><tbody>{model_rows}</tbody></table></div>"
+                "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">Model</th><th data-priority=\"1\">Reqs</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Provider</th><th data-priority=\"2\">Errs</th><th data-priority=\"2\">Latency</th><th data-priority=\"3\">Total tokens</th></tr></thead><tbody>{model_rows}</tbody></table></div>"
             )
         },
         if event_rows.is_empty() {
             "<p class=\"empty\">No recent events.</p>".to_owned()
         } else {
             format!(
-                "<div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{event_rows}</tbody></table></div>"
+                "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">When</th><th data-priority=\"1\">Account</th><th data-priority=\"1\">Type</th><th data-priority=\"2\">Details</th></tr></thead><tbody>{event_rows}</tbody></table></div>"
             )
         },
     );
@@ -333,7 +333,7 @@ pub(in crate::server::dashboard) fn render_overview(
         String::new()
     } else {
         format!(
-            "<section class=\"panel\"><h3>Request breakdown by IP</h3><div class=\"table-scroll\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">IP Address</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Errors</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Total tokens</th><th data-priority=\"3\">Models</th></tr></thead><tbody>{ip_rows}</tbody></table></div></section>"
+            "<section class=\"panel\"><h3>Request breakdown by IP</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data compact\"><thead><tr><th data-priority=\"1\">IP Address</th><th data-priority=\"1\">Requests</th><th data-priority=\"1\">Cost</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Errors</th><th data-priority=\"3\">Input tokens</th><th data-priority=\"3\">Output tokens</th><th data-priority=\"3\">Total tokens</th><th data-priority=\"3\">Models</th></tr></thead><tbody>{ip_rows}</tbody></table></div></section>"
         )
     };
     let retry_attempts = page_data
@@ -578,7 +578,7 @@ pub(in crate::server::dashboard) fn render_overview(
             String::new()
         } else {
             format!(
-                "<section class=\"panel\"><h3>Provider health</h3><div class=\"table-scroll\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Success rate</th><th data-priority=\"3\">Models</th><th data-priority=\"3\">Last ping</th></tr></thead><tbody>{ping_rows}</tbody></table></div></section>"
+                "<section class=\"panel\"><h3>Provider health</h3><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable data table\"><table class=\"data\"><thead><tr><th data-priority=\"1\">Provider</th><th data-priority=\"1\">Status</th><th data-priority=\"2\">Avg latency</th><th data-priority=\"2\">Success rate</th><th data-priority=\"3\">Models</th><th data-priority=\"3\">Last ping</th></tr></thead><tbody>{ping_rows}</tbody></table></div></section>"
             )
         };
         let warning_panel = if summary.reservation_fallback_rows > 0 {
