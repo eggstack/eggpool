@@ -111,17 +111,19 @@ pub(super) async fn admit_inference_body(
         Some(value) => match value.to_str().ok().and_then(|v| v.parse::<usize>().ok()) {
             Some(length) => Some(length),
             None => {
-                return json_response(
+                return error_body_response(
                     StatusCode::BAD_REQUEST,
-                    json!({"detail": "Invalid Content-Length"}),
+                    surface,
+                    endpoint_error_body(surface, "Invalid Content-Length"),
                 );
             }
         },
     };
     if declared_length.is_some_and(|length| length > limit) {
-        return json_response(
+        return error_body_response(
             StatusCode::PAYLOAD_TOO_LARGE,
-            json!({"detail": "Request body too large"}),
+            surface,
+            endpoint_error_body(surface, "Request body too large"),
         );
     }
     // Small initial reservation avoids exhausting the process budget on
@@ -144,11 +146,10 @@ pub(super) async fn admit_inference_body(
     let collected = match Limited::new(body, limit).collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(_) => {
-            return json_response(
+            return error_body_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                json!({
-                    "detail": "Request body too large"
-                }),
+                surface,
+                endpoint_error_body(surface, "Request body too large"),
             );
         }
     };

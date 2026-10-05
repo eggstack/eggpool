@@ -12,9 +12,9 @@ mod inference;
 mod middleware;
 
 use dashboard::{
-    accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, json_response,
-    latency_page, model_detail_page, models_page, overview, pings_page, reliability_page,
-    routing_page, runtime_page, static_chart_js, static_css, static_favicon, static_js,
+    accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, latency_page,
+    model_detail_page, models_page, overview, pings_page, reliability_page, routing_page,
+    runtime_page, static_chart_js, static_css, static_favicon, static_js,
     stats_cache_observability, stats_cache_stability, stats_request_segmentation,
     stats_request_shaping, stats_transcoding, summary, sync_accounts, theme_css, timeseries_api,
     timeseries_page, traces_page,

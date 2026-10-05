@@ -454,6 +454,18 @@ pub struct DashboardRepository {
     database: Database,
 }
 
+/// Normalize one optional dashboard filter.
+///
+/// The filter forms submit their `(any …)` option as an empty value, which
+/// deserializes to `Some("")`. The SQL guards are written as
+/// `?N IS NULL OR column = ?N`, so a blank value skips the `IS NULL`
+/// short-circuit and matches nothing: the page reports "no data" for a filter
+/// the operator never set. Treat blank as absent, the way the models page
+/// already does.
+fn dashboard_filter(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
 fn dashboard_sql(sql: &str) -> String {
     // Rust's continuation-string syntax removes newlines and indentation.
     // Keep the query text readable while restoring token boundaries before
@@ -550,6 +562,8 @@ impl DashboardRepository {
         account: Option<String>,
         model: Option<String>,
     ) -> Result<Vec<Value>, DatabaseError> {
+        let account = dashboard_filter(account);
+        let model = dashboard_filter(model);
         self.database
             .call(move |connection| {
                 let format = if bucket == "day" {
@@ -605,6 +619,8 @@ impl DashboardRepository {
         account: Option<String>,
         model: Option<String>,
     ) -> Result<(Vec<Value>, bool), DatabaseError> {
+        let account = dashboard_filter(account);
+        let model = dashboard_filter(model);
         self.database
             .call(move |connection| {
                 let format = if bucket == "day" {

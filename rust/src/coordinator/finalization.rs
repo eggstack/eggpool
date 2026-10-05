@@ -618,11 +618,30 @@ enum TxnResult {
     },
 }
 
-fn release_claim(claim: Option<&SelectionClaim>) -> Result<bool, FinalizationError> {
+pub(crate) fn release_claim(claim: Option<&SelectionClaim>) -> Result<bool, FinalizationError> {
     let Some(claim) = claim else { return Ok(false) };
     claim.release_quota_reservation()?;
     claim.release_active_claim()?;
     Ok(true)
+}
+
+/// Compensate ownership for a command the supervisor will never run.
+///
+/// `register` takes the command by value, so a refusal used to drop its claim
+/// on the floor. `SelectionClaim` has no `Drop` side effects, so the
+/// account's active-request count — and any converted quota reservation —
+/// would stay consumed for the life of the process, permanently shrinking the
+/// concurrency slots routing can select. Compensate exactly as terminal
+/// convergence does, then surface the original refusal.
+fn refuse_command(mut command: FinalizationCommand, error: FinalizationError) -> FinalizationError {
+    if let Err(release_error) = release_claim(command.take_claim().as_ref()) {
+        // Ownership compensation itself failed; the refusal must not be
+        // reported as a clean capacity/incompatibility outcome.
+        tracing::error!(
+            "refused finalization command could not release its selection claim: {release_error}"
+        );
+    }
+    error
 }
 
 fn durable_converged(progress: &FinalizationProgress) -> bool {
@@ -673,6 +692,12 @@ impl FinalizationCommand {
             Self::Request { identity, .. } | Self::FailedAttempt { identity, .. } => {
                 (identity.db_request_id, identity.attempt_id)
             }
+        }
+    }
+
+    fn take_claim(&mut self) -> Option<SelectionClaim> {
+        match self {
+            Self::Request { claim, .. } | Self::FailedAttempt { claim, .. } => claim.take(),
         }
     }
 }
@@ -926,14 +951,17 @@ impl FinalizationSupervisor {
             let mut jobs = self.inner.jobs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(existing) = jobs.get(&key) {
                 if existing.compatibility != compatibility {
-                    return Err(FinalizationError::IncompatibleCommand);
+                    return Err(refuse_command(
+                        command,
+                        FinalizationError::IncompatibleCommand,
+                    ));
                 }
                 return Ok(FinalizationHandle {
                     receiver: existing.receiver.clone(),
                 });
             }
             if jobs.len() >= self.inner.capacity {
-                return Err(FinalizationError::Capacity);
+                return Err(refuse_command(command, FinalizationError::Capacity));
             }
             let terminal_reference = self
                 .inner

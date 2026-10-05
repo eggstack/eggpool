@@ -4,6 +4,20 @@ from __future__ import annotations
 from ._shared import *  # noqa: F403
 from .process import *  # noqa: F403
 
+# Recorded reason for every static asset that intentionally diverges from the
+# frozen Python oracle. One entry per file: a single shared string would
+# misdescribe every other divergence, and a new divergence must fail loudly
+# instead of being labelled with an unrelated correction.
+ORACLE_CANDIDATE_CORRECTIONS = {
+    "static/dashboard.css": (
+        "bound mobile panel intrinsic width within its table scroll wrapper"
+    ),
+    "static/dashboard.js": (
+        "submit the timeseries filter form natively so the server renders the "
+        "chart, tables, and URL from one query"
+    ),
+}
+
 
 def asset_inventory() -> dict[str, Any]:
     candidate_manifest = json.loads(
@@ -22,19 +36,33 @@ def asset_inventory() -> dict[str, Any]:
         rust_path = RUST_ASSET_ROOT / relative
         if hashlib.sha256(rust_path.read_bytes()).hexdigest() != digest:
             raise AssertionError(f"Rust asset bytes differ for {relative}")
-    corrections = [
-        {
-            "path": relative,
-            "oracle_sha256": oracle_assets[relative.removeprefix("static/")],
-            "candidate_sha256": digest,
-            "reason": (
-                "bound mobile panel intrinsic width within its table scroll wrapper"
-            ),
-        }
-        for relative, digest in candidate_assets.items()
-        if relative.startswith("static/")
-        and oracle_assets.get(relative.removeprefix("static/")) != digest
-    ]
+    corrections: list[dict[str, Any]] = []
+    for relative, digest in candidate_assets.items():
+        if not relative.startswith("static/"):
+            continue
+        if oracle_assets.get(relative.removeprefix("static/")) == digest:
+            continue
+        reason = ORACLE_CANDIDATE_CORRECTIONS.get(relative)
+        if reason is None:
+            raise AssertionError(
+                f"{relative} diverges from the frozen oracle with no recorded "
+                "correction reason"
+            )
+        corrections.append(
+            {
+                "path": relative,
+                "oracle_sha256": oracle_assets[relative.removeprefix("static/")],
+                "candidate_sha256": digest,
+                "reason": reason,
+            }
+        )
+    stale = sorted(
+        set(ORACLE_CANDIDATE_CORRECTIONS) - {row["path"] for row in corrections}
+    )
+    if stale:
+        raise AssertionError(
+            f"recorded correction reasons no longer diverge: {', '.join(stale)}"
+        )
     return {
         "count": len(candidate_assets),
         "paths": sorted(candidate_assets),

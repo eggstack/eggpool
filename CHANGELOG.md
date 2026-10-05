@@ -195,6 +195,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolve a helper from the current directory; affinity eviction always makes
   progress; and the tooling workspace states its Python floor explicitly.
 
+- **A start or reload no longer withdraws models it does not know about.**
+  Building a generation hydrated every durable `models` row into the shared
+  catalog through an authoritative single-model update, which is destructive by
+  design: each row withdrew the account's other models and the next persist
+  tick deleted them from SQLite, rewriting historical usage to `__deprecated__`.
+  An account with several catalog models was reduced to whichever row was
+  seeded last, on every start, reload, and generation swap. Durable rows are
+  stored knowledge rather than a live observation, so they now seed
+  additively and record no freshness.
+
+- **A refused finalization no longer leaks its selection claim.** The
+  supervisor takes its command by value, so a command it refused — most often
+  the bounded job queue at capacity — was dropped with its claim still held.
+  `SelectionClaim` has no `Drop` side effects, so the account's active-request
+  count stayed consumed for the life of the process, permanently shrinking the
+  concurrency slots routing could select until a restart. Refused commands now
+  release the claim exactly as terminal convergence does, as do the two
+  drop-outside-a-runtime paths that abandon an unreconciled attempt.
+
+- **A provider's `Retry-After` now sizes the rate-limit cooldown.** The
+  classifier parsed the header and consumed the hint, but nothing ever put one
+  on the observation, so every `429` fell back to no cooldown at all: the
+  exhausted account was re-selected on the next attempt and the retry policy's
+  own growth took over. The provider's hint is now read from the response
+  headers and bounded by `max_retry_after`; absent, malformed, and elapsed
+  values leave the fixed policy in charge.
+
+- **A client's `Accept-Encoding` no longer reaches the provider.** The pinned
+  transport has no compiled-in decoder and only advertises codings it can
+  decode, but the client's content-coding preference was forwarded verbatim —
+  the only way a provider was asked for a body EggPool cannot decode, while
+  the response path strips `content-encoding` and leaves the client to parse
+  compressed bytes as its documented format. Content coding is request-local
+  negotiation and is now treated like `content-length`.
+
+- **A streamed request no longer counts its first chunk twice.** First-byte
+  prefetching parks the first provider chunk in `pending_raw` while the active
+  stream already started at the prefetched length, so the chunk was counted
+  again when it was pulled through the normal decode path and every streamed
+  request over-reported upstream bandwidth by the size of its first chunk.
+
+- **A blank dashboard filter no longer reads as an empty result.** The filter
+  forms submit their `(any account)` and `(any model)` options as empty values,
+  which deserialize to `Some("")`. The SQL guards read
+  `?N IS NULL OR column = ?N`, so a blank value skipped the `IS NULL`
+  short-circuit and matched nothing: the Timeseries page reported "no
+  requests" for a filter nobody had set, and the same blank broke its API.
+  Blank is now normalized to absent at the query boundary.
+
+- **The `/bandwidth` account select filters the page.** The select was
+  rendered and read by nothing, so submitting it produced a byte-identical
+  page while looking live. The page now scopes its received/emitted totals to
+  the submitted account and marks the current selection; the 180-day heatmap is
+  an all-account rollup with no account dimension and now says so.
+
+- **Body-limit rejections answer with the client's error envelope.** The
+  over-limit `Content-Length` and streamed-body rejections returned a bare
+  `{"detail": …}` body on every surface, so a Messages client received a shape
+  its SDK cannot parse and no `error.type` to handle programmatically. They
+  now use the same surface-shaped envelope as every other endpoint error.
+
+- **The dashboard parity report attributes each divergence to its own file.**
+  Every diverging static asset carried the same correction reason, so a second
+  divergence was reported with the first file's explanation. Reasons are now
+  recorded per path, and an unrecorded or stale divergence fails loudly
+  instead of being mislabelled.
+
 ## [0.8.0] - 2026-09-11
 
 ### Changed

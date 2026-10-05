@@ -85,7 +85,16 @@ pub(in crate::server::dashboard) fn render_dashboard_page_body(
             theme,
             timeseries_projection.unwrap_or(&Value::Null),
         )),
-        "bandwidth" => body.push_str(&render_bandwidth_page(data, period, theme)),
+        "bandwidth" => body.push_str(&render_bandwidth_page(
+            data,
+            period,
+            theme,
+            model_filters
+                .bandwidth
+                .as_ref()
+                .and_then(|filters| filters.account.as_deref()),
+        )),
+
         "pings" => body.push_str(&render_pings_page(data, period, theme)),
         "reliability" => body.push_str(&render_reliability_page(data, period, theme)),
         "routing" => body.push_str(&render_routing_page(data, period, theme, routing_trace)),

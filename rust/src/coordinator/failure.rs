@@ -2,10 +2,10 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -126,6 +126,14 @@ impl FailureObservation {
 
     pub fn signal(mut self, signal: impl Into<String>) -> Self {
         self.signal = Some(normalize_signal(&signal.into()));
+        self
+    }
+
+    /// Attach the provider's own recovery hint. Only the rate-limit branch of
+    /// [`classify`] consumes it, so a hint on any other response cannot widen
+    /// backoff or quarantine beyond the fixed policy.
+    pub fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
+        self.retry_after = retry_after;
         self
     }
 }
@@ -686,6 +694,29 @@ pub fn parse_retry_after(
     }
     let seconds = parse_rfc1123(value)? - now_epoch_seconds;
     (seconds >= 0).then(|| Duration::from_secs(seconds as u64).min(policy.max_retry_after))
+}
+
+/// Read a provider `Retry-After` hint from response headers.
+///
+/// A rate-limited account is the provider's own statement that it is
+/// unavailable, so the hint sizes the account cooldown the classifier records
+/// instead of discarding it and re-selecting the exhausted account. Absent,
+/// malformed, non-UTF-8, or already-elapsed values yield `None` so the fixed
+/// policy backoff stays in charge.
+pub fn retry_after_from_headers(headers: &HeaderMap, policy: RetryPolicy) -> Option<Duration> {
+    let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
+    parse_retry_after(value, epoch_seconds(), policy)
+}
+
+/// Wall-clock seconds used only to resolve HTTP-date `Retry-After` values. A
+/// clock before the epoch yields `0`, which makes such a date resolve to a
+/// negative delay and therefore to no hint at all.
+fn epoch_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        .unwrap_or_default()
 }
 
 fn parse_rfc1123(value: &str) -> Option<i64> {

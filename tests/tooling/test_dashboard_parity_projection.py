@@ -68,14 +68,20 @@ def test_browser_screenshot_plan_pairs_routes_themes_and_viewports(tmp_path) -> 
     }
 
 
-def test_asset_inventory_records_the_bounded_dashboard_css_correction() -> None:
+def test_asset_inventory_records_each_dashboard_asset_correction() -> None:
     inventory = asset_inventory()
     assert inventory["count"] == 54
     differences = inventory["oracle_candidate_differences"]
+    # Each diverging asset carries its own reason: a shared string would
+    # misdescribe the file it was not written for.
     assert [difference["path"] for difference in differences] == [
-        "static/dashboard.css"
+        "static/dashboard.css",
+        "static/dashboard.js",
     ]
-    assert "table scroll wrapper" in differences[0]["reason"]
+    reasons = {difference["path"]: difference["reason"] for difference in differences}
+    assert "table scroll wrapper" in reasons["static/dashboard.css"]
+    assert "timeseries filter form" in reasons["static/dashboard.js"]
+    assert len(set(reasons.values())) == len(reasons)
 
 
 def test_browser_visual_dispositions_distinguish_review_from_automation() -> None:

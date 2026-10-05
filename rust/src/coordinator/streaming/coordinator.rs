@@ -39,7 +39,7 @@ use crate::coordinator::{
     FinalizationData, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, NextAction, PublicationError, PublicationInput, PublicationOutcome,
     PublicationService, PublishedAttempt, RetryPolicy, RetryScope, WireResolver,
-    filter_response_headers,
+    filter_response_headers, retry_after_from_headers,
 };
 
 /// End-to-end streaming coordinator for one immutable runtime generation.
@@ -638,18 +638,25 @@ impl StreamingCoordinator {
                         }
                         crate::wire::FiniteResponseOutcome::ProviderError(error) => {
                             let signal = provider_error_signal(&error);
-                            let observation = self.observation(
-                                &identity,
-                                &candidate.profile,
-                                attempt_number,
-                                FailureSource::ProviderResponse,
-                                Some(upstream.status),
-                                None,
-                                signal,
-                                alternate_wire_available,
-                                "response_status",
-                                false,
-                            );
+                            let observation =
+                                self.observation(
+                                    &identity,
+                                    &candidate.profile,
+                                    attempt_number,
+                                    FailureSource::ProviderResponse,
+                                    Some(upstream.status),
+                                    None,
+                                    signal,
+                                    alternate_wire_available,
+                                    "response_status",
+                                    false,
+                                )
+                                // The provider's own recovery hint sizes the
+                                // rate-limit cooldown; without it a 429 is
+                                // retried against the exhausted account.
+                                .with_retry_after(
+                                    retry_after_from_headers(&upstream.headers, self.retry_policy),
+                                );
                             let (effects, first) = self.decide(&observation)?;
                             if first {
                                 self.apply_effects(&published.claim, &effects);
@@ -994,7 +1001,13 @@ impl StreamingCoordinator {
                     wire: if passthrough { None } else { Some(wire_stream) },
                     pending_raw: prefetched,
                     idle_timeout: policy.idle_timeout,
-                    provider_bytes: prefetched_len,
+                    // Start at zero: the prefetched chunk is still sitting in
+                    // `pending_raw` and `next_chunk` pulls it through the
+                    // normal decode path, which is where it is counted.
+                    // Seeding the prefetch length here counted it twice, and
+                    // `provider_bytes` is durable, so every streamed request
+                    // over-reported upstream bandwidth by the prefetch size.
+                    provider_bytes: 0,
                     client_bytes: 0,
                     events_forwarded: 0,
                     malformed_chunks: 0,

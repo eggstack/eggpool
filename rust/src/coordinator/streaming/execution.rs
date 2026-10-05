@@ -17,7 +17,7 @@ use crate::{
 use crate::coordinator::{
     DownstreamResult, FailureDecisionEngine, FinalizationCommand, FinalizationData,
     FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
-    FinalizationSupervisor, ResponseHandoffState, WireResolver,
+    FinalizationSupervisor, ResponseHandoffState, WireResolver, release_claim,
 };
 
 use super::{
@@ -727,22 +727,29 @@ impl Drop for PendingStreamFinalization {
             parts.data.cache_counter_status = Some(cache_status(usage.cache_counter_status).into());
         }
         parts.stream = None;
-        let command = FinalizationCommand::Request {
-            identity: parts.identity,
-            data: parts.data,
-            claim: parts.claim,
-        };
         let supervisor = parts.supervisor;
         let Ok(handle) = Handle::try_current() else {
             // `register` spawns its worker, so it cannot run here. The
             // attempt row is already durable, which means the startup
             // reconciler converges this request; losing it must not be
-            // silent, and it must not be reported as a clean drop.
+            // silent, and it must not be reported as a clean drop. Local
+            // ownership is not durable, so the claim is released here
+            // instead of being dropped with the unreconciled command.
             tracing::error!(
                 "stream finalization dropped outside a runtime context; \
                  leaving the durable attempt for reconciliation"
             );
+            if let Err(error) = release_claim(parts.claim.as_ref()) {
+                tracing::error!(
+                    "dropped stream finalization could not release its selection claim: {error}"
+                );
+            }
             return;
+        };
+        let command = FinalizationCommand::Request {
+            identity: parts.identity,
+            data: parts.data,
+            claim: parts.claim,
         };
         let Ok(finalization) = supervisor.register(command) else {
             return;

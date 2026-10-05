@@ -11,14 +11,15 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        DurableFinalizer, EffectLedger, FailureObservation, FinalizationCommand, FinalizationData,
-        FinalizationError, FinalizationOutcome, FinalizationSupervisor, ProviderModelPresence,
+        CoordinatorFaultInjector, CrashFaultPoint, DurableFinalizer, EffectLedger,
+        FailureObservation, FinalizationCommand, FinalizationData, FinalizationError,
+        FinalizationOutcome, FinalizationSupervisor, ProviderModelPresence,
         PublicationFaultInjector, PublicationInput, PublicationOutcome, PublicationService,
         PublicationStage, RetryPolicy, classify,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     quota::{AccountQuota, QuotaEstimator},
-    routing::{EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
+    routing::{ClaimTransition, EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
 };
 
 struct Fixture {
@@ -901,6 +902,77 @@ async fn replacement_claim_cannot_bypass_a_blocked_prior_publication() {
         .claim
         .release_active_claim()
         .expect("release blocked claim");
+    assert_eq!(fixture.router.active_request_count("account-a"), 0);
+    fixture.database.close().await.expect("database closes");
+}
+
+// The injected pause blocks its worker on a `std::sync::Barrier`, so the test
+// needs a second runtime thread to make progress while that worker waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refused_registration_releases_the_selection_claim() {
+    // `register` takes the command by value, so a refusal used to drop its
+    // claim. `SelectionClaim` has no `Drop` side effects, which leaked the
+    // account's active-request count for the life of the process and slowly
+    // starved routing of concurrency slots.
+    let fixture = fixture().await;
+    // Hold the first worker before it completes so the single job slot stays
+    // occupied; the injected pause is the observable boundary, never a sleep.
+    let barrier = Arc::new(Barrier::new(2));
+    let entered = Arc::new(AtomicBool::new(false));
+    let supervisor =
+        FinalizationSupervisor::with_capacity(DurableFinalizer::new(fixture.database.clone()), 1)
+            .with_fault_injector(CoordinatorFaultInjector::block_once_at(
+                CrashFaultPoint::TerminalJobCompletionBefore,
+                Arc::clone(&barrier),
+                Arc::clone(&entered),
+            ));
+    let completed_data = || FinalizationData {
+        outcome: FinalizationOutcome::Completed,
+        release_reason: Some("completed".into()),
+        ..FinalizationData::default()
+    };
+
+    let held = published(&fixture, "c006-capacity-hold").await;
+    let held_handle = supervisor
+        .register(FinalizationCommand::Request {
+            identity: held.identity.clone(),
+            data: completed_data(),
+            claim: Some(held.claim),
+        })
+        .expect("first job registers");
+    while !entered.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(fixture.router.active_request_count("account-a"), 1);
+
+    let refused = published(&fixture, "c006-capacity-refused").await;
+    let refused_claim = refused.claim.clone();
+    let refused_result = supervisor.register(FinalizationCommand::Request {
+        identity: refused.identity.clone(),
+        data: completed_data(),
+        claim: Some(refused.claim),
+    });
+    // Only the held claim's slot may remain: the refusal consumed nothing.
+    let held_only = fixture.router.active_request_count("account-a");
+
+    // Nothing between the hold and this release may panic, or the blocked
+    // worker would never be released. Assert below, once it is parked no more.
+    barrier.wait();
+    let held_result = held_handle.wait().await;
+    supervisor.drain().await;
+
+    let error = refused_result.expect_err("a supervisor at capacity refuses the second job");
+    assert!(matches!(error, FinalizationError::Capacity));
+    assert!(
+        matches!(
+            refused_claim.release_active_claim(),
+            Ok(ClaimTransition::AlreadyTransitioned)
+        ),
+        "the refused command released its claim instead of dropping it"
+    );
+    assert_eq!(held_only, 1, "the refusal consumed a concurrency slot");
+    held_result.expect("held job completes");
+    assert_eq!(supervisor.snapshot().active_jobs, 0);
     assert_eq!(fixture.router.active_request_count("account-a"), 0);
     fixture.database.close().await.expect("database closes");
 }

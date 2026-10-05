@@ -511,6 +511,88 @@ fn bandwidth_heatmap_uses_byte_totals_and_byte_tooltips() {
 }
 
 #[test]
+fn bandwidth_page_scopes_its_totals_to_the_submitted_account() {
+    let account = |name: &str, received: i64, emitted: i64| crate::db::DashboardAccountRow {
+        name: name.to_owned(),
+        provider_id: "provider".into(),
+        enabled: true,
+        requests: 1,
+        errors: 0,
+        cost_microdollars: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        exact_count: 0,
+        derived_count: 0,
+        partial_count: 0,
+        estimated_count: 0,
+        unknown_count: 0,
+        provider_reported_count: 0,
+        avg_latency_ms: 0.0,
+        reserved_microdollars: 0,
+        active_reservations: 0,
+        bytes_received: received,
+        bytes_emitted: emitted,
+        estimated_cost_fraction: 0.0,
+        cache_read_ratio: None,
+        cache_write_ratio: None,
+        reasoning_output_ratio: None,
+        avg_cost_per_request: None,
+        avg_cost_per_1k_tokens: None,
+        utilization_5h: 0,
+        utilization_7d: 0,
+        utilization_30d: 0,
+    };
+    let data = crate::db::DashboardData {
+        accounts: vec![
+            account("account-a", 2048, 4096),
+            account("account-b", 8192, 16384),
+        ],
+        cache: crate::db::DashboardCacheSummary {
+            total_bytes_received: 10240,
+            total_bytes_emitted: 20480,
+            ..crate::db::DashboardCacheSummary::default()
+        },
+        ..crate::db::DashboardData::default()
+    };
+
+    // The account select used to be rendered and read by nothing, so a
+    // submitted account produced a byte-identical unfiltered page.
+    let filtered = super::render_bandwidth_page(&data, "24h", "default", Some("account-b"));
+    assert!(filtered.contains(">8.2 KB<"), "{filtered}");
+    assert!(filtered.contains(">16.4 KB<"), "{filtered}");
+    assert!(
+        filtered.contains("<option value=\"account-b\" selected>"),
+        "{filtered}"
+    );
+    assert!(!filtered.contains(">10.2 KB<"), "{filtered}");
+    // The 180-day heatmap has no account dimension; say so instead of letting
+    // a filtered page imply it is scoped.
+    assert!(
+        filtered.contains("last 180 days, all accounts"),
+        "{filtered}"
+    );
+
+    // The `(all accounts)` option submits an empty value, which means no
+    // filter rather than an account named "".
+    for unfiltered in [
+        super::render_bandwidth_page(&data, "24h", "default", None),
+        super::render_bandwidth_page(&data, "24h", "default", Some("")),
+    ] {
+        assert!(unfiltered.contains(">10.2 KB<"), "{unfiltered}");
+        assert!(unfiltered.contains(">20.5 KB<"), "{unfiltered}");
+        assert!(
+            unfiltered.contains("<option value=\"\" selected>"),
+            "{unfiltered}"
+        );
+        assert!(!unfiltered.contains("selected>account"), "{unfiltered}");
+        assert!(
+            !unfiltered.contains("180 days, all accounts"),
+            "{unfiltered}"
+        );
+    }
+}
+
+#[test]
 fn authentication_accepts_bearer_and_x_api_key() {
     let mut headers = HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer test-key"));

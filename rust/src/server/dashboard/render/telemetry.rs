@@ -348,25 +348,59 @@ pub(in crate::server::dashboard) fn render_bandwidth_page(
     data: &db::DashboardData,
     period: &str,
     theme: &str,
+    account: Option<&str>,
 ) -> String {
+    // The form submits its `(all accounts)` option as an empty value; that
+    // means "no filter", not "the account named ''".
+    let selected = account.filter(|name| !name.trim().is_empty());
+    let (total_received, total_emitted) = match selected {
+        Some(name) => data
+            .accounts
+            .iter()
+            .filter(|account| account.name == name)
+            .fold((0_i64, 0_i64), |totals, account| {
+                (
+                    totals.0.saturating_add(account.bytes_received),
+                    totals.1.saturating_add(account.bytes_emitted),
+                )
+            }),
+        None => (
+            data.cache.total_bytes_received,
+            data.cache.total_bytes_emitted,
+        ),
+    };
     let account_options = data
         .accounts
         .iter()
         .map(|account| {
+            let selected = if selected == Some(account.name.as_str()) {
+                " selected"
+            } else {
+                ""
+            };
             format!(
-                "<option value=\"{}\">{}</option>",
+                "<option value=\"{}\"{selected}>{}</option>",
                 html_escape(&account.name),
                 html_escape(&account.name)
             )
         })
         .collect::<String>();
+    let all_selected = if selected.is_some() { "" } else { " selected" };
+    // The 180-day heatmap is a rollup with no account dimension, so state its
+    // scope rather than letting a filtered page imply it is filtered.
+    let heatmap_scope = if selected.is_some() {
+        ", all accounts"
+    } else {
+        ""
+    };
     format!(
-        "<h2>Bandwidth</h2><form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\" data-auto-submit=\"1\"><option value=\"\" selected>(all accounts)</option>{account_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"bucket\" value=\"hour\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><noscript><button type=\"submit\">Apply</button></noscript></form>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total bytes received from clients by EggPool in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes received from clients by EggPool in the selected period.\"><h3>Total received</h3><p class=\"metric\">{}</p><p class=\"sub\">client → proxy</p></div><div class=\"card\" data-tooltip=\"Total bytes emitted by EggPool toward clients in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes emitted by EggPool toward clients in the selected period.\"><h3>Total emitted</h3><p class=\"metric\">{}</p><p class=\"sub\">upstream → proxy</p></div></section><section class=\"panel\"><h3>Bandwidth activity (last 180 days)</h3>{}</section>",
+        "<h2>Bandwidth</h2><form method=\"get\" class=\"filter-form\"><label>Account: <select name=\"account\" data-auto-submit=\"1\"><option value=\"\"{all_selected}>(all accounts)</option>{account_options}</select></label><input type=\"hidden\" name=\"period\" value=\"{}\"><input type=\"hidden\" name=\"bucket\" value=\"hour\"><input type=\"hidden\" name=\"theme\" value=\"{}\"><noscript><button type=\"submit\">Apply</button></noscript></form>{}<section class=\"cards\"><div class=\"card\" data-tooltip=\"Total bytes received from clients by EggPool in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes received from clients by EggPool in the selected period.\"><h3>Total received</h3><p class=\"metric\">{}</p><p class=\"sub\">client → proxy</p></div><div class=\"card\" data-tooltip=\"Total bytes emitted by EggPool toward clients in the selected period.\" data-tooltip-pos=\"bottom\" aria-label=\"Total bytes emitted by EggPool toward clients in the selected period.\"><h3>Total emitted</h3><p class=\"metric\">{}</p><p class=\"sub\">upstream → proxy</p></div></section><section class=\"panel\"><h3>Bandwidth activity (last 180 days{})</h3>{}</section>",
         html_escape(period),
         html_escape(theme),
         dashboard_period_selector(period, theme),
-        format_bytes(data.cache.total_bytes_received),
-        format_bytes(data.cache.total_bytes_emitted),
+        format_bytes(total_received),
+        format_bytes(total_emitted),
+        heatmap_scope,
         render_bandwidth_heatmap(&data.token_activity, theme),
     )
 }

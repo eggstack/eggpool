@@ -363,3 +363,50 @@ async fn authoritative_withdrawal_emits_exact_event_and_updates_durable_state() 
     assert!(!rows.iter().any(|row| row.model_id == "gpt-old"));
     server.finish().await;
 }
+
+#[test]
+fn durable_model_rows_seed_additively_per_account() {
+    // Generation build hydrates every durable `models` row into the shared
+    // catalog. An authoritative single-model update is destructive by design,
+    // so seeding the rows one at a time withdrew the account's other models
+    // and the next persist tick deleted them from SQLite — rewriting
+    // historical usage to `__deprecated__` on every start and reload. Durable
+    // knowledge must seed additively and record no freshness.
+    let mut cache = eggpool::catalog::ModelCatalogCache::default();
+    cache.set_account_provider("account-a", "fixture");
+    let models = ["durable-one", "durable-two", "durable-three"];
+    for model_id in models {
+        let mut input = eggpool::catalog::ModelInput::new(model_id.to_owned());
+        input.protocol = Some("openai".into());
+        input.protocol_source = Some("durable".into());
+        input.resolution_status = eggpool::catalog::ProtocolResolutionStatus::Resolved;
+        cache
+            .seed_from_account("account-a", "fixture", std::slice::from_ref(&input))
+            .expect("durable seed");
+    }
+    let snapshot = cache.snapshot();
+    let mut model_ids = snapshot.model_ids.clone();
+    model_ids.sort();
+    let mut expected = models.to_vec();
+    expected.sort();
+    assert_eq!(
+        model_ids, expected,
+        "each durable row must survive the rows seeded after it"
+    );
+    for model_id in models {
+        assert_eq!(
+            snapshot.account_support[model_id],
+            vec!["account-a".to_owned()],
+            "{model_id} lost its account support"
+        );
+    }
+    assert_eq!(
+        snapshot.provider_model_keys.len(),
+        models.len(),
+        "no durable model pair was withdrawn"
+    );
+    assert!(
+        snapshot.freshness.is_empty(),
+        "stored rows are not freshness evidence"
+    );
+}

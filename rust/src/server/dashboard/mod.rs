@@ -30,6 +30,10 @@ pub(super) struct ModelFilters {
     /// rather than a separate parameter so the page helpers stay within the
     /// clippy argument budget.
     timeseries: Option<TimeseriesFilters>,
+    /// Bandwidth-page account filter. The page rendered this select and read
+    /// nothing, so submitting it produced a byte-identical page while the
+    /// control looked live — the same defect the timeseries controls had.
+    bandwidth: Option<BandwidthFilters>,
 }
 
 /// Grouped-timeseries controls from the `/timeseries` filter form. These were
@@ -43,6 +47,14 @@ pub(super) struct TimeseriesFilters {
     limit: Option<usize>,
     account: Option<String>,
     model: Option<String>,
+}
+
+/// Account filter from the `/bandwidth` filter form. The totals it scopes are
+/// per-account byte counters; the 180-day heatmap is an all-account rollup and
+/// says so on the page.
+#[derive(Debug, Default, Clone)]
+pub(super) struct BandwidthFilters {
+    account: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +133,8 @@ use render::{
 #[cfg(test)]
 use render::{
     format_runtime_age, host_platform_label, load_average_summary, render_bandwidth_heatmap,
-    render_models_page, render_timeseries_page, render_token_heatmap, render_traces_page,
+    render_bandwidth_page, render_models_page, render_timeseries_page, render_token_heatmap,
+    render_traces_page,
 };
 use response::{html_response, static_response};
 use theme::*;

@@ -1648,6 +1648,54 @@ async fn unknown_body_reservation_releases_at_stream_handoff() {
 }
 
 #[tokio::test]
+async fn body_limit_rejections_use_the_surfaces_error_envelope() {
+    // The body-limit rejections answered with a bare `{"detail": …}` body on
+    // every surface, so a Messages client saw a shape its SDK cannot parse
+    // and no `error.type` for programmatic handling.
+    let (_directory, database, runtime) = runtime_fixture_with_body_limit(64).await;
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind listener");
+    let address = listener.local_addr().expect("listener address");
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+    let over_limit = vec![b'x'; 65];
+
+    for (path, envelope) in [
+        ("/v1/messages", r#""type":"error""#),
+        ("/v1/chat/completions", r#""type":"upstream_error""#),
+    ] {
+        let mut raw = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-key-transport\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            over_limit.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&over_limit);
+        let response = request(address, &raw).await;
+        assert!(response.starts_with("HTTP/1.1 413"), "{path}: {response}");
+        assert!(
+            response.contains("Request body too large"),
+            "{path}: {response}"
+        );
+        assert!(
+            response.contains(r#""error""#) && response.contains(envelope),
+            "{path} rejected the body without its surface envelope: {response}"
+        );
+        assert!(
+            !response.contains(r#""detail""#),
+            "{path} still answers with the raw detail envelope: {response}"
+        );
+    }
+
+    assert!(handle.request_shutdown(ShutdownReason::Requested));
+    let _ = tokio::time::timeout(Duration::from_secs(11), task).await;
+    database
+        .close()
+        .await
+        .expect("database close is idempotent");
+}
+
+#[tokio::test]
 async fn compact_route_enforces_live_generation_body_ceiling() {
     let (_directory, database, runtime) = runtime_fixture_with_body_limit(64).await;
     let handle = runtime.handle();

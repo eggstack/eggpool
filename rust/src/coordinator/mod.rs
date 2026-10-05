@@ -22,7 +22,7 @@ pub use attempt::{
 pub use failure::{
     EffectLedger, EffectLedgerError, FailureCategory, FailureDecisionEngine, FailureEffects,
     FailureObservation, FailureSource, NextAction, ProviderModelPresence, RetryPolicy, RetryScope,
-    classify, is_wire_rejection_signal, parse_retry_after,
+    classify, is_wire_rejection_signal, parse_retry_after, retry_after_from_headers,
 };
 pub use finalization::{
     DurableFinalizer, FinalizationCommand, FinalizationData, FinalizationDrainError,
@@ -68,6 +68,7 @@ pub(crate) use endpoints::{
     build_inference_state_with_shared, build_inference_state_with_shared_and_accounts,
     compile_provider_profiles,
 };
+pub(crate) use finalization::release_claim;
 pub use semantic::{
     ModelSelection, SELECTOR_MAX_RESPONSE_BYTES, SelectionSource, SelectorDiagnostics,
     SelectorFallback, SelectorPrompt, SemanticSelector, build_semantic_view, compile_repair_prompt,

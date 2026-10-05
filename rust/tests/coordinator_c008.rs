@@ -2238,6 +2238,58 @@ async fn stream_phase_progresses_through_lifecycle() {
 }
 
 #[tokio::test]
+async fn stream_prefetched_first_chunk_is_counted_once() {
+    // First-byte prefetching parks the first provider chunk in `pending_raw`.
+    // The active stream also started at the prefetched length, so the pending
+    // chunk was counted a second time when it was pulled through the normal
+    // decode path, and every streamed request over-reported upstream
+    // bandwidth by the size of its first chunk.
+    let body = upstream_success_stream(WireSurface::OpenaiChatCompletions);
+    let expected = i64::try_from(body.len()).expect("body length fits");
+    let server = StreamingProvider::start(vec![SseScript::sse(body)]);
+    let fixture = build_fixture(
+        "openai",
+        &[ProviderSpec {
+            name: "account-a".to_owned(),
+            provider_id: "provider-a".to_owned(),
+            account_id: 1,
+            base_url: server.base_url(),
+            surfaces: vec![WireSurface::OpenaiChatCompletions],
+        }],
+        RetryPolicy::default(),
+        &StreamOptions::default(),
+    )
+    .await;
+    let proxy_id = "proxy-prefetch-bytes";
+    let mut execution = fixture
+        .coordinator
+        .execute(stream_request(ClientSurface::ChatCompletions, proxy_id))
+        .await
+        .expect("executes");
+    execution.mark_started();
+    let (_, error) = drain_stream(&mut execution).await;
+    assert_eq!(error, None);
+    assert_eq!(
+        execution.provider_bytes_observed(),
+        usize::try_from(expected).expect("body length fits"),
+        "provider bytes must equal the bytes the provider sent"
+    );
+    // The durable request row counts what EggPool emitted toward the client,
+    // which the coordinator rewrites per surface, so it is not this counter.
+    assert!(execution.client_bytes_emitted() > 0);
+    execution
+        .complete(DownstreamResult::Delivered)
+        .await
+        .expect("completion converges");
+    settle(&fixture.supervisor).await;
+    let (status, _, _, _, emitted) = db_request_row(&fixture.database, proxy_id).await;
+    assert_eq!(status, "completed");
+    assert!(emitted > 0);
+    server.join().await;
+    fixture.database.close().await.expect("database closes");
+}
+
+#[tokio::test]
 async fn stream_first_chunk_arrives_before_eof() {
     // The second half of the stream (including terminal evidence and EOF)
     // waits well beyond this assertion: a first chunk proves the coordinator

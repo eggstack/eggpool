@@ -544,6 +544,13 @@ const LOCAL_HEADERS: &[&str] = &[
     "x-api-key",
     "host",
     "content-length",
+    // Content coding is request-local negotiation, not a forwarded client
+    // preference. The pinned transport has no compiled-in decoder and only
+    // advertises codings it can decode, so a forwarded `Accept-Encoding` is
+    // the sole way a provider is asked for a body EggPool cannot decode —
+    // while the response path strips `content-encoding`, leaving the client
+    // to parse compressed bytes as its documented format.
+    "accept-encoding",
     "x-eggpool-route-session",
 ];
 
@@ -712,8 +719,47 @@ fn add_auth_header_value(
 
 #[cfg(test)]
 mod tests {
-    use super::add_request_identity_headers;
-    use http::HeaderMap;
+    use super::{add_forwarded_headers, add_request_identity_headers};
+    use http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn forwarded_headers_never_negotiate_a_content_coding_eggpool_cannot_decode() {
+        // The pinned transport has no compiled-in decoder, so a forwarded
+        // `Accept-Encoding` is the only way a provider is asked to compress.
+        // The response path strips `content-encoding`, so the client would
+        // parse compressed bytes as its documented format.
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            http::header::ACCEPT_ENCODING,
+            HeaderValue::from_static("gzip, deflate"),
+        );
+        incoming.insert("x-request-id", HeaderValue::from_static("req-1"));
+        let mut headers = HeaderMap::new();
+        add_forwarded_headers(&mut headers, &incoming).expect("forwarded headers");
+        assert!(
+            headers.get(http::header::ACCEPT_ENCODING).is_none(),
+            "client content coding preference reached the provider"
+        );
+        assert_eq!(headers.get("x-request-id").expect("request id"), "req-1");
+    }
+
+    #[test]
+    fn forwarded_headers_keep_coding_negotiation_out_of_connection_tokens() {
+        // `Connection: accept-encoding` must not smuggle the header back in.
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("accept-encoding"),
+        );
+        incoming.insert(
+            http::header::ACCEPT_ENCODING,
+            HeaderValue::from_static("gzip"),
+        );
+        let mut headers = HeaderMap::new();
+        add_forwarded_headers(&mut headers, &incoming).expect("forwarded headers");
+        assert!(headers.get(http::header::ACCEPT_ENCODING).is_none());
+        assert!(headers.get(http::header::CONNECTION).is_none());
+    }
 
     #[test]
     fn request_identity_headers_truncate_on_a_char_boundary() {

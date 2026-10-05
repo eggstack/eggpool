@@ -36,7 +36,7 @@ use super::{
     FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, PostCommitInterruption, PublicationError, PublicationInput,
     PublicationOutcome, PublicationService, PublishedAttempt, RetryPolicy,
-    RuntimePublicationReceipt, WireResolver,
+    RuntimePublicationReceipt, WireResolver, release_claim, retry_after_from_headers,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -1208,17 +1208,24 @@ impl FiniteCoordinator {
                     }
                     crate::wire::CompactResponseOutcome::ProviderError(error) => {
                         let signal = provider_error_signal(&error);
-                        let observation = self.observation(
-                            &identity,
-                            &candidate.profile,
-                            attempt_number,
-                            FailureSource::ProviderResponse,
-                            Some(upstream.status),
-                            None,
-                            signal,
-                            alternate_wire_available,
-                            "response_status",
-                        );
+                        let observation =
+                            self.observation(
+                                &identity,
+                                &candidate.profile,
+                                attempt_number,
+                                FailureSource::ProviderResponse,
+                                Some(upstream.status),
+                                None,
+                                signal,
+                                alternate_wire_available,
+                                "response_status",
+                            )
+                            // The provider's own recovery hint sizes the
+                            // rate-limit cooldown; without it a 429 is
+                            // retried against the exhausted account.
+                            .with_retry_after(
+                                retry_after_from_headers(&upstream.headers, self.retry_policy),
+                            );
                         let (effects, first) = self.decide(&observation)?;
                         if first {
                             self.apply_effects(&published.claim, &effects);
@@ -2056,6 +2063,24 @@ impl Drop for PendingFinalization {
         let Some(parts) = self.parts.take() else {
             return;
         };
+        let supervisor = parts.supervisor;
+        let Ok(handle) = Handle::try_current() else {
+            // `register` spawns its worker, so it cannot run here. The
+            // attempt row is already durable, which means the startup
+            // reconciler converges this request; losing it must not be
+            // silent, and it must not be reported as a clean drop. Local
+            // ownership is not durable, so the claim is released here
+            // instead of being dropped with the unreconciled command.
+            tracing::error!(
+                "pending finalization dropped outside a runtime context;                  leaving the durable attempt for reconciliation"
+            );
+            if let Err(error) = release_claim(parts.claim.as_ref()) {
+                tracing::error!(
+                    "dropped pending finalization could not release its selection claim: {error}"
+                );
+            }
+            return;
+        };
         let mut data = parts.data;
         data.outcome = FinalizationOutcome::Interrupted;
         data.error_class = Some("CoordinatorInterrupted".into());
@@ -2065,17 +2090,6 @@ impl Drop for PendingFinalization {
             identity: parts.identity,
             data,
             claim: parts.claim,
-        };
-        let supervisor = parts.supervisor;
-        let Ok(handle) = Handle::try_current() else {
-            // `register` spawns its worker, so it cannot run here. The
-            // attempt row is already durable, which means the startup
-            // reconciler converges this request; losing it must not be
-            // silent, and it must not be reported as a clean drop.
-            tracing::error!(
-                "pending finalization dropped outside a runtime context;                  leaving the durable attempt for reconciliation"
-            );
-            return;
         };
         let Ok(finalization) = supervisor.register(command) else {
             return;

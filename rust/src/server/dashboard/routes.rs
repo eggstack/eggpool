@@ -191,7 +191,24 @@ pub(in crate::server) async fn bandwidth_page(
     State(state): State<AppState>,
     Query(query): Query<PeriodQuery>,
 ) -> Response {
-    dashboard_data_page(&state, "Bandwidth", "bandwidth", query.period, query.theme).await
+    // The account select was rendered but never read, so submitting it
+    // re-rendered the identical page. Scope the page to the submitted
+    // account instead of pretending the control is live.
+    dashboard_data_page_with_options(
+        &state,
+        "Bandwidth",
+        "bandwidth",
+        query.period,
+        query.theme,
+        false,
+        ModelFilters {
+            bandwidth: Some(BandwidthFilters {
+                account: query.account,
+            }),
+            ..ModelFilters::default()
+        },
+    )
+    .await
 }
 
 pub(in crate::server) async fn pings_page(

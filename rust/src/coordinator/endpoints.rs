@@ -1072,6 +1072,13 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         })
         .await
         .unwrap_or_default();
+    // Seed non-destructively: a durable row is stored knowledge, not a live
+    // authoritative observation, so it must not withdraw the account's other
+    // models. An authoritative single-model update would compute
+    // `destructive = true`, drop every other support key, and the next
+    // `persist()` tick would delete those models from SQLite — rewriting
+    // historical usage rows to `__deprecated__` — on every start and reload.
+    // `seed_from_account` unions support instead and records no refresh.
     for (model_id, protocol, provider_id) in &durable_models {
         let mut input = ModelInput::new(model_id.clone());
         input.protocol = Some(protocol.clone());
@@ -1080,12 +1087,10 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         // Attach to every account of the recorded provider.
         if let Some(provider) = config.providers.get(provider_id) {
             for account in &provider.accounts {
-                let _ = catalog.update_from_account(
+                let _ = catalog.seed_from_account(
                     &account.name,
                     provider_id,
                     std::slice::from_ref(&input),
-                    true,
-                    true,
                 );
             }
         }
