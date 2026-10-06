@@ -10,7 +10,7 @@ use tokio::{runtime::Handle, time::timeout};
 
 use crate::{
     routing::{RoutingRouter, SelectionClaim},
-    wire::ir::{CanonicalEvent, CanonicalEventType, CanonicalUsage},
+    wire::ir::CanonicalUsage,
     wire::{StreamForwardingMode, TerminalEvidence, WireStream, WireSurface},
 };
 
@@ -387,15 +387,6 @@ enum ChunkDecode {
     TranslationError,
 }
 
-fn forwarded_terminal_from_event(event: &CanonicalEvent) -> Option<ForwardedTerminal> {
-    match event.event_type {
-        CanonicalEventType::ResponseComplete => Some(ForwardedTerminal::Completed),
-        CanonicalEventType::ResponseIncomplete => Some(ForwardedTerminal::Incomplete),
-        CanonicalEventType::Error => Some(ForwardedTerminal::Failed),
-        _ => None,
-    }
-}
-
 fn forwarded_terminal_from_evidence(evidence: TerminalEvidence) -> ForwardedTerminal {
     match evidence {
         TerminalEvidence::ResponsesCompleted
@@ -453,11 +444,21 @@ impl ActiveStream {
         };
         let mut out = Vec::new();
         let mut saw_terminal = false;
+        // Terminal ownership comes from wire evidence only. A canonical
+        // `ResponseComplete` event is not the wire terminal for every
+        // dialect: an OpenAI chat upstream reports `finish_reason` first and
+        // still sends a usage frame before `[DONE]`. Claiming the terminal on
+        // the event would stop the read before usage is folded and persist a
+        // zero-token request. The kernel records evidence for every dialect,
+        // including provider errors, so no event fallback is needed.
+        if let Some(terminal) = wire
+            .terminal_evidence()
+            .map(forwarded_terminal_from_evidence)
+        {
+            saw_terminal = true;
+            self.forwarded_terminal.get_or_insert(terminal);
+        }
         for event in &pushed.events {
-            if let Some(terminal) = forwarded_terminal_from_event(event) {
-                saw_terminal = true;
-                self.forwarded_terminal.get_or_insert(terminal);
-            }
             match wire.encode_client_event_stateful(event) {
                 Ok(bytes) if !bytes.is_empty() => {
                     self.events_forwarded = self.events_forwarded.saturating_add(1);

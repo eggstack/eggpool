@@ -934,6 +934,91 @@ async fn stream_success_matrix_covers_every_client_surface_and_upstream_profile(
     }
 }
 
+/// OpenAI chat reports its stop in a `finish_reason` chunk and only then sends
+/// the usage frame and `[DONE]`. A translated client surface must keep reading
+/// past `finish_reason`, otherwise the trailing usage frame is never observed
+/// and the request is persisted with zero tokens.
+fn chat_stream_with_trailing_usage_after_finish_reason() -> Vec<u8> {
+    concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,",
+        "\"completion_tokens\":4,\"total_tokens\":14}}\n\n",
+        "data: [DONE]\n\n",
+    )
+    .into()
+}
+
+#[tokio::test]
+async fn stream_translated_chat_bills_usage_sent_after_finish_reason() {
+    let body = chat_stream_with_trailing_usage_after_finish_reason();
+    // Deliver one SSE record per TCP write so the terminal is observed after
+    // `finish_reason` has already been forwarded downstream.
+    let mut records: Vec<Vec<u8>> = Vec::new();
+    let mut current: Vec<u8> = Vec::new();
+    for &byte in &body {
+        current.push(byte);
+        if byte == b'\n' && current.ends_with(b"\n\n") {
+            records.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        records.push(current);
+    }
+    let chunks: Vec<(Duration, Vec<u8>)> = records
+        .into_iter()
+        .enumerate()
+        // A real gap between writes keeps each SSE record in its own read, so
+        // `finish_reason` is forwarded and acted on before the usage frame
+        // arrives. Coalesced writes would hide the defect.
+        .map(|(index, record)| (Duration::from_millis(25 * index as u64), record))
+        .collect();
+    let server = StreamingProvider::start(vec![SseScript {
+        header_delay: Duration::ZERO,
+        extra_headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
+        framing: Framing::Raw,
+        chunks,
+        finish: Finish::CleanEof,
+    }]);
+    let fixture = build_fixture(
+        ClientSurface::Responses.protocol(),
+        &[ProviderSpec {
+            name: "account-a".to_owned(),
+            provider_id: "provider-a".to_owned(),
+            account_id: 1,
+            base_url: server.base_url(),
+            surfaces: vec![WireSurface::OpenaiChatCompletions],
+        }],
+        RetryPolicy::default(),
+        &StreamOptions::default(),
+    )
+    .await;
+    let proxy_id = "proxy-trailing-usage";
+    let mut execution = fixture
+        .coordinator
+        .execute(stream_request(ClientSurface::Responses, proxy_id))
+        .await
+        .expect("translated stream executes");
+    execution.mark_started();
+    let (_, error) = drain_stream(&mut execution).await;
+    assert_eq!(error, None, "the translated stream ends cleanly");
+    let result = execution
+        .complete(DownstreamResult::Delivered)
+        .await
+        .expect("completion converges");
+    assert!(result.progress.completed);
+    let (status, input, output, _, _) = db_request_row(&fixture.database, proxy_id).await;
+    assert_eq!(status, "completed");
+    assert_eq!(
+        (input, output),
+        (Some(10), Some(4)),
+        "usage sent after finish_reason must still be billed"
+    );
+    server.join().await;
+    fixture.database.close().await.expect("database closes");
+}
+
 // ---------------------------------------------------------------------------
 // Response-header timeout: retryable before handoff, terminal when exhausted
 // ---------------------------------------------------------------------------

@@ -591,6 +591,19 @@ impl StreamEventDecoder {
         self.usage.value()
     }
 
+    /// Wire-level terminal evidence observed so far.
+    ///
+    /// A canonical `ResponseComplete` event is *not* wire terminal evidence:
+    /// an OpenAI chat upstream reports its stop in a `finish_reason` chunk
+    /// and still sends a usage frame before `[DONE]`. Callers that take
+    /// ownership of a stream must consult this instead of inferring the
+    /// terminal from an event, or they stop reading before the trailing
+    /// usage frame arrives.
+    #[must_use]
+    pub const fn terminal_evidence(&self) -> Option<TerminalEvidence> {
+        self.evidence
+    }
+
     fn decode_frames(&mut self, frames: Vec<SseFrame>) -> Result<Vec<CanonicalEvent>, StreamError> {
         let mut events = Vec::new();
         for frame in frames {
@@ -623,8 +636,18 @@ impl StreamEventDecoder {
             self.observe_terminal(&frame, &decoded);
             for event in decoded {
                 if let Some(usage) = event.usage.as_ref() {
-                    self.usage
-                        .merge(usage, matches!(event.event_type, CanonicalEventType::Usage));
+                    if matches!(self.adapter, StreamAdapterKind::AnthropicMessagesSse) {
+                        // Anthropic counters are cumulative and restated, so
+                        // the later value replaces the earlier one instead of
+                        // being added to it.
+                        self.usage.merge_cumulative(
+                            usage,
+                            matches!(event.event_type, CanonicalEventType::Usage),
+                        );
+                    } else {
+                        self.usage
+                            .merge(usage, matches!(event.event_type, CanonicalEventType::Usage));
+                    }
                 }
                 events.push(event);
             }
@@ -852,6 +875,43 @@ impl UsageAccumulator {
         self.present.then(|| self.value.clone())
     }
 
+    /// Fold a usage frame that restates cumulative counters.
+    ///
+    /// Anthropic reports running totals: `message_start` opens with
+    /// `input_tokens` and a small `output_tokens`, and `message_delta`
+    /// restates the prompt alongside the grown completion count. Adding them
+    /// (the `merge` behavior other dialects need) would double-count the
+    /// prompt, so the later cumulative value replaces the earlier one. Fields
+    /// the frame omits keep their previous value, so a stream that reports
+    /// input tokens only at the start still retains them.
+    fn merge_cumulative(&mut self, incoming: &CanonicalUsage, complete: bool) {
+        self.present = true;
+        self.complete |= complete;
+        replace_present(&mut self.value.input_tokens, incoming.input_tokens);
+        replace_present(&mut self.value.output_tokens, incoming.output_tokens);
+        replace_present(&mut self.value.total_tokens, incoming.total_tokens);
+        replace_present(
+            &mut self.value.cached_input_tokens,
+            incoming.cached_input_tokens,
+        );
+        replace_present(
+            &mut self.value.cache_read_input_tokens,
+            incoming.cache_read_input_tokens,
+        );
+        replace_present(
+            &mut self.value.cache_creation_input_tokens,
+            incoming.cache_creation_input_tokens,
+        );
+        replace_present(
+            &mut self.value.cache_write_input_tokens,
+            incoming.cache_write_input_tokens,
+        );
+        replace_present(&mut self.value.reasoning_tokens, incoming.reasoning_tokens);
+        if incoming.cache_counter_status == CacheCounterStatus::Reported {
+            self.value.cache_counter_status = CacheCounterStatus::Reported;
+        }
+    }
+
     fn absorb(&mut self, incoming: &Self) {
         if !incoming.present {
             return;
@@ -865,6 +925,12 @@ fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
         (Some(left), Some(right)) => Some(left.saturating_add(right)),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
+    }
+}
+
+fn replace_present(slot: &mut Option<u64>, incoming: Option<u64>) {
+    if incoming.is_some() {
+        *slot = incoming;
     }
 }
 
@@ -1375,6 +1441,18 @@ fn decode_anthropic<S: CanonicalEventSink>(
                 event.model = string(message.get("model"));
             }
             events.push(event);
+            // `message_start` is the only frame carrying prompt/cache
+            // counters; `message_delta` reports output tokens alone. Fold the
+            // usage here or `input_tokens` stays unset for the whole stream.
+            if let Some(usage) = message
+                .and_then(|message| message.get("usage"))
+                .and_then(|usage| usage_from(Some(usage), UsageProtocol::Anthropic))
+            {
+                events.push(CanonicalEvent {
+                    usage: Some(usage),
+                    ..canonical_event(CanonicalEventType::Usage)
+                });
+            }
         }
         "content_block_start" => {
             let mut event = canonical_event(CanonicalEventType::ContentStart);
@@ -2616,6 +2694,36 @@ mod tests {
         StreamEventDecoder, StreamTerminalOutcome, TerminalEvidence, canonical_event,
     };
     use crate::ir::CanonicalUsage;
+
+    #[test]
+    fn anthropic_message_start_prompt_usage_is_not_dropped_or_double_counted() {
+        // `message_start` is the only frame that carries prompt/cache
+        // counters, while `message_delta` restates the prompt alongside the
+        // grown completion count. The folded total must be the reported
+        // value, never the sum of both frames.
+        let source = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg-1\",\"model\":\"m\",",
+            "\"usage\":{\"input_tokens\":42,\"cache_read_input_tokens\":7}}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"input_tokens\":42,\"output_tokens\":9}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let mut decoder = StreamEventDecoder::new(StreamAdapterKind::AnthropicMessagesSse);
+        decoder.push(source.as_bytes()).expect("legal stream");
+        let summary = decoder.finalize().expect("finalize");
+        assert_eq!(summary.outcome, StreamTerminalOutcome::Success);
+        let usage: CanonicalUsage = summary.usage.expect("usage folded from message_start");
+        assert_eq!(usage.input_tokens, Some(42), "prompt tokens must survive");
+        assert_eq!(
+            usage.output_tokens,
+            Some(9),
+            "completion count must not be summed"
+        );
+        assert_eq!(usage.cache_read_input_tokens, Some(7));
+    }
 
     #[test]
     fn empty_data_buffer_is_a_no_op_frame_not_a_malformed_event() {

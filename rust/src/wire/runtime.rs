@@ -1457,6 +1457,15 @@ impl WireStream {
         self.decoder.usage()
     }
 
+    /// Wire-level terminal evidence observed so far.
+    ///
+    /// Translated streams must not treat a canonical `ResponseComplete`
+    /// event as the terminal: an OpenAI chat upstream emits `finish_reason`
+    /// before its trailing usage frame and `[DONE]` sentinel.
+    pub fn terminal_evidence(&self) -> Option<super::stream::TerminalEvidence> {
+        self.decoder.terminal_evidence()
+    }
+
     #[must_use]
     pub const fn forwarding_mode(&self) -> StreamForwardingMode {
         self.mode

@@ -150,10 +150,20 @@ impl FairnessRotor {
     }
 
     pub fn commit(&self, key: &FairnessKey, candidate_count: usize) {
+        self.commit_keyed(&key.to_key_string(), candidate_count);
+    }
+
+    /// Advance the rotor under an already-materialized key.
+    ///
+    /// Callers that ordered a band under one candidate and later selected a
+    /// different candidate must commit under the *ordering* key; recomputing
+    /// it from the selected candidate would advance a rotor the band never
+    /// consulted and leave the consulted rotor stalled.
+    pub fn commit_keyed(&self, key: &str, candidate_count: usize) {
         if candidate_count < 2 {
             return;
         }
-        let key = key.to_key_string();
+        let key = key.to_owned();
         // Rebuild on poison: a panicking holder may have left positions/lru
         // inconsistent, so discard rather than advancing a corrupt rotor.
         let mut state = self.state.lock().unwrap_or_else(|error| {
@@ -205,5 +215,59 @@ impl FairnessRandom for DeterministicFairnessRandom {
         }
         let value = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         (value as usize) % candidate_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FairnessKey, FairnessRotor};
+
+    fn key(protocol: &str) -> FairnessKey {
+        FairnessKey {
+            provider_id: Some("openai".to_owned()),
+            model_id: "gpt-x".to_owned(),
+            protocol: Some(protocol.to_owned()),
+            priority: 0,
+            client_protocol: Some("openai.responses.v1".to_owned()),
+        }
+    }
+
+    /// Committing under the materialized ordering key must advance exactly the
+    /// rotor the band was ordered with. Recomputing the key from the selected
+    /// candidate left this rotor stalled at 0, so the same account kept
+    /// winning a contested band.
+    #[test]
+    fn commit_keyed_advances_the_rotor_that_ordered_the_band() {
+        let rotor = FairnessRotor::new();
+        let ordering = key("openai.chat.v1");
+        let ordering_key = ordering.to_key_string();
+
+        assert_eq!(rotor.preview(&ordering, &["a", "b"]).1, 0);
+        rotor.commit_keyed(&ordering_key, 2);
+
+        // The consulted rotor advanced, so the next band rotates to index 1.
+        assert_eq!(rotor.preview(&ordering, &["a", "b"]).1, 1);
+        assert_eq!(
+            rotor.key_count(),
+            1,
+            "committing the ordering key must not register the selected candidate's key"
+        );
+    }
+
+    /// Committing a different key than the one used for ordering advances an
+    /// unrelated rotor and stalls the consulted one.
+    #[test]
+    fn committing_a_foreign_key_leaves_the_ordering_rotor_stalled() {
+        let rotor = FairnessRotor::new();
+        let ordering = key("openai.chat.v1");
+
+        rotor.commit_keyed(&key("anthropic.messages.v1").to_key_string(), 2);
+
+        assert_eq!(
+            rotor.preview(&ordering, &["a", "b"]).1,
+            0,
+            "the ordering rotor must not advance when a foreign key is committed"
+        );
+        assert_eq!(rotor.key_count(), 1);
     }
 }

@@ -391,6 +391,49 @@ impl ModelQuarantine {
         self.clear_key(key, "catalog_reappearance", now, true)
     }
 
+    /// Lift terminal withdrawals for one account/model pair after the model
+    /// was observed working again.
+    ///
+    /// A terminal withdrawal has no expiry, so without an explicit lift an
+    /// account/model stays unroutable for the life of the process. A
+    /// successful upstream call for that account and canonical model is
+    /// direct evidence the withdrawal is stale. Entries are matched on
+    /// account and canonical model so the caller does not have to reproduce
+    /// the upstream-model/protocol key digest.
+    pub fn clear_authoritative_reappearance_for(
+        &self,
+        account_id: &str,
+        canonical_model_id: &str,
+        now: f64,
+    ) -> usize {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let stale: Vec<QuarantineKey> = entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.state == QuarantineState::TerminalWithdrawn
+                    && entry.key.account_id == account_id
+                    && entry.key.canonical_model_id == canonical_model_id
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        let cleared = stale.len();
+        // Clear in place, matching `clear_key`: the row stays for the audit
+        // trail and only its state moves back to healthy.
+        for key in stale {
+            let Some(entry) = entries.get_mut(&key) else {
+                continue;
+            };
+            entry.state = QuarantineState::Healthy;
+            entry.cleared_at = Some(now);
+            entry.clear_reason = Some("authoritative_reappearance".to_owned());
+            entry.expiry = None;
+        }
+        cleared
+    }
+
     pub fn manual_clear(&self, key: &QuarantineKey, now: f64) -> bool {
         self.clear_key(key, "operator_clear", now, true)
     }

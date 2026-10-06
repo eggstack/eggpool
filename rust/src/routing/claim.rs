@@ -480,10 +480,15 @@ pub(crate) fn publish(
     Ok(claim)
 }
 
+/// Upper bound on retained claim records.
+const CLAIM_RECORD_HARD_CAP: usize = 4_096;
+
+/// Alias used by the prune regression tests.
+#[cfg(test)]
+const CLAIM_RECORD_HARD_CAP_TEST: usize = CLAIM_RECORD_HARD_CAP;
+
 fn prune_terminal_claims(book: &mut ClaimBook) {
-    const CLAIM_RECORD_HARD_CAP: usize = 4_096;
-    let scan_limit = book.terminal_order.len();
-    for _ in 0..scan_limit {
+    for _ in 0..book.terminal_order.len() {
         if book.claims.len() <= CLAIM_RECORD_HARD_CAP {
             break;
         }
@@ -491,7 +496,12 @@ fn prune_terminal_claims(book: &mut ClaimBook) {
             break;
         };
         if book.claims.get(&id).is_some_and(|claim| {
-            matches!(claim.state, ClaimState::Released | ClaimState::RolledBack)
+            // A converted claim whose reservation is still outstanding keeps
+            // its record: evicting it would strand `reserved_*` permanently,
+            // because the later `release_quota_reservation` resolves the
+            // record and fails with `UnknownAccount`.
+            (claim.quota_released || !claim.converted)
+                && matches!(claim.state, ClaimState::Released | ClaimState::RolledBack)
         }) {
             book.claims.remove(&id);
         } else {
@@ -514,4 +524,61 @@ pub(crate) fn active_count(book: &Arc<Mutex<ClaimBook>>, account_name: &str) -> 
 
 pub(crate) fn claim_ids(book: &Arc<Mutex<ClaimBook>>) -> usize {
     lock_book(book).claims.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CLAIM_RECORD_HARD_CAP_TEST, ClaimBook, ClaimState, OwnedClaim, prune_terminal_claims,
+    };
+
+    fn seed(book: &mut ClaimBook, id: u64, state: ClaimState, converted: bool, released: bool) {
+        book.claims.insert(
+            id,
+            OwnedClaim {
+                state,
+                converted,
+                quota_released: released,
+            },
+        );
+        book.terminal_order.push_back(id);
+    }
+
+    /// A converted claim whose reservation is still owed must survive pruning;
+    /// evicting it would strand `reserved_*` because the later
+    /// `release_quota_reservation` resolves the record and fails.
+    #[test]
+    fn prune_keeps_a_converted_claim_whose_reservation_is_still_owed() {
+        let mut book = ClaimBook::default();
+        // Fill past the cap so pruning actually engages.
+        for id in 0..CLAIM_RECORD_HARD_CAP_TEST as u64 {
+            seed(&mut book, id, ClaimState::Released, false, true);
+        }
+        let owed = CLAIM_RECORD_HARD_CAP_TEST as u64;
+        seed(&mut book, owed, ClaimState::Released, true, false);
+        assert!(book.claims.len() > CLAIM_RECORD_HARD_CAP_TEST);
+
+        prune_terminal_claims(&mut book);
+
+        assert!(
+            book.claims.contains_key(&owed),
+            "a converted claim with an outstanding reservation must not be pruned"
+        );
+    }
+
+    /// A fully settled terminal claim is still pruned once over the cap.
+    #[test]
+    fn prune_still_reaps_fully_settled_terminal_claims() {
+        let mut book = ClaimBook::default();
+        for id in 0..CLAIM_RECORD_HARD_CAP_TEST as u64 {
+            seed(&mut book, id, ClaimState::Released, true, true);
+        }
+        let before = book.claims.len();
+        prune_terminal_claims(&mut book);
+        assert!(
+            book.claims.len() <= CLAIM_RECORD_HARD_CAP_TEST,
+            "settled claims must be reclaimed, saw {} before",
+            before
+        );
+    }
 }

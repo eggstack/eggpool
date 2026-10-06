@@ -676,6 +676,10 @@ impl ReloadService {
             }
         };
         wire_policy.finalize();
+        // The candidate is published: discard its wire-preference rollback so
+        // dropping the prepared handle cannot revert live traffic to the
+        // previous generation's preferences.
+        candidate.accept_wire_preferences();
         let mut result =
             self.result_with_diff(ReloadResultCategory::Applied, "applied", &diff, true);
         result.active_generation_id = publication.new_slot.generation_id();

@@ -441,7 +441,7 @@ impl RoutingRouter {
         // Fairness is committed only after the candidate owns all local
         // state, so a failed claim does not consume a rotor position.
         if let Some(fairness) = accepted_fairness.filter(|decision| decision.applied) {
-            self.commit_fairness(facts, &candidate, fairness.candidate_count);
+            self.commit_fairness(&fairness, fairness.candidate_count);
         }
         drop(catalog);
         Ok(Some(published))
@@ -464,6 +464,17 @@ impl RoutingRouter {
     pub fn record_success(&self, claim: &SelectionClaim) {
         if let Some(health) = self.state.health.as_ref() {
             health.record_success(claim.account_name(), Some(claim.canonical_model_id()));
+        }
+        // A terminal withdrawal has no expiry, so a stale withdrawal would
+        // otherwise keep the account/model unroutable for the life of the
+        // process. Serving the model successfully is authoritative evidence
+        // that the withdrawal no longer holds.
+        if let Some(quarantine) = self.state.quarantine.as_ref() {
+            quarantine.clear_authoritative_reappearance_for(
+                claim.account_name(),
+                claim.canonical_model_id(),
+                (self.state.recovery_clock)(),
+            );
         }
     }
 
@@ -680,17 +691,14 @@ impl RoutingRouter {
         Some(fairness)
     }
 
-    fn commit_fairness(
-        &self,
-        facts: &RoutingRequestFacts,
-        candidate: &RoutingCandidate,
-        count: usize,
-    ) {
+    fn commit_fairness(&self, fairness: &FairnessDecision, count: usize) {
         if self.state.policy.fairness_mode == FairnessMode::RoundRobin && count > 1 {
-            self.state.rotor.commit(
-                &self.fairness_key(facts, candidate.priority, candidate.protocol.clone()),
-                count,
-            );
+            // Advance the rotor under the key the band was *ordered* with,
+            // not one recomputed from the selected candidate. The two differ
+            // when the selected candidate reports a different protocol than
+            // the band's best candidate, which would otherwise stall the
+            // consulted rotor and skew an unrelated one.
+            self.state.rotor.commit_keyed(&fairness.key, count);
         }
     }
 

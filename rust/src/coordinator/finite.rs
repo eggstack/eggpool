@@ -835,7 +835,31 @@ impl FiniteCoordinator {
             // unsupported targets fail here, before submission.
             let prepared = if is_compact {
                 let FiniteAdmission::Compact(Some(compact_admission)) = &request.admission else {
-                    return Err(FiniteCoordinatorError::InvalidFacts);
+                    // Publication is already durable and `published.claim`
+                    // has no `Drop` side effects, so the claim must be handed
+                    // to `pending_terminal` exactly as the preparation-failure
+                    // branch below does. Dropping it here would strand the
+                    // account's active count and converted reservation.
+                    let response = self.error_response(
+                        request.client_surface,
+                        &request.proxy_request_id,
+                        attempt_number,
+                        StatusCode::BAD_REQUEST,
+                        "compact admission facts are inconsistent with the requested operation",
+                    );
+                    let data = self.local_failure_data(
+                        &identity,
+                        &candidate.profile,
+                        StatusCode::BAD_REQUEST,
+                        "InvalidFacts",
+                        request_bytes,
+                    );
+                    return Ok(self.pending_terminal(
+                        published.identity,
+                        Some(published.claim),
+                        response,
+                        data,
+                    ));
                 };
                 match self
                     .attempts
@@ -869,7 +893,28 @@ impl FiniteCoordinator {
                 }
             } else {
                 let FiniteAdmission::Generate(admitted) = &request.admission else {
-                    return Err(FiniteCoordinatorError::InvalidFacts);
+                    // Same reasoning as the compact branch above: the durable
+                    // claim must reach `pending_terminal`, not be dropped.
+                    let response = self.error_response(
+                        request.client_surface,
+                        &request.proxy_request_id,
+                        attempt_number,
+                        StatusCode::BAD_REQUEST,
+                        "generate admission facts are inconsistent with the requested operation",
+                    );
+                    let data = self.local_failure_data(
+                        &identity,
+                        &candidate.profile,
+                        StatusCode::BAD_REQUEST,
+                        "InvalidFacts",
+                        request_bytes,
+                    );
+                    return Ok(self.pending_terminal(
+                        published.identity,
+                        Some(published.claim),
+                        response,
+                        data,
+                    ));
                 };
                 match self.attempts.prepare_borrowed(borrowed_input, admitted) {
                     Ok(value) => value,

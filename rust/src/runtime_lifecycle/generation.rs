@@ -343,6 +343,7 @@ pub struct GenerationCloseReport {
 pub enum CandidateOwnership {
     Prepared,
     Transferred,
+    Accepted,
     Aborting,
     Aborted,
 }
@@ -421,11 +422,27 @@ impl PreparedGeneration {
             return Err(CandidateTransferError { state: inner.state });
         }
         inner.state = CandidateOwnership::Transferred;
-        // Candidate prefs become live with the transfer; drop the rollback.
-        inner.wire_rollback = None;
+        // The rollback snapshot is deliberately retained across the transfer.
+        // `accept_wire_preferences` discards it once the candidate is
+        // published; until then, dropping the prepared handle must restore the
+        // live preferences, so a post-stage abort cannot leave the active
+        // generation serving never-published wire behavior.
         inner.generation.take().ok_or(CandidateTransferError {
             state: CandidateOwnership::Transferred,
         })
+    }
+
+    /// Publish the candidate's wire preferences by discarding the rollback.
+    ///
+    /// Only the accepting swap calls this. Every other exit leaves the
+    /// snapshot in place so [`Drop`] restores the live preferences.
+    pub fn accept_wire_preferences(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.state == CandidateOwnership::Accepted {
+            return;
+        }
+        inner.wire_rollback = None;
+        inner.state = CandidateOwnership::Accepted;
     }
 
     /// Abort candidate-owned resources.  Concurrent and repeated callers
@@ -454,7 +471,21 @@ impl PreparedGeneration {
                             transferred: false,
                         };
                     }
+                    CandidateOwnership::Accepted => {
+                        return CandidateAbortReport {
+                            ownership: CandidateOwnership::Accepted,
+                            close_report: None,
+                            transferred: true,
+                        };
+                    }
                     CandidateOwnership::Transferred => {
+                        // Ownership already moved to the manager, but the
+                        // candidate was never accepted: its preferences never
+                        // published, so restore the live snapshot before
+                        // reporting the transfer.
+                        if let Some((resolver, previous)) = inner.wire_rollback.take() {
+                            resolver.set_configured_preferences(previous);
+                        }
                         return CandidateAbortReport {
                             ownership: CandidateOwnership::Transferred,
                             close_report: None,
@@ -485,17 +516,27 @@ impl PreparedGeneration {
 impl Drop for PreparedGeneration {
     fn drop(&mut self) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // An accepted candidate published its preferences and discarded the
+        // snapshot, so only unaccepted states need restoration here.
         if matches!(
             inner.state,
-            CandidateOwnership::Prepared | CandidateOwnership::Aborting
+            CandidateOwnership::Prepared
+                | CandidateOwnership::Transferred
+                | CandidateOwnership::Aborting
         ) {
             if let Some((resolver, previous)) = inner.wire_rollback.take() {
                 resolver.set_configured_preferences(previous);
             }
-            tracing::error!(
-                state = ?inner.state,
-                "prepared generation dropped before explicit ownership transfer or abort"
-            );
+            if inner.state == CandidateOwnership::Transferred {
+                tracing::warn!(
+                    "staged candidate dropped without acceptance; restored live wire preferences"
+                );
+            } else {
+                tracing::error!(
+                    state = ?inner.state,
+                    "prepared generation dropped before explicit ownership transfer or abort"
+                );
+            }
         }
     }
 }

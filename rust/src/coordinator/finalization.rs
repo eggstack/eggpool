@@ -208,7 +208,10 @@ impl DurableFinalizer {
         if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteBefore) {
             return Err(error);
         }
-        let durable = self.finalize_durable(identity, &data, true).await?;
+        let durable = self
+            .finalize_durable(identity, &data, true)
+            .await
+            .map_err(|error| release_claim_after_durable_error(claim.as_ref(), error))?;
         self.pause_at(CrashFaultPoint::DurableFinalizerWriteAfter);
         if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteAfter) {
             return Err(error);
@@ -252,7 +255,10 @@ impl DurableFinalizer {
         if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteBefore) {
             return Err(error);
         }
-        let durable = self.finalize_durable(identity, &data, false).await?;
+        let durable = self
+            .finalize_durable(identity, &data, false)
+            .await
+            .map_err(|error| release_claim_after_durable_error(claim.as_ref(), error))?;
         self.pause_at(CrashFaultPoint::DurableFinalizerWriteAfter);
         if let Some(error) = self.fail_at(CrashFaultPoint::DurableFinalizerWriteAfter) {
             return Err(error);
@@ -618,10 +624,33 @@ enum TxnResult {
     },
 }
 
+/// Compensate ownership when the durable terminal write fails.
+///
+/// `SelectionClaim` has no `Drop` side effects, so an error propagated past
+/// this point would strand the account's active-request count — and any
+/// converted quota reservation — for the life of the process, permanently
+/// shrinking the concurrency slots routing can select. Release before
+/// propagating; the caller keeps the original failure.
+fn release_claim_after_durable_error(
+    claim: Option<&SelectionClaim>,
+    error: FinalizationError,
+) -> FinalizationError {
+    if let Err(release_error) = release_claim(claim) {
+        tracing::error!(
+            "durable finalization failed and its selection claim could not be released: \
+             {release_error}"
+        );
+    }
+    error
+}
+
 pub(crate) fn release_claim(claim: Option<&SelectionClaim>) -> Result<bool, FinalizationError> {
     let Some(claim) = claim else { return Ok(false) };
-    claim.release_quota_reservation()?;
+    // Active-count ownership is released first, matching `release_all` and
+    // the post-commit compensation path. The active decrement is what gates
+    // routing, so a fallible quota release must never be able to skip it.
     claim.release_active_claim()?;
+    claim.release_quota_reservation()?;
     Ok(true)
 }
 

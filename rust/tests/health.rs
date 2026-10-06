@@ -247,6 +247,56 @@ fn quarantine_is_exact_key_bounded_and_terminal_recovery_is_authoritative() {
     );
 }
 
+#[test]
+fn authoritative_reappearance_lifts_a_terminal_withdrawal_by_account_and_model() {
+    let quarantine = ModelQuarantine::default();
+    let key = quarantine.key("openai", "acct-a", "gpt-x", None, "openai.chat.v1");
+    quarantine
+        .set_terminal_withdrawn(
+            key.clone(),
+            "catalog_absence",
+            EvidenceProvenance::ProviderCatalog,
+            10.0,
+        )
+        .expect("authoritative terminal state");
+    // A terminal withdrawal has no expiry, so it outlives every clock tick.
+    assert!(quarantine.is_model_quarantined(&key, 10.0));
+    assert!(quarantine.is_model_quarantined(&key, 10_000.0));
+
+    // A successful upstream call for the same account/model is authoritative
+    // evidence the withdrawal is stale and must lift it.
+    assert_eq!(
+        quarantine.clear_authoritative_reappearance_for("acct-a", "gpt-x", 20.0),
+        1
+    );
+    assert!(!quarantine.is_model_quarantined(&key, 20.0));
+    assert_eq!(
+        quarantine.get_entry(&key).expect("audit row").state,
+        QuarantineState::Healthy
+    );
+
+    // An unrelated account or model must not clear someone else's withdrawal.
+    let other = quarantine.key("openai", "acct-b", "gpt-x", None, "openai.chat.v1");
+    quarantine
+        .set_terminal_withdrawn(
+            other.clone(),
+            "catalog_absence",
+            EvidenceProvenance::ProviderCatalog,
+            21.0,
+        )
+        .expect("authoritative terminal state");
+    assert_eq!(
+        quarantine.clear_authoritative_reappearance_for("acct-a", "gpt-y", 22.0),
+        0
+    );
+    assert!(quarantine.is_model_quarantined(&other, 22.0));
+    assert_eq!(
+        quarantine.clear_authoritative_reappearance_for("acct-b", "gpt-x", 23.0),
+        1
+    );
+    assert!(!quarantine.is_model_quarantined(&other, 23.0));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn schema54_health_rows_round_trip_and_corrupt_state_fails_closed() {
     let database = Database::open(DatabaseConfig::default())
