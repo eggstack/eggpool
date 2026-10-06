@@ -558,6 +558,34 @@ table.data td a:focus-visible {
   border-radius: 2px;
 }
 
+/* Model ids are the primary navigation affordance on /models, /, /latency,
+   /events, /timeseries and /routing — they link to the per-model detail
+   page — but they shipped with no rule of their own and inherited only the
+   bare `table.data td a` colour. Measured at 390px the anchor was a 15px
+   inline box with zero padding: a link distinguished from the model name's
+   own text by hue alone, with no underline, and a tap target a third of the
+   finger minimum even inside a 36px row.
+
+   `inline-block` + symmetric negative vertical margin grows the hit box to
+   the full row height while leaving the row's layout box untouched, so the
+   extra target does not cost vertical density on a page that lists dozens of
+   models. The dotted underline is the non-colour affordance the colour-only
+   rule lacked; it stays off the resting state so the table still reads as
+   data rather than a wall of links. */
+table.data td a.model-link {
+  display: inline-block;
+  padding: 0.4rem 0;
+  margin: -0.4rem 0;
+  min-height: 2rem;
+}
+
+table.data td a.model-link:hover,
+table.data td a.model-link:focus-visible {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
 td.yes { color: var(--color-success); font-weight: 600; }
 td.no { color: var(--color-error); font-weight: 600; }
 
@@ -829,7 +857,10 @@ label.trace-limit {
 
 .heatmap-label {
   fill: var(--heatmap-label-text);
-  font-size: 10px;
+  /* The axis labels are the only way to date a cell without hovering it, so
+     10px left them below the 11px floor the HTML text respects. At 11px they
+     still fit one label per month column without collision. */
+  font-size: 11px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -1114,6 +1145,7 @@ label.trace-limit {
 
   .topnav-menu .theme-selector select,
   .filter-form select,
+  .filter-form button,
   .period-selector select {
     min-height: 44px;
   }
@@ -1323,6 +1355,53 @@ label.trace-limit {
   .topnav-menu {
     flex-wrap: nowrap;
     gap: 0.25rem;
+  }
+}
+
+/* Touch-sized topbar controls above the burger breakpoint.
+
+   The 760/761 split is a layout-fit decision: below it thirteen nav
+   links plus a theme picker do not fit on a row, so the burger appears.
+   It cannot also express *input capability*, so every viewport from
+   761px up inherits mouse-sized controls — and a 768x1024 iPad is
+   exactly such a viewport. Measured there: nav links 32px tall, theme
+   picker 32px, reload button 32px, wordmark 24px. Every control in the
+   primary navigation was below the 44px touch minimum on a device whose
+   only input is a finger, and the burger that would have provided the
+   44px treatment was hidden by the very rule that put the nav inline.
+
+   Re-applying the touch floor behind `hover: none` + `pointer: coarse`
+   targets real touchscreens at any width. Desktop, and hybrid laptops
+   that report a fine pointer, keep the compact metrics above. */
+@media (min-width: 761px) and (hover: none) and (pointer: coarse) {
+  nav.topnav a {
+    min-height: 44px;
+  }
+
+  header.topbar h1 a,
+  .topnav-refresh {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* The form controls the <=760px block sizes for touch get the desktop
+     metrics here for the same reason: measured at 768x1024 the period
+     selector was 34px, the filter selects 34px, Apply 36px, the traces
+     limit input 36px, the +/- steppers 36x36, and the "Show 1 disabled"
+     toggle 31px. Every interactive control on the page except the ones
+     inside a table row. */
+  .topnav-menu .theme-selector select,
+  .period-selector select,
+  .filter-form select,
+  .filter-form input,
+  .filter-form button,
+  .show-disabled-toggle,
+  .number-stepper-btn {
+    min-height: 44px;
+  }
+
+  .number-stepper-btn {
+    min-width: 44px;
   }
 }
 
@@ -1626,7 +1705,13 @@ nav.topnav [data-tooltip]::before {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  font-size: 0.8em;
+  /* `0.8em` compounds with whatever it sits in, and the <=480px table rule
+     already sets `font-size: 0.8rem` on the cell: the pill resolved to
+     0.8 x 0.8rem = 10.24px on every phone, below the 11px floor everything
+     else respects. `max()` keeps the proportional step where the parent is
+     larger and pins an absolute floor where it is not, so nesting depth can
+     no longer shrink the text twice. */
+  font-size: max(0.8em, 11px);
   line-height: 1.4;
   white-space: nowrap;
   vertical-align: middle;

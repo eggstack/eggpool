@@ -47,7 +47,7 @@
       "path": "dashboard/manifest.json",
       "category": "dashboard-assets",
       "source": "rust/assets/dashboard/manifest.json",
-      "sha256": "03a8360cd34e84adb905954d8033d18ef1da509bddad3f88a2bed09cf6f94359",
+      "sha256": "78edb15cc669d61ad099d2c5c98c6a1aa32186c29e12c22a7cc3e7b4626944c3",
       "identity": "exact"
     }
   ],
