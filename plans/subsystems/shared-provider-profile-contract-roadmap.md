@@ -16,7 +16,7 @@ Predecessor work:
 - `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` and M001 closure `plans/closure/provider-profile-metadata/001-status.md`.
 - `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` and C001 closure.
 - `plans/subsystems/request-admission-wire-roadmap.md` M006, which established the sibling-consumable `eggpool-wire` precedent.
-- `plans/subsystems/shared-model-routing-crate-roadmap.md`, which established the sibling-consumable `eggpool-model-routing` precedent.
+- `plans/173-shared-model-routing-crate-roadmap.md`, which established the sibling-consumable `eggpool-model-routing` precedent.
 
 Related ADRs:
 
