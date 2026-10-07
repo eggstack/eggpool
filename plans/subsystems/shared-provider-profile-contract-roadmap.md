@@ -1,6 +1,6 @@
 # Shared Provider Profile Contract Roadmap
 
-Status: active
+Status: closed
 
 Repository baseline reviewed: `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`
 
@@ -102,7 +102,7 @@ eggpool-provider-profile
 
 ### Milestone 001 — Neutral provider-profile contract and OpenCode Go surface hints
 
-Status: ready.
+Status: implemented (closed).
 
 Primary class: infrastructure.
 
@@ -148,4 +148,4 @@ This roadmap closes when M001 has an accepted closure record, EggPool consumes t
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 neutral provider-profile contract and OpenCode Go surface hints | ready | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | pending | none |
+| M001 neutral provider-profile contract and OpenCode Go surface hints | closed | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | `plans/closure/shared-provider-profile-contract/001-status.md` (implementation `9ac6a131`) | none — roadmap terminal; no successor registered |

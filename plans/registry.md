@@ -42,7 +42,7 @@ pair is a known numbering accident.
 | Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
-| Shared provider profile contract | active | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M001 ready — neutral provider-profile contract and OpenCode Go surface hints | No hard blocker. Downstream CodeGG consumption waits for accepted M001 closure revision. |
+| Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M001 closed — neutral provider-profile contract and OpenCode Go surface hints | M001 terminal; no successor registered. CodeGG consumption is unblocked at immutable revision `9ac6a131`. |
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
@@ -53,7 +53,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| Shared provider profile contract | M001 — neutral provider-profile contract and OpenCode Go surface hints | ready | `plans/implementation/shared-provider-profile-contract/001-neutral-provider-profile-contract-and-opencode-wire-hints.md` | Provider-profile metadata M001/C001 and request-admission-wire M006 are closed. Extract secret-free metadata only; record immutable revision for CodeGG. |
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 
 
@@ -82,6 +81,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Shared provider profile contract M001 — neutral provider-profile contract and OpenCode Go surface hints | closed — secret-free sans-I/O `eggpool-provider-profile` crate owns the contract and the single canonical bundled asset; EggPool projects all 23 providers onto an identical `ProviderConfig`; 30 reviewed non-fixed OpenCode Go hints; discovery is never credential proof; 930 workspace tests green; no in-repo plan unblocked, CodeGG unblocked at `9ac6a131` | `plans/closure/shared-provider-profile-contract/001-status.md`, implementation `9ac6a131` |
 | Persistence M010 — control/projection storage boundary architecture investigation | closed — schema-54 ownership/index inventory and test-only replay prototype complete; 12-to-2 modeled explicit secondary indexes, but 700-to-800 foreground row mutations and no lossless finite outage policy; no ADR or production split | `plans/closure/persistence/010-status.md`, implementation `dfa2a2ab` |
 | Persistence M009 — M008 documentation reconciliation corrective pass | closed — current lifecycle docs agree; focused guard 3 passed and full tooling suite 164 passed, 3 skipped; zero production/source/schema diff; M010 subsequently activated | `plans/closure/persistence/009-status.md`, implementation `4bff728c` |
 | Persistence M008 — rollback-journal PERSIST qualification and write-amplification attribution | closed — PERSIST/EXTRA failed request-p95 gates on Pi 5/MMC; worker-I/O proxy was about 2.04× control; production remains WAL/NORMAL; no registered successor unblocked | `plans/closure/persistence/008-status.md`, implementation `fac930b9`, physical corpus `artifacts/qualification/m008-pi5-2026-10-03/` |
@@ -347,3 +347,18 @@ Explicit user direction opens Persistence M010 at baseline `3efd650e63eef4999e45
 
 
 Explicit user direction opens Persistence M011 at baseline `9c1d86bc17a2a91b2ed8441bf23bd3e80b6603ed`. The accepted M009/M010 technical outcomes are unchanged: M009 closed the first lifecycle-doc drift; M010 rejected the control/outbox/analytics split under the current history/outage contract and proposed no ADR. M011 is restricted to current-authority roadmap/docs status reconciliation plus a targeted guard. It does not reopen storage architecture, retention policy, SQLite tuning, or production behavior.
+
+Shared provider profile contract M001 unblock audit (closed, implementation
+`9ac6a131`, `plans/closure/shared-provider-profile-contract/001-status.md`):
+searched `plans/implementation/`, `plans/subsystems/`, and the dependency-ready,
+active, and blocked registry tables. No registered plan declared shared provider
+profile contract M001 as a hard, interface, or operational dependency, and the
+blocked-work table has no entry for this subsystem, so nothing was promoted. The
+roadmap's only milestone is closed, which closes the roadmap terminal with no
+successor. The one gated consumer, CodeGG, lives in a downstream repository and
+was recorded as operational: it is unblocked by immutable revision
+`9ac6a1318e8db3c034b5ab54987317752d5ffea6`, which it should pin (the crate is
+unpublished and carries no semver promise). Per the source plan, CodeGG's product
+catalog — like any sibling repository — is not first-party provider authority;
+bundled profile facts remain reviewed transcriptions of current provider
+documentation.

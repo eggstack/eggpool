@@ -1,8 +1,10 @@
 # Shared Provider Profile Contract Milestone 001 — Neutral Provider Profile Contract and OpenCode Go Surface Hints
 
-Status: ready for handoff
+Status: implemented
 
 Repository baseline: `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`
+
+Closure record: `plans/closure/shared-provider-profile-contract/001-status.md` (implementation `9ac6a131`)
 
 Source roadmap:
 
