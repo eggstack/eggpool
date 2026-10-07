@@ -46,6 +46,15 @@ fingerprints, and hashed conversation identities. EggPool adapts TOML config
 into its policy types and keeps selector execution, provider/account routing,
 and the Tokio affinity cache in the application.
 
+The shared `eggpool-provider-profile` crate is the neutral, secret-free,
+sans-I/O owner of provider metadata — base URLs, per-surface paths, structural
+auth shape, model discovery, credential-verification policy, and reviewed exact
+model-to-wire hints — plus the single canonical bundled profile asset at
+`rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml`.
+`rust/src/provider_profile.rs` is the only EggPool reader. Accounts,
+credentials, routing, quota, health, retries, persistence, live catalog
+refresh, and transport stay in the application.
+
 The shared `eggpool-client-config` crate is the portable client-configuration
 boundary for Codex/OpenCode projection, connection profiles, `epc1` tokens,
 renderers, mutation primitives, ownership types, and validation. EggPool
@@ -105,7 +114,7 @@ the ordinary finite retry, publication, wire, and finalization loop.
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` |
 | Portable client config | `rust/crates/eggpool-client-config/`, `rust/src/operations/integrations.rs` (EggPool adapter), `rust/crates/eggpool-connect/` (transactional desktop helper) |
 | Provider/account routing, quota, health | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/` |
-| Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` (immutable provider/account topology; dispatch-oriented wire preparation) |
+| Providers and wire surfaces | `rust/src/providers/`, `rust/src/wire/` (immutable provider/account topology; dispatch-oriented wire preparation), `rust/crates/eggpool-provider-profile/` (shared provider metadata) |
 | SQLite and migrations | `rust/src/db/`, `rust/assets/db/migrations/` |
 | Runtime and reload | `rust/src/runtime_lifecycle/`, `rust/src/reload.rs` |
 | HTTP server and control-plane adapters | `rust/src/server/mod.rs`, `rust/src/server/{middleware,health,inference}.rs`, `rust/src/server/dashboard/` (`health.rs` also serves the authenticated compact `GET /api/status` snapshot and the authenticated versioned `GET /api/integrations/v1/profile`, and shares readiness evaluation with `readyz`) |

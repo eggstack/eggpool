@@ -32,7 +32,7 @@ providers/transport → `deep-dive-providers.md`; reload/restart →
   `providers/` transport, `runtime_lifecycle/` generations + `reload.rs` +
   `task_supervisor.rs`, `operations/` local lifecycle, `db/` +
   `rust/assets/db/migrations/` v1–v54 immutable.
-- Reusable policy crates: `rust/crates/eggpool-model-routing/` (neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`), `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, V1/V2 renderers, TOML/JSONC-preserving mutation; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`), `rust/crates/eggpool-wire/` (neutral sans-I/O wire kernel; execution stays in `rust/src/`), `rust/crates/eggpool-connect/` (narrow `eggpool-connect` binary: plan/install/verify/backups/restore/remove with byte-exact backups, atomic writes, automatic rollback; no Axum/SQLite/Eggress, no proxy/agent/daemon).
+- Reusable policy crates: `rust/crates/eggpool-model-routing/` (neutral validation/compilation only; selector execution and affinity cache stay in `rust/src/`), `rust/crates/eggpool-client-config/` (portable Codex/OpenCode projection, profiles, `epc1` tokens, V1/V2 renderers, TOML/JSONC-preserving mutation; EggPool `Config`/catalog/DB/key/endpoint/CLI/file IO stays in `rust/src/operations/integrations.rs`), `rust/crates/eggpool-provider-profile/` (secret-free sans-I/O provider-profile contract plus the canonical bundled asset at `assets/_provider_profiles.toml`; `rust/src/provider_profile.rs` is the only EggPool reader), `rust/crates/eggpool-wire/` (neutral sans-I/O wire kernel; execution stays in `rust/src/`), `rust/crates/eggpool-connect/` (narrow `eggpool-connect` binary: plan/install/verify/backups/restore/remove with byte-exact backups, atomic writes, automatic rollback; no Axum/SQLite/Eggress, no proxy/agent/daemon).
 - Tooling only (never a runtime fallback): repo-root `pyproject.toml`, `scripts/`, `tests/tooling/`. `scripts/qualification_sbc.py` is the sole physical-SBC runner (loopback-only, aggregate-only, non-CI). Native tests live in `rust/tests/` (serial; there is no `coordinator_c012`; streaming files are `coordinator.rs`, `execution.rs`, `terminal.rs`, `timeout.rs`, `types.rs`, `diagnostics.rs`).
 - Config resolution: `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`. Provider/upstream keys come from environment/`.env`, never committed; the server key lives under `[server]` (`api_key` via `eggpool newkey`, or `api_key_env`). Examples: `rust/config.example.toml`, `rust/config.sbc.example.toml`.
 - Plans: `plans/` is append-only (`plans/README.md`, `plans/registry.md` is the control surface; pre-251 flat `001-*`…`250-*` are immutable history). See the `plan` skill before adding one. Past plan numbers in this file go stale — link the registry, never paste plan history here.
@@ -137,6 +137,13 @@ dir, then `serve` (it daemonizes), curl, `stop`.
   the extractable `eggpool-wire` kernel; kernel modules must never import
   runtime state. `wire_extraction_contract` + `wire_kernel_boundary` guard the
   seam — run both for any `rust/src/wire/` change.
+- Provider-profile facts live in exactly one editable asset,
+  `rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml`, owned
+  by the shared contract. Never re-add a bundled profile file, and never let
+  `api_key`, `api_key_env`, `value_env`, or any other secret reference into
+  profile data — the parser rejects them. Discovery evidence never proves a
+  credential, and bundled model-wire hints stay `fixed = false` unless
+  first-party evidence plus a runtime guarantee both exist.
 - `deny.toml` + `cargo deny` is the license/advisory/source policy; `Cargo.toml`/`Cargo.lock`
   changes also need the locked release build + serial suite above.
 - Provider transport is exact-pinned to `eggfetch-core =0.2.2` with

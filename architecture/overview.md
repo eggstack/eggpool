@@ -470,7 +470,9 @@ transport),
 Axum/Tower, Clap, Serde/TOML/JSON, SHA-2, `tokio-rusqlite` (bundled/backup),
 Nix, Zip, Tracing, Eggress 1.0.11 (optional SSH capability), plus the path
 crates `eggpool-model-routing`, `eggpool-client-config` (which owns Base64
-for portable `epc1` tokens), and the `eggpool-connect` desktop binary (narrow
+for portable `epc1` tokens), `eggpool-provider-profile` (secret-free sans-I/O
+provider metadata plus the canonical bundled profile asset), and the
+`eggpool-connect` desktop binary (narrow
 Hyper/Rustls HTTPS fetch only; no Axum, SQLite, or Eggress). Default `ssh`
 supports SSH upstreams through the listener-free outbound connector;
 `--no-default-features` still
@@ -513,7 +515,7 @@ Deep dives: [Core](deep-dive-core.md), [Deployment](deep-dive-deployment.md).
 | Coordinator finite/streaming | `rust/src/coordinator/`, `rust/src/coordinator/streaming/` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Publication/finalization/failure | `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, `rust/src/coordinator/failure.rs`, `rust/src/coordinator/attempt.rs`, `rust/src/coordinator/wire_resolver.rs` | [Request lifecycle](deep-dive-request-lifecycle.md), [Retry](deep-dive-retry.md) |
 | Wire/transcoding | `rust/src/wire/` (facades + `adapters.rs` seam + `runtime.rs` join), `rust/crates/eggpool-wire/` (neutral kernel) | [Transcoder](deep-dive-transcoder.md) |
-| Providers/transport | `rust/src/providers/` | [Providers](deep-dive-providers.md) |
+| Providers/transport | `rust/src/providers/`, `rust/src/provider_profile.rs` + `rust/crates/eggpool-provider-profile/` (shared profile contract) | [Providers](deep-dive-providers.md) |
 | Routing/quota/health/accounts | `rust/src/routing/`, `rust/src/quota/`, `rust/src/health/`, `rust/src/accounts/` | [Routing](deep-dive-routing.md), [Health](deep-dive-health.md) |
 | Catalog/model-info | `rust/src/catalog/` | [Catalog](deep-dive-catalog.md), [Model info](deep-dive-model-info.md) |
 | Semantic model routing | `rust/crates/eggpool-model-routing/`, `rust/src/model_router.rs` | [Routing](deep-dive-routing.md), [Models](deep-dive-models.md) |

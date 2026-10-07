@@ -11,16 +11,30 @@ auth, wire selection, routing, or retry here; credentials render only at
 dispatch-header construction. Provider profiles describe protocol, URL, auth
 shape, wire surface, and capability facts without storing secrets in metadata.
 
-## Bundled provider-template authority
+## Bundled provider-profile authority
 
-`rust/assets/providers/_templates.toml` is the bundled bootstrap authority
-consumed by `operations/config_mutation.rs::load_provider_templates` (not by
-`rust/src/providers/`, which holds no templates). The
-templates carry secret-free setup facts only (canonical base URL, protocol
-families/wire surfaces, auth/header shape, model-discovery path, verification
-model/protocol, conservative capability hints). Provider IDs and config keys
-are stable; operator-configured endpoints keep winning per existing config
-semantics.
+Bundled provider metadata is owned by the shared
+`eggpool-provider-profile` crate, whose canonical document is
+`rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml`.
+`rust/src/provider_profile.rs` is the only EggPool reader: connect
+bootstrap (`operations/config_mutation.rs::load_provider_templates`), catalog
+discovery, and the parity tests all project the same bytes. `rust/src/providers/`
+holds transport only and no profile data.
+
+That contract is secret-free and sans-I/O. It carries connection facts only
+(canonical base URL, protocol families and per-surface paths, auth/header
+*shape*, model-discovery path, verification policy, and reviewed exact
+model-to-wire hints). Auth entries name a mode, header, and scheme; there is no
+field for a credential value or an environment reference, and the parser rejects
+both. Accounts, keys, routing, quota, health, retries, persistence, live catalog
+refresh, and transport stay in the runtime. Wire surfaces are the identities
+owned by `eggpool-wire`, so a hint selects exactly the codec surface a consumer
+encodes with — there is no second wire vocabulary.
+
+Provider IDs and config keys are stable; operator-configured endpoints keep
+winning per existing config semantics. There is no runtime or CI web freshness
+checker: profile facts are re-reviewed by bounded corrective passes, with the
+review matrix recorded in the closure evidence.
 
 Review authority is current first-party provider documentation, never a
 sibling repository. The 2026-10-02 review (provider-profile metadata M001)
@@ -32,9 +46,39 @@ confirmed. Base URL and endpoint path are always qualified as one
 composition so version segments are neither duplicated nor dropped; the
 `operations_o004` template tests lock the Together/OpenCode Go compositions
 plus representative edge shapes (DeepSeek's `/v1`-less base, MiniMax's
-Anthropic subpath, Alibaba's compatible-mode prefix). There is no runtime or
-CI web freshness checker: template facts are re-reviewed by bounded
-corrective passes, with the review matrix recorded in the closure evidence.
+Anthropic subpath, Alibaba's compatible-mode prefix). The 2026-10-07
+shared-contract extraction re-reviewed the same data against the crate's
+strict parser and added exact OpenCode Go model-to-wire hints transcribed from
+the first-party Go endpoint table; `operations_o004` proves the extraction
+projects every bundled profile onto an identical runtime provider
+configuration.
+
+### Model-to-wire hints
+
+`[providers.<id>.model_wire."<model-id>"]` holds an exact reviewed
+model-to-wire preference. Every bundled hint is `fixed = false`, so a runtime
+ranks the documented surface first while keeping the other candidates as
+fallbacks; `fixed = true` would pin the surface and is reserved for
+first-party evidence plus a runtime guarantee that no negotiation should be
+attempted. Lookup is exact — no prefix or model-family guessing — so an id
+absent from the reviewed table stays unresolved instead of defaulting to Chat
+Completions. OpenCode Go's hints cover the 30 model ids in the first-party Go
+endpoint table (reviewed 2026-10-07); a sibling integration's product catalog is
+not evidence for a wire contract.
+
+### Discovery is not credential proof
+
+`ProviderVerificationPolicy` separates the two. `CredentialProof` states what a
+runtime may conclude without inference; `CatalogEvidence` states what a
+discovery request returned; `assess` is the only conclusion they can produce.
+A reachable catalog — public endpoint, bundled static list, or `/models`
+answering `200` to anyone — never verifies a credential. OpenCode Go's catalog
+is recorded as public (`models_require_authentication = false`, observed by
+reading `https://opencode.ai/zen/go/v1/models` without a credential on
+2026-10-07), so its credential stays `Unverified` until real inference
+demonstrates acceptance. Credentialed profiles with no first-party evidence for
+an authenticated metadata endpoint stay `DeferredUntilInference`; no bundled
+profile guesses its way out of that state.
 
 `ProviderClientPool` is generation-owned. Direct and configured proxy accounts
 use the selected transport path; a configured proxy never silently falls back

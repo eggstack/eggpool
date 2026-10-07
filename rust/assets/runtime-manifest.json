@@ -11,8 +11,8 @@
     {
       "path": "providers/_templates.toml",
       "category": "provider-templates",
-      "source": "rust/assets/providers/_templates.toml",
-      "sha256": "05f5f5c37640450a83da7027e81ad8ad39cbc12231932d6e47634ef9f5c6eeb6",
+      "source": "rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml",
+      "sha256": "09eb9e3bdd8a986975e84c7371a296ba3d4f2fe6f7f42f08d1c8e4a9efc6602c",
       "identity": "exact"
     },
     {

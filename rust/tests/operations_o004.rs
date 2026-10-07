@@ -6,6 +6,7 @@ use eggpool::{
     Config,
     config_reload_policy::{ReloadDisposition, disposition_for},
     operations::config_mutation::{self, ApplyMode, ApplyOutcome},
+    provider_profile,
 };
 use tempfile::tempdir;
 
@@ -269,7 +270,14 @@ fn account_matching_is_secret_safe_and_apply_outcome_is_typed() {
 // is a legacy alias from the old migration page. OpenCode Go stays on
 // `https://opencode.ai/zen/go/v1`.
 
-const BUNDLED_TEMPLATES_TEXT: &str = include_str!("../assets/providers/_templates.toml");
+const BUNDLED_TEMPLATES_TEXT: &str = provider_profile::BUNDLED_PROVIDER_PROFILES;
+
+fn bundled_provider_ids() -> Vec<String> {
+    config_mutation::load_provider_templates(None)
+        .expect("bundled templates")
+        .into_keys()
+        .collect()
+}
 
 fn bundled_provider_table(id: &str) -> toml::map::Map<String, toml::Value> {
     let root: toml::Value = BUNDLED_TEMPLATES_TEXT.parse().expect("templates parse");
@@ -572,5 +580,241 @@ fn representative_template_path_compositions_stay_exact() {
         let table = bundled_provider_table(id);
         assert_eq!(template_str(&table, "base_url"), base);
         assert_eq!(compose_url(base, path), expected);
+    }
+}
+
+/// Provider-profile contract cutover parity. The bundled document is owned by
+/// `eggpool-provider-profile`; EggPool consumes it through `provider_profile`
+/// and projects it back onto the runtime configuration shape. These tests
+/// compare that projection against the canonical document parsed directly, so
+/// the extraction cannot silently change effective provider configuration.
+mod shared_profile_parity {
+    use super::{BUNDLED_TEMPLATES_TEXT, provider_profile};
+    use eggpool::{Config, operations::config_mutation};
+    use std::path::Path;
+
+    fn load(document: &toml::Table) -> Config {
+        let text = toml::to_string(document).expect("document renders");
+        Config::from_toml_bytes(Path::new("config.toml"), text.as_bytes())
+            .expect("document loads as configuration")
+    }
+
+    fn normalized(document: &toml::Table) -> std::collections::BTreeMap<String, String> {
+        load(document)
+            .providers
+            .into_iter()
+            .map(|(id, provider)| {
+                (
+                    id,
+                    toml::to_string(&provider).expect("provider config renders"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shared_profile_projection_matches_the_canonical_document() {
+        let canonical = normalized(&provider_profile::canonical_config_document());
+        let projected = normalized(
+            &provider_profile::projected_config_document().expect("shared profiles project"),
+        );
+        assert!(!canonical.is_empty(), "canonical document has providers");
+        assert_eq!(
+            projected.keys().collect::<std::collections::BTreeSet<_>>(),
+            canonical.keys().collect::<std::collections::BTreeSet<_>>(),
+            "the extraction neither adds nor drops a bundled provider"
+        );
+        for (id, expected) in &canonical {
+            assert_eq!(
+                projected.get(id).map(String::as_str),
+                Some(expected.as_str()),
+                "{id} projects onto an identical runtime provider configuration"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bundled_document_comes_from_the_shared_contract() {
+        assert_eq!(
+            provider_profile::BUNDLED_PROVIDER_PROFILES,
+            eggpool_provider_profile::EMBEDDED_PROVIDER_PROFILES_TOML
+        );
+        assert_eq!(
+            BUNDLED_TEMPLATES_TEXT,
+            eggpool_provider_profile::EMBEDDED_PROVIDER_PROFILES_TOML
+        );
+        assert_eq!(
+            provider_profile::bundled_profiles()
+                .expect("shared profiles parse")
+                .len(),
+            super::bundled_provider_ids().len()
+        );
+    }
+
+    #[test]
+    fn bundled_provider_data_carries_no_credential_material() {
+        let document: toml::Value = BUNDLED_TEMPLATES_TEXT
+            .parse()
+            .expect("bundled document is valid TOML");
+        let providers = document
+            .get("providers")
+            .and_then(toml::Value::as_table)
+            .expect("bundled document declares providers");
+        for (id, raw) in providers {
+            let table = raw.as_table().expect("provider entry is a table");
+            for key in ["api_key", "api_key_env", "value_env", "secret", "password"] {
+                assert!(!table.contains_key(key), "{id} declares no {key} field");
+            }
+            for (scope, table) in [
+                ("provider", table.clone()),
+                (
+                    "verify",
+                    table
+                        .get("verify")
+                        .and_then(toml::Value::as_table)
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+            ] {
+                assert!(
+                    !table.contains_key("models_require_authentication") || scope == "verify",
+                    "{id} keeps contract-only verification fields inside [verify]"
+                );
+            }
+        }
+        // The runtime-facing loader exposes no credential field either.
+        assert_eq!(
+            config_mutation::load_provider_templates(None)
+                .expect("bundled templates")
+                .len(),
+            providers.len()
+        );
+        let profiles = provider_profile::bundled_profiles().expect("shared profiles parse");
+        for profile in profiles.profiles() {
+            assert!(
+                eggpool_provider_profile::valid_header_name(&profile.auth.header),
+                "{} declares a valid credential header name",
+                profile.id
+            );
+            assert!(
+                !profile.auth.scheme.contains(char::is_whitespace),
+                "{} auth scheme is a single token",
+                profile.id
+            );
+            for surface in profile
+                .surface_auth(eggpool_wire::profile::WireSurface::AnthropicMessages)
+                .into_iter()
+                .chain(
+                    profile.surface_auth(eggpool_wire::profile::WireSurface::OpenaiChatCompletions),
+                )
+            {
+                assert!(
+                    eggpool_provider_profile::valid_header_name(&surface.header),
+                    "{} surface declares a valid credential header name",
+                    profile.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opencode_go_hints_reach_the_runtime_configuration_as_preferences() {
+        let document = provider_profile::canonical_config_document();
+        let config = load(&document);
+        let provider = config
+            .providers
+            .get("opencode-go")
+            .expect("OpenCode Go is bundled");
+        assert_eq!(
+            provider.model_wire.len(),
+            30,
+            "every reviewed OpenCode Go model carries an exact hint"
+        );
+        for (model, preference) in &provider.model_wire {
+            assert!(
+                !preference.fixed,
+                "{model} stays advisory so the runtime can renegotiate"
+            );
+            assert!(
+                provider
+                    .wire_surfaces
+                    .contains_key(&preference.preferred_surface),
+                "{model} names a surface the provider serves"
+            );
+        }
+        assert_eq!(
+            provider
+                .model_wire
+                .get("gpt-6-luna")
+                .map(|preference| preference.preferred_surface.as_str()),
+            Some("openai_responses")
+        );
+        assert_eq!(
+            provider
+                .model_wire
+                .get("minimax-m3")
+                .map(|preference| preference.preferred_surface.as_str()),
+            Some("anthropic_messages")
+        );
+    }
+
+    #[test]
+    fn explicit_operator_configuration_overrides_bundled_defaults() {
+        // Bundled profiles are bootstrap facts. An operator block that differs
+        // from the shared profile must still win under current semantics.
+        let mut document = provider_profile::canonical_config_document();
+        let providers = document
+            .get_mut("providers")
+            .and_then(toml::Value::as_table_mut)
+            .expect("providers table");
+        let opencode = providers
+            .get_mut("opencode-go")
+            .and_then(toml::Value::as_table_mut)
+            .expect("opencode-go entry");
+        opencode.insert(
+            "base_url".into(),
+            toml::Value::String("https://operator.example/v1".into()),
+        );
+        let config = load(&document);
+        let provider = config
+            .providers
+            .get("opencode-go")
+            .expect("opencode-go is configured");
+        assert_eq!(provider.base_url, "https://operator.example/v1");
+        assert_eq!(
+            provider
+                .model_wire
+                .get("gpt-6-luna")
+                .map(|preference| preference.preferred_surface.as_str()),
+            Some("openai_responses"),
+            "operator configuration keeps its own preferences"
+        );
+        assert_eq!(
+            provider.anthropic_path, "/messages",
+            "the operator keeps the derived surface path and the new base URL"
+        );
+        assert_eq!(
+            format!(
+                "{}/{}",
+                provider.base_url.trim_end_matches('/'),
+                provider.anthropic_path.trim_start_matches('/')
+            ),
+            "https://operator.example/v1/messages",
+            "an overridden base URL is what dispatch composes against"
+        );
+    }
+
+    #[test]
+    fn a_profile_without_a_hint_leaves_the_runtime_preference_map_empty() {
+        let document = provider_profile::canonical_config_document();
+        let config = load(&document);
+        let provider = config
+            .providers
+            .get("together")
+            .expect("together is bundled");
+        assert!(
+            provider.model_wire.is_empty(),
+            "a profile with no reviewed hint contributes no preference"
+        );
     }
 }

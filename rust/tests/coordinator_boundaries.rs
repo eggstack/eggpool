@@ -146,6 +146,56 @@ fn resolver_prefers_configured_model_wire_surface() {
 }
 
 #[test]
+fn bundled_model_wire_hints_resolve_as_advisory_preferences() {
+    // The canonical OpenCode Go profile ships exact, non-fixed model-to-wire
+    // hints. They must rank first without pinning the runtime to a single
+    // surface, so upstream changes remain recoverable.
+    let hints = eggpool::provider_profile::bundled_model_wire_hints();
+    assert_eq!(hints.len(), 30, "every reviewed hint is published");
+    for (id, surface) in [
+        ("gpt-6-luna", WireSurface::OpenaiResponses),
+        ("glm-5.3-flash", WireSurface::OpenaiChatCompletions),
+        ("minimax-m3", WireSurface::AnthropicMessages),
+    ] {
+        assert_eq!(
+            hints
+                .get(&("opencode-go".to_owned(), id.to_owned()))
+                .copied(),
+            Some(surface),
+            "{id} resolves to its documented surface"
+        );
+    }
+
+    let resolver = WireResolver::new(WireResolverConfig::default());
+    resolver.set_configured_preferences([(
+        "opencode-go".into(),
+        "minimax-m3".into(),
+        WireSurface::AnthropicMessages,
+        false,
+    )]);
+    let resolved = resolver.resolve(
+        "opencode-go",
+        "minimax-m3",
+        vec![
+            WireCandidate::new(profile(WireSurface::OpenaiChatCompletions, 1), "chat"),
+            WireCandidate::new(profile(WireSurface::AnthropicMessages, 2), "messages"),
+            WireCandidate::new(profile(WireSurface::OpenaiResponses, 3), "responses"),
+        ],
+        Instant::now(),
+    );
+    assert_eq!(
+        resolved.candidates.len(),
+        3,
+        "a non-fixed hint never removes a fallback candidate"
+    );
+    assert_eq!(
+        resolved.candidates[0].surface(),
+        WireSurface::AnthropicMessages,
+        "the documented surface is attempted first"
+    );
+}
+
+#[test]
 fn wire_state_is_bounded_on_all_insertion_paths_and_rate_delay_is_reactive() {
     let resolver = WireResolver::new(WireResolverConfig {
         cache_capacity: 2,

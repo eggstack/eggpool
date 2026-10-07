@@ -93,13 +93,16 @@ owned_by: eggpool, name}]}` with no refresh, probe, or health mutation.
 
 ## Discovery bootstrap
 
-Model discovery starts from the bundled provider templates
-(`rust/assets/providers/_templates.toml`), whose review authority is current
-first-party provider documentation — see "Bundled provider-template
-authority" in [Providers and Outbound Clients](deep-dive-providers.md). The
-template's base URL plus its model-discovery path is the initial discovery
-target; live responses remain the source of truth afterward and refresh
-failures never erase usable catalog state.
+Model discovery starts from the bundled provider profiles
+(`rust/crates/eggpool-provider-profile/assets/_provider_profiles.toml`, read
+through `rust/src/provider_profile.rs`), whose review authority is current
+first-party provider documentation — see "Bundled provider-profile authority"
+in [Providers and Outbound Clients](deep-dive-providers.md). The profile's base
+URL plus its model-discovery path is the initial discovery target; live
+responses remain the source of truth afterward and refresh failures never erase
+usable catalog state. Discovery output is catalog state, not credential proof:
+a provider that publishes its model list without a credential still has an
+unverified credential until real inference demonstrates acceptance.
 
 ## Invariants
 

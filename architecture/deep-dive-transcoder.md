@@ -75,6 +75,19 @@ drift, empty identities, and oversized context fields). `CompatibilityPath` (via
 (`CodecError` with `CodecReasonCode`, `WireRuntimeError`, `DecodeError`, `MediaLimitError`) and malformed
 wrappers fail closed instead of forwarding wrapper JSON as text.
 
+## Who states which surface a model uses
+
+`eggpool-wire` owns the grammar of a surface — its codec, dialect, and
+negotiation — and stays the only place payload semantics live. *Which* surface
+a given model should prefer on a given provider is provider metadata, owned by
+the shared `eggpool-provider-profile` crate as exact `model_wire` preferences
+(see [Providers and Outbound Clients](deep-dive-providers.md)). The kernel never
+reads provider facts; EggPool feeds those preferences into the existing
+configured-preference path, where `WireResolver` ranks the documented surface
+first while keeping the other candidates as fallbacks unless a preference is
+explicitly `fixed`. `coordinator_boundaries.rs` locks that advisory behavior for
+the bundled OpenCode Go hints.
+
 ## Adaptation policy and fidelity preflight
 
 Shared pure policy lives in `adaptation`: `request_notices` and `native_summary_notices` evaluate loss

@@ -1,0 +1,11 @@
+[package]
+name = "eggpool-provider-profile-consumer-fixture"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+
+[dependencies]
+eggpool-provider-profile = { version = "0.1.0", path = ".." }
+
+[workspace]

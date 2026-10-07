@@ -1,25 +1,34 @@
-# providers.toml — Provider templates for `eggpool connect`
+# _provider_profiles.toml — canonical bundled provider-profile data
 #
-# Each [providers.<id>] block defines a provider that can be added
-# to your config via the interactive `eggpool connect` command.
+# This file is owned by the `eggpool-provider-profile` crate. It is the single
+# source of bundled provider metadata in this repository: EggPool reads it
+# through that crate, and sibling consumers pin the same crate revision. Do
+# not add a second copy of these facts anywhere else.
 #
-# The api_key_env value is a placeholder. When you connect, the
-# actual environment variable name is derived from the provider id
-# (e.g. MINIMAX_API_KEY for minimax).
+# Each [providers.<id>] block describes one provider's connection contract:
+# base URL, protocols, per-surface paths, structural auth shape, model
+# discovery, verification policy, and reviewed exact model-to-wire hints.
 #
-# Providers not listed here can still be added via the
-# "Custom compatible endpoint" option. Bundled templates are
-# curated shortcuts for providers with nontrivial contracts
-# (custom auth, headers, paths, or protocol quirks) or well-known
-# local runtimes. A generic base URL alone does not justify a
-# template.
+# Authority is current first-party provider documentation. These entries are
+# reviewed transcriptions of that documentation, never an independent source
+# of truth, and never a sibling repository.
+#
+# Credential material is deliberately absent. There is no `api_key`,
+# `api_key_env`, or header `value_env` field here, and the crate's parser
+# rejects them. An owning runtime resolves credential values from operator
+# configuration or the environment at request time.
+#
+# Providers not listed here can still be added as a custom compatible
+# endpoint. Bundled profiles are curated facts for providers with
+# nontrivial contracts (custom auth, headers, paths, or protocol quirks) or
+# well-known local runtimes. A generic base URL alone does not justify a
+# profile.
 
 [providers.opencode-go]
 # OpenCode Go — primary provider
 id = "opencode-go"
 base_url = "https://opencode.ai/zen/go/v1"
 protocols = ["openai", "anthropic"]
-api_key_env = "API_KEY"
 display_name = "OpenCode Go"
 status = "verified"
 category = "direct"
@@ -57,6 +66,145 @@ header = "x-api-key"
 probe_model = "gpt-5.5-mini"
 probe_protocol = "openai"
 require_models = true
+# The Go model catalog is public: `GET https://opencode.ai/zen/go/v1/models`
+# answered 200 with an ordinary OpenAI-shaped model list when read without any
+# credential (observed 2026-10-07). That proves model availability, never that
+# a Go credential is accepted, so this provider's credential stays unverified
+# until real inference demonstrates it.
+models_require_authentication = false
+
+# Exact model-to-wire hints from the first-party Go endpoint table
+# (https://opencode.ai/docs/go, reviewed 2026-10-07). Each entry names the
+# documented endpoint for that exact model id; there are no wildcard or
+# model-family guesses, and an id absent from this table stays unresolved.
+#
+# All hints are non-fixed on purpose: upstream may move a model between
+# endpoint families, and a runtime must keep its ability to learn or recover
+# from that. `fixed = true` requires first-party evidence *plus* a runtime
+# guarantee that no negotiation should be attempted.
+#
+# Responses: https://opencode.ai/zen/go/v1/responses
+[providers.opencode-go.model_wire."grok-4.7"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.opencode-go.model_wire."grok-4.6"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.opencode-go.model_wire."gpt-6-luna"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.opencode-go.model_wire."gpt-5.6-luna"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.opencode-go.model_wire."muse-spark-1.3-contributor"]
+preferred_surface = "openai_responses"
+fixed = false
+
+[providers.opencode-go.model_wire."muse-spark-1.2-contributor"]
+preferred_surface = "openai_responses"
+fixed = false
+
+# Chat Completions: https://opencode.ai/zen/go/v1/chat/completions
+[providers.opencode-go.model_wire."glm-5.3-flash"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."glm-5.3"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."glm-5.2"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."kimi-k3"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."kimi-k2.7-code"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."kimi-k2.6"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."longcat-2.0"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."longcat-2.5-preview-free"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."deepseek-v4.1-flash"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."deepseek-v4-pro"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."deepseek-v4-flash"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."deepseek-v4-flash-vision-exp"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."mimo-v2.6-flash"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."mimo-v2.6-pro"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."mimo-v2.5"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."mimo-v2.5-pro"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."hy4-preview"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."hy3"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+[providers.opencode-go.model_wire."space-bunny"]
+preferred_surface = "openai_chat_completions"
+fixed = false
+
+# Anthropic Messages: https://opencode.ai/zen/go/v1/messages
+[providers.opencode-go.model_wire."minimax-m3"]
+preferred_surface = "anthropic_messages"
+fixed = false
+
+[providers.opencode-go.model_wire."minimax-m2.7"]
+preferred_surface = "anthropic_messages"
+fixed = false
+
+[providers.opencode-go.model_wire."qwen3.8-max"]
+preferred_surface = "anthropic_messages"
+fixed = false
+
+[providers.opencode-go.model_wire."qwen3.8-flash"]
+preferred_surface = "anthropic_messages"
+fixed = false
+
+[providers.opencode-go.model_wire."qwen3.7-plus"]
+preferred_surface = "anthropic_messages"
+fixed = false
 
 [providers.minimax]
 # MiniMax International — Anthropic-compatible endpoint for token-plan keys.
@@ -70,7 +218,6 @@ protocols = ["anthropic"]
 anthropic_path = "/v1/messages"
 models_method = "GET"
 models_path = "/v1/models"
-api_key_env = "API_KEY"
 display_name = "MiniMax International"
 status = "experimental"
 category = "direct"
@@ -125,7 +272,6 @@ base_url = "https://api.minimaxi.com/v1"
 protocols = ["openai"]
 openai_path = "/chat/completions"
 models_path = "/models"
-api_key_env = "API_KEY"
 display_name = "MiniMax China"
 status = "experimental"
 category = "direct"
@@ -174,7 +320,6 @@ supports_vision = false
 id = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "OpenRouter"
 status = "verified"
 category = "aggregator"
@@ -202,7 +347,6 @@ id = "ollama-local"
 base_url = "http://localhost:11434/v1"
 protocols = ["openai"]
 responses_path = "/responses"
-api_key_env = "API_KEY"
 display_name = "Ollama (local)"
 status = "verified"
 category = "local"
@@ -239,7 +383,6 @@ non_text_tool_result = false
 id = "lmstudio-local"
 base_url = "http://localhost:1234/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "LM Studio (local)"
 status = "verified"
 category = "local"
@@ -279,7 +422,6 @@ id = "llamacpp-local"
 base_url = "http://localhost:8080/v1"
 protocols = ["openai"]
 responses_path = "/responses"
-api_key_env = "API_KEY"
 display_name = "llama.cpp (local)"
 status = "verified"
 category = "local"
@@ -319,7 +461,6 @@ id = "vllm-local"
 base_url = "http://localhost:8000/v1"
 protocols = ["openai"]
 responses_path = "/responses"
-api_key_env = "API_KEY"
 display_name = "vLLM (local)"
 status = "verified"
 category = "local"
@@ -355,7 +496,6 @@ non_text_tool_result = false
 id = "localai-local"
 base_url = "http://localhost:8080/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "LocalAI (local)"
 status = "verified"
 category = "local"
@@ -392,7 +532,6 @@ non_text_tool_result = false
 id = "custom-compatible"
 base_url = "http://localhost:8000/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Custom compatible endpoint"
 status = "unverified"
 category = "local"
@@ -419,7 +558,6 @@ id = "openai"
 base_url = "https://api.openai.com/v1"
 protocols = ["openai"]
 responses_path = "/responses"
-api_key_env = "API_KEY"
 display_name = "OpenAI"
 status = "verified"
 category = "direct"
@@ -441,7 +579,6 @@ id = "anthropic"
 base_url = "https://api.anthropic.com/v1"
 protocols = ["anthropic"]
 anthropic_path = "/messages"
-api_key_env = "API_KEY"
 display_name = "Anthropic"
 status = "verified"
 category = "direct"
@@ -472,7 +609,6 @@ non_text_tool_result = true
 id = "groq"
 base_url = "https://api.groq.com/openai/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Groq"
 status = "verified"
 category = "direct"
@@ -493,7 +629,6 @@ require_models = true
 id = "deepinfra"
 base_url = "https://api.deepinfra.com/v1/openai"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "DeepInfra"
 status = "verified"
 category = "direct"
@@ -514,7 +649,6 @@ require_models = true
 id = "gemini"
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Google Gemini"
 status = "verified"
 category = "direct"
@@ -537,7 +671,6 @@ require_models = true
 id = "gemini-native"
 base_url = "https://generativelanguage.googleapis.com/v1beta"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Google Gemini (native)"
 status = "experimental"
 category = "direct"
@@ -573,7 +706,6 @@ require_models = false
 id = "xai"
 base_url = "https://api.x.ai/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "xAI (Grok)"
 status = "verified"
 category = "direct"
@@ -594,7 +726,6 @@ require_models = true
 id = "mistral"
 base_url = "https://api.mistral.ai/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Mistral"
 status = "verified"
 category = "direct"
@@ -615,7 +746,6 @@ require_models = true
 id = "siliconflow"
 base_url = "https://api.siliconflow.cn/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "SiliconFlow"
 status = "verified"
 category = "aggregator"
@@ -636,7 +766,6 @@ require_models = true
 id = "deepseek"
 base_url = "https://api.deepseek.com"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "DeepSeek"
 status = "verified"
 category = "direct"
@@ -657,7 +786,6 @@ require_models = true
 id = "together"
 base_url = "https://api.together.ai/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Together AI"
 status = "verified"
 category = "direct"
@@ -678,7 +806,6 @@ require_models = true
 id = "fireworks"
 base_url = "https://api.fireworks.ai/inference/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Fireworks AI"
 status = "verified"
 category = "direct"
@@ -699,7 +826,6 @@ require_models = true
 id = "alibaba"
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 protocols = ["openai"]
-api_key_env = "API_KEY"
 display_name = "Alibaba Qwen"
 status = "verified"
 category = "direct"

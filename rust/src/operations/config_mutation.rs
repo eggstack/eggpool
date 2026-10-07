@@ -24,7 +24,6 @@ use crate::{
 };
 
 const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
-const BUNDLED_PROVIDERS: &str = include_str!("../../assets/providers/_templates.toml");
 
 include!(concat!(env!("OUT_DIR"), "/eggpool_config_assets.rs"));
 
@@ -675,7 +674,8 @@ pub fn load_provider_templates(
 ) -> Result<BTreeMap<String, ProviderTemplate>, MutationError> {
     let text = match path {
         Some(path) => fs::read_to_string(path).map_err(MutationError::Template)?,
-        None => BUNDLED_PROVIDERS.to_owned(),
+        // Bundled provider metadata is owned by `eggpool-provider-profile`.
+        None => crate::provider_profile::BUNDLED_PROVIDER_PROFILES.to_owned(),
     };
     let root: Value = text.parse().map_err(|_| MutationError::TemplateParse)?;
     let providers = root

@@ -1,0 +1,21 @@
+[package]
+name = "eggpool-provider-profile"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Neutral secret-free sans-I/O provider-profile contract and canonical bundled provider-profile data"
+license = "MIT"
+repository = "https://github.com/eggstack/eggpool"
+exclude = ["consumer-fixture/**"]
+
+[dependencies]
+eggpool-wire = { version = "0.1.0", path = "../eggpool-wire" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.8"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
