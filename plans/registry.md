@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M002 closed — Eggfetch 0.2.2 transport failure classification adoption | M001–M005 closed; no successor registered. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M006 ready — Eggress 1.0.12 dependency refresh and requalification | M001–M005 closed; upstream v1.0.12 published, downstream registry-resolution gate first. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M001 closed — neutral provider-profile contract and OpenCode Go surface hints | M001 terminal; no successor registered. CodeGG consumption is unblocked at immutable revision `9ac6a131`. |
@@ -53,6 +53,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| Provider transport | M006 — Eggress 1.0.12 dependency refresh and requalification | ready | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | M001–M005 closed; registry resolution and unchanged feature/API contract; no new architecture. |
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 
 
@@ -144,8 +145,9 @@ Provider-transport M002 is now closed. Hosted CI `37070421301` and hosted
 dependency audit `37070423689` passed at implementation head
 `6f0cfd532e753a43c454b370453850c55679aab5`. Its completion unblocks no
 registered plan; the ready provider-profile metadata C001 plan is independent.
-The Provider Transport roadmap is closed because all registered milestones
-M001–M005 are closed and no successor is ready.
+The Provider Transport roadmap was closed after M001–M005; explicit
+upstream Eggress 1.0.12 patch adoption reopens it for dependency-ready M006.
+M002's Eggfetch 0.2.2 classification closure remains unchanged.
 
 Historical unblock-audit snapshot: Dashboard M008 was registered `ready` at
 baseline `299a0b3657667af509742a184e658c14df22d406` after hosted run
