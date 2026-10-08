@@ -1,6 +1,6 @@
 # Provider Transport Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -142,8 +142,8 @@ The live Eggfetch profile is now `eggfetch-core =0.2.2` with
 `native-http1,tls-rustls`; the lockfile also selects
 `eggfetch-http-connect 0.2.2` through Eggress HTTP CONNECT support. The
 Eggress family resolves at 1.0.12 after M006's exact-pin refresh;
-`eggserve-server` remains 0.4.0. Local qualification passed; hosted evidence
-and the formal closure transition are in progress.
+`eggserve-server` remains 0.4.0. Local and hosted qualification passed, and
+the provider-transport roadmap is closed.
 
 At the M005 planning baseline (`869964c236cfd985a771beeb0ee815df3e1cf601`), upstream has since published
 `eggfetch-core 0.2.1` / `eggfetch-http-connect 0.2.1` and the Eggress
@@ -613,15 +613,16 @@ upstream CI cannot substitute for consumer qualification.
 
 ## 11. Completion definition
 
-Provider-transport milestones M001–M005 remain closed; M006 is ready for the
-Eggress 1.0.12 patch refresh and requalification.
+Provider-transport milestones M001–M006 are closed; M006 completed the
+Eggress 1.0.12 patch refresh and requalification. This roadmap is terminal
+with no registered successor.
 M001 left runtime behavior unchanged while making the response-frame/error
 boundary explicit. M003 retained the Eggress ownership/feature contract while
 moving to the qualified upstream family. M004 and M005 refreshed typed
 diagnostics and published dependency patch lines without changing transport
 ownership or policy. M002 adopts Eggfetch 0.2.2's typed failure classifier
-without changing EggPool retry, health, routing, or transport policy. M006 is the only registered dependency-ready successor; closure requires the
-implementation and qualification evidence specified by its plan.
+without changing EggPool retry, health, routing, or transport policy. No
+registered provider-transport successor remains.
 
 ## 12. Milestone status
 
@@ -632,4 +633,4 @@ implementation and qualification evidence specified by its plan.
 | 003 — Eggress 1.0.10 adoption and requalification | closed | `plans/implementation/provider-transport/003-eggress-1.0.10-adoption-and-requalification.md` | `plans/closure/provider-transport/003-status.md` | none |
 | 004 — Typed transport diagnostic evidence | closed | `plans/implementation/provider-transport/004-typed-transport-diagnostic-evidence.md` | `plans/closure/provider-transport/004-status.md` | none |
 | 005 — Eggfetch 0.2.1 and Eggress 1.0.11 dependency refresh | closed | `plans/implementation/provider-transport/005-eggfetch-0.2.1-eggress-1.0.11-refresh.md` | `plans/closure/provider-transport/005-status.md` | none; M002 later unblocked by published Eggfetch 0.2.2 |
-| 006 — Eggress 1.0.12 dependency refresh and requalification | closing | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | pending `plans/closure/provider-transport/006-status.md` | hosted CI and dependency audit |
+| 006 — Eggress 1.0.12 dependency refresh and requalification | closed | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | `plans/closure/provider-transport/006-status.md` | none; roadmap terminal |

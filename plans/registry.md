@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M006 closing — Eggress 1.0.12 dependency refresh and requalification | Implementation and local qualification landed; hosted CI/dependency audit and closure record pending. |
+| Provider transport | closed | `plans/subsystems/provider-transport-roadmap.md` | M006 closed — Eggress 1.0.12 dependency refresh and requalification | M001–M006 closed; no successor registered. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M001 closed — neutral provider-profile contract and OpenCode Go surface hints | M001 terminal; no successor registered. CodeGG consumption is unblocked at immutable revision `9ac6a131`. |
@@ -61,7 +61,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Provider transport | M006 — Eggress 1.0.12 dependency refresh and requalification | closing | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | Implementation and local gates passed; hosted CI/dependency audit pending. |
 
 
 ## Blocked work
@@ -82,6 +81,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Provider transport M006 — Eggress 1.0.12 dependency refresh and requalification | closed — all 16 registry-resolved Eggress crates at 1.0.12; provider/coordinator/wire and default/no-default workspace gates passed; release binary +520 bytes (+0.0017%); hosted CI and dependency audit green; no plan unblocked | `plans/closure/provider-transport/006-status.md`, implementation `d8be1599` |
 | Shared provider profile contract M001 — neutral provider-profile contract and OpenCode Go surface hints | closed — secret-free sans-I/O `eggpool-provider-profile` crate owns the contract and the single canonical bundled asset; EggPool projects all 23 providers onto an identical `ProviderConfig`; 30 reviewed non-fixed OpenCode Go hints; discovery is never credential proof; 930 workspace tests green; no in-repo plan unblocked, CodeGG unblocked at `9ac6a131` | `plans/closure/shared-provider-profile-contract/001-status.md`, implementation `9ac6a131` |
 | Persistence M010 — control/projection storage boundary architecture investigation | closed — schema-54 ownership/index inventory and test-only replay prototype complete; 12-to-2 modeled explicit secondary indexes, but 700-to-800 foreground row mutations and no lossless finite outage policy; no ADR or production split | `plans/closure/persistence/010-status.md`, implementation `dfa2a2ab` |
 | Persistence M009 — M008 documentation reconciliation corrective pass | closed — current lifecycle docs agree; focused guard 3 passed and full tooling suite 164 passed, 3 skipped; zero production/source/schema diff; M010 subsequently activated | `plans/closure/persistence/009-status.md`, implementation `4bff728c` |
