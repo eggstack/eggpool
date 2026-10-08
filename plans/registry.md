@@ -39,7 +39,7 @@ pair is a known numbering accident.
 
 | Subsystem | Status | Roadmap | Current milestone | Dependencies or blockers |
 |---|---|---|---|---|
-| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M006 active — Eggress 1.0.12 dependency refresh and requalification | M001–M005 closed; upstream v1.0.12 published; local and hosted qualification in progress. |
+| Provider transport | active | `plans/subsystems/provider-transport-roadmap.md` | M006 closing — Eggress 1.0.12 dependency refresh and requalification | Implementation and local qualification landed; hosted CI/dependency audit and closure record pending. |
 | Provider profile metadata corrective | closed | `plans/subsystems/provider-profile-metadata-corrective-roadmap.md` | M001 closed — provider template endpoint/source reconciliation | M001 terminal; no successor registered. |
 | Provider profile metadata planning/documentation reconciliation | closed | `plans/subsystems/provider-profile-metadata-planning-reconciliation-corrective-roadmap.md` | C001 closed — closed-roadmap/source-truth reconciliation | No successor registered. |
 | Shared provider profile contract | closed | `plans/subsystems/shared-provider-profile-contract-roadmap.md` | M001 closed — neutral provider-profile contract and OpenCode Go surface hints | M001 terminal; no successor registered. CodeGG consumption is unblocked at immutable revision `9ac6a131`. |
@@ -61,7 +61,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Provider transport | M006 — Eggress 1.0.12 dependency refresh and requalification | active | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | Exact-pin refresh; provider and release qualification. |
+| Provider transport | M006 — Eggress 1.0.12 dependency refresh and requalification | closing | `plans/implementation/provider-transport/006-eggress-1.0.12-dependency-refresh-and-requalification.md` | Implementation and local gates passed; hosted CI/dependency audit pending. |
 
 
 ## Blocked work

@@ -1,6 +1,6 @@
 # Provider Transport Milestone 006 — Eggress 1.0.12 dependency refresh and requalification
 
-Status: active
+Status: closing
 
 Repository baseline: `087366af4f9d89738715936a8b27026e2fad8c1a` (EggPool `main`, 2026-10-08; reconfirm at execution).
 
