@@ -30,10 +30,11 @@ use crate::verification::{ProfileVerification, ProviderVerificationPolicy};
 ///
 /// This is a structural fact. The credential itself is resolved and applied by
 /// the owning runtime and never appears in provider-profile data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderAuthMode {
     /// `Authorization: Bearer <credential>`.
+    #[default]
     Bearer,
     /// The credential is sent as a bare header value, conventionally `x-api-key`.
     ApiKey,
@@ -75,12 +76,6 @@ impl std::str::FromStr for ProviderAuthMode {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::parse(value).ok_or(ProfileValidationError::AuthMode(value.to_owned()))
-    }
-}
-
-impl Default for ProviderAuthMode {
-    fn default() -> Self {
-        Self::Bearer
     }
 }
 

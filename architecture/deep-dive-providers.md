@@ -184,7 +184,7 @@ chain-executor path keeps its own fully typed `ChainError` classification.
 route timeout; Eggfetch's connect timeout owns the provider deadline.
 
 Eggpool delegates provider proxy-chain construction and execution to
-`eggress-outbound` 1.0.11. The root `ssh` capability enables the outbound
+`eggress-outbound` 1.0.12. The root `ssh` capability enables the outbound
 crate's native SSH session ownership plus the compatibility crate's SSH
 translation support by default (pproxy-style SSH expressions construct only
 when both cfg gates agree); `--no-default-features` omits that capability
@@ -374,7 +374,7 @@ implementation, all conservative and all requalified:
   passes no SSH session cache and remains `cfg(test-support)`.
 - The RSA advisory exception (`RUSTSEC-2023-0071`) is retained with a
   corrected rationale: the affected `rsa 0.10.0-rc.18` still resolves through
-  the live Eggress 1.0.11 / `russh` 0.62.7 SSH path.
+  the live Eggress 1.0.12 / `russh` 0.62.7 SSH path.
 
 Focused qualification tightened one previously broad assertion (HTTP CONNECT
 rejection without credentials is now deterministically
@@ -394,8 +394,8 @@ evidence. Its debug representation reports trailer presence only. Eggfetch
 physical-admission expiry uses its typed predicate; residual pool errors fail
 closed without parsing upstream display text. At M003 closure, the live Eggress
 package family was exact-pinned to 1.0.10; the preceding Plan 243 measurements
-remain historical. M005 subsequently qualified Eggress 1.0.11 as the current
-family.
+remain historical. M005 qualified Eggress 1.0.11; M006 subsequently qualified
+Eggress 1.0.12 as the current family.
 
 For coordinator diagnostic observations, each `TransportError` also owns one
 static `diagnostic_class()` label. Finite submit/body-read failures and

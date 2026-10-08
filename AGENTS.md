@@ -128,7 +128,7 @@ dir, then `serve` (it daemonizes), curl, `stop`.
 - `--no-default-features` must still compile/test; it keeps direct/non-SSH
   proxy paths and rejects SSH proxy config as `TransportError::ProxyConfiguration`
   before dialing. Default SSH is the root `ssh` capability forwarded to
-  Eggress 1.0.11 (`eggress-outbound/ssh` plus the compat crate's SSH
+  Eggress 1.0.12 (`eggress-outbound/ssh` plus the compat crate's SSH
   translation support); there is no Eggpool SSH executor fallback.
 - Cancellation-path tests must synchronize on an observable fixture boundary or
   invariant under a bounded timeout. Do not use fixed millisecond sleeps or
@@ -152,7 +152,7 @@ dir, then `serve` (it daemonizes), curl, `stop`.
   HTTP/2/3. EggPool maps Eggfetch's typed `TransportFailureKind` after its
   pool, timeout, request, proxy, and custom-dialer categories; provider-side
   Hyper/Rustls error-chain inspection is removed. Provider proxy dialing is
-  exact-pinned Eggress `1.0.11` `eggress-outbound` via `connect_tcp_detailed`
+  exact-pinned Eggress `1.0.12` `eggress-outbound` via `connect_tcp_detailed`
   with a typed kind/stage adapter (no message-string classifier).
   `operations/update.rs` remains a separate Hyper/Rustls owner. Downstream
   HTTP/1 is exact-pinned `eggserve-server =0.4.0` with `tower` (server-owned

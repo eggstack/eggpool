@@ -260,7 +260,7 @@ tests locally.
 
 No-default builds must preserve direct and non-SSH proxy construction while
 returning `TransportError::ProxyConfiguration` for SSH proxy configuration.
-Default SSH uses the root `ssh` capability forwarded to Eggress 1.0.11
+Default SSH uses the root `ssh` capability forwarded to Eggress 1.0.12
 (`eggress-outbound/ssh` plus the compatibility crate's SSH translation
 support; pproxy-style SSH needs both); no Eggpool-owned
 SSH executor fallback is permitted. The production dial path uses

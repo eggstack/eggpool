@@ -119,7 +119,7 @@ and proxied request shape, TLS, keepalive, pool pressure, cancellation recovery,
 timeouts, premature closes, body bounds, account isolation, supported Eggress
 route families, route authentication/refusal, and fail-closed behavior.
 
-Eggress is exact-pinned at 1.0.11 across the live outbound/test-support family.
+Eggress is exact-pinned at 1.0.12 across the live outbound/test-support family.
 Production uses the listener-free `eggress-outbound` `OutboundConnector` and
 `connect_tcp_detailed` typed failure surface; the full `eggress-embed`/runtime
 service facade is absent from the normal release path. The root `ssh` capability
@@ -141,8 +141,9 @@ no-default profiles. The public `OutboundConnector::from_pproxy_uri` and
 The live Eggfetch profile is now `eggfetch-core =0.2.2` with
 `native-http1,tls-rustls`; the lockfile also selects
 `eggfetch-http-connect 0.2.2` through Eggress HTTP CONNECT support. The
-Eggress family currently resolves at 1.0.11, with M006 ready for an exact-pin
-1.0.12 refresh; `eggserve-server` remains 0.4.0.
+Eggress family resolves at 1.0.12 after M006's exact-pin refresh;
+`eggserve-server` remains 0.4.0. Local qualification passed; hosted evidence
+and the formal closure transition are in progress.
 
 At the M005 planning baseline (`869964c236cfd985a771beeb0ee815df3e1cf601`), upstream has since published
 `eggfetch-core 0.2.1` / `eggfetch-http-connect 0.2.1` and the Eggress
