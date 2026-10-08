@@ -28,8 +28,10 @@ workspace, dependency-policy, release-build, feature-containment, and hosted
 checks passed. No transport adapter or runtime policy change was required.
 
 The release artifact grew by 520 bytes on the same host and release profile
-(31,384,976 to 31,385,496 bytes, about 0.0017%). The lockfile retained 384
-package entries and the production non-dev tree retained 975 lines. No
+(31,384,976 to 31,385,496 bytes, about 0.0017%). This records the total M006
+candidate-tree delta, including the small Clippy cleanup below; it is not an
+isolated measurement of the Eggress version change alone. The lockfile retained
+384 package entries and the production non-dev tree retained 975 lines. No
 unrelated package version was upgraded.
 
 ## 2. Requirement-to-evidence matrix
@@ -66,9 +68,9 @@ versions: `hyper-util` selects `socket2 0.6.5`; `errno`, `rustix`, and
 `tempfile` select `windows-sys 0.61.2` for target-specific edges. These
 already-locked compatible entries were selected by Cargo's targeted graph
 resolution; lock entry count and the production non-dev tree line count stayed
-constant. The release binary size increase is 520 bytes and is attributable
-to the refreshed graph within the existing release profile; no feature or
-transport redesign was made.
+constant. The release binary size increase is 520 bytes for the complete M006
+candidate tree, which includes the derived-`Default` cleanup as well as the
+dependency refresh. No feature or transport redesign was made.
 
 ## 4. Verification executed
 
