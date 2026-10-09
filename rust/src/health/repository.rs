@@ -592,6 +592,17 @@ fn parse_timestamp(value: &str) -> Result<Option<f64>, String> {
     ))
 }
 fn epoch_to_timestamp(epoch: f64) -> String {
+    // `as` casts saturate on NaN/±inf/huge values, silently producing a wrong
+    // timestamp. Clamp invalid inputs to the epoch and cap absurdly large
+    // ones at 9999-12-31 so corrupt observations stay bounded instead of
+    // drifting rows into the far future (where a string-compared expiry
+    // would never elapse). Corrupt epochs are expected data here, not a
+    // caller bug, so this clamps silently by design.
+    let epoch = if epoch.is_finite() && epoch >= 0.0 {
+        epoch.min(253402300799.0)
+    } else {
+        0.0
+    };
     let seconds = epoch.floor() as i64;
     // Clamped rather than rounded up: a fraction of `999_999.5` would round to
     // `1_000_000` and format as `.1000000`, which `parse_timestamp` reads back
@@ -653,5 +664,16 @@ mod tests {
                 "{epoch} -> {text} -> {parsed}"
             );
         }
+    }
+
+    #[test]
+    fn invalid_epochs_stay_bounded() {
+        // Non-finite or negative inputs previously saturated through `as`
+        // casts into wrong timestamps; they now clamp to the epoch, and absurd
+        // futures cap at 9999-12-31 so string-compared expiries still elapse.
+        assert_eq!(epoch_to_timestamp(f64::NAN), "1970-01-01 00:00:00");
+        assert_eq!(epoch_to_timestamp(f64::INFINITY), "1970-01-01 00:00:00");
+        assert_eq!(epoch_to_timestamp(-1.0), "1970-01-01 00:00:00");
+        assert_eq!(epoch_to_timestamp(1e300), "9999-12-31 23:59:59");
     }
 }

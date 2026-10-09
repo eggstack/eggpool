@@ -882,7 +882,6 @@ impl FiniteCoordinator {
                             error_class,
                             request_bytes,
                         );
-                        let _ = error;
                         return Ok(self.pending_terminal(
                             published.identity,
                             Some(published.claim),
@@ -934,7 +933,6 @@ impl FiniteCoordinator {
                             error_class,
                             request_bytes,
                         );
-                        let _ = error;
                         return Ok(self.pending_terminal(
                             published.identity,
                             Some(published.claim),
@@ -1138,7 +1136,9 @@ impl FiniteCoordinator {
                     &context,
                 ) {
                     Ok(value) => value,
-                    Err(error) => {
+                    // The decode error can restate upstream bytes, so only
+                    // the static classification above reaches diagnostics.
+                    Err(_error) => {
                         // Upstream body was unadaptable: 502 (bad gateway),
                         // not 500. Record health effects and run the standard
                         // retry classifier instead of dropping the cause.
@@ -1157,7 +1157,6 @@ impl FiniteCoordinator {
                         if first {
                             self.apply_effects(&published.claim, &effects);
                         }
-                        let _ = error;
                         if self.should_retry(&effects) {
                             self.cleanup_failed_attempt(
                                 &published,
@@ -1394,7 +1393,6 @@ impl FiniteCoordinator {
                             "MalformedResponse",
                             request_bytes,
                         );
-                        let _ = effects;
                         return Ok(self.pending_terminal(
                             identity,
                             Some(published.claim),
@@ -1450,8 +1448,6 @@ impl FiniteCoordinator {
                         error_class,
                         request_bytes,
                     );
-                    let _ = error;
-                    let _ = effects;
                     return Ok(self.pending_terminal(
                         published.identity,
                         Some(published.claim),
@@ -1655,7 +1651,6 @@ impl FiniteCoordinator {
                         "MalformedResponse",
                         request_bytes,
                     );
-                    let _ = effects;
                     return Ok(self.pending_terminal(
                         identity,
                         Some(published.claim),

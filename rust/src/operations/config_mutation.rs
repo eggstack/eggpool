@@ -212,6 +212,11 @@ fn existing_mode(path: &Path) -> Result<Option<fs::Permissions>, MutationError> 
 /// processes; this at least closes symlink-swap TOCTOU between check and
 /// rename. Cross-process `flock` would require a new dependency and is
 /// documented as a limitation.
+///
+/// Operator rule: at most one config writer at a time. Do not run `eggpool`
+/// config mutations concurrently with each other or with a live server that
+/// mutates its own config; concurrent writers can interleave despite the
+/// per-process lock and unpredictable temp names.
 fn reject_symlink_ancestors(path: &Path) -> Result<(), MutationError> {
     let mut current = PathBuf::new();
     for component in path.components() {

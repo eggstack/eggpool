@@ -702,10 +702,15 @@ impl Database {
                     match read_worker_write_bytes() {
                         Ok(value) => Some(value),
                         Err(_) => {
-                            qualification
-                                .as_ref()
-                                .expect("attribution collector exists when enabled")
-                                .record_worker_io_failure();
+                            // `qualification` is built exactly when
+                            // `worker_io_attribution` is set; a missing
+                            // collector is a wiring bug, not a reason to
+                            // panic the database worker.
+                            if let Some(collector) = qualification.as_ref() {
+                                collector.record_worker_io_failure();
+                            } else {
+                                debug_assert!(false, "worker I/O attribution collector is missing");
+                            }
                             None
                         }
                     }
@@ -779,18 +784,19 @@ impl Database {
                 };
                 #[cfg(feature = "qualification-persist-journal")]
                 if let Some(before) = worker_write_bytes_before {
-                    let collector = qualification
-                        .as_ref()
-                        .expect("attribution collector exists when enabled");
-                    match read_worker_write_bytes()
-                        .ok()
-                        .and_then(|after| after.checked_sub(before))
-                    {
-                        Some(delta) if transaction_result.is_ok() => {
-                            collector.record_worker_io(kind, delta);
+                    if let Some(collector) = qualification.as_ref() {
+                        match read_worker_write_bytes()
+                            .ok()
+                            .and_then(|after| after.checked_sub(before))
+                        {
+                            Some(delta) if transaction_result.is_ok() => {
+                                collector.record_worker_io(kind, delta);
+                            }
+                            Some(_) => {}
+                            None => collector.record_worker_io_failure(),
                         }
-                        Some(_) => {}
-                        None => collector.record_worker_io_failure(),
+                    } else {
+                        debug_assert!(false, "worker I/O attribution collector is missing");
                     }
                 }
                 #[cfg(feature = "qualification-db-diagnostics")]
@@ -1116,7 +1122,12 @@ impl Database {
         let progress = match inspection {
             MaintenanceInspection::BelowThreshold(progress)
             | MaintenanceInspection::Checkpointed(progress) => progress,
-            MaintenanceInspection::Deferred => unreachable!("deferred inspection returned above"),
+            MaintenanceInspection::Deferred => {
+                // Handled by the early return above; reaching here would mean
+                // the gate check was removed. Defer again instead of panicking.
+                debug_assert!(false, "deferred inspection returned above");
+                return Ok(CheckpointMaintenanceOutcome::GateBusy);
+            }
         };
         observed_transactions.store(current, Ordering::Relaxed);
         self.inner
@@ -1242,7 +1253,12 @@ impl Database {
         let progress = match inspection {
             MaintenanceInspection::BelowThreshold(progress)
             | MaintenanceInspection::Checkpointed(progress) => progress,
-            MaintenanceInspection::Deferred => unreachable!("deferred returned above"),
+            MaintenanceInspection::Deferred => {
+                // Handled by the early return above; reaching here would mean
+                // the gate check was removed. Defer again instead of panicking.
+                debug_assert!(false, "deferred inspection returned above");
+                return Ok(CheckpointMaintenanceOutcome::SqliteBusy);
+            }
         };
         self.inner
             .dedicated_stats
@@ -1763,10 +1779,17 @@ fn parse_qualification_worker_io_toggle(value: &str) -> Result<bool, DatabaseErr
 
 #[cfg(all(feature = "qualification-persist-journal", target_os = "linux"))]
 fn read_worker_write_bytes() -> Result<u64, DatabaseError> {
-    let contents =
-        std::fs::read_to_string("/proc/thread-self/io").map_err(|_| DatabaseError::Integrity {
-            detail: "worker I/O attribution counter is unavailable".to_owned(),
-        })?;
+    let contents = std::fs::read_to_string("/proc/thread-self/io").map_err(|error| {
+        // `ErrorKind` is a static classification (no paths or content), so it
+        // is safe to keep: it distinguishes host faults (e.g. permission)
+        // from database faults.
+        DatabaseError::Integrity {
+            detail: format!(
+                "worker I/O attribution counter is unavailable ({})",
+                error.kind()
+            ),
+        }
+    })?;
     parse_worker_write_bytes(&contents)
 }
 

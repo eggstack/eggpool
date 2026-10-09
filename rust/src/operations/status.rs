@@ -753,7 +753,15 @@ pub fn ping_evidence_for_provider(
         success,
         age_seconds: probe_age_secs(&ping.probed_at, now_epoch_secs),
         latency_ms: ping.latency_ms.map(|value| value.max(0) as u64),
-        status_code: ping.status_code.and_then(|code| u16::try_from(code).ok()),
+        // Out-of-range stored codes stay unknown for display, but say so so
+        // corrupt rows are visible in debug logs.
+        status_code: ping.status_code.and_then(|code| {
+            u16::try_from(code)
+                .inspect_err(|_| {
+                    tracing::debug!("stored probe status code is out of range; showing unknown")
+                })
+                .ok()
+        }),
         model_count: ping.model_count,
     }
 }
@@ -780,21 +788,41 @@ fn parse_sqlite_timestamp(value: &str) -> Option<u64> {
         .and_then(|part| part.parse().ok())?;
     if !(1..=12).contains(&month)
         || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        // `60` stays accepted for leap seconds: it aliases the following
+        // minute's `:00`, matching the pre-existing behavior for stored rows.
+        || !(0..=60).contains(&second)
     {
         return None;
     }
-    // Days-from-civil (Howard Hinnant) for Gregorian dates.
-    let year_adj = if month <= 2 { year - 1 } else { year };
+    // Days-from-civil (Howard Hinnant) for Gregorian dates. All arithmetic is
+    // checked so a corrupt out-of-range row yields `None` instead of wrapping
+    // (release) or panicking (debug) before the `u64` conversion below.
+    let year_adj = if month <= 2 {
+        year.checked_sub(1)?
+    } else {
+        year
+    };
     let era = year_adj.div_euclid(400);
     let year_of_era = year_adj.rem_euclid(400);
     let month_adj = (month + 9) % 12;
     let day_of_year = (153 * month_adj + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146097 + day_of_era - 719468;
-    u64::try_from(days * 86400 + hour * 3600 + minute * 60 + second).ok()
+    let day_of_era = year_of_era
+        .checked_mul(365)?
+        .checked_add(year_of_era / 4)?
+        .checked_sub(year_of_era / 100)?
+        .checked_add(day_of_year)?;
+    let days = era
+        .checked_mul(146097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719468)?;
+    let seconds = days
+        .checked_mul(86400)?
+        .checked_add(hour.checked_mul(3600)?)?
+        .checked_add(minute.checked_mul(60)?)?
+        .checked_add(second)?;
+    u64::try_from(seconds).ok()
 }
 
 /// Count distinct catalog models per provider from a cache snapshot.
@@ -981,5 +1009,20 @@ mod tests {
         assert!(parse_sqlite_timestamp("2026-09-16 12:00:00").is_some());
         assert!(parse_sqlite_timestamp("not-a-timestamp").is_none());
         assert!(parse_sqlite_timestamp("2026-13-40 99:99:99").is_none());
+    }
+
+    #[test]
+    fn sqlite_timestamp_rejects_negative_fields_and_overflow() {
+        // One-sided range checks used to accept these; negative parts
+        // corrupted the epoch math instead of yielding `None`.
+        assert!(parse_sqlite_timestamp("2026-09-16 -1:00:00").is_none());
+        assert!(parse_sqlite_timestamp("2026-09-16 12:-1:00").is_none());
+        assert!(parse_sqlite_timestamp("2026-09-16 12:00:-1").is_none());
+        // Extreme years must yield `None` via checked arithmetic, never wrap
+        // (release) or panic (debug) before the `u64` conversion.
+        assert!(parse_sqlite_timestamp("999999999999-01-01 00:00:00").is_none());
+        assert!(parse_sqlite_timestamp("-999999999999-01-01 00:00:00").is_none());
+        // Leap-second acceptance is preserved for stored rows.
+        assert!(parse_sqlite_timestamp("2026-09-16 12:00:60").is_some());
     }
 }

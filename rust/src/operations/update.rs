@@ -978,7 +978,14 @@ impl PackageTransitionService {
                 }
             }
             InstallProvenance::StandaloneRust { .. } => {
-                unreachable!("standalone Rust provenance is handled before package resolution")
+                // Handled before package resolution: a standalone install has
+                // no manager to drive. Return instead of panicking so a future
+                // provenance variant or refactor degrades to an error.
+                debug_assert!(
+                    false,
+                    "standalone Rust provenance is handled before package resolution"
+                );
+                Err(UpdateError::ManagerUnavailable)
             }
             InstallProvenance::UvTool { .. }
             | InstallProvenance::Pipx { .. }

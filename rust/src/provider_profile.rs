@@ -233,13 +233,15 @@ pub fn provider_config_table(profile: &ProviderProfile) -> Table {
 /// result loads as a configuration document. This is the pre-extraction parse
 /// path, kept as the comparison baseline.
 pub fn canonical_config_document() -> Table {
-    let parsed: Value = BUNDLED_PROVIDER_PROFILES
-        .parse()
-        .expect("embedded provider-profile document is valid TOML");
+    // Build-time asset: a corrupt bundle is a build bug, so this panics like
+    // before, but keeps the TOML cause in the message instead of dropping it.
+    let parsed: Value = BUNDLED_PROVIDER_PROFILES.parse().unwrap_or_else(|error| {
+        panic!("embedded provider-profile document is valid TOML: {error}")
+    });
     let providers = parsed
         .get("providers")
         .and_then(Value::as_table)
-        .expect("embedded document declares providers");
+        .unwrap_or_else(|| panic!("embedded provider-profile document declares providers"));
     let mut document = Table::new();
     let mut rendered = Table::new();
     for (id, raw) in providers {

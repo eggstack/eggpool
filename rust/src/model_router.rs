@@ -141,19 +141,39 @@ struct AffinityState {
 }
 
 impl AffinityState {
+    fn lru_node_mut(&mut self, slot: usize) -> Option<&mut LruNode> {
+        self.lru_nodes.get_mut(slot)?.as_mut()
+    }
+
     fn append_mru(&mut self, key: AffinityKey) -> usize {
-        let slot = self.free_lru_slots.pop().unwrap_or_else(|| {
-            let slot = self.lru_nodes.len();
+        // A recycled slot must be inside storage and currently empty; a
+        // stale free-list entry falls back to a fresh slot so a live node is
+        // never aliased.
+        let slot = match self.free_lru_slots.pop() {
+            Some(slot) if slot < self.lru_nodes.len() && self.lru_nodes[slot].is_none() => slot,
+            Some(_) => {
+                debug_assert!(false, "affinity LRU free list holds a live slot");
+                self.lru_nodes.len()
+            }
+            None => self.lru_nodes.len(),
+        };
+        if slot == self.lru_nodes.len() {
             self.lru_nodes.push(None);
-            slot
-        });
+        }
         self.lru_nodes[slot] = Some(LruNode {
             key,
             previous: self.lru_tail,
             next: None,
         });
         if let Some(tail) = self.lru_tail {
-            self.lru_nodes[tail].as_mut().expect("linked tail").next = Some(slot);
+            if let Some(node) = self.lru_node_mut(tail) {
+                node.next = Some(slot);
+            } else {
+                // Corrupt tail link: restart the list from this slot rather
+                // than panicking the holder of the affinity lock.
+                debug_assert!(false, "affinity LRU tail link is missing");
+                self.lru_head = Some(slot);
+            }
         } else {
             self.lru_head = Some(slot);
         }
@@ -161,29 +181,39 @@ impl AffinityState {
         slot
     }
 
-    fn unlink(&mut self, slot: usize) -> LruNode {
-        let node = self.lru_nodes[slot].take().expect("occupied LRU slot");
+    fn unlink(&mut self, slot: usize) -> Option<LruNode> {
+        let node = self.lru_nodes.get_mut(slot)?.take()?;
         if let Some(previous) = node.previous {
-            self.lru_nodes[previous]
-                .as_mut()
-                .expect("linked previous")
-                .next = node.next;
+            if let Some(previous) = self.lru_node_mut(previous) {
+                previous.next = node.next;
+            } else {
+                debug_assert!(false, "affinity LRU previous link is missing");
+            }
         } else {
             self.lru_head = node.next;
         }
         if let Some(next) = node.next {
-            self.lru_nodes[next].as_mut().expect("linked next").previous = node.previous;
+            if let Some(next) = self.lru_node_mut(next) {
+                next.previous = node.previous;
+            } else {
+                debug_assert!(false, "affinity LRU next link is missing");
+            }
         } else {
             self.lru_tail = node.previous;
         }
-        node
+        Some(node)
     }
 
     fn move_to_mru(&mut self, slot: usize) {
         if self.lru_tail == Some(slot) {
             return;
         }
-        let node = self.unlink(slot);
+        let Some(node) = self.unlink(slot) else {
+            // Missing slot: the cached entry still counts as a hit, it just
+            // loses this promotion. Fail closed without panicking.
+            debug_assert!(false, "affinity LRU promotion missed its slot");
+            return;
+        };
         self.lru_nodes[slot] = Some(LruNode {
             key: node.key,
             previous: self.lru_tail,
@@ -199,8 +229,14 @@ impl AffinityState {
 
     fn remove_entry(&mut self, key: &AffinityKey) -> Option<CachedDecision> {
         let entry = self.entries.remove(key)?;
-        self.unlink(entry.lru_slot);
-        self.free_lru_slots.push(entry.lru_slot);
+        // The map removal already happened: a missing slot only skips link
+        // repair, and the slot is recycled only when it was occupied so the
+        // free list never aliases a live slot.
+        if self.unlink(entry.lru_slot).is_some() {
+            self.free_lru_slots.push(entry.lru_slot);
+        } else {
+            debug_assert!(false, "affinity LRU removal missed its slot");
+        }
         Some(entry)
     }
 }
@@ -362,7 +398,12 @@ impl ModelRouterAffinity {
                 break;
             }
             checked += 1;
-            let node = state.lru_nodes[slot].as_ref().expect("linked node");
+            let Some(node) = state.lru_nodes.get(slot).and_then(|node| node.as_ref()) else {
+                // Corrupt cursor: this scan is opportunistic and reruns on the
+                // next store, so stop here instead of panicking.
+                debug_assert!(false, "affinity LRU expiry scan missed its slot");
+                break;
+            };
             let key = node.key.clone();
             let next = node.next;
             if state
@@ -385,16 +426,33 @@ impl ModelRouterAffinity {
             // Every iteration must remove an entry, or this loop would spin
             // forever holding the affinity lock.
             let Some(oldest) = state.lru_head else { break };
-            let key = state.lru_nodes[oldest]
-                .as_ref()
-                .expect("linked head")
-                .key
-                .clone();
-            if state.remove_entry(&key).is_none() {
+            let Some(head_key) = state
+                .lru_nodes
+                .get(oldest)
+                .and_then(|node| node.as_ref())
+                .map(|node| node.key.clone())
+            else {
+                // Corrupt head with no recoverable successor: abandon the
+                // list so the loop terminates. Orphaned entries stay
+                // reachable by key and expire through the normal path.
+                debug_assert!(false, "affinity LRU eviction missed its head");
+                if oldest < state.lru_nodes.len() {
+                    state.lru_nodes[oldest] = None;
+                    state.free_lru_slots.push(oldest);
+                }
+                state.lru_head = None;
+                state.lru_tail = None;
+                break;
+            };
+            if state.remove_entry(&head_key).is_none() {
                 // The head is not in `entries`: the two structures disagree.
-                // Drop the head node so the loop still makes progress.
-                state.lru_head = state.lru_nodes[oldest].as_ref().and_then(|node| node.next);
-                state.lru_nodes.remove(oldest);
+                // Clear the head node in place so the loop still makes
+                // progress. (Never `Vec::remove` here: it would shift every
+                // slot index that live entries point at.)
+                let next = state.lru_nodes[oldest].as_ref().and_then(|node| node.next);
+                state.lru_head = next;
+                state.lru_nodes[oldest] = None;
+                state.free_lru_slots.push(oldest);
                 continue;
             }
             state.stats.evictions += 1;

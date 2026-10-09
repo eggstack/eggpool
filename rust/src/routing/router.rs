@@ -487,9 +487,12 @@ impl RoutingRouter {
     /// admission check had nothing to compare. Tokens are recorded on the same
     /// clock the scorer reads.
     pub fn record_usage(&self, claim: &SelectionClaim, usage: &CanonicalUsage) {
+        // Saturate (not zero) on overflow: a corrupt huge usage must
+        // over-count quota rather than vanish from the rolling window.
+        // Missing usage stays zero.
         let bounded = |value: Option<u64>| {
             value
-                .and_then(|value| i64::try_from(value).ok())
+                .map(|value| i64::try_from(value).unwrap_or(i64::MAX))
                 .unwrap_or_default()
         };
         let tokens = bounded(usage.input_tokens)
@@ -538,7 +541,14 @@ impl RoutingRouter {
         }
         let reason = backoff_reason
             .and_then(|value| BackoffReason::try_from(value).ok())
-            .unwrap_or(BackoffReason::Unknown);
+            .unwrap_or_else(|| {
+                // Corrupt stored reasons stay `Unknown` for availability, but
+                // say so: silent normalization would hide data corruption.
+                if backoff_reason.is_some() {
+                    tracing::debug!("unknown stored backoff reason normalized to Unknown");
+                }
+                BackoffReason::Unknown
+            });
         if let Some(delay) = backoff_until {
             health.record_cooldown(claim.account_name(), reason, delay.as_secs_f64());
         } else if circuit_penalty {

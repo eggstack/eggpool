@@ -158,6 +158,14 @@ impl From<AdmissionError> for EndpointError {
     }
 }
 
+impl From<crate::model_router::AffinityError> for EndpointError {
+    // Both affinity failures are static (no dynamic context beyond the
+    // variant), so they share the thin `Attempt` mapping.
+    fn from(_: crate::model_router::AffinityError) -> Self {
+        Self::Attempt
+    }
+}
+
 impl EndpointError {
     pub fn status(&self) -> StatusCode {
         match self {
@@ -178,6 +186,11 @@ impl EndpointError {
 }
 
 /// Render a protocol-shaped error body (Python parity).
+///
+/// `message` is client-visible: every new `EndpointError` variant (and every
+/// new caller of this function) must be reviewed as client-visible text.
+/// Keep model ids, paths, provider detail, and credentials out of it; the
+/// bounded terminal data (not this body) carries diagnostic classes.
 pub fn endpoint_error_body(surface: ClientSurface, message: &str) -> Vec<u8> {
     let value = if surface == ClientSurface::Messages {
         json!({
@@ -526,6 +539,9 @@ fn static_routing_facts(
 }
 
 fn encode_resolved_value(value: &Value) -> Result<Bytes, EndpointError> {
+    // Serialization of an in-memory `Value` is effectively infallible; the
+    // serde cause carries no offset here, so the thin `InvalidJson` mapping
+    // loses nothing.
     serde_json::to_vec(value)
         .map(Bytes::from)
         .map_err(|_| EndpointError::InvalidJson)
@@ -545,7 +561,10 @@ fn admit_resolved(
             ..Default::default()
         },
     )
-    .map_err(|_| EndpointError::Admission)
+    // `From<AdmissionError>` preserves the thin client classification
+    // (InvalidJson/BodyTooLarge/StatelessViolation/InvalidStream) instead of
+    // collapsing everything to `Admission`.
+    .map_err(EndpointError::from)
     .and_then(|admitted| {
         if concrete_body.len() > state.max_body_bytes {
             return Err(EndpointError::BodyTooLarge);
@@ -619,8 +638,8 @@ async fn resolve_virtual(
 ) -> Result<ResolvedInference, EndpointError> {
     // Build the early canonical view for the semantic prompt and affinity
     // identity. Admission here is bounded by the same body ceiling.
-    let canonical = canonical_request_from_object(parsed.object()?, surface)
-        .map_err(|_| EndpointError::Admission)?;
+    let canonical =
+        canonical_request_from_object(parsed.object()?, surface).map_err(EndpointError::from)?;
     let _ = proxy_request_id;
     let identity_input = crate::request::affinity_identity_input(&canonical, session_header);
     let identity = identity_input.session_identity();
@@ -642,7 +661,7 @@ async fn resolve_virtual(
                 }
             })
             .await
-            .map_err(|_| EndpointError::Attempt)?;
+            .map_err(EndpointError::from)?;
         let source = match resolution.decision.source {
             crate::model_router::AffinityDecisionSource::Selector => SelectionSource::Selector,
             crate::model_router::AffinityDecisionSource::Default => SelectionSource::Default,
@@ -823,7 +842,9 @@ pub async fn execute_endpoint(
             admitted,
             routing_facts,
         )
-        .map_err(|_| EndpointError::Admission)?;
+        // `from_admitted` only fails with `InvalidFacts`, which the typed
+        // mapper already classifies as `Admission`.
+        .map_err(map_stream_error)?;
         let execution = state
             .streaming
             .execute(request)
@@ -842,7 +863,9 @@ pub async fn execute_endpoint(
             admitted,
             routing_facts,
         )
-        .map_err(|_| EndpointError::Admission)?;
+        // `from_admitted` only fails with `InvalidFacts`, which the typed
+        // mapper already classifies as `Admission`.
+        .map_err(map_finite_error)?;
         let execution = state
             .finite
             .execute(request)

@@ -747,9 +747,12 @@ fn atomic_restore(prepared: PreparedRestore) -> Result<RestoreResult, BackupErro
             return Err(BackupError::RestoreRollback);
         }
         let _ = fs::remove_dir_all(&safety);
-        let error = match result {
-            Ok(()) => unreachable!("restore result was checked as an error"),
-            Err(error) => error,
+        let Err(error) = result else {
+            // Checked `is_err` above; an `Ok` here would mean the guard was
+            // removed. The restore already succeeded, so there is no error to
+            // return — surface the rollback-path bug without panicking.
+            debug_assert!(false, "restore result was checked as an error");
+            return Err(BackupError::RestoreRollback);
         };
         return Err(error);
     }

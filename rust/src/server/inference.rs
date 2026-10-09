@@ -94,8 +94,11 @@ pub(super) async fn handle_finite_compact(
                 .as_ref()
                 .map(ProcessRuntime::metrics_coalescer)
                 && let Some(event) = execution.usage_metric_event()
+                && metrics.record_usage_async(event).await.is_err()
             {
-                let _ = metrics.record_usage_async(event).await;
+                // Coalescer drops only on queue-full/shutdown: rare enough to
+                // warn, and usage loss would otherwise be fully silent.
+                tracing::warn!("usage metrics coalescer dropped a finite usage event");
             }
             match execution
                 .complete(crate::coordinator::DownstreamResult::Delivered)
@@ -171,8 +174,9 @@ async fn finish_finite_execution(
         .as_ref()
         .map(ProcessRuntime::metrics_coalescer)
         && let Some(event) = execution.usage_metric_event()
+        && metrics.record_usage_async(event).await.is_err()
     {
-        let _ = metrics.record_usage_async(event).await;
+        tracing::warn!("usage metrics coalescer dropped a finite usage event");
     }
     match execution
         .complete(crate::coordinator::DownstreamResult::Delivered)
@@ -204,14 +208,19 @@ async fn finish_stream_execution(
             .as_ref()
             .map(ProcessRuntime::metrics_coalescer)
             && let Some(event) = execution.usage_metric_event()
+            && metrics.record_usage_async(event).await.is_err()
         {
-            let _ = metrics.record_usage_async(event).await;
+            tracing::warn!("usage metrics coalescer dropped a stream error usage event");
         }
         // Best-effort: terminal convergence for the already-returned error
         // envelope; the client response is fixed above.
-        let _ = execution
+        if execution
             .complete(crate::coordinator::DownstreamResult::Delivered)
-            .await;
+            .await
+            .is_err()
+        {
+            tracing::warn!("stream error envelope finalization was lost");
+        }
         return (status, outgoing, error_body).into_response();
     }
     let status = execution.headers.status;
@@ -234,12 +243,19 @@ async fn finish_stream_execution(
                     if sender.send(Ok(chunk)).await.is_err() {
                         if let Some(metrics) = &metrics
                             && let Some(event) = execution.usage_metric_event()
+                            && metrics.record_usage_async(event).await.is_err()
                         {
-                            let _ = metrics.record_usage_async(event).await;
+                            tracing::warn!(
+                                "usage metrics coalescer dropped a cancelled-stream usage event"
+                            );
                         }
-                        let _ = execution
+                        if execution
                             .complete(crate::coordinator::DownstreamResult::Cancelled)
-                            .await;
+                            .await
+                            .is_err()
+                        {
+                            tracing::warn!("cancelled-stream finalization was lost");
+                        }
                         break;
                     }
                 }
@@ -248,12 +264,19 @@ async fn finish_stream_execution(
                     // ends; the downstream body is already fixed.
                     if let Some(metrics) = &metrics
                         && let Some(event) = execution.usage_metric_event()
+                        && metrics.record_usage_async(event).await.is_err()
                     {
-                        let _ = metrics.record_usage_async(event).await;
+                        tracing::warn!(
+                            "usage metrics coalescer dropped a delivered-stream usage event"
+                        );
                     }
-                    let _ = execution
+                    if execution
                         .complete(crate::coordinator::DownstreamResult::Delivered)
-                        .await;
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("delivered-stream finalization was lost");
+                    }
                     break;
                 }
                 Some(Err(_)) => {
@@ -263,12 +286,19 @@ async fn finish_stream_execution(
                     // success.
                     if let Some(metrics) = &metrics
                         && let Some(event) = execution.usage_metric_event()
+                        && metrics.record_usage_async(event).await.is_err()
                     {
-                        let _ = metrics.record_usage_async(event).await;
+                        tracing::warn!(
+                            "usage metrics coalescer dropped a failed-stream usage event"
+                        );
                     }
-                    let _ = execution
+                    if execution
                         .complete(crate::coordinator::DownstreamResult::Cancelled)
-                        .await;
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("failed-stream finalization was lost");
+                    }
                     break;
                 }
             }

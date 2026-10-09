@@ -210,6 +210,9 @@ pub(super) fn map_generation_error(error: GenerationBuildError) -> ServerError {
 }
 
 pub(super) fn verify_api_key(headers: &HeaderMap, expected: &str) -> bool {
+    // Non-UTF8 header values map to `""` (fail-closed, same as absent).
+    // There is deliberately no per-request log or counter here: this runs on
+    // every request, and the outcome is already observable as a 401.
     let authorization = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())

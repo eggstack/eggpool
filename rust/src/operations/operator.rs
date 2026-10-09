@@ -899,7 +899,8 @@ async fn price_cost(
             fallback
         });
         cost = cost.saturating_add(
-            ((tokens as i128 * rate as i128) / 1_000_000).min(250_000_000_i128) as i64,
+            ((tokens as i128).saturating_mul(rate as i128) / 1_000_000).min(250_000_000_i128)
+                as i64,
         );
     }
     Ok(Some((

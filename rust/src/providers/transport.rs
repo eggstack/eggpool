@@ -558,6 +558,11 @@ where
 /// `None` means direct Eggfetch dialing. `Some` means the returned custom
 /// dialer owns the only physical route available to that account's Eggfetch
 /// client: a failed dial never falls back to direct networking.
+///
+/// Proxy-configuration sources are intentionally dropped (rather than kept as
+/// error sources): proxy URLs may embed credentials, and transport errors
+/// flow into persisted diagnostics that must stay secret-free. The static
+/// `diagnostic_class` preserves the triage category.
 fn build_eggress_dialer(proxy_url: Option<&str>) -> Result<Option<EggressDialer>, TransportError> {
     let dialer = match proxy_url {
         None => None,
@@ -595,6 +600,9 @@ fn target_addr_for_dial(host: &str, port: u16) -> TargetAddr {
 /// Build a chain-route dialer with a deterministic test-only Eggress TLS
 /// root.  Production callers use [`build_eggress_dialer`], which preserves
 /// Eggress's system-root verification.
+///
+/// Chain/TOML/compile sources are dropped for the same secret-free reason:
+/// translated TOML can restate proxy credentials.
 #[cfg(feature = "test-support")]
 fn build_test_root_proxy_dialer(
     proxy_url: &str,
@@ -776,6 +784,11 @@ fn classify_chain_handshake_source(source: &(dyn StdError + 'static)) -> DialErr
     DialErrorKind::Other
 }
 
+/// Parse and validate a provider base URL.
+///
+/// URI parse/builder causes are intentionally dropped: the rejected value is
+/// operator-typed (and could contain a pasted secret), while transport errors
+/// must stay secret-free. The static `diagnostic_class` keeps the category.
 fn parse_base_url(value: &str) -> Result<Uri, TransportError> {
     let uri: Uri = value.parse().map_err(|_| TransportError::Configuration)?;
     let valid_scheme = uri

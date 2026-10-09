@@ -87,7 +87,10 @@ pub fn estimate_text_tokens(text: &str) -> u64 {
         .chars()
         .filter(|character| character.is_ascii())
         .count() as u64;
-    let non_ascii_bytes = text.len() as u64 - ascii_chars;
+    // ASCII characters are one byte each, so the ASCII count can never exceed
+    // the byte length (and the all-ASCII input early-returns above).
+    let non_ascii_bytes = (text.len() as u64).saturating_sub(ascii_chars);
+    debug_assert!(ascii_chars <= text.len() as u64);
     ceil_div(ascii_chars, ESTIMATED_TEXT_CHARS_PER_TOKEN).saturating_add(ceil_div(
         non_ascii_bytes,
         ESTIMATED_NON_ASCII_BYTES_PER_TOKEN,
@@ -117,7 +120,12 @@ pub fn requested_output_tokens(
             let Some(number) = candidate.as_u64() else {
                 return Err(LimitError::InvalidPositiveInteger { field: key });
             };
-            return Ok((number > 0).then_some(number));
+            // `0` is not a positive integer: reject it instead of silently
+            // falling back to the default reservation.
+            if number == 0 {
+                return Err(LimitError::InvalidPositiveInteger { field: key });
+            }
+            return Ok(Some(number));
         }
     }
     Ok(None)
@@ -153,5 +161,43 @@ pub fn valid_reference(value: &str) -> bool {
 }
 
 fn ceil_div(value: u64, divisor: u64) -> u64 {
+    // All call sites pass non-zero constants; guard the private helper so a
+    // future zero divisor saturates instead of underflowing `divisor - 1`
+    // (debug panic / release wrap) and then dividing by zero.
+    if divisor == 0 {
+        debug_assert!(false, "ceil_div divisor must be positive");
+        return u64::MAX;
+    }
     value.saturating_add(divisor - 1) / divisor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn zero_output_tokens_is_rejected_not_absent() {
+        let value = json!({"model": "m", "max_tokens": 0});
+        assert_eq!(
+            requested_output_tokens(&value, "openai", "chat_completions"),
+            Err(LimitError::InvalidPositiveInteger {
+                field: "max_tokens"
+            })
+        );
+    }
+
+    #[test]
+    fn positive_output_tokens_pass_through() {
+        let value = json!({"model": "m", "max_tokens": 128});
+        assert_eq!(
+            requested_output_tokens(&value, "openai", "chat_completions"),
+            Ok(Some(128))
+        );
+        let missing = json!({"model": "m"});
+        assert_eq!(
+            requested_output_tokens(&missing, "openai", "chat_completions"),
+            Ok(None)
+        );
+    }
 }

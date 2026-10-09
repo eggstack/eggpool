@@ -778,9 +778,13 @@ fn catalog_headers(
                 .and_then(|name| env::var(name).ok())
         });
         if let Some(value) = value {
-            let name =
-                HeaderName::from_bytes(header.name.as_bytes()).map_err(|_| "invalid header")?;
-            let value = HeaderValue::from_str(&value).map_err(|_| "invalid header")?;
+            // The header name is config (secret-free); the value stays
+            // redacted so a key pasted into a header value never lands in
+            // diagnostics.
+            let name = HeaderName::from_bytes(header.name.as_bytes())
+                .map_err(|_| format!("invalid header {:?}", header.name))?;
+            let value = HeaderValue::from_str(&value)
+                .map_err(|_| format!("invalid header {:?}", header.name))?;
             headers.insert(name, value);
         }
     }
@@ -838,8 +842,8 @@ fn insert_auth(
         format!("{scheme} {key}")
     };
     headers.insert(
-        HeaderName::from_bytes(name.as_bytes()).map_err(|_| "invalid header")?,
-        HeaderValue::from_str(&value).map_err(|_| "invalid header")?,
+        HeaderName::from_bytes(name.as_bytes()).map_err(|_| format!("invalid header {name:?}"))?,
+        HeaderValue::from_str(&value).map_err(|_| format!("invalid header {name:?}"))?,
     );
     Ok(())
 }

@@ -100,9 +100,24 @@ impl CredentialStore {
         for provider in config.providers.values() {
             for account in &provider.accounts {
                 let value = account.api_key.clone().or_else(|| {
-                    (!account.api_key_env.is_empty())
-                        .then(|| env::var(&account.api_key_env).ok())
-                        .flatten()
+                    if account.api_key_env.is_empty() {
+                        return None;
+                    }
+                    match env::var(&account.api_key_env) {
+                        Ok(value) => Some(value),
+                        // Secret-free: log names only, never the value. A set
+                        // `api_key_env` with an unreadable variable is a
+                        // misconfiguration, not an unconfigured account.
+                        Err(error) => {
+                            tracing::warn!(
+                                account = account.name.as_str(),
+                                env_var = account.api_key_env.as_str(),
+                                reason = error.to_string(),
+                                "account key environment variable is unreadable; treating account as unconfigured"
+                            );
+                            None
+                        }
+                    }
                 });
                 if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
                     store.keys.insert(account.name.clone(), value);

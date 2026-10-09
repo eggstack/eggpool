@@ -446,7 +446,6 @@ impl StreamingCoordinator {
                         error_class,
                         request_bytes,
                     );
-                    let _ = error;
                     return Ok(self.pending_terminal(
                         published.identity,
                         Some(published.claim),
@@ -775,7 +774,6 @@ impl StreamingCoordinator {
                                 "MalformedResponse",
                                 request_bytes,
                             );
-                            let _ = effects;
                             return Ok(self.pending_terminal(
                                 identity,
                                 Some(published.claim),
@@ -789,7 +787,9 @@ impl StreamingCoordinator {
                             ));
                         }
                     },
-                    Err(error) => {
+                    // The adaptation error can restate upstream bytes, so only
+                    // the static classification above reaches diagnostics.
+                    Err(_error) => {
                         let headers = StreamClientHeaders {
                             status: StatusCode::BAD_GATEWAY,
                             headers: self.error_headers(&request.proxy_request_id, attempt_number),
@@ -801,7 +801,6 @@ impl StreamingCoordinator {
                             "ResponseAdaptation",
                             request_bytes,
                         );
-                        let _ = error;
                         return Ok(self.pending_terminal(
                             published.identity,
                             Some(published.claim),
@@ -945,7 +944,9 @@ impl StreamingCoordinator {
                 .stream_for_request(&context, &request.admitted.canonical)
             {
                 Ok(stream) => stream,
-                Err(error) => {
+                // The stream-construction error can restate request detail,
+                // so only the static classification above reaches diagnostics.
+                Err(_error) => {
                     let headers = StreamClientHeaders {
                         status: StatusCode::INTERNAL_SERVER_ERROR,
                         headers: self.error_headers(&request.proxy_request_id, attempt_number),
@@ -957,7 +958,6 @@ impl StreamingCoordinator {
                         "StreamUnavailable",
                         request_bytes,
                     );
-                    let _ = error;
                     return Ok(self.pending_terminal(
                         published.identity,
                         Some(published.claim),
@@ -1117,7 +1117,6 @@ impl StreamingCoordinator {
             0,
             false,
         );
-        let _ = error;
         Ok(Some(self.pending_terminal(
             identity.clone(),
             Some(published.claim.clone()),

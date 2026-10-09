@@ -190,6 +190,10 @@ impl CircuitBreaker {
     /// releases the slot.
     pub fn try_acquire_probe(&self) -> Option<ProbeGuard> {
         let now = self.now();
+        // Fail-closed like `can_request`/`allow_request` above: a poisoned
+        // lock denies the probe rather than trusting possibly-inconsistent
+        // breaker state. `state()`/`stats()` still report `Open` so
+        // dashboards do not show healthy while gating denies traffic.
         let mut inner = self.inner.lock().ok()?;
         if inner.probe_in_flight
             && inner

@@ -445,10 +445,7 @@ fn routing_request_facts_from_parts(
     let mut facts =
         RoutingRequestFacts::from_model_id(&canonical.model, &inputs.known_provider_ids);
     facts.requested_protocol = inputs.requested_protocol.clone();
-    let client_surface = canonical
-        .origin
-        .client_surface()
-        .expect("admission produces a client-wire origin");
+    let client_surface = admitted_client_surface(canonical);
     facts.client_protocol = Some(client_surface.protocol().into());
     facts.request_surface = client_surface.as_str().into();
     facts.transcode_protocols = inputs.transcode_protocols.clone();
@@ -476,11 +473,7 @@ pub fn affinity_identity_input(
 ) -> AffinityIdentityInput {
     if let Some(identity) = session_identity_from_header(explicit_session) {
         return AffinityIdentityInput::explicit(
-            request
-                .origin
-                .client_surface()
-                .expect("admitted wire origin")
-                .as_str(),
+            admitted_client_surface(request).as_str(),
             identity,
         );
     }
@@ -490,13 +483,24 @@ pub fn affinity_identity_input(
         .map(|(role, text)| ConversationTextFragment::new(role.as_str(), text))
         .collect();
     AffinityIdentityInput::automatic(
-        request
-            .origin
-            .client_surface()
-            .expect("admitted wire origin")
-            .as_str(),
+        admitted_client_surface(request).as_str(),
         ConversationPrefix::new(system_developer, request.first_user_text()),
     )
+}
+
+/// Client surface for an admitted request without panicking.
+///
+/// Admission always decodes through a client-wire surface, so `None` (a
+/// synthetic `Canonical` origin) is a caller bug, never a client error. The
+/// `from_admitted` constructors already reject such requests fail-closed;
+/// these infallible bridges fall back to chat completions so a future
+/// synthetic caller degrades deterministically instead of panicking.
+fn admitted_client_surface(request: &CanonicalRequest) -> ClientSurface {
+    if let Some(surface) = request.origin.client_surface() {
+        return surface;
+    }
+    debug_assert!(false, "admitted request has a synthetic canonical origin");
+    ClientSurface::ChatCompletions
 }
 
 fn parse_once(raw_body: &[u8]) -> Result<Value, AdmissionError> {
