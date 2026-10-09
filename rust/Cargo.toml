@@ -6,6 +6,7 @@ rust-version = "1.89"
 description = "A lightweight native proxy that aggregates multiple LLM provider accounts"
 license = "MIT"
 repository = "https://github.com/eggstack/eggpool"
+readme = "../README.md"
 
 [workspace]
 members = [
