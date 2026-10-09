@@ -146,7 +146,7 @@ def test_publication_verifier_accepts_exact_manifest_bytes() -> None:
     result = verify_publication(_manifest(), pypi, github)
     assert result == {
         "status": "pass",
-        "version": "0.8.1",
+        "version": "0.8.2",
         "wheels": 3,
         "raw_assets": 3,
         "connect_assets": 6,
@@ -166,7 +166,7 @@ def test_publication_verifier_rejects_missing_github_digest() -> None:
 def test_publication_verifier_rejects_source_archives() -> None:
     pypi, github = _public_metadata()
     pypi["urls"].append(
-        {"filename": "eggpool-0.8.1.tar.gz", "digests": {"sha256": "0" * 64}}
+        {"filename": "eggpool-0.8.2.tar.gz", "digests": {"sha256": "0" * 64}}
     )
     with pytest.raises(PublicationVerificationError, match="source archive"):
         verify_publication(_manifest(), pypi, github)
