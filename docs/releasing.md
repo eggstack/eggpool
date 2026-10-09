@@ -49,14 +49,17 @@ The same version is published to crates.io for `cargo install eggpool`
 (users need Rust 1.89 or newer; the installer script and PyPI wheels are
 unchanged). Published crates, in dependency order:
 
-- `eggpool-wire 0.1.0`, `eggpool-model-routing 0.1.0`,
+- `eggpool-wire 0.1.1`, `eggpool-model-routing 0.1.0`,
   `eggpool-client-config 0.1.0` (neutral library crates);
-- `eggpool 0.8.2` (the proxy binary; depends on the three libraries above).
+- `eggpool-provider-profile 0.1.0` (secret-free provider-profile contract;
+  depends on `eggpool-wire`);
+- `eggpool 0.8.2` (the proxy binary; depends on the four libraries above).
 
 ```bash
 cargo publish --manifest-path rust/crates/eggpool-wire/Cargo.toml
 cargo publish --manifest-path rust/crates/eggpool-model-routing/Cargo.toml
 cargo publish --manifest-path rust/crates/eggpool-client-config/Cargo.toml
+cargo publish --manifest-path rust/crates/eggpool-provider-profile/Cargo.toml
 cargo publish --manifest-path rust/Cargo.toml
 ```
 
