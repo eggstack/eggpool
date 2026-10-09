@@ -364,12 +364,14 @@ enum PullBody {
 }
 
 async fn pull_body(body: &mut crate::providers::ProviderBody, idle: Option<Duration>) -> PullBody {
-    let next = match idle {
-        Some(limit) => match timeout(limit, body.next()).await {
-            Ok(value) => value,
-            Err(_) => return PullBody::Idle,
-        },
-        None => body.next().await,
+    // `None` preserves historical transport behavior but must not wait
+    // forever: bound it with a conservative ceiling so a stalled upstream
+    // still surfaces as idle timeout.
+    const DEFAULT_IDLE_CEILING: Duration = Duration::from_secs(300);
+    let limit = idle.unwrap_or(DEFAULT_IDLE_CEILING);
+    let next = match timeout(limit, body.next()).await {
+        Ok(value) => value,
+        Err(_) => return PullBody::Idle,
     };
     match next {
         None => PullBody::Eof,
@@ -581,7 +583,10 @@ impl PendingStreamFinalization {
             parts.phase = StreamPhase::Streaming;
         }
         let handoff_started = parts.handoff.started();
-        if downstream != DownstreamResult::Delivered {
+        // A stored midstream terminal (transport/translation/EOF/idle) is
+        // authoritative: preserve outcome/error_class/retry_category instead
+        // of reinterpreting the provider fault as a downstream cancellation.
+        if downstream != DownstreamResult::Delivered && !parts.terminal_stored {
             parts.data.outcome = if handoff_started {
                 FinalizationOutcome::ClientCancelled
             } else {

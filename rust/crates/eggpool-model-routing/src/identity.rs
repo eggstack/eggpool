@@ -38,6 +38,7 @@ impl fmt::Debug for SessionIdentity {
 pub fn session_identity_from_header(value: Option<&str>) -> Option<SessionIdentity> {
     let value = value?;
     if value.is_empty()
+        || value.trim().is_empty()
         || value.len() > AFFINITY_SESSION_HEADER_MAX_BYTES
         || value
             .chars()
@@ -238,9 +239,13 @@ pub fn automatic_session_identity(
         digest.update(field);
     }
     let user_field = bounded_identity_field("user", &user_text, remaining);
-    if !user_field.is_empty() {
-        digest.update(user_field);
+    if user_field.is_empty() {
+        // The user text is the cross-user binding: without it the digest
+        // covers system/developer content only and different users would
+        // share one affinity session.
+        return None;
     }
+    digest.update(user_field);
     Some(SessionIdentity {
         digest: digest.finalize().into(),
         source: SessionSource::AutomaticSession,

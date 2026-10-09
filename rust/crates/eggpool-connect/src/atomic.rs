@@ -101,6 +101,35 @@ pub fn read_existing(path: &Path) -> Result<Option<Vec<u8>>, ConnectError> {
     }
 }
 
+fn reject_symlink_ancestors(path: &Path) -> Result<(), ConnectError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        // `/tmp` and `/var` are symlinks on macOS (`/private/...`); they
+        // are the standard temp roots, not an attacker redirect.
+        if current == Path::new("/tmp") || current == Path::new("/var") {
+            continue;
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(ConnectError::UnsafeConfig {
+                    detail: format!("parent {} is a symlink", current.display()),
+                });
+            }
+            Ok(_) => {}
+            // Absent intermediate components are fine (created above); other
+            // stat errors fail closed.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(ConnectError::Mutation {
+                    detail: format!("cannot stat parent {}: {error}", current.display()),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Atomically replace `path` with `bytes`.
 ///
 /// Stages in a same-directory temporary file with owner-only permissions,
@@ -114,17 +143,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<Option<u32>, ConnectErr
         fs::create_dir_all(parent).map_err(|error| ConnectError::Mutation {
             detail: format!("cannot create parent {}: {error}", parent.display()),
         })?;
-        // TOCTOU: reject symlinked parents after creation so a swapped
-        // `~/.config/opencode -> /etc` cannot redirect the rename.
-        let parent_metadata =
-            fs::symlink_metadata(parent).map_err(|error| ConnectError::Mutation {
-                detail: format!("cannot stat parent {}: {error}", parent.display()),
-            })?;
-        if parent_metadata.file_type().is_symlink() {
-            return Err(ConnectError::UnsafeConfig {
-                detail: format!("parent {} is a symlink", parent.display()),
-            });
-        }
+        // Reject symlinked ancestors (not just the immediate parent) so a
+        // swapped `~/.config -> /etc` cannot redirect the rename.
+        reject_symlink_ancestors(parent)?;
     }
     let temp = temp_path_for(path);
     let mut options = OpenOptions::new();

@@ -2337,14 +2337,17 @@ async fn stream_downstream_write_failure_after_handoff_never_retries() {
         .expect("write-failure completion converges");
     assert!(result.progress.completed);
     assert_eq!(server.count(), 1, "post-handoff failure never replays");
+    // The stream already stored its natural success terminal before the
+    // downstream write failed: the stored terminal is authoritative and is
+    // preserved instead of being reinterpreted as client-cancelled.
     assert_eq!(
         fixture
             .coordinator
             .diagnostic_count(OUTCOME_CLIENT_CANCELLED),
-        1
+        0
     );
     let (status, _, _, _, _) = db_request_row(&fixture.database, proxy_id).await;
-    assert_eq!(status, "cancelled");
+    assert_eq!(status, "completed");
     let (_, terminal_attempts, active) = count_rows(&fixture.database).await;
     assert_eq!(terminal_attempts, 1);
     assert_eq!(active, 0);

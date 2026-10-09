@@ -275,7 +275,16 @@ impl CircuitBreaker {
                 inner.probe_in_flight = false;
             }
             CircuitState::Closed => {
-                inner.failure_count = inner.failure_count.saturating_add(1);
+                // Decay stale failures: without this, failures hours ago
+                // still count toward the threshold alongside a fresh one.
+                if inner
+                    .last_failure_at
+                    .is_some_and(|last| now - last > self.recovery_timeout)
+                {
+                    inner.failure_count = 1;
+                } else {
+                    inner.failure_count = inner.failure_count.saturating_add(1);
+                }
                 if inner.failure_count >= self.failure_threshold {
                     inner.state = CircuitState::Open;
                     inner.last_failure_at = Some(now);

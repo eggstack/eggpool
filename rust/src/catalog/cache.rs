@@ -430,30 +430,10 @@ impl ModelCatalogCache {
     }
 
     fn hydrate_legacy_freshness(&mut self) {
-        let durable: BTreeSet<String> = self.freshness.keys().cloned().collect();
-        for (model_id, accounts) in &self.account_support {
-            for account in accounts {
-                if durable.contains(account) {
-                    continue;
-                }
-                let provider = self.account_providers.get(account);
-                let timestamp = provider
-                    .and_then(|provider_id| {
-                        self.provider_models
-                            .get(&(model_id.clone(), provider_id.clone()))
-                            .map(|row| row.last_seen_at)
-                    })
-                    .unwrap_or_else(|| self.models.get(model_id).map_or(0, |row| row.last_seen_at));
-                if timestamp > 0 {
-                    self.freshness
-                        .entry(account.clone())
-                        .or_insert(AccountFreshness {
-                            last_successful_refresh_at: timestamp,
-                            source: "legacy_model_timestamp".into(),
-                        });
-                }
-            }
-        }
+        // Never synthesize per-account freshness from other accounts or
+        // model timestamps: a never-refreshed account must stay stale so
+        // `catalog_stale_after_s` can exclude it. Legacy rows without
+        // explicit freshness are left absent.
     }
 
     pub fn update_from_account(
@@ -832,6 +812,9 @@ impl ModelCatalogCache {
     ) {
         self.outcomes.insert(account_name.into(), outcome);
     }
+    pub fn model_count(&self) -> usize {
+        self.models.len()
+    }
     pub fn snapshot(&self) -> CacheSnapshot {
         CacheSnapshot {
             model_ids: self.models.keys().cloned().collect(),
@@ -968,7 +951,7 @@ impl ModelCatalogCache {
                 .min(),
             input_tokens: rows.iter().filter_map(|row| row.limits.input_tokens).min(),
             output_tokens: rows.iter().filter_map(|row| row.limits.output_tokens).min(),
-            enforce: rows.iter().all(|row| row.limits.enforce),
+            enforce: rows.iter().any(|row| row.limits.enforce),
             context_source: "conservative".into(),
             input_source: "conservative".into(),
             output_source: "conservative".into(),

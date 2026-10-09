@@ -211,7 +211,7 @@ pub(super) fn grouped_timeseries_projection(
                 "label": if is_other { "Other" } else { row["raw_series_label"].as_str().unwrap_or_default() },
                 "provider_id": if is_other { Value::Null } else { row["provider_id"].clone() },
                 "model_id": if is_other { Value::Null } else { row["model_id"].clone() },
-                "account_name": if is_other { Value::Null } else { json!("") },
+                "account_name": if is_other { Value::Null } else { row["account_name"].clone() },
                 "is_other": is_other,
                 "request_count": 0, "error_count": 0, "input_tokens": 0,
                 "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0,

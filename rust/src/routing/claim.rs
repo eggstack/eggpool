@@ -452,8 +452,19 @@ pub(crate) fn publish(
     if is_claim_book_poisoned() {
         return Err(ClaimError::Poisoned);
     }
-    state.next_id = state.next_id.saturating_add(1);
-    let id = state.next_id;
+    // Bound leaked `Pending`/unreleased-`Converted` records: prune what is
+    // releasable, then refuse rather than grow `claims` + `terminal_order`
+    // without bound.
+    prune_terminal_claims(&mut state);
+    if state.claims.len() >= CLAIM_RECORD_HARD_CAP {
+        return Err(ClaimError::Poisoned);
+    }
+    // Fail closed on ID exhaustion: saturating would reuse `u64::MAX` and
+    // overwrite the live claim while still incrementing `active_requests`.
+    let Some(id) = state.next_id.checked_add(1) else {
+        return Err(ClaimError::Poisoned);
+    };
+    state.next_id = id;
     // The right-hand side is evaluated before the entry is inserted, so the
     // `or_default` zero is the pre-increment value. Reordering these two
     // operands would turn the increment into a reset.

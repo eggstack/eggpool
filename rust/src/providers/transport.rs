@@ -192,12 +192,11 @@ impl TryFrom<&crate::config::ProviderConfig> for ProviderHttpConfig {
     type Error = TransportError;
 
     fn try_from(provider: &crate::config::ProviderConfig) -> Result<Self, Self::Error> {
-        let read_timeout = provider
-            .stream_timeouts
-            .first_byte_timeout_s
-            .into_iter()
-            .chain(provider.stream_timeouts.idle_timeout_s)
-            .fold(provider.read_timeout_s, f64::max);
+        // Transport header/read wait is exactly `read_timeout_s`. Streaming
+        // first-byte/idle timers are enforced by the streaming coordinator,
+        // not by inflating the transport timeout (which would also inflate
+        // finite header wait to hours).
+        let read_timeout = provider.read_timeout_s;
         let mut config = Self::new(&provider.base_url)?;
         config.connect_timeout = duration_from_seconds(provider.connect_timeout_s)?;
         config.read_timeout = duration_from_seconds(read_timeout)?;

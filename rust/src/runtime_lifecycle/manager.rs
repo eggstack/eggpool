@@ -413,28 +413,13 @@ impl RuntimeManager {
             return Err(GenerationStageError::PendingSwap);
         }
         if self.retiring_slot_count() >= MAX_RETIRING_GENERATIONS {
-            // FailedClose slots retain diagnostics separately; if every
-            // retiring slot already failed, evict the oldest to avoid
-            // bricking all future reloads (restart-only otherwise).
-            let all_failed = self
-                .inner
-                .retiring
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .iter()
-                .all(|slot| slot.state() == GenerationSlotState::FailedClose);
-            if all_failed {
-                tracing::warn!(
-                    "retirement backlog is all FailedClose; evicting oldest to admit stage"
-                );
-                self.inner
-                    .retiring
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(0);
-            } else {
-                return Err(GenerationStageError::RetirementBacklog);
-            }
+            // Fail closed when the retirement backlog is full, even if every
+            // slot already failed to close: silently evicting the oldest
+            // `FailedClose` slot would drop a generation that may still hold
+            // open provider transports (live-retirement keeps failed opens).
+            // The operator restarts to clear the backlog; no generation is
+            // leaked untracked.
+            return Err(GenerationStageError::RetirementBacklog);
         }
         let old = self.inner.active.load_full();
         if old.generation_id() != expected_generation {

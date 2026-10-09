@@ -248,12 +248,14 @@ impl StreamingCoordinator {
                         true,
                     );
                     let upstream_protocol = identity.upstream_protocol.clone();
+                    // Oversize bodies are dropped instead of truncated: a 512
+                    // B slice of JSON is invalid and breaks client framing.
                     let body = if last.body.len() > MAX_CLIENT_ERROR_BYTES {
-                        Bytes::copy_from_slice(&last.body[..MAX_CLIENT_ERROR_BYTES])
+                        None
                     } else {
-                        last.body.clone()
+                        Some(last.body.clone())
                     };
-                    let provider_bytes = body.len();
+                    let provider_bytes = body.as_ref().map_or(0, |b: &Bytes| b.len());
                     let data = self.failure_data(
                         &identity,
                         &upstream_protocol,
@@ -269,7 +271,7 @@ impl StreamingCoordinator {
                         identity,
                         None,
                         headers,
-                        Some(body),
+                        body,
                         data,
                         StreamPhase::Closed,
                     ));

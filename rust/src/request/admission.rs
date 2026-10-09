@@ -290,27 +290,6 @@ pub(crate) fn admit_parsed_request(
     })
 }
 
-/// Convert an already parsed object through the same canonical decoder used
-/// by admission. Network callers should use [`admit_request`] so the body
-/// bound and one-parse contract remain explicit.
-///
-/// EggPool-owned wrapper: enforces the stateless Responses product policy
-/// first (preserving pre-extraction error precedence), then delegates to the
-/// pure wire-kernel structural decoder with [`DecodeLimits::current()`].
-pub fn canonical_request_from_value(
-    value: &Value,
-    surface: ClientSurface,
-) -> Result<CanonicalRequest, AdmissionError> {
-    use crate::wire::decode::{DecodeLimits, canonical_request_from_value_with_limits};
-    if surface == ClientSurface::Responses
-        && let Some(object) = value.as_object()
-    {
-        validate_responses_stateless_policy(object)?;
-    }
-    canonical_request_from_value_with_limits(value, surface, DecodeLimits::current())
-        .map_err(map_decode_error)
-}
-
 fn map_decode_error(error: crate::wire::decode::DecodeError) -> AdmissionError {
     use crate::wire::decode::DecodeError as D;
     match error {

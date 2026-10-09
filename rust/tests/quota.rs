@@ -130,7 +130,7 @@ fn defaults_weight_offsets_and_hard_cap_boundaries_are_explicit() {
         !estimator
             .get_account_quota("account")
             .expect("account")
-            .is_within_limits(0.0)
+            .is_within_limits(0.0, 0)
     ); // exact capacity is exhausted for hard-cap callers
 }
 
@@ -206,7 +206,7 @@ fn hard_cap_excludes_on_the_same_default_capacities_the_scorer_uses() {
         estimator
             .get_account_quota("account")
             .expect("account")
-            .is_within_limits(0.0)
+            .is_within_limits(0.0, 0)
     );
     // A configured hard cap that the account has reached excludes it, exactly
     // as the scorer reports the same window as exhausted.
@@ -224,7 +224,7 @@ fn hard_cap_excludes_on_the_same_default_capacities_the_scorer_uses() {
         !estimator
             .get_account_quota("account")
             .expect("account")
-            .is_within_limits(0.0)
+            .is_within_limits(0.0, 0)
     );
 }
 

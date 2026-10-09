@@ -326,6 +326,13 @@ pub fn compile_model_router(
     router: &ModelRouterPolicy,
 ) -> Result<CompiledModelRouter, ModelRoutingError> {
     validate_virtual_model_id(virtual_model, "model router virtual ID")?;
+    // Direct crate callers bypass the config path (`config.rs` calls
+    // `validate_model_router_mapping` separately): enforce the same bounds
+    // here so invalid TTL/timeout/sizes cannot compile.
+    validate_model_router_mapping(&BTreeMap::from([(
+        virtual_model.to_owned(),
+        router.clone(),
+    )]))?;
     let mut routes = router.routes.iter().collect::<Vec<_>>();
     routes.sort_by_key(|(label, _)| *label);
     let routes = routes

@@ -186,11 +186,12 @@ impl BackupService {
     /// Retention is deliberately best-effort, and is called only after a
     /// successful publication.
     pub fn prune(&self, retain_count: u64) -> Result<Vec<PathBuf>, BackupError> {
-        let mut entries = list_backups(&self.paths.output_dir)?;
+        let entries = list_backups(&self.paths.output_dir)?;
         if entries.len() <= retain_count as usize {
             return Ok(Vec::new());
         }
-        entries.sort_by(|a, b| b.cmp(a));
+        // `list_backups` already orders newest-first by mtime; keep that
+        // order instead of re-sorting by name (which mis-orders `-10`/`-2`).
         let mut removed = Vec::new();
         for path in entries.into_iter().skip(retain_count as usize) {
             if fs::remove_file(&path).is_ok() {
@@ -314,7 +315,18 @@ pub fn list_backups(directory: &Path) -> Result<Vec<PathBuf>, BackupError> {
             paths.push(path);
         }
     }
-    paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+    // Newest first by modification time (fallback to name): lexicographic
+    // name order mis-sorts collision suffixes (`-10` < `-2`) and clock skew.
+    paths.sort_by(|a, b| {
+        let mtime = |path: &Path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        };
+        mtime(b)
+            .cmp(&mtime(a))
+            .then_with(|| b.file_name().cmp(&a.file_name()))
+    });
     Ok(paths)
 }
 

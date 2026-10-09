@@ -178,6 +178,7 @@ struct PersistenceDelta {
     old_accounts: Vec<AccountProjection>,
     auth_reset_account_ids: Vec<i64>,
     auth_rows: Vec<AuthBackoffRow>,
+    existing_fingerprint: (usize, i64),
 }
 
 impl PersistenceDelta {
@@ -206,6 +207,10 @@ impl PersistenceDelta {
         let auth_rows = load_auth_rows(database, &auth_reset_account_ids)
             .await
             .map_err(|_| ReloadPreparationError::Persistence)?;
+        let existing_fingerprint = (
+            existing.len(),
+            existing.iter().map(|account| account.id).max().unwrap_or(0),
+        );
         Ok((
             Self {
                 providers,
@@ -214,9 +219,37 @@ impl PersistenceDelta {
                 old_accounts,
                 auth_reset_account_ids,
                 auth_rows,
+                existing_fingerprint,
             },
             candidate_durable,
         ))
+    }
+
+    /// Re-validate the pre-transaction snapshot after `BEGIN IMMEDIATE`: a
+    /// concurrent cross-process writer would otherwise interleave between
+    /// `prepare` reads and the transaction.
+    async fn validate_snapshot(
+        &self,
+        transaction: &DatabaseTransaction,
+    ) -> Result<(), ReloadPreparationError> {
+        let expected = self.existing_fingerprint;
+        let observed = transaction
+            .call(move |connection| {
+                let mut statement = connection.prepare("SELECT COUNT(*), MAX(id) FROM accounts")?;
+                let (count, max_id): (i64, Option<i64>) =
+                    statement.query_row([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+                Ok((count, max_id))
+            })
+            .await
+            .map_err(|_| ReloadPreparationError::Persistence)?;
+        let observed = (
+            usize::try_from(observed.0).unwrap_or(usize::MAX),
+            observed.1.unwrap_or(0),
+        );
+        if observed != expected {
+            return Err(ReloadPreparationError::Persistence);
+        }
+        Ok(())
     }
 
     async fn apply(&self, transaction: &DatabaseTransaction) -> Result<(), DatabaseError> {
@@ -537,17 +570,51 @@ impl ReloadService {
                     .await;
             }
         };
+        // Commit tasks before `BEGIN IMMEDIATE`: task stops wait up to 1 s
+        // each, and holding the single SQLite gate across them stalls all
+        // other `call`/`with_transaction` users (health/status). DB
+        // failures after this point use the existing `rollback_committed`
+        // compensation below.
+        #[cfg(feature = "test-support")]
+        let task_commit_failed = self.take_test_fault(ReloadTestFault::TaskCommit);
+        #[cfg(not(feature = "test-support"))]
+        let task_commit_failed = false;
+        if task_commit_failed || task_diff.commit().await.is_err() {
+            return self
+                .abort_staged_with_policy(
+                    staged,
+                    task_diff,
+                    wire_policy,
+                    &diff,
+                    "task_commit_failed",
+                )
+                .await;
+        }
         #[cfg(feature = "test-support")]
         if self.take_test_fault(ReloadTestFault::PersistenceBegin) {
+            let _ = task_diff.rollback_committed().await;
             return self
-                .abort_staged(staged, task_diff, &diff, "persistence_begin_failed")
+                .abort_staged_with_policy(
+                    staged,
+                    task_diff,
+                    wire_policy,
+                    &diff,
+                    "persistence_begin_failed",
+                )
                 .await;
         }
         let transaction = match self.process.database().begin_transaction().await {
             Ok(transaction) => transaction,
             Err(_) => {
+                let _ = task_diff.rollback_committed().await;
                 return self
-                    .abort_staged(staged, task_diff, &diff, "persistence_begin_failed")
+                    .abort_staged_with_policy(
+                        staged,
+                        task_diff,
+                        wire_policy,
+                        &diff,
+                        "persistence_begin_failed",
+                    )
                     .await;
             }
         };
@@ -555,27 +622,43 @@ impl ReloadService {
         let persistence_apply_failed = self.take_test_fault(ReloadTestFault::PersistenceApply);
         #[cfg(not(feature = "test-support"))]
         let persistence_apply_failed = false;
+        if persistence.validate_snapshot(&transaction).await.is_err() {
+            let _ = transaction.rollback().await;
+            let _ = task_diff.rollback_committed().await;
+            return self
+                .abort_staged_with_policy(
+                    staged,
+                    task_diff,
+                    wire_policy,
+                    &diff,
+                    "persistence_snapshot_changed",
+                )
+                .await;
+        }
         if persistence_apply_failed || persistence.apply(&transaction).await.is_err() {
             let _ = transaction.rollback().await;
+            let _ = task_diff.rollback_committed().await;
             return self
-                .abort_staged(staged, task_diff, &diff, "persistence_apply_failed")
+                .abort_staged_with_policy(
+                    staged,
+                    task_diff,
+                    wire_policy,
+                    &diff,
+                    "persistence_apply_failed",
+                )
                 .await;
         }
         if staged.commit_pointer().is_err() {
             let _ = transaction.rollback().await;
+            let _ = task_diff.rollback_committed().await;
             return self
-                .abort_staged(staged, task_diff, &diff, "pointer_commit_failed")
-                .await;
-        }
-        #[cfg(feature = "test-support")]
-        let task_commit_failed = self.take_test_fault(ReloadTestFault::TaskCommit);
-        #[cfg(not(feature = "test-support"))]
-        let task_commit_failed = false;
-        if task_commit_failed || task_diff.commit().await.is_err() {
-            let _ = transaction.rollback().await;
-            let _ = staged.rollback_pointer();
-            return self
-                .abort_staged(staged, task_diff, &diff, "task_commit_failed")
+                .abort_staged_with_policy(
+                    staged,
+                    task_diff,
+                    wire_policy,
+                    &diff,
+                    "pointer_commit_failed",
+                )
                 .await;
         }
         #[cfg(feature = "test-support")]
@@ -702,6 +785,19 @@ impl ReloadService {
         self.result_with_diff(ReloadResultCategory::Aborted, reason, diff, false)
     }
 
+    async fn abort_staged_with_policy(
+        &self,
+        staged: StagedGenerationSwap,
+        task_diff: PreparedTaskDiff,
+        mut wire_policy: crate::coordinator::WireResolverPolicyStage,
+        diff: &ConfigDiff,
+        reason: &str,
+    ) -> ReloadResult {
+        // Explicit rollback: do not rely on `Drop` to restore live prefs.
+        wire_policy.rollback();
+        self.abort_staged(staged, task_diff, diff, reason).await
+    }
+
     fn acceptance_failure_after_commit(
         &self,
         wire_policy: &mut crate::coordinator::WireResolverPolicyStage,
@@ -741,18 +837,12 @@ fn bounded_reason(reason: &str) -> String {
 
 fn read_input(
     input: &ReloadInput,
-    default_path: Option<&Path>,
+    _default_path: Option<&Path>,
 ) -> Result<(PathBuf, Vec<u8>), ReloadPreparationError> {
     match input {
-        ReloadInput::Path(path) => read_bounded(path)
-            .map(|bytes| (path.clone(), bytes))
-            .or_else(|_| {
-                default_path
-                    .map(|path| read_bounded(path).map(|bytes| (path.to_owned(), bytes)))
-                    .transpose()
-                    .map_err(|_| ReloadPreparationError::Read)?
-                    .ok_or(ReloadPreparationError::Read)
-            }),
+        // An explicit path must fail closed: falling back to the live path
+        // would apply an unintended file and mask an operator typo.
+        ReloadInput::Path(path) => read_bounded(path).map(|bytes| (path.clone(), bytes)),
         ReloadInput::Bytes {
             canonical_path,
             content,
@@ -814,19 +904,20 @@ fn account_projections(
         .iter()
         .map(|row| (row.name.as_str(), row))
         .collect();
-    configured_accounts(config)
+    // DB drift (manual edit, partial restore) must not brick a live-only
+    // reload: an old-config account already absent from the database has
+    // nothing to restore, so skip it instead of failing preparation.
+    Ok(configured_accounts(config)
         .into_iter()
-        .map(|account| {
-            let id = by_name
+        .filter_map(|account| {
+            by_name
                 .get(account.name.as_str())
-                .map(|row| row.id)
-                .ok_or(ReloadPreparationError::Persistence)?;
-            Ok(AccountProjection {
-                id,
-                config: account,
-            })
+                .map(|row| AccountProjection {
+                    id: row.id,
+                    config: account,
+                })
         })
-        .collect()
+        .collect())
 }
 
 fn account_projections_with_new_ids(

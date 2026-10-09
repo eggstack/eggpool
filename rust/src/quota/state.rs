@@ -59,6 +59,7 @@ impl QuotaWindow {
     }
 
     pub fn add_observation(&mut self, timestamp: f64, tokens: i64, cost: i64) {
+        const MAX_OBSERVATIONS: usize = 8_192;
         let observation = (
             timestamp,
             clamp_non_negative(tokens),
@@ -74,6 +75,7 @@ impl QuotaWindow {
                 saturating_add(self.used_cost_microdollars, observation.2);
             self.last_observation_timestamp = Some(timestamp);
             self.prune(timestamp);
+            self.enforce_cap(MAX_OBSERVATIONS);
             return;
         }
 
@@ -86,6 +88,7 @@ impl QuotaWindow {
                 .map_or(timestamp, |last| last.max(timestamp)),
         );
         self.rebuild(self.last_observation_timestamp.unwrap_or(timestamp));
+        self.enforce_cap(MAX_OBSERVATIONS);
     }
 
     pub fn usage(&mut self, current_time: f64) -> (i64, i64) {
@@ -104,6 +107,18 @@ impl QuotaWindow {
                 self.used_tokens = (self.used_tokens - tokens).max(0);
                 self.used_cost_microdollars = (self.used_cost_microdollars - cost).max(0);
             }
+        }
+    }
+
+    /// Bound memory and keep insertion amortized: drop oldest first when the
+    /// 5 h fallback window grows without bound at load.
+    fn enforce_cap(&mut self, max: usize) {
+        while self.observations.len() > max {
+            let Some((_timestamp, tokens, cost)) = self.observations.pop_front() else {
+                break;
+            };
+            self.used_tokens = (self.used_tokens - tokens).max(0);
+            self.used_cost_microdollars = (self.used_cost_microdollars - cost).max(0);
         }
     }
 
@@ -275,7 +290,11 @@ impl AccountQuota {
     /// score-only path agree on what "at capacity" means. Cost limits stay
     /// opt-in: there is no default cost capacity, so only a configured
     /// `capacity_*_microdollars` can exclude on spend.
-    pub fn is_within_limits(&mut self, now: f64) -> bool {
+    /// `incoming_tokens` is the projected cost of the request being admitted;
+    /// the check fails if current usage plus the incoming request would reach
+    /// capacity, matching `utilization` headroom math.
+    pub fn is_within_limits(&mut self, now: f64, incoming_tokens: i64) -> bool {
+        let incoming = incoming_tokens.max(0);
         for window in [
             QuotaWindowName::FiveHour,
             QuotaWindowName::Weekly,
@@ -287,7 +306,7 @@ impl AccountQuota {
                 .cost_capacity(window)
                 .is_some_and(|capacity| cost >= capacity)
                 || requests >= self.request_capacity(window)
-                || tokens >= self.token_capacity(window)
+                || tokens.saturating_add(incoming) >= self.token_capacity(window)
             {
                 return false;
             }

@@ -943,20 +943,23 @@ pub fn dynamic_rules() -> &'static [(&'static str, ReloadDisposition)] {
 }
 
 /// Exact policy lookup, with only the established blanket dynamic rules.
-/// Everything else is restart-required.
+/// Everything else is restart-required. Prefixes mirror `DYNAMIC_RULES`
+/// (`models.*` is Live, `cache.*` is RestartRequired).
 pub fn disposition_for(path: &str) -> ReloadDisposition {
     if let Some((_, disposition)) = FIELD_DISPOSITIONS.iter().find(|(known, _)| *known == path) {
         return *disposition;
     }
-    for prefix in [
-        "providers.",
-        "accounts.",
-        "model_overrides.",
-        "model_capabilities.",
-        "transcoder.",
+    for (prefix, disposition) in [
+        ("providers.", ReloadDisposition::Live),
+        ("accounts.", ReloadDisposition::Live),
+        ("model_overrides.", ReloadDisposition::Live),
+        ("model_capabilities.", ReloadDisposition::Live),
+        ("transcoder.", ReloadDisposition::Live),
+        ("models.", ReloadDisposition::Live),
+        ("cache.", ReloadDisposition::RestartRequired),
     ] {
         if path.starts_with(prefix) {
-            return ReloadDisposition::Live;
+            return disposition;
         }
     }
     ReloadDisposition::RestartRequired

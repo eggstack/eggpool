@@ -238,7 +238,20 @@ async fn finish_stream_execution(
         let mut execution = execution;
         execution.mark_started();
         loop {
-            match execution.next_chunk().await {
+            tokio::select! {
+                _ = sender.closed() => {
+                    // Client disconnected while awaiting upstream: stop
+                    // pulling and finalize as cancelled.
+                    if execution
+                        .complete(crate::coordinator::DownstreamResult::Cancelled)
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("cancelled-stream finalization was lost");
+                    }
+                    break;
+                }
+                chunk = execution.next_chunk() => match chunk {
                 Some(Ok(chunk)) => {
                     if sender.send(Ok(chunk)).await.is_err() {
                         if let Some(metrics) = &metrics
@@ -300,6 +313,7 @@ async fn finish_stream_execution(
                         tracing::warn!("failed-stream finalization was lost");
                     }
                     break;
+                }
                 }
             }
         }

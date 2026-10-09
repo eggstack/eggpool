@@ -189,9 +189,7 @@ impl RoutingRouter {
                 .catalog
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .snapshot()
-                .model_ids
-                .len(),
+                .model_count(),
             health_version: self
                 .state
                 .health
@@ -229,9 +227,7 @@ impl RoutingRouter {
             .catalog
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .snapshot()
-            .model_ids
-            .len()
+            .model_count()
     }
 
     /// Return the bounded model-id projection used by the public models
@@ -468,12 +464,13 @@ impl RoutingRouter {
         // A terminal withdrawal has no expiry, so a stale withdrawal would
         // otherwise keep the account/model unroutable for the life of the
         // process. Serving the model successfully is authoritative evidence
-        // that the withdrawal no longer holds.
+        // that the withdrawal no longer holds. Quarantine is wall-clock
+        // stamped: clear with wall time, not the monotonic recovery clock.
         if let Some(quarantine) = self.state.quarantine.as_ref() {
             quarantine.clear_authoritative_reappearance_for(
                 claim.account_name(),
                 claim.canonical_model_id(),
-                (self.state.recovery_clock)(),
+                epoch_seconds() as f64,
             );
         }
     }
@@ -499,15 +496,26 @@ impl RoutingRouter {
             .saturating_add(bounded(usage.output_tokens))
             .saturating_add(bounded(usage.cache_read_input_tokens))
             .saturating_add(bounded(usage.cache_write_input_tokens));
+        // No attempt carries provider-reported cost: use the same estimated
+        // pricing `estimate_cost` admits with (overrides/family/global) so
+        // the per-token EWMA learns instead of staying permanently empty.
+        let now = epoch_seconds() as f64;
+        let cost = if tokens > 0 {
+            self.state.estimator.estimate_cost(
+                claim.account_name(),
+                claim.canonical_model_id(),
+                tokens,
+                now,
+            )
+        } else {
+            0
+        };
         self.state.estimator.record_usage(
             claim.account_name(),
             tokens,
-            // No attempt carries cost provenance, so none is invented here. A
-            // zero cost contributes tokens to the rolling window and leaves the
-            // per-token cost estimate alone.
-            0,
+            cost,
             Some(claim.canonical_model_id()),
-            epoch_seconds() as f64,
+            now,
         );
     }
 

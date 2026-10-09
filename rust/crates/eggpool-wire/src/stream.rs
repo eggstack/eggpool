@@ -172,6 +172,11 @@ impl SseDecoder {
                 character => {
                     self.line_buffer.push(character);
                     self.line_buffer_bytes += character.len_utf8();
+                    if self.line_buffer_bytes > self.max_frame_bytes {
+                        return Err(SseDecodeError::FrameTooLarge {
+                            limit: self.max_frame_bytes,
+                        });
+                    }
                 }
             }
         }

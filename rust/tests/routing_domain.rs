@@ -385,12 +385,12 @@ async fn missing_durable_refresh_rows_use_legacy_model_timestamp_fallback() {
         .hydrate_from_db(&database)
         .await
         .expect("legacy state hydrates");
-    assert_eq!(
-        cache
-            .freshness("account-a")
-            .expect("legacy freshness")
-            .source,
-        "legacy_model_timestamp"
+    // Never-refreshed accounts stay stale: per-account freshness is never
+    // synthesized from other accounts or model timestamps, so the stale
+    // gate can exclude them.
+    assert!(
+        cache.freshness("account-a").is_none(),
+        "legacy timestamps must not synthesize freshness"
     );
     database.close().await.expect("database closes");
     fs::remove_file(path).expect("temporary database removed");

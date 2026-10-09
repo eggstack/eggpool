@@ -51,8 +51,14 @@ pub fn runtime_paths() -> RuntimePaths {
 
 /// Read a positive decimal PID.  Missing or malformed files are observations,
 /// not fatal process errors, because stale local state must be recoverable.
+/// An existing but unsafe file (symlink, special, foreign owner) fails closed
+/// instead of reading as absent: treating it as `None` would let a second
+/// server start alongside the owner.
 pub fn read_pid(path: &Path) -> Result<Option<i32>, ProcessError> {
     if !safe_pid_file(path) {
+        if std::fs::symlink_metadata(path).is_ok() {
+            return Err(ProcessError::UnsafePidPath);
+        }
         return Ok(None);
     }
     let contents = match std::fs::read_to_string(path) {
@@ -77,7 +83,15 @@ pub fn write_pid_atomic(path: &Path, pid: i32) -> Result<(), ProcessError> {
     let parent = path.parent().ok_or(ProcessError::UnsafePidPath)?;
     ensure_private_parent(parent)?;
     let file_name = path.file_name().ok_or(ProcessError::UnsafePidPath)?;
-    let temporary = parent.join(format!(".{}.tmp-{}", file_name.to_string_lossy(), pid));
+    // Unpredictable temp (pid + counter) with `create_new` so a reused PID
+    // cannot collide on a predictable name.
+    static PID_TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let temporary = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        file_name.to_string_lossy(),
+        pid,
+        PID_TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let mut file = match create_private_file(&temporary) {
         Ok(file) => file,
         Err(PathError::Io(error)) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -235,9 +249,22 @@ impl Drop for StartGuard {
         let Ok(contents) = fs::read_to_string(&self.path) else {
             return;
         };
-        if contents.trim() == self.pid.to_string() {
-            let _ = fs::remove_file(&self.path);
+        if contents.trim() != self.pid.to_string() {
+            return;
         }
+        // Non-atomic read+remove: verify the path still refers to our own
+        // file (same inode as the held create-new handle) so a replacement
+        // created between read and remove — including under a reused PID —
+        // is never deleted.
+        #[cfg(unix)]
+        {
+            let own = self._file.metadata().ok().map(|m| m.ino());
+            let current = std::fs::metadata(&self.path).ok().map(|m| m.ino());
+            if own.is_some() && own != current {
+                return;
+            }
+        }
+        let _ = fs::remove_file(&self.path);
     }
 }
 

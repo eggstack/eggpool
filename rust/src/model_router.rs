@@ -306,7 +306,7 @@ impl ModelRouterAffinity {
     where
         F: Fn() -> f64 + Send + Sync + 'static,
     {
-        assert!(max_entries > 0, "affinity cache capacity must be positive");
+        let max_entries = max_entries.max(1);
         Self {
             max_entries,
             clock: Arc::new(clock),
@@ -380,7 +380,9 @@ impl ModelRouterAffinity {
         };
         let slot = entry.lru_slot;
         let decision = entry.decision.clone();
-        if decision.expires_at_monotonic <= now {
+        // Non-finite expiry never satisfies `<= now` (NaN is unordered), which
+        // would make the entry immortal: treat it as an immediate miss.
+        if !decision.expires_at_monotonic.is_finite() || decision.expires_at_monotonic <= now {
             state.remove_entry(key);
             state.stats.expirations += 1;
             state.stats.misses += 1;
@@ -413,11 +415,10 @@ impl ModelRouterAffinity {
             };
             let key = node.key.clone();
             let next = node.next;
-            if state
-                .entries
-                .get(&key)
-                .is_some_and(|entry| entry.decision.expires_at_monotonic <= now)
-            {
+            if state.entries.get(&key).is_some_and(|entry| {
+                !entry.decision.expires_at_monotonic.is_finite()
+                    || entry.decision.expires_at_monotonic <= now
+            }) {
                 state.remove_entry(&key);
                 state.stats.expirations += 1;
             }
@@ -426,6 +427,12 @@ impl ModelRouterAffinity {
     }
 
     fn store(&self, key: AffinityKey, decision: AffinityDecision) {
+        // Non-finite or non-positive TTLs must not create sticky entries:
+        // without this a NaN expiry would never compare `<= now` and live
+        // forever. The caller still returns the fresh decision uncached.
+        if !decision.expires_at_monotonic.is_finite() {
+            return;
+        }
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.cleanup_expired(&mut state, 16);
         state.remove_entry(&key);

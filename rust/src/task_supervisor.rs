@@ -209,9 +209,15 @@ impl RuntimeTaskSpec {
         if self.run_immediately {
             Duration::ZERO
         } else {
-            Duration::from_secs_f64(self.initial_delay_s.unwrap_or(self.interval_s))
+            duration_from_secs_f64_saturating(self.initial_delay_s.unwrap_or(self.interval_s))
         }
     }
+}
+
+/// Saturating `Duration::from_secs_f64`: NaN/inf/negative become ZERO instead
+/// of panicking (test-injected specs bypass `validate_specs`).
+fn duration_from_secs_f64_saturating(seconds: f64) -> Duration {
+    Duration::try_from_secs_f64(seconds).unwrap_or(Duration::ZERO)
 }
 
 /// Build the authoritative R001 inventory in canonical order.
@@ -862,7 +868,12 @@ impl TaskState {
     fn start(self: &Arc<Self>, supervisor: Arc<SupervisorInner>) {
         if self.running.swap(true, Ordering::AcqRel) {
             // Already running: spawning again would detach the prior
-            // JoinHandle (it keeps running untracked). Fail closed.
+            // JoinHandle (it keeps running untracked). Fail closed and stay
+            // loud in release (debug_assert is compiled out).
+            tracing::error!(
+                task = self.spec.name.as_str(),
+                "task started while already running"
+            );
             debug_assert!(false, "task started while already running");
             return;
         }
@@ -1379,12 +1390,18 @@ impl PreparedTaskDiff {
     }
 
     async fn insert_and_start(&self, task: Arc<TaskState>) {
-        self.supervisor
+        let old = self
+            .supervisor
             .inner
             .tasks
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(task.spec.name.clone(), Arc::clone(&task));
+        // Never orphan a running task under a reused name: stop the previous
+        // handle before starting the replacement.
+        if let Some(old) = old {
+            stop_task(old).await;
+        }
         task.start(Arc::clone(&self.supervisor.inner));
     }
 
@@ -1488,7 +1505,12 @@ async fn run_task(state: Arc<TaskState>, supervisor: Arc<SupervisorInner>) {
             state.running.store(false, Ordering::Release);
             return;
         }
-        if !wait_for_next_tick(&state, Duration::from_secs_f64(state.spec.interval_s)).await {
+        if !wait_for_next_tick(
+            &state,
+            duration_from_secs_f64_saturating(state.spec.interval_s),
+        )
+        .await
+        {
             state.running.store(false, Ordering::Release);
             return;
         }
@@ -1537,7 +1559,7 @@ async fn run_callback(state: &TaskState, context: TaskTickContext) -> TaskOutcom
                     Ok(Err(_)) => TaskOutcome::Error,
                     Err(_) => TaskOutcome::Panicked,
                 }),
-                _ = tokio::time::sleep(Duration::from_secs_f64(timeout_s)) => {
+                _ = tokio::time::sleep(duration_from_secs_f64_saturating(timeout_s)) => {
                     tick.abort();
                     let _ = tick.await;
                     Some(TaskOutcome::TimedOut)

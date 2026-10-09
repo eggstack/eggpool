@@ -459,7 +459,9 @@ fn candidate_for_account(
     if quota_mode == LocalQuotaMode::HardCap
         && estimator
             .get_account_quota(&identity.account_name)
-            .is_some_and(|mut quota| !quota.is_within_limits(facts.now as f64))
+            .is_some_and(|mut quota| {
+                !quota.is_within_limits(facts.now as f64, facts.projected_tokens)
+            })
     {
         exclude("quota_exhausted");
         return None;

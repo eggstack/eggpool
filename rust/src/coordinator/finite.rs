@@ -49,6 +49,11 @@ fn wire_prep_failure(error: &AttemptError) -> (StatusCode, &'static str) {
         AttemptError::Wire(crate::wire::WireRuntimeError::BodyTooLarge) => {
             (StatusCode::PAYLOAD_TOO_LARGE, "RequestBodyTooLarge")
         }
+        // Invalid provider inputs (missing credential, bad path template,
+        // header config) are server misconfiguration, not a bad gateway.
+        AttemptError::InvalidInput(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "ProviderConfiguration")
+        }
         _ => (StatusCode::BAD_GATEWAY, "RequestAdaptation"),
     }
 }
@@ -616,13 +621,31 @@ impl FiniteCoordinator {
                 // synthetic envelope when at least one dispatch returned.
                 if let (Some(identity), Some(last)) = (last_identity.clone(), last_upstream.clone())
                 {
-                    // Bound pass-through egress to the synthetic error envelope
-                    // (512 bytes) so a 10 MiB provider body cannot amplify.
-                    let body = if last.body.len() > MAX_CLIENT_ERROR_BYTES {
-                        Bytes::copy_from_slice(&last.body[..MAX_CLIENT_ERROR_BYTES])
-                    } else {
-                        last.body.clone()
-                    };
+                    // Pass through only intact bodies: a truncated slice is
+                    // not valid JSON and breaks client framing, so oversize
+                    // bodies become a synthetic envelope instead.
+                    if last.body.len() > MAX_CLIENT_ERROR_BYTES {
+                        let response = self.error_response(
+                            request.client_surface,
+                            &request.proxy_request_id,
+                            attempt_number.saturating_sub(1).max(1),
+                            last.status,
+                            "upstream error",
+                        );
+                        let upstream_protocol = identity.upstream_protocol.clone();
+                        let data = self.failure_data(
+                            &identity,
+                            &upstream_protocol,
+                            &last.effects,
+                            Some(last.status),
+                            last.upstream_request_id,
+                            last.headers_elapsed,
+                            request_bytes,
+                            0,
+                        );
+                        return Ok(self.pending_terminal(identity, None, response, data));
+                    }
+                    let body = last.body.clone();
                     let response = self.client_response(
                         last.status,
                         &last.headers,
@@ -1002,6 +1025,10 @@ impl FiniteCoordinator {
                     }
                     let status = if is_body_too_large {
                         StatusCode::PAYLOAD_TOO_LARGE
+                    } else if matches!(&error, AttemptError::Injected { .. }) {
+                        // Fault-injection is a test-only upstream fault, never
+                        // a client error.
+                        StatusCode::BAD_GATEWAY
                     } else if source == FailureSource::LocalPreparation {
                         StatusCode::BAD_REQUEST
                     } else {
@@ -1506,17 +1533,25 @@ impl FiniteCoordinator {
                 }
                 FiniteResponseOutcome::ProviderError(error) => {
                     let signal = provider_error_signal(&error);
-                    let observation = self.observation(
-                        &identity,
-                        &candidate.profile,
-                        attempt_number,
-                        FailureSource::ProviderResponse,
-                        Some(upstream.status),
-                        None,
-                        signal,
-                        alternate_wire_available,
-                        "response_status",
-                    );
+                    let observation = self
+                        .observation(
+                            &identity,
+                            &candidate.profile,
+                            attempt_number,
+                            FailureSource::ProviderResponse,
+                            Some(upstream.status),
+                            None,
+                            signal,
+                            alternate_wire_available,
+                            "response_status",
+                        )
+                        // The provider's own recovery hint sizes the
+                        // rate-limit cooldown; without it a 429 is
+                        // retried against the exhausted account.
+                        .with_retry_after(retry_after_from_headers(
+                            &upstream.headers,
+                            self.retry_policy,
+                        ));
                     let (effects, first) = self.decide(&observation)?;
                     if first {
                         self.apply_effects(&published.claim, &effects);
@@ -2165,6 +2200,8 @@ const RESPONSE_INTERNAL_HEADERS: &[&str] = &[
     "x-api-key",
     "content-encoding",
     "content-length",
+    "set-cookie",
+    "cookie",
 ];
 
 pub fn filter_response_headers(headers: &HeaderMap) -> ClientResponseHeaders {

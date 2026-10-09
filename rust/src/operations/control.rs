@@ -483,13 +483,24 @@ where
 
 #[cfg(unix)]
 async fn accept_loop(listener: UnixListener, handler: ControlHandler, stop: Arc<Notify>) {
+    use std::sync::Arc as StdArc;
+    use tokio::sync::Semaphore;
+    // Bound local-only control fan-out: an unbounded spawn per connection
+    // lets a chatty peer exhaust the process.
+    let inflight = StdArc::new(Semaphore::new(8));
     loop {
         tokio::select! {
             _ = stop.notified() => return,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
+                let Ok(permit) = StdArc::clone(&inflight).try_acquire_owned() else {
+                    continue;
+                };
                 let handler = Arc::clone(&handler);
-                tokio::spawn(async move { handle_connection(stream, handler).await; });
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    handle_connection(stream, handler).await;
+                });
             }
         }
     }

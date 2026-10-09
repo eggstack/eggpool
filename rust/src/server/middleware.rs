@@ -143,23 +143,49 @@ pub(super) async fn admit_inference_body(
         );
     };
     let body = std::mem::replace(request.body_mut(), Body::empty());
-    let collected = match Limited::new(body, limit).collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => {
-            return error_body_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                surface,
-                endpoint_error_body(surface, "Request body too large"),
-            );
+    // Stream the body in frames, growing the process budget incrementally so
+    // a lying Content-Length cannot allocate up to `limit` before the 429.
+    let mut limited = Limited::new(body, limit);
+    let mut collected = Vec::new();
+    let mut accounted = initial_reservation;
+    loop {
+        match limited.frame().await {
+            None => break,
+            Some(Ok(frame)) => {
+                let Some(data) = frame.data_ref() else {
+                    continue;
+                };
+                let chunk_len = data.len();
+                let total = collected.len().saturating_add(chunk_len);
+                if total > limit {
+                    return error_body_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        surface,
+                        endpoint_error_body(surface, "Request body too large"),
+                    );
+                }
+                if total > accounted {
+                    let need = total - accounted;
+                    if !reservation.try_grow(need, ceiling) {
+                        return backpressure_response(
+                            surface,
+                            endpoint_error_body(surface, "Service busy: body budget exhausted"),
+                        );
+                    }
+                    accounted = total;
+                }
+                collected.extend_from_slice(data);
+            }
+            Some(Err(_)) => {
+                return error_body_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    surface,
+                    endpoint_error_body(surface, "Request body too large"),
+                );
+            }
         }
-    };
-    let overage = collected.len().saturating_sub(initial_reservation);
-    if !reservation.try_grow(overage, ceiling) {
-        return backpressure_response(
-            surface,
-            endpoint_error_body(surface, "Service busy: body budget exhausted"),
-        );
     }
+    let collected = Bytes::from(collected);
     request.extensions_mut().insert(Arc::new(lease));
     request.extensions_mut().insert(Arc::new(reservation));
     *request.body_mut() = Body::from(collected);

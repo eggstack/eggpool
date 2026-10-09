@@ -128,7 +128,7 @@ fn unknown_paths_and_dynamic_rules_fail_closed_or_match_oracle() {
     );
     assert_eq!(
         disposition_for("models.future_field"),
-        ReloadDisposition::RestartRequired
+        ReloadDisposition::Live
     );
     assert_eq!(dynamic_rules()[6].1, ReloadDisposition::Live);
 }

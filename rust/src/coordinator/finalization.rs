@@ -1097,9 +1097,7 @@ impl FinalizationSupervisor {
     }
 
     pub async fn drain(&self) {
-        let _ = self
-            .drain_with_timeout(Duration::from_secs(365 * 24 * 60 * 60))
-            .await;
+        let _ = self.drain_with_timeout(Duration::from_secs(30)).await;
     }
 
     /// Drain retained terminal work while preserving a typed worker failure.
@@ -1119,7 +1117,7 @@ impl FinalizationSupervisor {
                 if snapshot.active_jobs == 0 {
                     return Ok(snapshot);
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
         .await;

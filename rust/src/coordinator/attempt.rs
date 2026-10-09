@@ -617,9 +617,37 @@ fn expand_path(template: &str, model_id: &str) -> Result<String, AttemptError> {
             "provider path is not relative and safe".into(),
         ));
     }
-    Ok(template
-        .replace("{model}", model_id)
-        .replace("{model_id}", model_id))
+    // `model_id` is client-controlled: encode it as a single path segment so
+    // `a/b`, `foo?x=1`, or `foo#bar` cannot inject extra segments, query, or
+    // fragment into the upstream target.
+    let encoded = encode_path_segment(model_id);
+    if encoded.is_empty() {
+        return Err(AttemptError::InvalidInput("provider model is empty".into()));
+    }
+    let expanded = template
+        .replace("{model}", &encoded)
+        .replace("{model_id}", &encoded);
+    if expanded.contains("//") || expanded.contains("..") {
+        return Err(AttemptError::InvalidInput(
+            "provider path is not relative and safe".into(),
+        ));
+    }
+    Ok(expanded)
+}
+
+/// Percent-encode a single path segment (RFC 3986 unreserved set stays
+/// literal; everything else — including `/ ? #` — is encoded).
+fn encode_path_segment(segment: &str) -> String {
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~";
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if UNRESERVED.contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 fn add_static_headers(

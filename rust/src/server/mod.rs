@@ -494,28 +494,13 @@ impl Drop for ServerRuntime {
         if self.phase() >= ShutdownPhase::Stopped {
             return;
         }
-        let handle = self.handle();
-        handle.request_shutdown(ShutdownReason::Requested);
-        let inner = Arc::clone(&self.inner);
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            runtime.spawn(async move {
-                let _ = close_runtime_resources(inner, false, GRACEFUL_SHUTDOWN_TIMEOUT).await;
-            });
-        }
+        // `Drop` must not own async cleanup: the spawned close above could
+        // not be awaited and left DB/generations half-closed. Request
+        // shutdown here; callers must run explicit `shutdown()` to join
+        // resources and preserve the retirement report.
+        tracing::error!("ServerRuntime dropped while running: call shutdown() explicitly");
+        self.handle().request_shutdown(ShutdownReason::Requested);
     }
-}
-
-async fn close_runtime_resources(
-    inner: Arc<ServerRuntimeInner>,
-    initially_forced: bool,
-    shutdown_timeout: Duration,
-) -> ShutdownReport {
-    close_runtime_resources_until(
-        inner,
-        initially_forced,
-        tokio::time::Instant::now() + shutdown_timeout,
-    )
-    .await
 }
 
 async fn close_runtime_resources_until(

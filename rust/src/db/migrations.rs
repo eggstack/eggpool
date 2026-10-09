@@ -107,7 +107,18 @@ impl MigrationRunner {
                 .collect();
             self.database
                 .with_transaction(move |connection| {
+                    // Re-read inside the transaction: a concurrent starter
+                    // may have committed while we waited on `BEGIN
+                    // IMMEDIATE`. Skipping already-applied versions turns
+                    // the PK conflict into a noop instead of a startup error.
+                    let already: std::collections::BTreeSet<i64> = connection
+                        .prepare("SELECT version FROM _migrations")?
+                        .query_map([], |row| row.get(0))?
+                        .collect::<Result<_, _>>()?;
                     for (version, name, sql) in &pending_sql {
+                        if already.contains(version) {
+                            continue;
+                        }
                         connection.execute_batch(sql)?;
                         connection.execute(
                             "INSERT INTO _migrations (version, name) VALUES (?1, ?2)",
