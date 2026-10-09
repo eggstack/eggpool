@@ -19,7 +19,7 @@ from scripts.inspect_release_raw import RawInspectionError, inspect_raw, raw_fil
 from scripts.inspect_release_wheel import TARGET_PLATFORMS
 from scripts.validate_release_artifacts import ValidationError, validate_manifest
 
-VERSION = "0.8.1"
+VERSION = "0.8.2"
 TARGETS = {
     "linux-x86_64": ("manylinux_2_17_x86_64", 62),
     "linux-aarch64": ("manylinux_2_17_aarch64", 183),
@@ -44,7 +44,7 @@ def _make_wheel(directory: Path, target_class: str) -> Path:
     executable = f"eggpool-{VERSION}.data/scripts/eggpool"
     members = {
         f"{dist_info}/METADATA": (
-            b"Metadata-Version: 2.3\nName: eggpool\nVersion: 0.8.1\n"
+            b"Metadata-Version: 2.3\nName: eggpool\nVersion: 0.8.2\n"
             b"Summary: Native EggPool proxy\nRequires-Python: >=3.11\n"
             b"License-File: LICENSE\n\n"
         ),

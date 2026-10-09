@@ -62,7 +62,7 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
     let artifact = b"reviewed rust executable".to_vec();
     let digest = hex_digest(&artifact);
     let metadata = format!(
-        r#"{{"tag_name":"v0.8.1","prerelease":false,"draft":false,"assets":[{{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{digest}","size":{}}}]}}"#,
+        r#"{{"tag_name":"v0.8.2","prerelease":false,"draft":false,"assets":[{{"name":"eggpool-0.8.2-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{digest}","size":{}}}]}}"#,
         artifact.len()
     );
     let (api, stop) = fake_release_server(metadata, artifact.clone()).await;
@@ -77,7 +77,7 @@ async fn loopback_release_metadata_selects_platform_and_verifies_sha256() {
         .await
         .expect("release resolves");
     let selected = resolved.artifact.expect("matching artifact");
-    assert_eq!(selected.name, "eggpool-0.8.1-linux-aarch64");
+    assert_eq!(selected.name, "eggpool-0.8.2-linux-aarch64");
     assert_eq!(
         client.download(&selected).await.expect("download"),
         artifact
@@ -197,7 +197,7 @@ async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
     let artifact = b"artifact".to_vec();
     let wrong_digest = "0000000000000000000000000000000000000000000000000000000000000000";
     let metadata = format!(
-        r#"{{"tag_name":"v0.8.1","assets":[{{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{wrong_digest}","size":{}}}]}}"#,
+        r#"{{"tag_name":"v0.8.2","assets":[{{"name":"eggpool-0.8.2-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact","digest":"sha256:{wrong_digest}","size":{}}}]}}"#,
         artifact.len()
     );
     let (api, stop) = fake_release_server(metadata, artifact).await;
@@ -219,7 +219,7 @@ async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
     let _ = stop.send(());
 
     let (api, stop) = fake_release_server(
-        r#"{"tag_name":"v0.8.1","assets":[{"name":"eggpool-0.8.1-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact"}]}"#.to_owned(),
+        r#"{"tag_name":"v0.8.2","assets":[{"name":"eggpool-0.8.2-linux-aarch64","browser_download_url":"http://127.0.0.1/artifact"}]}"#.to_owned(),
         b"artifact".to_vec(),
     )
     .await;
@@ -240,14 +240,14 @@ async fn metadata_and_integrity_failures_are_typed_and_no_asset_is_explicit() {
 async fn checker_is_check_only_bounded_and_retains_latest_on_failure() {
     let artifact = b"unused".to_vec();
     let metadata =
-        r#"{"tag_name":"v0.8.2","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
+        r#"{"tag_name":"v0.8.3","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
     let (api, stop) = fake_release_server(metadata, artifact).await;
     let service = UpdateService::with_release_api(&api).expect("service");
     let checker = UpdateCheckerState::new(service);
     let info = timeout(Duration::from_secs(2), checker.check_once())
         .await
         .expect("bounded check");
-    assert_eq!(info.latest_version, "0.8.2");
+    assert_eq!(info.latest_version, "0.8.3");
     assert!(info.update_available);
     assert!(info.last_check_error.is_empty());
     let _ = stop.send(());
@@ -256,7 +256,7 @@ async fn checker_is_check_only_bounded_and_retains_latest_on_failure() {
 #[tokio::test]
 async fn update_checker_runs_once_on_the_shared_supervisor_and_shuts_down_cleanly() {
     let metadata =
-        r#"{"tag_name":"v0.8.1","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
+        r#"{"tag_name":"v0.8.2","prerelease":false,"draft":false,"assets":[]}"#.to_owned();
     let (api, stop) = fake_release_server(metadata, b"unused".to_vec()).await;
     let checker = Arc::new(UpdateCheckerState::new(
         UpdateService::with_release_api(&api).expect("service"),

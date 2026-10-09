@@ -80,11 +80,11 @@ The server maps local validation, capability, model, upstream, and
 transport failures to their public contracts.
 
 `rust/src/version.rs` exposes `PACKAGE_VERSION` from `CARGO_PKG_VERSION`
-(currently `0.8.1`).
+(currently `0.8.2`).
 
 ## Dependency and feature authority
 
-`rust/Cargo.toml` (package `eggpool`, currently `0.8.1`) plus its locked
+`rust/Cargo.toml` (package `eggpool`, currently `0.8.2`) plus its locked
 resolved graph is the native dependency authority. Exact pins
 (`rust/Cargo.toml:58-74`):
 `eggserve-server =0.4.0` (`tower` feature), the Eggress `1.0.11` family

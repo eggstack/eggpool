@@ -2,7 +2,7 @@
 
 Every command accepts `--config /path/to/config.toml`. Config resolution:
 `--config` > `$EGGPOOL_CONFIG` > `~/.config/eggpool/config.toml` > `./config.toml`.
-Command list verified against `eggpool help` (0.8.1).
+Command list verified against `eggpool help` (0.8.2).
 
 ## Lifecycle
 

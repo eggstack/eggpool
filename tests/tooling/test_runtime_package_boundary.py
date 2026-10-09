@@ -21,7 +21,7 @@ def test_current_publication_has_one_rust_authority() -> None:
         "current_runtime": "rust",
         "publication_manifest": "packaging/pypi/pyproject.toml",
         "historical_python_version": "0.7.4",
-        "native_release_version": "0.8.1",
+        "native_release_version": "0.8.2",
     }
 
 

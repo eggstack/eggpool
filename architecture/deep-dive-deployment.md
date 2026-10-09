@@ -56,8 +56,8 @@ symlink/special-file destinations, and preserves configuration (seeding only
 after the command is committed and verified). Ordinary standalone updates
 remain standalone; `--adopt-standalone` is an explicit advanced migration to
  wheel ownership only. Native releases start at `NATIVE_RELEASE_VERSION =
-"0.8.1"` (`rust/src/operations/update.rs`; `rust/Cargo.toml` `version =
-"0.8.1"`); historical Python versions are catalogued exact-only targets and
+"0.8.2"` (`rust/src/operations/update.rs`; `rust/Cargo.toml` `version =
+"0.8.2"`); historical Python versions are catalogued exact-only targets and
 never the default.
 
 ## Operational tooling

@@ -89,7 +89,7 @@ internals either. `rust/src/error.rs`
 (`AppError`/`BootstrapError`) owns the typed error hierarchy and stable
 exit-code mapping only; HTTP/status mappings for server surfaces live with
 their adapters and retain context without secrets or raw bodies. `rust/src/version.rs`
-exposes `PACKAGE_VERSION` from `CARGO_PKG_VERSION` (currently `0.8.1`).
+exposes `PACKAGE_VERSION` from `CARGO_PKG_VERSION` (currently `0.8.2`).
 
 Deep dive: [Core](deep-dive-core.md).
 

@@ -126,7 +126,7 @@ def test_root_project_is_tooling_only_and_not_publishable() -> None:
         "historical_artifacts": "immutable-external-pypi",
         "requires_python_semantics": "package-manager-compatibility-only",
     }
-    assert cargo_project["version"] == "0.8.1"
+    assert cargo_project["version"] == "0.8.2"
 
 
 def test_inspector_accepts_a_native_platform_wheel(tmp_path: Path) -> None:

@@ -242,7 +242,7 @@ mod tests {
             )
             .expect("latest release");
 
-        assert_eq!(release.version.as_str(), "0.8.1");
+        assert_eq!(release.version.as_str(), "0.8.2");
         assert_eq!(release.era, ReleaseEra::Rust);
     }
 }

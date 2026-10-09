@@ -40,18 +40,18 @@ def test_frozen_catalog_is_complete_and_current() -> None:
 
     assert summary == {
         "catalog_version": "release-catalog.v1",
-        "native_release_version": "0.8.1",
-        "release_count": 58,
+        "native_release_version": "0.8.2",
+        "release_count": 59,
         "rollback_count": 8,
     }
     assert value["official_inventory"]["missing_pypi_versions"] == []
     assert all(
         expanded_release(value, release)["implementation_era"] == "python"
-        for release in releases(value)[:-2]
+        for release in releases(value)[:-3]
     )
     assert all(
         expanded_release(value, release)["implementation_era"] == "rust"
-        for release in releases(value)[-2:]
+        for release in releases(value)[-3:]
     )
     assert {
         release["version"]
@@ -112,13 +112,14 @@ def test_rust_release_requires_wheels_after_artifact_stage_activation() -> None:
         validate_catalog(value)
 
 
-def test_published_native_release_has_immutable_source_and_public_artifact() -> None:
+def test_candidate_native_release_has_pending_source_and_no_public_artifact() -> None:
     value = catalog()
     authority = value["version_authority"]
-    assert authority["publication_status"] == "published"
-    assert authority["native_release_source_commit"]
+    assert authority["publication_status"] == "candidate"
+    assert authority["native_release_source_commit"] is None
     assert authority["rust_cargo_version"] == authority["native_release_version"]
     versions = {release["version"] for release in releases(value)}
     assert authority["native_release_version"] in versions
     assert releases(value)[-1]["implementation_era"] == "rust"
-    assert len(releases(value)[-1]["pypi_files"]) == 3
+    assert releases(value)[-1].get("pypi_files") is None
+    assert releases(value)[-1]["public_release_status"] == "unavailable"
