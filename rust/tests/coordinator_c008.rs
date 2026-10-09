@@ -819,8 +819,18 @@ async fn drain_stream(
     }
 }
 
-async fn settle(supervisor: &FinalizationSupervisor) {
-    sleep(Duration::from_millis(300)).await;
+async fn settle(database: &Database, supervisor: &FinalizationSupervisor) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_, terminal_attempts, active) = count_rows(database).await;
+            if terminal_attempts >= 1 && active == 0 {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("streaming finalization converges");
     supervisor.drain().await;
 }
 
@@ -2211,7 +2221,7 @@ async fn stream_cancellation_before_start_finalizes_interrupted() {
     assert_eq!(server.count(), 1);
     assert!(!execution.handoff_started());
     drop(execution);
-    settle(&fixture.supervisor).await;
+    settle(&fixture.database, &fixture.supervisor).await;
     assert_eq!(server.count(), 1, "cancelled request never replays");
     assert_eq!(
         fixture
@@ -2272,7 +2282,7 @@ async fn stream_cancellation_after_start_finalizes_cancelled() {
         .expect("first chunk decodes");
     assert!(!first.is_empty());
     drop(execution);
-    settle(&fixture.supervisor).await;
+    settle(&fixture.database, &fixture.supervisor).await;
     assert_eq!(server.count(), 1, "post-handoff cancel never replays");
     assert_eq!(
         fixture
@@ -2372,7 +2382,7 @@ async fn stream_cancellation_during_finalization_handoff_preserves_terminal() {
     // Drop after the natural terminal but before `complete`: the stored
     // completed terminal must survive, not become interrupted.
     drop(execution);
-    settle(&fixture.supervisor).await;
+    settle(&fixture.database, &fixture.supervisor).await;
     let (status, input, output, _, _) = db_request_row(&fixture.database, proxy_id).await;
     assert_eq!(status, "completed");
     assert_eq!((input, output), (Some(10), Some(4)));
@@ -2485,7 +2495,7 @@ async fn stream_prefetched_first_chunk_is_counted_once() {
         .complete(DownstreamResult::Delivered)
         .await
         .expect("completion converges");
-    settle(&fixture.supervisor).await;
+    settle(&fixture.database, &fixture.supervisor).await;
     let (status, _, _, _, emitted) = db_request_row(&fixture.database, proxy_id).await;
     assert_eq!(status, "completed");
     assert!(emitted > 0);

@@ -107,8 +107,8 @@ impl ConfigDiff {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigPolicyError {
-    #[error("configuration semantic projection failed")]
-    Serialization,
+    #[error("configuration semantic projection failed: {0}")]
+    Serialization(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -123,7 +123,8 @@ pub struct DigestMismatch {
 /// Serde struct field order is fixed by the Rust schema and all dynamic maps
 /// use `BTreeMap`, so TOML comments and formatting do not affect this digest.
 pub fn semantic_digest(config: &Config) -> Result<String, ConfigPolicyError> {
-    let bytes = serde_json::to_vec(config).map_err(|_| ConfigPolicyError::Serialization)?;
+    let bytes = serde_json::to_vec(config)
+        .map_err(|error| ConfigPolicyError::Serialization(error.to_string()))?;
     let digest = Sha256::digest(bytes);
     Ok(format!("{digest:x}"))
 }
@@ -184,8 +185,10 @@ pub fn classify_transition(
     old: &Config,
     new: &Config,
 ) -> Result<ConfigTransition, ConfigPolicyError> {
-    let old_value = serde_json::to_value(old).map_err(|_| ConfigPolicyError::Serialization)?;
-    let new_value = serde_json::to_value(new).map_err(|_| ConfigPolicyError::Serialization)?;
+    let old_value = serde_json::to_value(old)
+        .map_err(|error| ConfigPolicyError::Serialization(error.to_string()))?;
+    let new_value = serde_json::to_value(new)
+        .map_err(|error| ConfigPolicyError::Serialization(error.to_string()))?;
     let mut changes = Vec::new();
 
     diff_dynamic_map(&old_value, &new_value, "providers", &mut changes, true);
@@ -974,8 +977,8 @@ const SCHEMA_COLLAPSE: &[&str] = &[
 
 /// Return the stable leaf projection used by the schema-coverage guard.
 pub fn schema_paths() -> Result<Vec<String>, ConfigPolicyError> {
-    let value =
-        serde_json::to_value(Config::default()).map_err(|_| ConfigPolicyError::Serialization)?;
+    let value = serde_json::to_value(Config::default())
+        .map_err(|error| ConfigPolicyError::Serialization(error.to_string()))?;
     let mut paths = Vec::new();
     collect_schema_paths(&value, "", &mut paths);
     paths.sort();

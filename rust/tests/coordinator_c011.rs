@@ -1941,7 +1941,16 @@ async fn c011_cancellation_and_write_failure_boundaries() {
         .expect("executes");
         assert!(!execution.handoff_started());
         drop(execution);
-        sleep(Duration::from_millis(200)).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if fixture.state.active_request_count("account-a") == 0 {
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropped execution releases the claim");
     }
     // Cancelled after handoff converges terminally without replay.
     let (execution, _) = execute_finite(
@@ -2508,7 +2517,18 @@ async fn c011_concurrent_requests_and_cancellation_storm_converge_without_leak()
         .expect("executes");
         drop(execution);
     }
-    sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture2.state.active_request_count("account-a") == 0
+                && active_reservations(&fixture2.database).await == 0
+            {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("cancellation storm converges");
     assert_eq!(fixture2.state.active_request_count("account-a"), 0);
     assert_eq!(active_reservations(&fixture2.database).await, 0);
     // Next valid request succeeds without restart after the storm.

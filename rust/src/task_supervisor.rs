@@ -55,6 +55,8 @@ pub(crate) fn effective_checkpoint_interval_s() -> f64 {
 #[cfg(feature = "qualification-db-diagnostics")]
 fn qualification_checkpoint_interval_override() -> Option<f64> {
     let value = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_INTERVAL_S")?;
+    // Qualification-only override: non-UTF-8 or unparseable values fall back
+    // to the default cadence by design (never a startup error).
     parse_qualification_checkpoint_interval(value.to_str().unwrap_or("")).ok()
 }
 

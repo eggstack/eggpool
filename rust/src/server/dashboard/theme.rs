@@ -65,17 +65,20 @@ pub(super) fn selected_theme(configured: &str) -> &str {
 
 pub(super) fn parse_theme_rgb(color: &str) -> Option<(f64, f64, f64)> {
     let color = color.strip_prefix('#')?;
+    if !color.is_ascii() {
+        return None;
+    }
     let color = if color.len() == 8 {
-        &color[..6]
+        color.get(..6)?
     } else if color.len() == 6 {
         color
     } else {
         return None;
     };
     Some((
-        u8::from_str_radix(&color[0..2], 16).ok()? as f64 / 255.0,
-        u8::from_str_radix(&color[2..4], 16).ok()? as f64 / 255.0,
-        u8::from_str_radix(&color[4..6], 16).ok()? as f64 / 255.0,
+        u8::from_str_radix(color.get(0..2)?, 16).ok()? as f64 / 255.0,
+        u8::from_str_radix(color.get(2..4)?, 16).ok()? as f64 / 255.0,
+        u8::from_str_radix(color.get(4..6)?, 16).ok()? as f64 / 255.0,
     ))
 }
 
@@ -87,14 +90,21 @@ pub(super) fn theme_lightness(color: &str) -> Option<f64> {
 pub(super) fn mix_theme_colors(base: &str, target: &str, ratio: f64) -> Option<String> {
     let channels = |color: &str| -> Option<(i32, i32, i32)> {
         let color = color.strip_prefix('#')?;
-        let color = if color.len() == 8 { &color[..6] } else { color };
+        if !color.is_ascii() {
+            return None;
+        }
+        let color = if color.len() == 8 {
+            color.get(..6)?
+        } else {
+            color
+        };
         if color.len() != 6 {
             return None;
         }
         Some((
-            i32::from_str_radix(&color[0..2], 16).ok()?,
-            i32::from_str_radix(&color[2..4], 16).ok()?,
-            i32::from_str_radix(&color[4..6], 16).ok()?,
+            i32::from_str_radix(color.get(0..2)?, 16).ok()?,
+            i32::from_str_radix(color.get(2..4)?, 16).ok()?,
+            i32::from_str_radix(color.get(4..6)?, 16).ok()?,
         ))
     };
     let (base_red, base_green, base_blue) = channels(base)?;
@@ -537,7 +547,10 @@ pub(super) fn theme_value<'a>(value: &'a toml::Value, path: &[&str], fallback: &
 fn opaque_hex(color: &str) -> String {
     let trimmed = color.strip_prefix('#').unwrap_or(color);
     if trimmed.len() == 8 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        color[..7].to_owned()
+        color
+            .get(..7)
+            .map(str::to_owned)
+            .unwrap_or_else(|| color.to_owned())
     } else {
         color.to_owned()
     }

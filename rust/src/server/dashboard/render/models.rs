@@ -515,11 +515,13 @@ pub(in crate::server::dashboard) fn dashboard_optional_text(value: Option<&Value
 }
 
 pub(in crate::server::dashboard) fn dashboard_iso_timestamp(value: &str) -> String {
-    if value.len() == 19 && value.as_bytes().get(10) == Some(&b' ') {
-        format!("{}T{}+00:00", &value[..10], &value[11..])
-    } else {
-        value.to_owned()
+    if value.len() == 19
+        && value.as_bytes().get(10) == Some(&b' ')
+        && let (Some(prefix), Some(suffix)) = (value.get(..10), value.get(11..))
+    {
+        return format!("{prefix}T{suffix}+00:00");
     }
+    value.to_owned()
 }
 
 pub(in crate::server::dashboard) fn dashboard_positive_integer(

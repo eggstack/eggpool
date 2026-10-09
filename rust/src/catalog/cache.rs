@@ -1381,19 +1381,36 @@ fn parse_timestamp(value: &str) -> Result<i64, CatalogCacheError> {
     {
         return Err(CatalogCacheError::InvalidTimestamp(value.into()));
     }
-    Ok(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
+    let days = days_from_civil(year, month, day)
+        .ok_or_else(|| CatalogCacheError::InvalidTimestamp(value.into()))?;
+    days.checked_mul(86_400)
+        .and_then(|base| base.checked_add(hour.checked_mul(3_600)?))
+        .and_then(|base| base.checked_add(minute.checked_mul(60)?))
+        .and_then(|base| base.checked_add(second))
+        .ok_or_else(|| CatalogCacheError::InvalidTimestamp(value.into()))
 }
 
 // Howard Hinnant's proleptic-Gregorian conversion, kept local to avoid a new
-// date dependency in the native runtime.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
+// date dependency in the native runtime. Checked so corrupt timestamps fail
+// closed instead of overflowing (debug panic / release wrap).
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    let year = year.checked_sub(i64::from(month <= 2))?;
+    let era = if year >= 0 {
+        year
+    } else {
+        year.checked_sub(399)?
+    } / 400;
+    let year_of_era = year.checked_sub(era.checked_mul(400)?)?;
     let month_prime = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    let day_of_year = (153_i64.checked_mul(month_prime)?.checked_add(2)?) / 5 + day - 1;
+    let day_of_era = year_of_era
+        .checked_mul(365)?
+        .checked_add(year_of_era / 4)?
+        .checked_sub(year_of_era / 100)?
+        .checked_add(day_of_year)?;
+    era.checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)
 }
 
 #[cfg(test)]

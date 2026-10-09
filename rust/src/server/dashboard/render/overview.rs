@@ -563,7 +563,10 @@ pub(in crate::server::dashboard) fn render_overview(
                         .filter(|ping| ping.latency_ms.is_some())
                         .count()
                         .max(1) as f64;
-                let latest = observations[0];
+                let latest = match observations.first() {
+                    Some(latest) => *latest,
+                    None => return String::new(),
+                };
                 let status = if success_rate >= 90.0 { "healthy" } else { "degraded" };
                 format!(
                     "<tr><td data-priority=\"1\">{}</td><td data-priority=\"1\" class=\"{status}\">{status}</td><td data-priority=\"2\">{}</td><td data-priority=\"2\">{success_rate:.1}%</td><td data-priority=\"3\">{}</td><td data-priority=\"3\">{}</td></tr>",

@@ -248,7 +248,10 @@ pub async fn explain_accounts(
     facts.provider_id = provider_id.map(str::to_owned).or(facts.provider_id);
     facts.requested_protocol = protocol.map(str::to_owned);
     facts.client_protocol = protocol.map(str::to_owned);
-    facts.now = now_timestamp().parse().unwrap_or_default();
+    facts.now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .map_err(|_| "system clock is before Unix epoch".to_owned())?;
     let plan = generation
         .inference()
         .router_handle()
@@ -396,8 +399,15 @@ pub async fn list_compact_model_observations(
             let mut observations = statement
                 .query_map([&model_id], |row| {
                     let normalized: String = row.get(5)?;
-                    let normalized =
-                        serde_json::from_str::<Value>(&normalized).unwrap_or_else(|_| json!({}));
+                    let normalized = serde_json::from_str::<Value>(&normalized).unwrap_or_else(
+                        |error| {
+                            tracing::warn!(
+                                error = %error,
+                                "operator model observation has corrupt normalized JSON; using empty object"
+                            );
+                            json!({})
+                        },
+                    );
                     Ok(json!({
                         "source": row.get::<_, String>(0)?,
                         "source_model_id": row.get::<_, String>(1)?,
@@ -1040,8 +1050,17 @@ fn model_info_value(
     let detail: String = row.get(3)?;
     let provenance: String = row.get(4)?;
     let conflicts: String = row.get(5)?;
+    let parse_or_empty = |text: &str| {
+        serde_json::from_str::<Value>(text).unwrap_or_else(|error| {
+            tracing::warn!(
+                error = %error,
+                "operator model_info has corrupt JSON column; using empty object"
+            );
+            json!({})
+        })
+    };
     Ok(
-        json!({"model_id":row.get::<_,String>(0)?,"status":row.get::<_,String>(1)?,"summary":row.get::<_,Option<String>>(2)?,"detail":serde_json::from_str::<Value>(&detail).unwrap_or_else(|_|json!({})),"provenance":serde_json::from_str::<Value>(&provenance).unwrap_or_else(|_|json!({})),"conflicts":serde_json::from_str::<Value>(&conflicts).unwrap_or_else(|_|json!({})),"sparse":row.get::<_,i64>(6)? != 0,"first_seen_at":row.get::<_,String>(7)?,"last_seen_at":row.get::<_,String>(8)?,"last_refreshed_at":row.get::<_,Option<String>>(9)?,"next_refresh_at":row.get::<_,Option<String>>(10)?}),
+        json!({"model_id":row.get::<_,String>(0)?,"status":row.get::<_,String>(1)?,"summary":row.get::<_,Option<String>>(2)?,"detail":parse_or_empty(&detail),"provenance":parse_or_empty(&provenance),"conflicts":parse_or_empty(&conflicts),"sparse":row.get::<_,i64>(6)? != 0,"first_seen_at":row.get::<_,String>(7)?,"last_seen_at":row.get::<_,String>(8)?,"last_refreshed_at":row.get::<_,Option<String>>(9)?,"next_refresh_at":row.get::<_,Option<String>>(10)?}),
     )
 }
 fn object_from_text(text: &str) -> serde_json::Map<String, Value> {
@@ -1049,11 +1068,6 @@ fn object_from_text(text: &str) -> serde_json::Map<String, Value> {
         .ok()
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default()
-}
-fn now_timestamp() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or_else(|_| "0".into(), |d| d.as_secs().to_string())
 }
 fn period_modifier(period: &str) -> &'static str {
     match period {

@@ -332,7 +332,16 @@ async fn cancellation_while_generation_admission_is_closed_leaks_no_lease() {
         .prepare_diff_with_callbacks(&[], &[spec], &callback_registry("gated", callback))
         .expect("preflight");
     prepared.commit().await.expect("commit");
-    sleep(Duration::from_millis(10)).await;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if supervisor.task_count() == 1 {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("gated task starts");
     supervisor.shutdown().await;
     assert_eq!(supervisor.task_count(), 0);
     assert_eq!(supervisor.join_handle_count(), 0);

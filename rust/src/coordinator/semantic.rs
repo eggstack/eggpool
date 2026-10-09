@@ -206,8 +206,7 @@ fn truncate_head_only(value: &str, max_bytes: usize) -> String {
 
 fn decode_prefix(bytes: &[u8], budget: usize) -> String {
     let mut end = budget.min(bytes.len());
-    let text = String::from_utf8_lossy(bytes);
-    while end > 0 && !text.is_char_boundary(end) {
+    while end > 0 && end < bytes.len() && bytes[end] & 0xC0 == 0x80 {
         end -= 1;
     }
     // `from_utf8_lossy` never panics; re-slice on the lossy view would hide
@@ -218,8 +217,7 @@ fn decode_prefix(bytes: &[u8], budget: usize) -> String {
 fn decode_suffix(bytes: &[u8], budget: usize) -> String {
     let start = bytes.len().saturating_sub(budget);
     let mut adjusted = start;
-    let text = String::from_utf8_lossy(bytes);
-    while adjusted < bytes.len() && !text.is_char_boundary(adjusted) {
+    while adjusted < bytes.len() && bytes[adjusted] & 0xC0 == 0x80 {
         adjusted += 1;
     }
     String::from_utf8_lossy(&bytes[adjusted..]).into_owned()

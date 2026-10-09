@@ -456,9 +456,9 @@ fn prepare_restore(archive_path: &Path) -> Result<PreparedRestore, BackupError> 
     let metadata =
         metadata.ok_or_else(|| BackupError::InvalidArchive("META is required".to_owned()))?;
     let value: toml::Value = std::str::from_utf8(&metadata)
-        .map_err(|_| BackupError::InvalidArchive("META is not UTF-8".to_owned()))?
+        .map_err(|error| BackupError::InvalidArchive(format!("META is not UTF-8: {error}")))?
         .parse()
-        .map_err(|_| BackupError::InvalidArchive("META is not valid TOML".to_owned()))?;
+        .map_err(|error| BackupError::InvalidArchive(format!("META is not valid TOML: {error}")))?;
     if value
         .get("format_version")
         .and_then(toml::Value::as_integer)
@@ -567,10 +567,12 @@ fn reject_duplicate_archive_members(archive_path: &Path) -> Result<(), BackupErr
     if central_offset > size || central_end > size || central_end > eocd_absolute {
         return Ok(());
     }
-    let central_offset = usize::try_from(central_offset)
-        .map_err(|_| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
-    let central_len = usize::try_from(central_size)
-        .map_err(|_| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
+    let central_offset = usize::try_from(central_offset).map_err(|error| {
+        BackupError::InvalidArchive(format!("invalid central directory: {error}"))
+    })?;
+    let central_len = usize::try_from(central_size).map_err(|error| {
+        BackupError::InvalidArchive(format!("invalid central directory: {error}"))
+    })?;
     central_offset
         .checked_add(central_len)
         .ok_or_else(|| BackupError::InvalidArchive("invalid central directory".to_owned()))?;
@@ -641,11 +643,14 @@ fn futures_lite_block_on_validate(path: &Path) -> Result<(), BackupError> {
     // Recovery runs on the Tokio CLI runtime. This helper is replaced by the
     // synchronous SQLite integrity check below so validation never touches a
     // final target or opens the live database.
-    let conn = tokio_rusqlite::rusqlite::Connection::open(path)
-        .map_err(|_| BackupError::InvalidArchive("database could not be opened".to_owned()))?;
+    let conn = tokio_rusqlite::rusqlite::Connection::open(path).map_err(|error| {
+        BackupError::InvalidArchive(format!("database could not be opened: {error}"))
+    })?;
     let status: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
-        .map_err(|_| BackupError::InvalidArchive("database integrity check failed".to_owned()))?;
+        .map_err(|error| {
+            BackupError::InvalidArchive(format!("database integrity check failed: {error}"))
+        })?;
     if !status.eq_ignore_ascii_case("ok") {
         return Err(BackupError::InvalidArchive(
             "database integrity check failed".to_owned(),
@@ -657,7 +662,9 @@ fn futures_lite_block_on_validate(path: &Path) -> Result<(), BackupError> {
             [],
             |row| row.get(0),
         )
-        .map_err(|_| BackupError::InvalidArchive("migration ledger is missing".to_owned()))?;
+        .map_err(|error| {
+            BackupError::InvalidArchive(format!("migration ledger is missing: {error}"))
+        })?;
     if !has_ledger {
         return Err(BackupError::InvalidArchive(
             "migration ledger is missing".to_owned(),
@@ -665,14 +672,20 @@ fn futures_lite_block_on_validate(path: &Path) -> Result<(), BackupError> {
     }
     let mut statement = conn
         .prepare("SELECT version, name FROM _migrations ORDER BY version")
-        .map_err(|_| BackupError::InvalidArchive("migration ledger is unreadable".to_owned()))?;
+        .map_err(|error| {
+            BackupError::InvalidArchive(format!("migration ledger is unreadable: {error}"))
+        })?;
     let applied = statement
         .query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|_| BackupError::InvalidArchive("migration ledger is unreadable".to_owned()))?
+        .map_err(|error| {
+            BackupError::InvalidArchive(format!("migration ledger is unreadable: {error}"))
+        })?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| BackupError::InvalidArchive("migration ledger is unreadable".to_owned()))?;
+        .map_err(|error| {
+            BackupError::InvalidArchive(format!("migration ledger is unreadable: {error}"))
+        })?;
     for (version, name) in applied {
         let Some(migration) = MigrationRunner::migrations()
             .iter()
@@ -927,7 +940,7 @@ fn verify_opened_same_file(
 
 fn validate_source_file(path: &Path, max: u64, member: &str) -> Result<(), BackupError> {
     let metadata = fs::symlink_metadata(path)
-        .map_err(|_| BackupError::Source(format!("{member} is unavailable")))?;
+        .map_err(|error| BackupError::Source(format!("{member} is unavailable: {error}")))?;
     if !metadata.is_file() || metadata.len() > max {
         return Err(BackupError::Source(format!(
             "{member} is unavailable or too large"

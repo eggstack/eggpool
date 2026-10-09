@@ -5,11 +5,12 @@ pub(super) fn format_microdollars(value: i64) -> String {
 pub(super) fn format_tokens(value: i64) -> String {
     let digits = value.unsigned_abs().to_string();
     // ASCII decimal digits: every 3-byte chunk is a valid UTF-8 boundary.
+    debug_assert!(digits.is_ascii());
     let grouped = digits
         .as_bytes()
         .rchunks(3)
         .rev()
-        .map(|chunk| std::str::from_utf8(chunk).expect("decimal digit chunk is UTF-8"))
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
         .collect::<Vec<_>>()
         .join(",");
     if value < 0 {

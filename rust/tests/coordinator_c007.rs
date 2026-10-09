@@ -875,7 +875,17 @@ async fn finite_cancellation_before_handoff_finalizes_as_interrupted() {
     assert!(!execution.handoff_started());
     // Cancellation before response start: drop without completing.
     drop(execution);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_, terminal_attempts, active) = count_rows(&fixture.database).await;
+            if terminal_attempts == 1 && active == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("cancellation finalizes");
     assert_eq!(server.count(), 1, "cancelled request never replays");
     let (status, _, _, _, _, _) = db_request_row(&fixture.database, proxy_id).await;
     assert_eq!(status, "error");
@@ -914,7 +924,32 @@ async fn finite_cancellation_after_handoff_marks_downstream_started() {
         .expect("executes");
     execution.mark_started();
     drop(execution);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let terminal: bool = fixture
+                .database
+                .call({
+                    let proxy_id = proxy_id.to_owned();
+                    move |connection| {
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM requests WHERE proxy_request_id = ?1 AND status IN
+                             ('cancelled', 'error')",
+                            [proxy_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                    }
+                })
+                .await
+                .map(|count| count == 1)
+                .unwrap_or(false);
+            if terminal {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("cancelled request reaches terminal state");
     assert_eq!(server.count(), 1, "post-handoff cancel never replays");
     let downstream_started: bool = fixture
         .database

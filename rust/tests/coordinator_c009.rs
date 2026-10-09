@@ -1510,7 +1510,16 @@ async fn cancellation_before_and_after_handoff_never_replays() {
     .expect("executes");
     assert!(!execution.handoff_started());
     drop(execution);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture.state.active_request_count("account-a") == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("pre-handoff cancellation releases the claim");
     assert_eq!(server.count(), 1, "cancelled request never replays");
     // Cancellation after handoff: drop after marking start.
     let (execution, _) = execute_finite(
@@ -1525,7 +1534,16 @@ async fn cancellation_before_and_after_handoff_never_replays() {
     .expect("executes");
     execution.mark_started();
     drop(execution);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture.state.active_request_count("account-a") == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("post-handoff cancellation releases the claim");
     assert_eq!(server.count(), 2, "post-handoff cancel never replays");
     assert_eq!(fixture.state.active_request_count("account-a"), 0);
     server.join().await;

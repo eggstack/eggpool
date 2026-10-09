@@ -243,9 +243,9 @@ pub(in crate::server::dashboard) fn render_cache_page(
         ),
         html_escape(stability_notes),
         html_escape(period),
-        card_slice(&values[11..17]),
+        card_slice(values.get(11..17).unwrap_or(&[])),
         segmentation_totals,
-        card_slice(&values[17..]),
+        card_slice(values.get(17..).unwrap_or(&[])),
     );
     format!(
         "<h2>Cache</h2><p class=\"sub\">Cache reporting, request shaping, and safety guardrails.</p>{}<div id=\"cache-summary\"><section class=\"panel\"><h3>Request shaping ({})</h3><p class=\"sub\">Operator summary for request changes, provider cache counter coverage, safety guardrails, and routing isolation. Routing stays load-based and reporting-only metrics never enter the scorer.</p><section class=\"cards\">{cards}</section></section></div><div id=\"cache-reporting\"><section class=\"panel\"><h3>Provider cache counters ({})</h3><p class=\"sub\">Provider-reported cache counters from upstream payloads. Missing cache fields mean the upstream did not surface them. They are not cache misses and do not prove the upstream is uncached. EggPool never disables provider-side caching.</p><section class=\"cards\">{reporting_cards}</section>{reporting_table}</section></div><details class=\"advanced-details\" id=\"advanced-diagnostics\"><summary>Show advanced diagnostics</summary><div class=\"advanced-body\">{}</div></details>",

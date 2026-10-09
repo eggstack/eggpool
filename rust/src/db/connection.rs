@@ -1878,6 +1878,8 @@ fn parse_qualification_wal_autocheckpoint(value: &str) -> Result<u32, DatabaseEr
 #[cfg(feature = "qualification-db-diagnostics")]
 fn qualification_checkpoint_soft_frames_override() -> Option<u32> {
     let value = std::env::var_os("EGGPOOL_QUALIFICATION_CHECKPOINT_SOFT_FRAMES")?;
+    // Qualification-only override: non-UTF-8 or unparseable values fall back
+    // to the default policy by design (never a startup error).
     let value = value.to_str().unwrap_or("");
     parse_qualification_checkpoint_soft_frames(value).ok()
 }

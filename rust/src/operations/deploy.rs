@@ -117,7 +117,9 @@ impl CommandRunner for SystemCommandRunner {
         }
         let output = child.wait_with_output().map_err(DeployError::Io)?;
         Ok(CommandResult {
-            status: output.status.code().unwrap_or(1),
+            // `code()` is `None` on signal termination; use -1 so a kill is
+            // never conflated with exit 1. Callers only branch on `== 0`.
+            status: output.status.code().unwrap_or(-1),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
@@ -151,6 +153,8 @@ impl CommandRunner for RecordingCommandRunner {
             args: args.to_vec(),
             stdin: stdin.map(<[u8]>::to_vec),
         });
+        // Test convenience: an empty queue defaults to success so callers can
+        // assert on `calls` without stubbing every invocation.
         Ok(self.results.pop().unwrap_or(CommandResult {
             status: 0,
             stdout: String::new(),

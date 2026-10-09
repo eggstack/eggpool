@@ -61,8 +61,8 @@ pub enum MutationError {
     Invalid(String),
     #[error("provider template could not be loaded")]
     Template(#[source] io::Error),
-    #[error("provider template is invalid")]
-    TemplateParse,
+    #[error("provider template is invalid: {0}")]
+    TemplateParse(String),
     #[error("local control could not apply the configuration")]
     Control,
     #[error("server restart failed")]
@@ -299,8 +299,9 @@ where
             "configuration file not found",
         )));
     };
-    let original_text = String::from_utf8(original.clone())
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
+    let original_text = String::from_utf8(original.clone()).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
     let old_config = Config::from_toml_bytes(path, &original)?;
     let (updated, changed) = edit(&original_text)?;
     let candidate_config = if changed {
@@ -437,9 +438,9 @@ pub fn set_server_value_with_transition(
     let rendered = match key {
         "host" => render_string(value),
         "port" => {
-            let port = value
-                .parse::<u16>()
-                .map_err(|_| MutationError::Invalid("port must be an integer".into()))?;
+            let port = value.parse::<u16>().map_err(|error| {
+                MutationError::Invalid(format!("port must be an integer: {error}"))
+            })?;
             if port == 0 {
                 return Err(MutationError::Invalid(
                     "port must be between 1 and 65535".into(),
@@ -476,9 +477,13 @@ pub fn set_dashboard_public_with_transition(
 pub fn read_dashboard_public(path: &Path) -> Result<bool, MutationError> {
     let bytes = read_bounded(path)?;
     let value: Value = std::str::from_utf8(&bytes)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+        })?
         .parse()
-        .map_err(|_| MutationError::Invalid("configuration TOML is malformed".into()))?;
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration TOML is malformed: {error}"))
+        })?;
     Ok(value
         .get("dashboard")
         .and_then(Value::as_table)
@@ -525,9 +530,13 @@ pub fn init_config_with_transition(
 pub fn read_server_key(path: &Path) -> Result<Option<String>, MutationError> {
     let bytes = read_bounded(path)?;
     let value: Value = std::str::from_utf8(&bytes)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+        })?
         .parse()
-        .map_err(|_| MutationError::Invalid("configuration TOML is malformed".into()))?;
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration TOML is malformed: {error}"))
+        })?;
     let server = value
         .get("server")
         .and_then(Value::as_table)
@@ -552,9 +561,13 @@ pub fn read_server_key(path: &Path) -> Result<Option<String>, MutationError> {
 pub fn resolve_server_key(path: &Path) -> Result<(String, bool), MutationError> {
     let bytes = read_bounded(path)?;
     let value: Value = std::str::from_utf8(&bytes)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+        })?
         .parse()
-        .map_err(|_| MutationError::Invalid("configuration TOML is malformed".into()))?;
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration TOML is malformed: {error}"))
+        })?;
     let server = value
         .get("server")
         .and_then(Value::as_table)
@@ -631,15 +644,19 @@ pub fn redact_key(key: &str) -> String {
 
 pub fn generate_key() -> Result<String, MutationError> {
     let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|_| MutationError::Read(io::Error::other("cryptographic entropy unavailable")))?;
+    getrandom::fill(&mut bytes).map_err(|error| {
+        MutationError::Read(io::Error::other(format!(
+            "cryptographic entropy unavailable: {error}"
+        )))
+    })?;
     let mut output = String::with_capacity(64);
     for byte in bytes {
         use std::fmt::Write as _;
         // `String` formatting is infallible; map the theoretical error to a
         // typed failure instead of panicking.
-        write!(output, "{byte:02x}")
-            .map_err(|_| MutationError::Read(io::Error::other("key encoding failed")))?;
+        write!(output, "{byte:02x}").map_err(|error| {
+            MutationError::Read(io::Error::other(format!("key encoding failed: {error}")))
+        })?;
     }
     Ok(output)
 }
@@ -657,9 +674,13 @@ pub fn write_server_key_with_transition(
     }
     let bytes = read_bounded(path)?;
     let value: Value = std::str::from_utf8(&bytes)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+        })?
         .parse()
-        .map_err(|_| MutationError::Invalid("configuration TOML is malformed".into()))?;
+        .map_err(|error| {
+            MutationError::Invalid(format!("configuration TOML is malformed: {error}"))
+        })?;
     let env_owned = value
         .get("server")
         .and_then(Value::as_table)
@@ -682,11 +703,15 @@ pub fn load_provider_templates(
         // Bundled provider metadata is owned by `eggpool-provider-profile`.
         None => crate::provider_profile::BUNDLED_PROVIDER_PROFILES.to_owned(),
     };
-    let root: Value = text.parse().map_err(|_| MutationError::TemplateParse)?;
+    let root: Value = text.parse().map_err(|error| {
+        MutationError::TemplateParse(format!("template TOML is malformed: {error}"))
+    })?;
     let providers = root
         .get("providers")
         .and_then(Value::as_table)
-        .ok_or(MutationError::TemplateParse)?;
+        .ok_or_else(|| {
+            MutationError::TemplateParse("template providers table is missing".into())
+        })?;
     let mut result = BTreeMap::new();
     for (id, raw) in providers {
         let Some(table) = raw.as_table() else {
@@ -742,7 +767,9 @@ pub fn load_provider_templates(
         result.insert("opencode-go".into(), default);
     }
     if !result.contains_key("opencode-go") {
-        return Err(MutationError::TemplateParse);
+        return Err(MutationError::TemplateParse(
+            "template opencode-go entry is missing".into(),
+        ));
     }
     Ok(result)
 }
@@ -772,18 +799,27 @@ fn read_secret_line(prompt: &str) -> Result<Option<String>, MutationError> {
     {
         use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
         let stdin = io::stdin();
-        let original = tcgetattr(&stdin)
-            .map_err(|_| MutationError::Read(io::Error::other("terminal mode unavailable")))?;
+        let original = tcgetattr(&stdin).map_err(|error| {
+            MutationError::Read(io::Error::other(format!(
+                "terminal mode unavailable: {error}"
+            )))
+        })?;
         let mut hidden = original.clone();
         hidden.local_flags.remove(LocalFlags::ECHO);
-        tcsetattr(&stdin, SetArg::TCSANOW, &hidden)
-            .map_err(|_| MutationError::Read(io::Error::other("terminal mode unavailable")))?;
+        tcsetattr(&stdin, SetArg::TCSANOW, &hidden).map_err(|error| {
+            MutationError::Read(io::Error::other(format!(
+                "terminal mode unavailable: {error}"
+            )))
+        })?;
         let mut value = String::new();
         let read_result = stdin.read_line(&mut value).map_err(MutationError::Read);
         let restore_result = tcsetattr(&stdin, SetArg::TCSANOW, &original);
         println!();
-        restore_result
-            .map_err(|_| MutationError::Read(io::Error::other("terminal mode restore failed")))?;
+        restore_result.map_err(|error| {
+            MutationError::Read(io::Error::other(format!(
+                "terminal mode restore failed: {error}"
+            )))
+        })?;
         Ok((read_result? > 0).then(|| value.trim().to_owned()))
     }
     #[cfg(not(unix))]
@@ -846,8 +882,9 @@ fn provider_block(
     providers.insert(template.id.clone(), Value::Table(provider));
     let mut root = Map::new();
     root.insert("providers".into(), Value::Table(providers));
-    let rendered =
-        toml::to_string_pretty(&Value::Table(root)).map_err(|_| MutationError::TemplateParse)?;
+    let rendered = toml::to_string_pretty(&Value::Table(root)).map_err(|error| {
+        MutationError::TemplateParse(format!("template render failed: {error}"))
+    })?;
     Ok(rendered.trim_end().to_owned())
 }
 
@@ -1062,8 +1099,9 @@ pub fn connect_with_transition(
     } else {
         Vec::new()
     };
-    let original_text = String::from_utf8(original)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
+    let original_text = String::from_utf8(original).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
     let names = account_names(&original_text);
     let account_name = unique_account_name(&provider_id, &names);
     let duplicate = api_key.as_ref().is_some_and(|key| {
@@ -1309,8 +1347,9 @@ pub fn logout_with_transition(
     };
     let guard = lock_mutation(path)?;
     let original = read_bounded(path)?;
-    let text = String::from_utf8(original)
-        .map_err(|_| MutationError::Invalid("configuration is not valid UTF-8".into()))?;
+    let text = String::from_utf8(original).map_err(|error| {
+        MutationError::Invalid(format!("configuration is not valid UTF-8: {error}"))
+    })?;
     let updated = remove_account_block(&text, &account)?;
     let old_config = Config::from_toml_bytes(path, text.as_bytes())?;
     let candidate_config = validate_config_bytes(path, updated.as_bytes())?;

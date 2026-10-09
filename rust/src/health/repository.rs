@@ -131,13 +131,14 @@ impl AccountBackoffRepository {
         // Truncate instead of failing closed: one noisy account must not
         // black out health hydration. Overflow is bounded and observable via
         // truncation.
-        if rows.len() > usize::try_from(limit).unwrap_or(5_000) {
+        let limit_usize = usize::try_from(limit).unwrap_or(5_000);
+        if rows.len() > limit_usize {
             tracing::warn!(
                 limit,
                 rows = rows.len(),
                 "account backoff hydration truncated: limit exceeded"
             );
-            rows.truncate(usize::try_from(limit).unwrap_or(5_000));
+            rows.truncate(limit_usize);
         }
         rows.into_iter().map(parse_backoff).collect()
     }
@@ -585,11 +586,21 @@ fn parse_timestamp(value: &str) -> Result<Option<f64>, String> {
     let micros: f64 = format!("0.{fraction}")
         .parse()
         .map_err(|_| "timestamp fraction".to_owned())?;
-    Ok(Some(
-        days_from_civil(year, month, day) as f64 * 86_400.0
-            + (hour * 3_600 + minute * 60 + second) as f64
-            + micros,
-    ))
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
+        return Err("timestamp range".to_owned());
+    }
+    let days = days_from_civil(year, month, day).ok_or_else(|| "timestamp range".to_owned())?;
+    let clock = hour
+        .checked_mul(3_600)
+        .and_then(|value| value.checked_add(minute.checked_mul(60)?))
+        .and_then(|value| value.checked_add(second))
+        .ok_or_else(|| "timestamp range".to_owned())?;
+    Ok(Some(days as f64 * 86_400.0 + clock as f64 + micros))
 }
 fn epoch_to_timestamp(epoch: f64) -> String {
     // `as` casts saturate on NaN/±inf/huge values, silently producing a wrong
@@ -619,14 +630,25 @@ fn epoch_to_timestamp(epoch: f64) -> String {
         format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{micros:06}")
     }
 }
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = (if year >= 0 { year } else { year - 399 }).div_euclid(400);
-    let year_of_era = year - era * 400;
+fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+    let year = year.checked_sub(i64::from(month <= 2))?;
+    let era = (if year >= 0 {
+        year
+    } else {
+        year.checked_sub(399)?
+    })
+    .div_euclid(400);
+    let year_of_era = year.checked_sub(era.checked_mul(400)?)?;
     let month_prime = month + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    let day_of_year = (153_i64.checked_mul(month_prime)?.checked_add(2)?) / 5 + day - 1;
+    let day_of_era = year_of_era
+        .checked_mul(365)?
+        .checked_add(year_of_era / 4)?
+        .checked_sub(year_of_era / 100)?
+        .checked_add(day_of_year)?;
+    era.checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)
 }
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let days = days + 719_468;

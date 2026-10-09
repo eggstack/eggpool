@@ -181,7 +181,8 @@ pub fn provider_config_table(profile: &ProviderProfile) -> Table {
                             ("max_output_tokens", model.max_output_tokens),
                         ] {
                             if let Some(limit) = limit {
-                                value.insert(key.into(), Value::Integer(limit as i64));
+                                let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+                                value.insert(key.into(), Value::Integer(limit));
                             }
                         }
                         for (key, flag) in [

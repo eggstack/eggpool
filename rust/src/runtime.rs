@@ -2676,7 +2676,10 @@ async fn systemd_service_state_for_scope(system_scope: bool) -> Option<SystemdSe
         } else if let Some(value) = line.strip_prefix("UnitFileState=") {
             unit_file_state = value;
         } else if let Some(value) = line.strip_prefix("MainPID=") {
-            main_pid = value.parse().unwrap_or_default();
+            // Corrupt PIDs must not read as 0: `stopped` is `inactive/failed &&
+            // main_pid == 0`, so 0 claims stopped. Use a sentinel that keeps
+            // unknown PIDs out of the stopped state (fail-closed).
+            main_pid = value.parse().unwrap_or(u32::MAX);
         }
     }
     if load_state != "loaded" {
@@ -2793,8 +2796,8 @@ async fn fetch_local_json(
         TcpStream::connect((host, config.server.port)),
     )
     .await
-    .map_err(|_| format!("{label} connection timed out"))?
-    .map_err(|_| format!("{label} server is not running"))?;
+    .map_err(|error| format!("{label} connection timed out: {error}"))?
+    .map_err(|error| format!("{label} server is not running: {error}"))?;
     let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     if let Some(key) = config.resolved_server_api_key() {
         request.push_str(&format!("Authorization: Bearer {key}\r\n"));
@@ -2802,15 +2805,15 @@ async fn fetch_local_json(
     request.push_str("\r\n");
     timeout(STATUS_TIMEOUT, stream.write_all(request.as_bytes()))
         .await
-        .map_err(|_| format!("{label} request timed out"))?
-        .map_err(|_| format!("{label} request failed"))?;
+        .map_err(|error| format!("{label} request timed out: {error}"))?
+        .map_err(|error| format!("{label} request failed: {error}"))?;
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 8192];
     loop {
         let count = timeout(STATUS_TIMEOUT, stream.read(&mut chunk))
             .await
-            .map_err(|_| format!("{label} response timed out"))?
-            .map_err(|_| format!("{label} response failed"))?;
+            .map_err(|error| format!("{label} response timed out: {error}"))?
+            .map_err(|error| format!("{label} response failed: {error}"))?;
         if count == 0 {
             break;
         }
@@ -2838,7 +2841,7 @@ async fn fetch_local_json(
         });
     }
     serde_json::from_slice(&bytes[header_end + 4..])
-        .map_err(|_| format!("{label} response body was malformed JSON"))
+        .map_err(|error| format!("{label} response body was malformed JSON: {error}"))
 }
 
 async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {

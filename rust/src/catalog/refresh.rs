@@ -512,7 +512,7 @@ impl CatalogService {
                         provider_id: pending.provider_id.clone(),
                         refreshed_at: pending.refreshed_at,
                         outcome: pending.outcome.as_str().into(),
-                        model_count: pending.model_count as i64,
+                        model_count: i64::try_from(pending.model_count).unwrap_or(i64::MAX),
                     })
             })
             .collect();
@@ -521,10 +521,10 @@ impl CatalogService {
             .map(|ping| CatalogPingWrite {
                 provider_id: ping.provider_id,
                 account_name: ping.account_name,
-                latency_ms: ping.latency_ms as i64,
+                latency_ms: i64::try_from(ping.latency_ms).unwrap_or(i64::MAX),
                 status_code: ping.status_code.map(i64::from),
                 error: ping.error,
-                model_count: ping.model_count as i64,
+                model_count: i64::try_from(ping.model_count).unwrap_or(i64::MAX),
             })
             .collect();
         let repository = CatalogRepository::new(&self.database);

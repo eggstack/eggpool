@@ -294,7 +294,13 @@ impl FailureDecisionEngine {
 
 impl EffectLedger {
     pub fn apply_once(&mut self, attempt_id: i64) -> bool {
-        self.try_apply_once(attempt_id).unwrap_or(false)
+        match self.try_apply_once(attempt_id) {
+            Ok(first) => first,
+            Err(_) => {
+                debug_assert!(false, "effect ledger error must surface via try_apply_once");
+                false
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -561,6 +567,7 @@ pub fn classify(observation: &FailureObservation, policy: RetryPolicy) -> Failur
                 persist_backoff = true;
                 backoff_reason = Some("upstream_server_error");
                 backoff_until = Some(Duration::from_secs(20));
+                debug_assert!(observation.status.is_some());
                 evidence_class = format!("http_{}_server_error", observation.status.unwrap_or(500));
                 provider_attributable = true;
                 if retryable {

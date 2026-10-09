@@ -214,7 +214,7 @@ impl FairnessRandom for DeterministicFairnessRandom {
             return 0;
         }
         let value = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        (value as usize) % candidate_count
+        (value % candidate_count as u64) as usize
     }
 }
 

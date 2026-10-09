@@ -681,6 +681,8 @@ pub fn aggregate_proxy(
 /// external date dependency.
 pub fn observed_at_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
+    // Pre-epoch clocks yield the epoch: the timestamp reads as maximally
+    // stale (fail-closed for freshness/expiry checks), never as fresh.
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -689,8 +691,8 @@ pub fn observed_at_now() -> String {
 }
 
 fn format_epoch_rfc3339(epoch_secs: u64) -> String {
-    let days = (epoch_secs / 86400) as i64;
-    let time_of_day = (epoch_secs % 86400) as i64;
+    let days = i64::try_from(epoch_secs / 86400).unwrap_or(i64::MAX);
+    let time_of_day = i64::try_from(epoch_secs % 86400).unwrap_or(0);
     let hour = time_of_day / 3600;
     let minute = (time_of_day % 3600) / 60;
     let second = time_of_day % 60;
