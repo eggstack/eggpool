@@ -1832,9 +1832,9 @@ def _release_manifest_case() -> dict[str, str]:
     )
     raws = {r["raw"]["filename"] for r in manifest["artifacts"]}
     assert raws == {
-        "eggpool-0.8.1-linux-x86_64",
-        "eggpool-0.8.1-linux-aarch64",
-        "eggpool-0.8.1-macos-aarch64",
+        "eggpool-0.8.2-linux-x86_64",
+        "eggpool-0.8.2-linux-aarch64",
+        "eggpool-0.8.2-macos-aarch64",
     }
     # Wheel/helper entries must never satisfy the raw selector: simulate the
     # installer's basename + pattern gate.
