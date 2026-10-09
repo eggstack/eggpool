@@ -858,7 +858,12 @@ impl TaskState {
     }
 
     fn start(self: &Arc<Self>, supervisor: Arc<SupervisorInner>) {
-        self.running.store(true, Ordering::Release);
+        if self.running.swap(true, Ordering::AcqRel) {
+            // Already running: spawning again would detach the prior
+            // JoinHandle (it keeps running untracked). Fail closed.
+            debug_assert!(false, "task started while already running");
+            return;
+        }
         let state = Arc::clone(self);
         let join = tokio::spawn(async move { run_task(state, supervisor).await });
         *self.join.lock().unwrap_or_else(|e| e.into_inner()) = Some(join);

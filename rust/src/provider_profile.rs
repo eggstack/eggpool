@@ -231,17 +231,23 @@ pub fn provider_config_table(profile: &ProviderProfile) -> Table {
 ///
 /// Presentation keys and contract-only verification keys are dropped, so the
 /// result loads as a configuration document. This is the pre-extraction parse
-/// path, kept as the comparison baseline.
-pub fn canonical_config_document() -> Table {
-    // Build-time asset: a corrupt bundle is a build bug, so this panics like
-    // before, but keeps the TOML cause in the message instead of dropping it.
-    let parsed: Value = BUNDLED_PROVIDER_PROFILES.parse().unwrap_or_else(|error| {
-        panic!("embedded provider-profile document is valid TOML: {error}")
-    });
+/// path, kept as the comparison baseline. A corrupt bundle is a build bug,
+/// but it fails closed with a typed error instead of aborting the process.
+pub fn canonical_config_document() -> Result<Table, eggpool_provider_profile::ProviderProfileError>
+{
+    let parsed: Value = BUNDLED_PROVIDER_PROFILES
+        .parse()
+        .map_err(|error: toml::de::Error| {
+            eggpool_provider_profile::ProviderProfileError::Parse(error.to_string())
+        })?;
     let providers = parsed
         .get("providers")
         .and_then(Value::as_table)
-        .unwrap_or_else(|| panic!("embedded provider-profile document declares providers"));
+        .ok_or_else(|| {
+            eggpool_provider_profile::ProviderProfileError::Parse(
+                "embedded provider-profile document declares providers".into(),
+            )
+        })?;
     let mut document = Table::new();
     let mut rendered = Table::new();
     for (id, raw) in providers {
@@ -263,7 +269,7 @@ pub fn canonical_config_document() -> Table {
         rendered.insert(id.clone(), Value::Table(value));
     }
     document.insert("providers".into(), Value::Table(rendered));
-    document
+    Ok(document)
 }
 
 /// Every bundled provider projected onto the runtime configuration shape.

@@ -246,11 +246,7 @@ impl QuotaFairScorer {
             is_eligible,
             inflight_penalty: active_request_count as f64
                 * self.policy.inflight_penalty_per_request,
-            health_penalty: if health_penalty == 0.0 {
-                0.0
-            } else {
-                health_penalty
-            },
+            health_penalty,
             reserved_microdollars: snapshot.reserved_cost.saturating_add(snapshot.pending_cost),
             reserved_requests: snapshot
                 .reserved_requests

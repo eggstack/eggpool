@@ -4,11 +4,12 @@ pub(super) fn format_microdollars(value: i64) -> String {
 
 pub(super) fn format_tokens(value: i64) -> String {
     let digits = value.unsigned_abs().to_string();
+    // ASCII decimal digits: every 3-byte chunk is a valid UTF-8 boundary.
     let grouped = digits
         .as_bytes()
         .rchunks(3)
         .rev()
-        .map(|chunk| std::str::from_utf8(chunk).unwrap_or("0"))
+        .map(|chunk| std::str::from_utf8(chunk).expect("decimal digit chunk is UTF-8"))
         .collect::<Vec<_>>()
         .join(",");
     if value < 0 {
@@ -39,6 +40,20 @@ pub(super) fn civil_date_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     year += i64::from(month <= 2);
     (year, month, day)
+}
+
+/// Three-letter month label for a 1-based month. The civil-date and RFC-1123
+/// parsers only produce 1..=12, but the lookup stays total so a future caller
+/// cannot turn an out-of-range month into an indexing panic.
+pub(super) fn month_name(month: i64) -> &'static str {
+    const MONTH_NAMES: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    debug_assert!((1..=12).contains(&month), "month is 1-based 1..=12");
+    usize::try_from(month - 1)
+        .ok()
+        .and_then(|index| MONTH_NAMES.get(index).copied())
+        .unwrap_or("???")
 }
 
 pub(super) fn format_ratio_percent(value: Option<f64>) -> String {

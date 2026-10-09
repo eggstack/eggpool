@@ -220,7 +220,14 @@ impl AffinityState {
             next: None,
         });
         if let Some(tail) = self.lru_tail {
-            self.lru_nodes[tail].as_mut().expect("linked tail").next = Some(slot);
+            if let Some(tail_node) = self.lru_nodes[tail].as_mut() {
+                tail_node.next = Some(slot);
+            } else {
+                // Dangling tail: the promoted entry is already linked as the
+                // new tail, it just loses the predecessor link. Fail closed
+                // without panicking.
+                debug_assert!(false, "affinity LRU tail link is missing");
+            }
         } else {
             self.lru_head = Some(slot);
         }

@@ -22,10 +22,10 @@ pub const STATUS_SCHEMA_VERSION: u32 = 1;
 /// ceiling, not a pagination contract.
 pub const MAX_STATUS_PROVIDERS: usize = 256;
 
-/// Maximum bytes retained for a provider identifier in status output.
+/// Maximum chars retained for a provider identifier in status output.
 pub const MAX_PROVIDER_ID_CHARS: usize = 96;
 
-/// Maximum bytes retained for a bounded reason code.
+/// Maximum chars retained for a bounded reason code.
 pub const MAX_REASON_CODE_CHARS: usize = 64;
 
 /// Observation-freshness fallback when the caller has no configured
@@ -224,11 +224,7 @@ pub struct ProviderStatusInput {
 }
 
 pub fn truncate_id(value: &str) -> String {
-    let mut out: String = value.chars().take(MAX_PROVIDER_ID_CHARS).collect();
-    if out.len() > MAX_PROVIDER_ID_CHARS {
-        out.truncate(MAX_PROVIDER_ID_CHARS);
-    }
-    out
+    value.chars().take(MAX_PROVIDER_ID_CHARS).collect()
 }
 
 fn bounded_reason(value: impl Into<String>) -> String {

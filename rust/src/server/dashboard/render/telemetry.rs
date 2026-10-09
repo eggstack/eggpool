@@ -537,9 +537,6 @@ pub(in crate::server::dashboard) fn render_token_heatmap(
             )
         })
         .collect::<String>();
-    let month_names = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
     let mut month_labels = String::new();
     let mut prior_month = 0;
     for week in 0..weeks {
@@ -549,7 +546,7 @@ pub(in crate::server::dashboard) fn render_token_heatmap(
             month_labels.push_str(&format!(
                 "<text x=\"{}\" y=\"10\" class=\"heatmap-label\" text-anchor=\"start\">{}</text>",
                 left + week * step,
-                month_names[(month - 1) as usize]
+                month_name(month)
             ));
         }
     }
@@ -584,7 +581,7 @@ pub(in crate::server::dashboard) fn render_token_heatmap(
                 [(day_number + 4).rem_euclid(7) as usize];
             let tooltip = format!(
                 "{weekday}, {} {day} {year}\n{} tokens · {request_count} request{}",
-                month_names[(month - 1) as usize],
+                month_name(month),
                 format_tokens(token_count),
                 if request_count == 1 { "" } else { "s" }
             );

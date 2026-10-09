@@ -1991,6 +1991,13 @@ fn delete_old(
 /// A caller-controlled SQLite transaction.  It is deliberately not a general
 /// transaction abstraction: it exists to keep the runtime acceptance gate and
 /// the durable config-derived state under one explicit owner.
+///
+/// Dropping an unfinished holder bricks later writes (the next `BEGIN
+/// IMMEDIATE` fails), so every holder must be committed or rolled back.
+/// `Drop` issues a best-effort async `ROLLBACK`; when no Tokio runtime is
+/// present the rollback cannot be issued and the brick-risk stands — callers
+/// must not drop an unfinished transaction outside a runtime.
+#[must_use = "an unfinished DatabaseTransaction bricks later writes on drop; commit or roll it back"]
 pub struct DatabaseTransaction {
     database: Database,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -2136,6 +2143,19 @@ impl Drop for DatabaseTransaction {
                     .await;
                 drop(permit);
             });
+        } else {
+            // No runtime: the ROLLBACK cannot be issued. The permit releases
+            // here, but the SQLite transaction may still be open, so the next
+            // BEGIN IMMEDIATE can fail. This path is a programming error —
+            // surface it loudly and catch it in debug builds.
+            tracing::error!(
+                "database transaction dropped outside a Tokio runtime; ROLLBACK skipped"
+            );
+            debug_assert!(
+                false,
+                "DatabaseTransaction dropped without commit/rollback outside a runtime"
+            );
+            drop(permit);
         }
     }
 }

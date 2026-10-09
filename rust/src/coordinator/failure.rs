@@ -762,7 +762,10 @@ fn parse_rfc1123(value: &str) -> Option<i64> {
         .checked_add(leap_days(year.checked_sub(1)?)?)?
         .checked_sub(leap_days(1969)?)?;
     for index in 1..month {
-        days = days.checked_add(i64::from(month_days[(index - 1) as usize]))?;
+        // `month` is 1..=12 from the allow-listed match above, so `index - 1`
+        // stays in bounds; fail closed on any future caller drift.
+        let days_in_month = month_days.get(usize::try_from(index - 1).ok()?).copied()?;
+        days = days.checked_add(i64::from(days_in_month))?;
         if index == 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
             days = days.checked_add(1)?;
         }

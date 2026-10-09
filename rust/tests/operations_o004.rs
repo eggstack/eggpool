@@ -614,7 +614,9 @@ mod shared_profile_parity {
 
     #[test]
     fn shared_profile_projection_matches_the_canonical_document() {
-        let canonical = normalized(&provider_profile::canonical_config_document());
+        let canonical = normalized(
+            &provider_profile::canonical_config_document().expect("bundled document parses"),
+        );
         let projected = normalized(
             &provider_profile::projected_config_document().expect("shared profiles project"),
         );
@@ -719,7 +721,8 @@ mod shared_profile_parity {
 
     #[test]
     fn opencode_go_hints_reach_the_runtime_configuration_as_preferences() {
-        let document = provider_profile::canonical_config_document();
+        let document =
+            provider_profile::canonical_config_document().expect("bundled document parses");
         let config = load(&document);
         let provider = config
             .providers
@@ -762,7 +765,8 @@ mod shared_profile_parity {
     fn explicit_operator_configuration_overrides_bundled_defaults() {
         // Bundled profiles are bootstrap facts. An operator block that differs
         // from the shared profile must still win under current semantics.
-        let mut document = provider_profile::canonical_config_document();
+        let mut document =
+            provider_profile::canonical_config_document().expect("bundled document parses");
         let providers = document
             .get_mut("providers")
             .and_then(toml::Value::as_table_mut)
@@ -806,7 +810,8 @@ mod shared_profile_parity {
 
     #[test]
     fn a_profile_without_a_hint_leaves_the_runtime_preference_map_empty() {
-        let document = provider_profile::canonical_config_document();
+        let document =
+            provider_profile::canonical_config_document().expect("bundled document parses");
         let config = load(&document);
         let provider = config
             .providers

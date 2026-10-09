@@ -40,12 +40,12 @@ fn home_dir() -> PathBuf {
 pub enum ConfigError {
     #[error("Config file not found: {path}")]
     FileNotFound { path: String },
-    #[error("Invalid TOML in configuration file: {path}")]
-    Parse { path: String },
+    #[error("Invalid TOML in configuration file: {path}: {detail}")]
+    Parse { path: String, detail: String },
     #[error("Configuration validation failed: {detail}")]
     Validation { detail: String },
-    #[error("Cannot read configuration file: {path}")]
-    Read { path: String },
+    #[error("Cannot read configuration file: {path}: {detail}")]
+    Read { path: String, detail: String },
 }
 
 impl ConfigError {
@@ -1507,8 +1507,9 @@ impl Config {
                 path: path.display().to_string(),
             });
         }
-        let content = fs::read_to_string(path).map_err(|_| ConfigError::Read {
+        let content = fs::read_to_string(path).map_err(|error| ConfigError::Read {
             path: path.display().to_string(),
+            detail: error.kind().to_string(),
         })?;
         Self::from_toml_bytes(path, content.as_bytes())
     }
@@ -1518,14 +1519,24 @@ impl Config {
     /// second read between digest verification and candidate construction.
     pub fn from_toml_bytes(path: impl AsRef<Path>, content: &[u8]) -> Result<Self, ConfigError> {
         let path = path.as_ref();
-        let content = std::str::from_utf8(content).map_err(|_| ConfigError::Parse {
+        let content = std::str::from_utf8(content).map_err(|error| ConfigError::Parse {
             path: path.display().to_string(),
+            detail: format!(
+                "content is not valid UTF-8 (valid up to byte {})",
+                error.valid_up_to()
+            ),
         })?;
-        let value: toml::Value = content.parse().map_err(|_| ConfigError::Parse {
-            path: path.display().to_string(),
-        })?;
-        let mut config: Self = value.try_into().map_err(|_| {
-            ConfigError::validation("configuration contains an unsupported field, type, or value")
+        let value: toml::Value =
+            content
+                .parse()
+                .map_err(|error: toml::de::Error| ConfigError::Parse {
+                    path: path.display().to_string(),
+                    detail: error.to_string(),
+                })?;
+        let mut config: Self = value.try_into().map_err(|error: toml::de::Error| {
+            ConfigError::validation(format!(
+                "configuration contains an unsupported field, type, or value: {error}"
+            ))
         })?;
         config.validate()?;
         if config.server.port == 0 {
@@ -2369,8 +2380,9 @@ fn absolute(path: PathBuf) -> PathBuf {
 }
 
 pub fn content_digest(path: &Path) -> Result<String, ConfigError> {
-    let bytes = fs::read(path).map_err(|_| ConfigError::Read {
+    let bytes = fs::read(path).map_err(|error| ConfigError::Read {
         path: path.display().to_string(),
+        detail: error.kind().to_string(),
     })?;
     let digest = Sha256::digest(bytes);
     Ok(format!("{digest:x}"))
