@@ -950,9 +950,16 @@ def _case_truncated_download() -> dict[str, str]:
             binary_path=candidate,
             omit_asset=True,
         )
-        result = _run(root, release_fixture=releases, allow_origin=True, expected=1)
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=1,
+        )
         assert "could not download" in result.stderr
         assert not (root / "home/.local/bin/eggpool").exists()
+        assert not (root / "home/.bashrc").exists()
         return {"case": "truncated-download", "status": "pass"}
 
 
@@ -1383,6 +1390,7 @@ def _case_fresh_signal_cleanup_removes_staging() -> dict[str, str]:
         fake_bin.mkdir(parents=True, exist_ok=True)
         environment = _env(root, fake_bin)
         (root / "home").mkdir(parents=True, exist_ok=True)
+        environment["SHELL"] = "/bin/bash"
         environment["EGGPOOL_RELEASE_BASE_URL"] = f"file://{releases}"
         environment["EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN"] = "1"
         _exe(
@@ -1435,6 +1443,7 @@ else:
                 proc.wait(timeout=10)
         final = root / "config-home/eggpool/config.toml"
         assert not final.exists() or final.read_bytes() != b"[server]\nport = 11300\n"
+        assert not (root / "home/.bashrc").exists()
         _assert_no_staging_residue(root)
         assert not (root / "state-home/eggpool/install.lock.d").exists()
         return {"case": "fresh-signal-cleanup-removes-staging", "status": "pass"}
@@ -2138,6 +2147,54 @@ def _case_profile_symlink_and_optout() -> dict[str, str]:
         assert "unsafe startup target" in result.stdout
         assert target.read_text(encoding="utf-8") == "# operator file\n"
         assert (home / ".bashrc").is_symlink()
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-special-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        profile = home / ".bashrc"
+        try:
+            os.mkfifo(profile)
+            fifo_created = True
+        except OSError:
+            profile.mkdir()
+            fifo_created = False
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "unsafe startup target" in result.stdout
+        if fifo_created:
+            import stat
+
+            assert stat.S_ISFIFO(profile.stat().st_mode)
+        else:
+            assert profile.is_dir()
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-unwritable-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        profile = home / ".bashrc"
+        profile.write_text("# operator profile\n", encoding="utf-8")
+        profile.chmod(0o444)
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "not writable" in result.stdout
+        assert profile.read_text(encoding="utf-8") == "# operator profile\n"
+        assert profile.stat().st_mode & 0o222 == 0
     with tempfile.TemporaryDirectory(prefix="eggpool-profile-") as value:
         root = Path(value)
         releases = _fresh_binary_fixture(
