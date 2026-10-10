@@ -46,7 +46,7 @@ pair is a known numbering accident.
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M003 closed — config publication ownership corrective | M001/M002/M003 closed; no ready successor; future hardening requires new bounded plans. |
+| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M004 ready — shell command discovery and activation corrective | Hard: M001/M002/M003 closed. Preserve owner/collision/rollback invariants; no Gregg implementation dependency. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
@@ -54,6 +54,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| Deployment and packaging | M004 — shell command discovery and activation corrective | ready | `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | Hard: M001–M003 closed. PATH-hidden canonical ownership, bounded profile persistence, documented invoking-shell activation, and disposable/native shell regression gates. |
 
 
 
