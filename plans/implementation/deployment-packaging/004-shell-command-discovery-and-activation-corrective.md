@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone 004 — Shell command discovery and activation corrective
 
-Status: ready
+Status: active
 
 Repository baseline: `963a1a706877728117a7abf1f0355fc017082551` (`main`, 2026-10-10)
 
