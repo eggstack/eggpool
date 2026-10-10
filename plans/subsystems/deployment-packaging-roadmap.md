@@ -1,6 +1,6 @@
 # Deployment and Packaging Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -395,6 +395,60 @@ Deferred work:
 - Changes to Gregg's completed Plans 130/131 without a demonstrated
   separate defect.
 
+### Milestone 5 — Active PATH integration detection corrective
+
+Class: polish (bounded detector correctness; preserves profile/installer safety invariants)
+
+Objective:
+
+Prevent an unnecessary EggPool-managed profile append when a **functioning
+preexisting Gregg guarded PATH block** or **zsh tied `path=(...)` array**
+already exposes the verified installed directory.
+
+Dependencies:
+
+- Hard: M004 closed at `plans/closure/deployment-packaging/004-status.md`;
+  73-case installer harness, Linux Bash and macOS arm64 zsh shell qualification
+  and native parent-shell activation are accepted.
+- Gregg Plans 130/131 are **source-backed fixture references**, not executable
+  sibling dependencies. No pending interface or upstream change.
+
+Deliverable boundary:
+
+Correct only `scripts/install.sh` `profile_has_active_bin()` and the
+disposable qualification coverage in `scripts/qualify_quick_installer.py`,
+plus focused comments/docs/planning if needed. Recognize complete working
+Gregg `case` guards and real zsh `path=(...)` assignments with static
+read-only validation of the actual installed directory, not broad text or
+malformed syntax. Preserve profiles byte-for-byte when already integrated;
+conservatively append the existing safe guarded EggPool block when not.
+
+The M004 ownership/provenance, hidden canonical owner classification,
+collision/`--force` refusal, checksum/release, success-only profile edits,
+no-clobber config/rollback, explicit opt-out, custom bin location, and
+parent-shell activation contract are unchanged. No Rust/runtime, database,
+protocol, release-target, or new CI workflow changes.
+
+Exit conditions:
+
+- Gregg-managed functional guard and zsh array fixtures (with real zsh
+  startup proof where available) yield `already active` without profile edit.
+- Comment-only, disabled/incomplete, unrelated, quoted-tilde, subpath and
+  wrong-directory cases never falsely suppress a needed append.
+- Existing EggPool-managed and normal Bash PATH forms remain recognized;
+  rerun is idempotent and the baseline 73 cases stay green.
+- Existing ordinary CI and native shell qualification are recorded, with a
+  new `plans/closure/deployment-packaging/005-status.md` before closure.
+
+Implementation plan:
+
+- `plans/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md`
+
+Deferred work:
+
+- Arbitrary shell parsing or evaluating profiles.
+- Broad installer, manager, update, runtime, or Gregg changes.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -482,3 +536,4 @@ security findings.
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
 | 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
 | 4 | closed | `plans/archive/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | `plans/closure/deployment-packaging/004-status.md` | none |
+| 5 | ready | `plans/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | pending `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |
