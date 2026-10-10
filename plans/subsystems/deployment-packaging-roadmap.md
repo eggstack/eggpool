@@ -329,6 +329,72 @@ Deferred work:
 - General installer transaction framework extraction.
 - System/root deployment authority changes.
 
+### Milestone 4 — Shell command discovery and activation corrective
+
+Class: capability (with owner/collision security invariants)
+
+Objective:
+
+Make an installed EggPool command discoverable in future supported interactive
+shells automatically and in the already-running shell through the documented
+one-line install command; repair the hidden-but-owned canonical executable
+discovery gap without changing native binary-first installation authority.
+
+Dependencies:
+
+- Hard: M001–M003 closed, including native release qualification and guarded
+  executable/config publication and rollback.
+- Soft/reference: Gregg Plans 130/131 define bounded PATH profile persistence
+  and a documented parent-shell activation pattern; no Gregg code change or
+  downstream release dependency is required.
+
+Deliverable boundary:
+
+One coherent `scripts/install.sh`, disposable installer qualification,
+README/install documentation, and planning corrective. Resolve PATH-hidden
+canonical EggPool owners by verifiable provenance without weakening foreign
+collision/`--force` refusal. Persist guarded, idempotent user-shell PATH
+integration only after successful installation, with custom destination and
+unsafe-profile handling; do not mutate startup files on failed installs.
+Document one invocation that runs the installer and then activates its bin
+directory in the **invoking** shell, since a piped child cannot export into
+its parent. Keep system shell files and all Rust/runtime/protocol/storage
+surfaces unchanged.
+
+User or operator value:
+
+macOS arm64 zsh and Linux Bash users can paste one command and invoke
+`eggpool` immediately in that shell; future shells also resolve it without
+manual PATH configuration. A hidden earlier install is repaired/updated as a
+verified owner rather than rejected as a fresh unowned collision.
+
+Exit conditions:
+
+- Native macOS zsh and Linux Bash shells resolve the CLI immediately after
+  the documented parent-shell one-liner and in subsequent sessions.
+- Bare pipeline semantics are described truthfully: persist future-shell
+  config, but no impossible parent-process mutation guarantee.
+- Managed startup integration is append-only, idempotent, fails safely on
+  symlink/special/unwritable targets and reuses working Gregg/user PATH
+  entries without duplication; opt-out and custom bin location are covered.
+- An off-PATH canonical verified EggPool owner is recognized; hidden unowned
+  files and visible conflicting executables still fail closed.
+- All M001–M003 checksum, provenance, no-clobber, rollback, and manager
+  invariants remain green; deterministic and real shell startup evidence
+  are recorded.
+
+Implementation plan:
+
+- `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md`
+
+Deferred work:
+
+- A universal shell integration mechanism (fish/nu/PowerShell).
+- Privileged/system-scope PATH changes and a general installer transaction
+  abstraction.
+- Changes to Gregg's completed Plans 130/131 without a demonstrated
+  separate defect.
+
 ## 8. Cross-cutting requirements
 
 Storage/migration: no schema or data migration. Installer state/lock/temp files
@@ -415,3 +481,4 @@ security findings.
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
 | 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
+| 4 | ready | `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | pending `plans/closure/deployment-packaging/004-status.md` | none; M001–M003 closed |
