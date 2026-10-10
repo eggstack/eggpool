@@ -1,6 +1,6 @@
 # Deployment and Packaging Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -536,4 +536,4 @@ security findings.
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
 | 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
 | 4 | closed | `plans/archive/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | `plans/closure/deployment-packaging/004-status.md` | none |
-| 5 | ready | `plans/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | pending `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |
+| 5 | closed | `plans/archive/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | `plans/closure/deployment-packaging/005-status.md` | none; M004 closed |

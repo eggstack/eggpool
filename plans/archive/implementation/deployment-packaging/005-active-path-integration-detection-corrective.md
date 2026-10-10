@@ -1,6 +1,6 @@
 # Deployment and Packaging Milestone 005 — Active PATH integration detection corrective
 
-Status: active
+Status: implemented
 
 Repository baseline: `48a114db232609e515de673a6617e163e44059bc` (`main`, 2026-10-10)
 

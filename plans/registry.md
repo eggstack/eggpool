@@ -14,9 +14,9 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Deployment and Packaging M004 (shell discovery and
-activation; hosted Linux Bash + macOS arm64 zsh passed;
-`plans/closure/deployment-packaging/004-status.md`).
+Most recently closed: Deployment and Packaging M005 (active PATH integration
+detection corrective; 78-case harness, hosted Linux Bash + macOS arm64 zsh
+passed; `plans/closure/deployment-packaging/005-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -47,7 +47,7 @@ pair is a known numbering accident.
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M005 active — active PATH integration detection corrective | Hard: M004 closed; scope limited to Gregg guard / zsh path array recognition and regression evidence. |
+| Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
@@ -62,7 +62,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Deployment and packaging | M005 — active PATH integration detection corrective | active | `plans/implementation/deployment-packaging/005-active-path-integration-detection-corrective.md` | Hard: M004 closed. Fix functioning Gregg guard and zsh array false negatives; preserve all M004 installer/ownership invariants. |
 
 
 ## Blocked work
@@ -83,6 +82,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Deployment and packaging M005 — active PATH integration detection corrective | closed — 78-case installer harness (73 baseline + 5 new Gregg/array regressions), Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/005-status.md`, implementation `576b462d`, CI `38030165909`, shell run `38030165862` |
 | Deployment and packaging M004 — shell command discovery and activation corrective | closed — 73-case installer harness, Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/004-status.md`, implementation `57af5bc` + test hardening `45149d2`, CI `38026958264`, shell run `38026958268` |
 | Provider transport M006 — Eggress 1.0.12 dependency refresh and requalification | closed — all 16 registry-resolved Eggress crates at 1.0.12; provider/coordinator/wire and default/no-default workspace gates passed; release binary +520 bytes (+0.0017%); hosted CI and dependency audit green; no plan unblocked | `plans/closure/provider-transport/006-status.md`, implementation `d8be1599` |
 | Shared provider profile contract M001 — neutral provider-profile contract and OpenCode Go surface hints | closed — secret-free sans-I/O `eggpool-provider-profile` crate owns the contract and the single canonical bundled asset; EggPool projects all 23 providers onto an identical `ProviderConfig`; 30 reviewed non-fixed OpenCode Go hints; discovery is never credential proof; 930 workspace tests green; no in-repo plan unblocked, CodeGG unblocked at `9ac6a131` | `plans/closure/shared-provider-profile-contract/001-status.md`, implementation `9ac6a131` |
@@ -367,3 +367,18 @@ unpublished and carries no semver promise). Per the source plan, CodeGG's produc
 catalog — like any sibling repository — is not first-party provider authority;
 bundled profile facts remain reviewed transcriptions of current provider
 documentation.
+
+Unblock audit (deployment-packaging M005 closed, implementation `576b462d`,
+`plans/closure/deployment-packaging/005-status.md`): M005 is a polish
+corrective to closed M004 with no hard dependencies beyond M004's closed
+installer/ownership baseline and no interface/operational dependency on any
+sibling repository. Searched `plans/implementation/deployment-packaging/`, the
+deployment-packaging roadmap dependency graph, and the ready/active/blocked
+registry tables. No registered plan declares M005 as a hard, interface, soft,
+or operational dependency, and the blocked-work table has no deployment-packaging
+entry. Closure promotes no blocked work and unblocks no future plan. Persistence
+M011 remains independently ready and is unaffected. Provider transport, routing
+selection, runtime efficiency, shared provider profile contract, and dashboard
+remain closed with no successor. No deployment-packaging successor is registered;
+future hardening (attestations, system/root distribution, additional targets)
+requires new bounded plans.
