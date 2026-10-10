@@ -25,8 +25,8 @@ A lightweight, LAN-hosted proxy that aggregates multiple AI provider accounts be
 ## Quick Start
 
 ```bash
-# Install (verified standalone binary, no Python required)
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+# Install and activate in this Bash/zsh session (verified binary; no Python required)
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
 
 # Or via your package manager: `uv tool install eggpool`, `pipx install eggpool`,
 # or `cargo install eggpool` (Rust 1.89+). Targets: Linux x86_64, Linux aarch64, macOS arm64.
@@ -45,7 +45,15 @@ executable for your target (SHA-256 verified before execution) and commits it
 to `~/.local/bin/eggpool` as a `standalone-rust` installation that uses
 native `eggpool update` thereafter — it never invokes uv, pipx, pip, Python,
 Cargo, or a source build. Windows and other unqualified targets are
-unsupported.
+unsupported. The command above adds the directory to this invoking shell
+after a successful install; running the bare `curl ... | bash` form persists
+future-shell PATH configuration but cannot change its parent shell. To use a
+custom destination, set `EGGPOOL_INSTALL_BIN_DIR` inside the installer Bash
+process and export that same path in the invoking shell, for example:
+
+```bash
+bash -o pipefail -c 'export EGGPOOL_INSTALL_BIN_DIR="$HOME/opt/eggpool/bin"; curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/opt/eggpool/bin:$PATH"
+```
 
 To update or switch to one exact catalogued release and to roll back, see
 [Upgrading](docs/upgrading.md):

@@ -14,6 +14,8 @@ import contextlib
 import hashlib
 import json
 import os
+import platform as host_platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -440,6 +442,8 @@ def _run(
     pre_hold_lock: bool = False,
     fake_curl: str | None = None,
     fake_python3: str | None = None,
+    hidden_existing: bool = False,
+    canonical_conflict: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     fake_bin = root / "fake-bin"
     fake_bin.mkdir(parents=True, exist_ok=True)
@@ -475,7 +479,9 @@ else:
     if manager:
         _fake_manager(fake_bin / manager, kind=manager_kind)
     if existing:
-        existing_bin = root / "existing-bin"
+        existing_bin = (
+            root / "home/.local/bin" if hidden_existing else root / "existing-bin"
+        )
         existing_bin.mkdir(parents=True, exist_ok=True)
         path = existing_bin / "eggpool"
         kind, version, native, mode = existing
@@ -534,9 +540,16 @@ else:
                 native=native,
                 update_log=str(root / "update.log"),
             )
-        environment["PATH"] = os.pathsep.join(
-            (str(existing_bin), str(fake_bin), "/usr/bin", "/bin")
-        )
+        if hidden_existing:
+            environment["PATH"] = os.pathsep.join((str(fake_bin), "/usr/bin", "/bin"))
+        else:
+            environment["PATH"] = os.pathsep.join(
+                (str(existing_bin), str(fake_bin), "/usr/bin", "/bin")
+            )
+        if canonical_conflict:
+            conflict = root / "home/.local/bin/eggpool"
+            conflict.parent.mkdir(parents=True, exist_ok=True)
+            conflict.write_bytes(b"different canonical owner\n")
     if pre_hold_lock:
         state_dir = Path(environment["XDG_STATE_HOME"]) / "eggpool"
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -761,6 +774,31 @@ def _case_fresh_package_explicit() -> dict[str, str]:
         )
         assert _log(root) == ["tool", "install", "eggpool"]
         return {"case": "fresh-package-explicit", "status": "pass"}
+
+
+def _case_package_manager_profile_uses_owner_bin() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-manager-profile-") as value:
+        root = Path(value)
+        manager_bin = root / "home/custom manager bin"
+        result = _run(
+            root,
+            manager="uv",
+            args=["--package-manager", "uv"],
+            extra_env={
+                "SHELL": "/bin/bash",
+                "UV_TOOL_BIN_DIR": str(manager_bin),
+            },
+            expected=0,
+        )
+        assert "Parent-shell activation" in result.stdout
+        profile = (root / "home/.bashrc").read_text(encoding="utf-8")
+        assert "Future-shell profile: persisted" in result.stdout
+        assert str(manager_bin) in profile
+        assert "custom manager bin" in profile
+        return {
+            "case": "package-manager-profile-uses-verified-owner-bin",
+            "status": "pass",
+        }
 
 
 # ---- negative checksum / download paths (WP-D) ----
@@ -1138,7 +1176,8 @@ def _case_fresh_init_failure_preserves_preexisting() -> dict[str, str]:
         config = root / "config-home/eggpool/config.toml"
         config.parent.mkdir(parents=True)
         config.write_bytes(b"operator-config\n")
-        _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        result = _run(root, release_fixture=releases, allow_origin=True, expected=0)
+        assert "Bare curl | bash cannot update its invoking shell" in result.stdout
         assert (root / "home/.local/bin/eggpool").is_file()
         assert config.read_bytes() == b"operator-config\n"
         return {
@@ -1850,6 +1889,426 @@ def _release_manifest_case() -> dict[str, str]:
     return {"case": "release-manifest-raw-contract", "status": "pass"}
 
 
+def _case_hidden_native_owner() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool hidden ") as value:
+        root = Path(value)
+        result = _run(
+            root,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+            hidden_existing=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Existing owner: standalone-rust" in result.stdout
+        assert "Delegating to the existing native updater" in result.stdout
+        assert _update_log(root)
+        assert (root / "home/.local/bin/eggpool").is_file()
+        assert "EggPool PATH" in (root / "home/.bashrc").read_text(encoding="utf-8")
+        return {"case": "hidden-canonical-native-owner", "status": "pass"}
+
+
+def _case_hidden_manager_owner() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+        root = Path(value)
+        result = _run(
+            root,
+            existing=("uv-tool", "0.8.1", True, "rust"),
+            hidden_existing=True,
+            expected=0,
+        )
+        assert "Existing owner: uv-tool" in result.stdout
+        assert "Delegating to the existing native updater" in result.stdout
+        return {"case": "hidden-canonical-manager-owner", "status": "pass"}
+
+
+def _case_hidden_foreign_force_refusal() -> dict[str, str]:
+    for args in ([], ["--force"]):
+        with tempfile.TemporaryDirectory(prefix="eggpool-") as value:
+            root = Path(value)
+            releases = _fresh_binary_fixture(
+                root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+            )
+            destination = root / "home/.local/bin/eggpool"
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"foreign executable bytes\n")
+            destination.chmod(0o755)
+            before = destination.read_bytes()
+            result = _run(
+                root,
+                release_fixture=releases,
+                allow_origin=True,
+                args=args,
+                expected=1,
+            )
+            assert "canonical destination" in result.stderr
+            assert destination.read_bytes() == before
+            if args:
+                assert "--force" in result.stderr
+    return {
+        "case": "hidden-foreign-force-refusal-preserves-bytes",
+        "status": "pass",
+    }
+
+
+def _case_path_visible_canonical_conflict() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-path-conflict-") as value:
+        root = Path(value)
+        result = _run(
+            root,
+            existing=("standalone-rust", "0.8.1", True, "rust"),
+            canonical_conflict=True,
+            expected=1,
+        )
+        assert "conflicts with canonical destination" in result.stderr
+        assert (root / "home/.local/bin/eggpool").read_bytes() == (
+            b"different canonical owner\n"
+        )
+        return {
+            "case": "path-visible-command-canonical-conflict-refusal",
+            "status": "pass",
+        }
+
+
+def _case_profile_custom_zdotdir_idempotent() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-shell-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="macos", raw_arch="aarch64"
+        )
+        home = root / "home"
+        zdotdir = home / "z dot's files"
+        zdotdir.mkdir(parents=True)
+        custom_bin = home / "Applications/Egg Pool bin"
+        env = {
+            "SHELL": "/bin/zsh",
+            "ZDOTDIR": str(zdotdir),
+            "EGGPOOL_INSTALL_BIN_DIR": str(custom_bin),
+        }
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Darwin", "arm64"),
+            extra_env=env,
+            expected=0,
+        )
+        profile = zdotdir / ".zshrc"
+        text = profile.read_text(encoding="utf-8")
+        assert "Future-shell profile: persisted" in result.stdout
+        assert "EggPool PATH" in text and "Applications/Egg Pool" in text
+        assert (
+            subprocess.run(
+                ["bash", "-n", str(profile)], check=False, capture_output=True
+            ).returncode
+            == 0
+        )
+        assert "\n" not in str(custom_bin)
+        _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Darwin", "arm64"),
+            extra_env=env,
+            expected=0,
+        )
+        assert profile.read_text(encoding="utf-8").count("EggPool PATH (managed") == 1
+        native_zsh = False
+        zsh_bin = shutil.which("zsh")
+        if zsh_bin:
+            shell_env = _env(root, root / "fake-bin")
+            shell_env.update({"ZDOTDIR": str(zdotdir), "SHELL": zsh_bin})
+            shell_result = subprocess.run(
+                [zsh_bin, "-ic", "command -v eggpool && eggpool version"],
+                cwd=root,
+                env=shell_env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            assert shell_result.returncode == 0, shell_result.stderr[-500:]
+            assert str(custom_bin / "eggpool") in shell_result.stdout
+            assert "0.8.1" in shell_result.stdout
+            native_zsh = True
+        return {
+            "case": "profile-zdotdir-custom-path-idempotent",
+            "status": "pass",
+            "native_zsh_smoke": str(native_zsh).lower(),
+            "host_os": host_platform.system(),
+            "host_arch": host_platform.machine(),
+        }
+
+
+def _case_linux_bash_startup() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-bash-shell-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        install_result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Parent-shell activation" in install_result.stdout
+        env = _env(root, root / "fake-bin")
+        env.update({"SHELL": "/bin/bash"})
+        result = subprocess.run(
+            [
+                "bash",
+                "--noprofile",
+                "--rcfile",
+                str(root / "home/.bashrc"),
+                "-ic",
+                "command -v eggpool && eggpool version",
+            ],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr[-500:]
+        assert str(root / "home/.local/bin/eggpool") in result.stdout
+        assert "0.8.1" in result.stdout
+        return {"case": "linux-bash-interactive-startup-resolution", "status": "pass"}
+
+
+def _case_macos_login_bash_profile_selection() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-login-bash-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="macos", raw_arch="aarch64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        (home / ".bash_login").write_text(
+            "# operator login profile\n", encoding="utf-8"
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            platform=("Darwin", "arm64"),
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        login_profile = (home / ".bash_login").read_text(encoding="utf-8")
+        assert "EggPool PATH" in login_profile
+        assert not (home / ".bashrc").exists()
+        assert "Future-shell profile: persisted" in result.stdout
+        shell_env = _env(root, root / "fake-bin")
+        shell_env.update({"SHELL": "/bin/bash"})
+        login_shell = subprocess.run(
+            ["bash", "-lic", "command -v eggpool && eggpool version"],
+            cwd=root,
+            env=shell_env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert login_shell.returncode == 0, login_shell.stderr[-500:]
+        assert str(root / "home/.local/bin/eggpool") in login_shell.stdout
+        assert "0.8.1" in login_shell.stdout
+        return {"case": "macos-login-bash-profile-selection", "status": "pass"}
+
+
+def _case_profile_symlink_and_optout() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        target = root / "operator-bashrc"
+        target.write_text("# operator file\n", encoding="utf-8")
+        (home / ".bashrc").symlink_to(target)
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "unsafe startup target" in result.stdout
+        assert target.read_text(encoding="utf-8") == "# operator file\n"
+        assert (home / ".bashrc").is_symlink()
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            args=["--no-shell-profile"],
+            expected=0,
+        )
+        assert "unchanged (--no-shell-profile)" in result.stdout
+        assert not (root / "home/.bashrc").exists()
+        return {"case": "profile-symlink-refusal-and-optout", "status": "pass"}
+
+
+def _case_profile_active_vs_comment_only() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-active-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        profile = home / ".bashrc"
+        authored = 'export PATH="$HOME/.local/bin:$PATH"\n'
+        profile.write_text(authored, encoding="utf-8")
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in result.stdout
+        assert profile.read_text(encoding="utf-8") == authored
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-comment-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(exist_ok=True)
+        profile = home / ".bashrc"
+        authored = '# export PATH="$HOME/.local/bin:$PATH"\n# EggPool mention only\n'
+        profile.write_text(authored, encoding="utf-8")
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        changed = profile.read_text(encoding="utf-8")
+        assert "Future-shell profile: persisted" in result.stdout
+        assert changed.startswith(authored)
+        assert changed.count("EggPool PATH (managed") == 1
+        return {
+            "case": "active-user-path-reused-comment-only-ignored",
+            "status": "pass",
+        }
+
+
+def _case_unsupported_shell_and_unsafe_custom_bin() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-unsupported-shell-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/usr/bin/fish"},
+            expected=0,
+        )
+        assert "unsupported shell" in result.stdout
+        assert not (root / "home/.config/fish/config.fish").exists()
+    with tempfile.TemporaryDirectory(prefix="eggpool-unsafe-bin-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        unsafe_dir = root / "custom;unsafe"
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={
+                "SHELL": "/bin/bash",
+                "EGGPOOL_INSTALL_BIN_DIR": str(unsafe_dir),
+            },
+            expected=0,
+        )
+        assert "unsafe shell characters" in result.stdout
+        assert not (root / "home/.bashrc").exists()
+        return {"case": "unsupported-shell-and-unsafe-bin-fallback", "status": "pass"}
+
+
+def _case_failed_install_leaves_profile_unchanged() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-profile-") as value:
+        root = Path(value)
+        releases = _fresh_failing_release(root, version="0.8.1")
+        env = {"SHELL": "/bin/bash"}
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env=env,
+            expected=1,
+        )
+        assert "init-config" in result.stderr or "config" in result.stderr
+        assert not (root / "home/.bashrc").exists()
+        return {
+            "case": "failed-config-transaction-does-not-edit-profile",
+            "status": "pass",
+        }
+
+
+def _case_parent_shell_activation() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-activation-") as value:
+        root = Path(value)
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir()
+        _exe(
+            fake_bin / "uname",
+            '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n',
+        )
+        _exe(
+            fake_bin / "curl",
+            f"#!{sys.executable}\nimport subprocess, sys\n"
+            f"if sys.argv[-1] == 'https://fixture/install.sh':\n"
+            f"    sys.stdout.write(open({str(INSTALLER)!r}, encoding='utf-8').read())\n"
+            "else:\n"
+            "    raise SystemExit(subprocess.call(\n"
+            "        ['/usr/bin/curl', *sys.argv[1:]]))\n",
+        )
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        environment = _env(root, fake_bin)
+        environment.update(
+            {
+                "SHELL": "/bin/bash",
+                "EGGPOOL_RELEASE_BASE_URL": f"file://{releases}",
+                "EGGPOOL_INSTALL_ALLOW_NONPRODUCTION_ORIGIN": "1",
+            }
+        )
+        command = (
+            "bash -o pipefail -c 'curl -fsSL https://fixture/install.sh | bash' "
+            '&& export PATH="$HOME/.local/bin:$PATH" '
+            "&& command -v eggpool && eggpool version"
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", command],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr[-500:]
+        assert "Parent-shell activation" in result.stdout
+        assert str(root / "home/.local/bin/eggpool") in result.stdout
+        assert "0.8.1" in result.stdout
+        return {"case": "documented-parent-shell-activation", "status": "pass"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
@@ -1860,6 +2319,7 @@ def main() -> int:
         _case_fresh_macos(),
         _case_fresh_exact_rust(),
         _case_fresh_package_explicit(),
+        _case_package_manager_profile_uses_owner_bin(),
         _case_missing_sidecar(),
         _case_zero_matching(),
         _case_multiple_matching(),
@@ -1906,6 +2366,18 @@ def main() -> int:
         _case_standalone_historical_refusal(),
         _source_case(),
         _release_manifest_case(),
+        _case_hidden_native_owner(),
+        _case_hidden_manager_owner(),
+        _case_hidden_foreign_force_refusal(),
+        _case_path_visible_canonical_conflict(),
+        _case_profile_custom_zdotdir_idempotent(),
+        _case_linux_bash_startup(),
+        _case_macos_login_bash_profile_selection(),
+        _case_profile_symlink_and_optout(),
+        _case_profile_active_vs_comment_only(),
+        _case_unsupported_shell_and_unsafe_custom_bin(),
+        _case_failed_install_leaves_profile_unchanged(),
+        _case_parent_shell_activation(),
         *_negative_cases(),
     ]
     print(json.dumps({"cases": results, "status": "pass"}, sort_keys=True))

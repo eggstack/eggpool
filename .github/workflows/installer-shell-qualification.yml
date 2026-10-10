@@ -1,0 +1,50 @@
+name: Installer shell qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/qualify_quick_installer.py"
+      - "tests/tooling/test_installer.py"
+      - "README.md"
+      - "docs/**"
+      - ".github/workflows/installer-shell-qualification.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/install.sh"
+      - "scripts/qualify_quick_installer.py"
+      - "tests/tooling/test_installer.py"
+      - "README.md"
+      - "docs/**"
+      - ".github/workflows/installer-shell-qualification.yml"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+
+jobs:
+  shell:
+    name: ${{ matrix.os }} installer shell behavior
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: Linux Bash
+            runner: ubuntu-latest
+          - os: macOS zsh
+            runner: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+      - run: uv sync --frozen
+      - run: uv run pytest tests/tooling/test_installer.py -q --tb=short --maxfail=1

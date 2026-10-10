@@ -17,7 +17,7 @@ for public-facing deployments.
 ### 1. One-shot install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
 eggpool onboard
 sudo env "PATH=$PATH" "$(command -v eggpool)" deploy systemd --install
 ```

@@ -7,6 +7,11 @@ explicit alternatives — see [Upgrade and rollback](upgrading.md).
 Standalone binaries use the verified GitHub raw-asset authority and are
 distinct from package-managed installations.
 
+For immediate use in the current Bash/zsh session, follow the one-command
+activation example in [Upgrade and rollback](upgrading.md#fresh-installs).
+The bare piped installer can persist supported future-shell PATH setup, but a
+child process cannot update the parent shell's PATH.
+
 ## Build and run
 
 Build the release from the checkout, then run the resulting binary directly

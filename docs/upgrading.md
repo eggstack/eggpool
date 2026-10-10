@@ -20,7 +20,7 @@ performs a staged self-check, and commits it atomically to
 Python, Cargo, or a source build:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Explicit package-manager alternatives remain supported (they require
@@ -124,7 +124,7 @@ Python-era package. Ordinary standalone updates remain standalone via native
 To explicitly migrate a standalone install into wheel management, use:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash -- --adopt-standalone
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash -- --adopt-standalone' && export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Adoption is an advanced compatibility operation: it preserves a rollback copy

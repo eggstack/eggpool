@@ -6,7 +6,7 @@ Run EggPool on a Raspberry Pi for always-on LAN access.
 
 ```bash
 # Install (verified standalone raw binary, no Python >=3.11 required)
-curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
 
 # Explicit wheel alternative (requires Python >=3.11 for package management)
 # pipx install eggpool

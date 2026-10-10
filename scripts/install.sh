@@ -9,6 +9,7 @@ set -euo pipefail
 FORCE_REINSTALL=0
 UPGRADE_ONLY=0
 ADOPT_STANDALONE=0
+NO_SHELL_PROFILE=0
 TARGET_VERSION=""
 VERSION_REQUESTED=0
 EXPLICIT_PACKAGE_MANAGER=""
@@ -48,7 +49,7 @@ usage() {
 EggPool quick install (binary-first)
 
 Usage:
-    curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash
+    bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/eggstack/eggpool/main/scripts/install.sh | bash' && export PATH="$HOME/.local/bin:$PATH"
     ./scripts/install.sh [options]
 
 Options:
@@ -60,6 +61,7 @@ Options:
     --package-manager uv|pipx|pip
                         Explicitly use a package-manager wheel path for a fresh
                         install instead of the default verified raw binary
+    --no-shell-profile  Do not edit a supported user shell startup file
     --help              Show this help
 
 Default fresh current-native installs use the verified GitHub raw binary and
@@ -70,6 +72,11 @@ installations retain their owner: native installs delegate to
 `eggpool update`, legacy Python-era installs use their owning manager.
 Source-checkout invocation installs the local checkout build and never
 resolves the public package by accident.
+
+For immediate command availability in the invoking Bash/zsh shell, wrap the
+verified pipe in `bash -o pipefail -c 'curl ... | bash'` and export the install
+directory after success. A bare curl pipe only configures future shells; use
+--no-shell-profile to opt out of startup-file edits.
 EOF
 }
 
@@ -186,6 +193,10 @@ while (($#)); do
             ADOPT_STANDALONE=1
             shift
             ;;
+        --no-shell-profile)
+            NO_SHELL_PROFILE=1
+            shift
+            ;;
         --package-manager)
             (($# >= 2)) || fail "--package-manager requires uv, pipx, or pip"
             EXPLICIT_PACKAGE_MANAGER="$(normalize_package_manager "$2")"
@@ -290,9 +301,21 @@ if ((SOURCE_CHECKOUT)); then
     echo "Using source checkout: $PROJECT_DIR"
 fi
 
+INSTALL_DEST_DIR="${EGGPOOL_INSTALL_BIN_DIR:-$HOME/.local/bin}"
+[[ "$INSTALL_DEST_DIR" == /* ]] || fail "EGGPOOL_INSTALL_BIN_DIR must be an absolute path"
+INSTALL_DEST="$INSTALL_DEST_DIR/eggpool"
 EXISTING_BIN=""
 if command -v eggpool >/dev/null 2>&1; then
     EXISTING_BIN="$(command -v eggpool)"
+elif [[ -f "$INSTALL_DEST" && ! -L "$INSTALL_DEST" ]]; then
+    # A canonical regular-file candidate is not trusted by basename. It goes
+    # through the exact same native/package provenance checks as PATH owners.
+    EXISTING_BIN="$INSTALL_DEST"
+    CANONICAL_HIDDEN_OWNER=1
+fi
+CANONICAL_HIDDEN_OWNER="${CANONICAL_HIDDEN_OWNER:-0}"
+if [[ -n "$EXISTING_BIN" && "$EXISTING_BIN" != "$INSTALL_DEST" && ( -e "$INSTALL_DEST" || -L "$INSTALL_DEST" ) ]]; then
+    fail "PATH-visible eggpool ($EXISTING_BIN) conflicts with canonical destination $INSTALL_DEST; refusing ambiguous ownership"
 fi
 
 PROVENANCE_KIND=""
@@ -348,7 +371,7 @@ probe_python_provenance() {
     [[ -x "$python" ]] || return 1
 
     local report
-    report="$(PYTHONPATH= PYTHONNOUSERSITE=1 "$python" -c '
+    report="$(PYTHONPATH='' PYTHONNOUSERSITE=1 "$python" -c '
 import importlib.metadata as metadata
 import json
 import pathlib
@@ -426,6 +449,9 @@ classify_existing_owner() {
             fail "existing eggpool belongs to a source checkout; use that checkout's documented developer flow"
             ;;
         ambiguous|*)
+            if ((CANONICAL_HIDDEN_OWNER)); then
+                fail "canonical destination $EXISTING_BIN already exists but is not a verified EggPool installation; --force cannot authorize replacing it"
+            fi
             if [[ -n "$PROVENANCE_EVIDENCE" ]]; then
                 fail "existing eggpool ownership is ambiguous ($PROVENANCE_EVIDENCE); remove the collision explicitly or use a known manager"
             fi
@@ -451,9 +477,8 @@ find_curl() {
 INSTALL_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/eggpool"
 INSTALL_LOCK_DIR="$INSTALL_STATE_DIR/install.lock.d"
 INSTALL_TMPDIR=""
-INSTALL_DEST_DIR="${EGGPOOL_INSTALL_BIN_DIR:-$HOME/.local/bin}"
-INSTALL_DEST="$INSTALL_DEST_DIR/eggpool"
 LOCK_HELD=0
+PROFILE_LOCK_DIR=""
 
 # Fresh-install transaction state (M002, hardened by M003). The fresh
 # transaction ends only after executable publication, provenance/version
@@ -469,7 +494,6 @@ FRESH_TX_COMMITTED=0
 FRESH_TX_EXPECTED_HASH=""
 FRESH_TX_EXPECTED_VERSION=""
 FRESH_TX_CONFIG=""
-FRESH_TX_CONFIG_EXISTED=0
 FRESH_TX_ROLLBACK_DONE=0
 # Transaction-owned config staging directory (M003). Set by
 # safe_seed_config_via_staging while staging is live so EXIT/signal traps
@@ -495,6 +519,13 @@ release_install_lock() {
         rmdir "$INSTALL_LOCK_DIR" 2>/dev/null || true
     fi
     LOCK_HELD=0
+}
+
+release_profile_lock() {
+    if [[ -n "$PROFILE_LOCK_DIR" && -d "$PROFILE_LOCK_DIR" ]]; then
+        rmdir "$PROFILE_LOCK_DIR" 2>/dev/null || true
+    fi
+    PROFILE_LOCK_DIR=""
 }
 
 # Guarded fresh-install rollback (M003). Returns 0 when the executable
@@ -572,6 +603,7 @@ install_trap_cleanup() {
         cleanup_config_staging
     fi
     cleanup_install_temp
+    release_profile_lock
     release_install_lock
 }
 
@@ -582,6 +614,7 @@ fresh_tx_signal_handler() {
         cleanup_config_staging
     fi
     cleanup_install_temp
+    release_profile_lock
     release_install_lock
     exit 130
 }
@@ -961,7 +994,6 @@ install_fresh_raw_binary() {
     FRESH_TX_EXPECTED_HASH=""
     FRESH_TX_EXPECTED_VERSION=""
     FRESH_TX_CONFIG=""
-    FRESH_TX_CONFIG_EXISTED=0
     FRESH_TX_ROLLBACK_DONE=0
     CONFIG_STAGING_DIR=""
     sidecar_file="$INSTALL_TMPDIR/SHA256SUMS"
@@ -1010,26 +1042,14 @@ install_fresh_raw_binary() {
     FRESH_TX_EXPECTED_VERSION="$SELECTED_VERSION"
     local fresh_config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
     FRESH_TX_CONFIG="$fresh_config_path"
-    if [[ -f "$fresh_config_path" ]]; then
-        FRESH_TX_CONFIG_EXISTED=1
-    else
-        FRESH_TX_CONFIG_EXISTED=0
-    fi
     mv "$staged_samefs" "$INSTALL_DEST" || {
         rm -f "$staged_samefs"
         fail "could not commit the verified executable"
     }
     chmod 755 "$INSTALL_DEST" 2>/dev/null || true
     FRESH_TX_COMMITTED=1
-    export PATH="$INSTALL_DEST_DIR:$PATH"
-    local active
-    active="$(command -v eggpool 2>/dev/null || true)"
-    if [[ -z "$active" ]]; then
-        fail_fresh_tx "installed eggpool command is not on PATH"
-    fi
-    if ! same_path "$active" "$INSTALL_DEST"; then
-        fail_fresh_tx "installed eggpool at an unexpected PATH location; refusing a silent command collision"
-    fi
+    local active="$INSTALL_DEST"
+    [[ -x "$active" && ! -L "$active" ]] || fail_fresh_tx "installed eggpool executable could not be independently rechecked"
     local report cli_version
     if report="$("$active" install-provenance --shell 2>/dev/null)" && parse_provenance_report "$report"; then
         :
@@ -1058,13 +1078,13 @@ install_fresh_raw_binary() {
     if ! safe_seed_config_via_staging "$active" "$fresh_config_path"; then
         fail_fresh_tx "could not seed the missing config at $fresh_config_path (init-config failed)"
     fi
-    print_binary_next_steps "$cli_version" "$SELECTED_VERSION" "$active"
     # Disarm the transaction on success; the install is complete.
     FRESH_TX_ACTIVE=0
     FRESH_TX_COMMITTED=0
     cleanup_config_staging
     release_install_lock
     cleanup_install_temp
+    print_binary_next_steps "$cli_version" "$SELECTED_VERSION" "$active"
 }
 
 seed_config_after_commit() {
@@ -1088,8 +1108,160 @@ seed_config_after_commit() {
     fail "could not seed the missing config at $config_path"
 }
 
+shell_quote() {
+    # Caller rejects quote characters before this literal is used.
+    local value="$1"
+    printf "'%s'" "$value"
+}
+
+profile_bin_path_is_safe() {
+    local bin_dir="$1" char
+    [[ "$bin_dir" == *"'"* ]] && return 1
+    for char in $'\n' $'\r' $'\t' ':' ';' '`' '$' '|' '&' '<' '>' '"' '(' ')' '{' '}' '[' ']' '?' '*'; do
+        [[ "$bin_dir" == *"$char"* ]] && return 1
+    done
+    return 0
+}
+
+profile_has_active_bin() {
+    local profile="$1" bin_dir="$2"
+    [[ -f "$profile" && ! -L "$profile" ]] || return 1
+    awk -v want="$bin_dir" -v homebin="$HOME/.local/bin" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*EGGPOOL_INSTALL_BIN_DIR[[:space:]]*=/ {
+            value=$0
+            sub(/^[^=]*=/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            sub(/^["\047]/, "", value)
+            sub(/["\047]$/, "", value)
+            managed=(value == want)
+            next
+        }
+        managed && /case .*EGGPOOL_INSTALL_BIN_DIR/ && /export PATH=/ { found=1 }
+        /^[[:space:]]*(export[[:space:]]+)?PATH[[:space:]]*=/ || /^[[:space:]]*(export[[:space:]]+)?path[[:space:]]*=/ {
+            line=$0
+            sub(/^[^=]*=/, "", line)
+            gsub(/["\047]/, "", line)
+            n=split(line, parts, ":")
+            for (i=1; i<=n; i++) {
+                token=parts[i]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", token)
+                gsub(/[()]/, "", token)
+                if (token == want || (want == homebin && (token == "$HOME/.local/bin" || token == "${HOME}/.local/bin"))) found=1
+            }
+            # zsh array form: path=("$HOME/.local/bin" $path)
+            if (line ~ /(^|[[:space:]])path[[:space:]]*=/) {
+                n=split(line, parts, /[[:space:]()]+/)
+                for (i=1; i<=n; i++) {
+                    token=parts[i]
+                    if (token == want || (want == homebin && (token == "$HOME/.local/bin" || token == "${HOME}/.local/bin"))) found=1
+                }
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$profile"
+}
+
+persist_shell_path() {
+    local shell_name profile dir_literal profile_bin_dir="${1:-$INSTALL_DEST_DIR}"
+    if ((NO_SHELL_PROFILE)); then
+        echo "  Future-shell profile: unchanged (--no-shell-profile)"
+        return 0
+    fi
+    case "${SHELL##*/}" in
+        zsh)
+            shell_name=zsh
+            profile="${ZDOTDIR:-$HOME}/.zshrc"
+            ;;
+        bash)
+            shell_name=bash
+            if [[ "$(uname -s 2>/dev/null || true)" == Darwin ]]; then
+                if [[ -e "$HOME/.bash_profile" ]]; then profile="$HOME/.bash_profile"
+                elif [[ -e "$HOME/.bash_login" ]]; then profile="$HOME/.bash_login"
+                elif [[ -e "$HOME/.profile" ]]; then profile="$HOME/.profile"
+                else profile="$HOME/.bash_profile"
+                fi
+            else
+                profile="$HOME/.bashrc"
+            fi
+            ;;
+        *)
+            echo "  Future-shell profile: unavailable (unsupported shell ${SHELL:-unknown})"
+            echo "  Manual guidance: add $profile_bin_dir to PATH in your supported shell startup file."
+            return 0
+            ;;
+    esac
+    local profile_dir="${profile%/*}"
+    if [[ -L "$profile_dir" || ! -d "$profile_dir" ]]; then
+        echo "  Future-shell profile: unchanged (unsafe startup directory: $profile_dir)"
+        return 0
+    fi
+    if [[ -L "$profile_bin_dir" || ! -d "$profile_bin_dir" ]]; then
+        echo "  Future-shell profile: unchanged (unsafe install directory: $profile_bin_dir)"
+        return 0
+    fi
+    if [[ "$profile_bin_dir" != /* ]] || ! profile_bin_path_is_safe "$profile_bin_dir"; then
+        echo "  Future-shell profile: unavailable (installation directory contains unsafe shell characters)"
+        echo "  Manual guidance: add the executable directory to PATH manually: $profile_bin_dir"
+        return 0
+    fi
+    if [[ -L "$profile" || ( -e "$profile" && ! -f "$profile" ) ]]; then
+        echo "  Future-shell profile: unchanged (unsafe startup target: $profile)"
+        return 0
+    fi
+    if [[ -e "$profile" ]] && [[ ! -w "$profile" ]]; then
+        echo "  Future-shell profile: unchanged (startup file is not writable: $profile)"
+        return 0
+    fi
+    if profile_has_active_bin "$profile" "$profile_bin_dir"; then
+        echo "  Future-shell profile: already active ($profile)"
+        return 0
+    fi
+    mkdir -p "$INSTALL_STATE_DIR" 2>/dev/null || {
+        echo "  Future-shell profile: unchanged (could not create the private profile lock directory)"
+        return 0
+    }
+    local profile_lock="$INSTALL_STATE_DIR/shell-profile.lock.d"
+    if ! mkdir "$profile_lock" 2>/dev/null; then
+        echo "  Future-shell profile: unchanged (another profile update is in progress; rerun to retry)"
+        return 0
+    fi
+    PROFILE_LOCK_DIR="$profile_lock"
+    dir_literal="$(shell_quote "$profile_bin_dir")"
+    if ! (umask 077; {
+        if [[ ! -e "$profile" ]]; then : > "$profile" || exit 1; fi
+        [[ ! -L "$profile" && -f "$profile" ]] || exit 1
+        [[ ! -s "$profile" ]] || printf '\n' >> "$profile"
+        # The assignment and conditional are literal shell text for the user's
+        # future shell, so keep the parameter references unevaluated here.
+        # shellcheck disable=SC2016
+        printf '# >>> EggPool PATH (managed; append-only) >>>\nEGGPOOL_INSTALL_BIN_DIR=%s\ncase ":$PATH:" in *":$EGGPOOL_INSTALL_BIN_DIR:"*) ;; *) export PATH="$EGGPOOL_INSTALL_BIN_DIR:$PATH" ;; esac\n# <<< EggPool PATH <<<\n' "$dir_literal" >> "$profile"
+    } 2>/dev/null); then
+        release_profile_lock
+        echo "  Future-shell profile: unchanged (could not safely update $profile)"
+        return 0
+    fi
+    release_profile_lock
+    echo "  Future-shell profile: persisted ($profile; adds $profile_bin_dir for future $shell_name shells)"
+}
+
+print_parent_shell_activation() {
+    local profile_bin_dir="$1"
+    if [[ "$profile_bin_dir" == /* ]] && profile_bin_path_is_safe "$profile_bin_dir"; then
+        local quoted_dir
+        quoted_dir="$(shell_quote "$profile_bin_dir")"
+        # This text is copied into the invoking shell after the child returns.
+        # shellcheck disable=SC2016
+        printf '  Parent-shell activation (after successful install): export PATH=%s:"$PATH"\n' "$quoted_dir"
+    else
+        echo "  Parent-shell activation: add the installed directory to PATH manually after success."
+    fi
+}
+
 print_binary_next_steps() {
     local cli_version="$1" selected="$2" active="$3"
+    local active_dir
+    active_dir="$(dirname "$active")"
     local config_path="${EGGPOOL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/eggpool/config.toml}"
     echo ""
     echo "Installation complete."
@@ -1098,6 +1270,10 @@ print_binary_next_steps() {
     echo "  Manager: standalone-rust"
     echo "  Command: $active"
     echo "  Config:  $config_path"
+    case ":$PATH:" in *":$active_dir:"*) echo "  Current process PATH: includes $active_dir" ;; *) echo "  Current process PATH: does not include $active_dir" ;; esac
+    persist_shell_path "$active_dir"
+    print_parent_shell_activation "$active_dir"
+    echo "  Bare curl | bash cannot update its invoking shell; use the documented parent-shell activation command for immediate use."
     echo ""
     echo "Next steps:"
     echo "  eggpool onboard"
@@ -1300,6 +1476,10 @@ delegate_existing_native_update() {
     echo "  Manager: $PROVENANCE_KIND"
     echo "  Command: $existing"
     echo "  Config:  $config_path"
+    case ":$PATH:" in *":$(dirname "$existing"):") echo "  Current process PATH: includes $(dirname "$existing")" ;; *) echo "  Current process PATH: does not include $(dirname "$existing")" ;; esac
+    persist_shell_path "$(dirname "$existing")"
+    print_parent_shell_activation "$(dirname "$existing")"
+    echo "  Bare curl | bash cannot update its invoking shell; use the documented parent-shell activation command for immediate use."
     echo ""
     echo "Next steps:"
     echo "  eggpool onboard"
@@ -1533,6 +1713,10 @@ run_package_authority() {
     echo "  Manager: $manager_kind"
     echo "  Command: $active_bin"
     echo "  Config:  $config_path"
+    case ":$PATH:" in *":$manager_bin_dir:"*) echo "  Current process PATH: includes $manager_bin_dir" ;; *) echo "  Current process PATH: does not include $manager_bin_dir" ;; esac
+    persist_shell_path "$manager_bin_dir"
+    print_parent_shell_activation "$manager_bin_dir"
+    echo "  Bare curl | bash cannot update its invoking shell; use the documented parent-shell activation command for immediate use."
     if [[ -n "$standalone_backup" && -e "$standalone_backup" ]]; then
         echo "  Standalone rollback retained at: $standalone_backup"
     fi
