@@ -2366,6 +2366,327 @@ def _case_parent_shell_activation() -> dict[str, str]:
         return {"case": "documented-parent-shell-activation", "status": "pass"}
 
 
+def _install_detector_source() -> str:
+    lines = INSTALLER.read_text(encoding="utf-8").splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.startswith("profile_has_active_bin()")
+    )
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    return "\n".join(lines[start : end + 1])
+
+
+def _detector_active(profile_text: str, *, home: Path, bin_dir: str) -> bool:
+    with tempfile.TemporaryDirectory(prefix="eggpool-detector-") as value:
+        tmp = Path(value)
+        profile = tmp / "profile"
+        profile.write_text(profile_text, encoding="utf-8")
+        driver = tmp / "driver.sh"
+        driver.write_text(
+            _install_detector_source()
+            + '\nif profile_has_active_bin "$1" "$2"; then exit 0; else exit 1; fi\n',
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["HOME"] = str(home)
+        result = subprocess.run(
+            ["bash", str(driver), str(profile), bin_dir],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+        return result.returncode == 0
+
+
+_GREGG_ACTIVE_BLOCK = (
+    "# added by gregg installer: ensure user-local binaries are on PATH\n"
+    'case ":$PATH:" in\n'
+    '  *":$HOME/.local/bin:"*) ;;\n'
+    '  *) export PATH="$HOME/.local/bin:$PATH" ;;\n'
+    "esac\n"
+)
+
+
+def _case_gregg_guarded_active_path_reused() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-gregg-active-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        profile = home / ".bashrc"
+        profile.write_text(_GREGG_ACTIVE_BLOCK, encoding="utf-8")
+        before = profile.read_bytes()
+        assert _detector_active(
+            _GREGG_ACTIVE_BLOCK, home=home, bin_dir=str(home / ".local/bin")
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in result.stdout
+        assert profile.read_bytes() == before
+        assert "EggPool PATH (managed" not in profile.read_text(encoding="utf-8")
+        rerun = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in rerun.stdout
+        assert profile.read_bytes() == before
+        return {"case": "gregg-guarded-active-path-reused", "status": "pass"}
+
+
+def _case_zsh_active_path_array_reused() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-zsh-array-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        zdotdir = home / "zdot"
+        zdotdir.mkdir(parents=True, exist_ok=True)
+        profile = zdotdir / ".zshrc"
+        authored = 'path=("$HOME/.local/bin" $path)\n'
+        profile.write_text(authored, encoding="utf-8")
+        assert _detector_active(authored, home=home, bin_dir=str(home / ".local/bin"))
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/zsh", "ZDOTDIR": str(zdotdir)},
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in result.stdout
+        assert profile.read_text(encoding="utf-8") == authored
+        assert "EggPool PATH (managed" not in authored
+        native_zsh = False
+        zsh_bin = shutil.which("zsh")
+        if zsh_bin:
+            shell_env = _env(root, root / "fake-bin")
+            shell_env.update({"SHELL": zsh_bin, "ZDOTDIR": str(zdotdir)})
+            smoke = subprocess.run(
+                [zsh_bin, "-ic", "command -v eggpool && eggpool version"],
+                cwd=root,
+                env=shell_env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            assert smoke.returncode == 0, smoke.stderr[-500:]
+            assert str(home / ".local/bin/eggpool") in smoke.stdout
+            assert "0.8.1" in smoke.stdout
+            native_zsh = True
+        return {
+            "case": "zsh-active-path-array-reused",
+            "status": "pass",
+            "native_zsh_smoke": str(native_zsh).lower(),
+            "host_os": host_platform.system(),
+            "host_arch": host_platform.machine(),
+        }
+
+
+def _case_inactive_guard_does_not_suppress_append() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-guard-marker-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        profile = home / ".bashrc"
+        authored = (
+            "# added by gregg installer: ensure user-local binaries are on PATH\n"
+            "# no active integration yet\n"
+        )
+        profile.write_text(authored, encoding="utf-8")
+        assert not _detector_active(
+            authored, home=home, bin_dir=str(home / ".local/bin")
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: persisted" in result.stdout
+        changed = profile.read_text(encoding="utf-8")
+        assert changed.startswith(authored)
+        assert changed.count("EggPool PATH (managed") == 1
+        rerun = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in rerun.stdout
+        assert profile.read_text(encoding="utf-8").count("EggPool PATH (managed") == 1
+    with tempfile.TemporaryDirectory(prefix="eggpool-guard-disabled-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        profile = home / ".bashrc"
+        authored = (
+            'case ":$PATH:" in\n'
+            '  *":$HOME/.local/bin:"*) ;;\n'
+            '  # *) export PATH="$HOME/.local/bin:$PATH" ;;\n'
+            "esac\n"
+        )
+        profile.write_text(authored, encoding="utf-8")
+        assert not _detector_active(
+            authored, home=home, bin_dir=str(home / ".local/bin")
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: persisted" in result.stdout
+        changed = profile.read_text(encoding="utf-8")
+        assert changed.startswith(authored)
+        assert changed.count("EggPool PATH (managed") == 1
+        return {"case": "inactive-guard-does-not-suppress-append", "status": "pass"}
+
+
+def _case_custom_bin_not_covered_by_gregg_default() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-custom-gregg-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        custom_bin = home / "custom-bin"
+        profile = home / ".bashrc"
+        profile.write_text(_GREGG_ACTIVE_BLOCK, encoding="utf-8")
+        assert _detector_active(
+            _GREGG_ACTIVE_BLOCK, home=home, bin_dir=str(home / ".local/bin")
+        )
+        assert not _detector_active(
+            _GREGG_ACTIVE_BLOCK, home=home, bin_dir=str(custom_bin)
+        )
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={
+                "SHELL": "/bin/bash",
+                "EGGPOOL_INSTALL_BIN_DIR": str(custom_bin),
+            },
+            expected=0,
+        )
+        assert "Future-shell profile: persisted" in result.stdout
+        changed = profile.read_text(encoding="utf-8")
+        assert changed.startswith(_GREGG_ACTIVE_BLOCK)
+        assert changed.count("EggPool PATH (managed") == 1
+        assert str(custom_bin) in changed
+        rerun = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={
+                "SHELL": "/bin/bash",
+                "EGGPOOL_INSTALL_BIN_DIR": str(custom_bin),
+            },
+            expected=0,
+        )
+        assert "Future-shell profile: already active" in rerun.stdout
+        assert profile.read_text(encoding="utf-8").count("EggPool PATH (managed") == 1
+        return {"case": "custom-bin-not-covered-by-gregg-default", "status": "pass"}
+
+
+def _case_zsh_array_syntax_and_negative_matrix() -> dict[str, str]:
+    with tempfile.TemporaryDirectory(prefix="eggpool-array-matrix-") as value:
+        root = Path(value)
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        default_bin = str(home / ".local/bin")
+        custom_bin = str(home / "custom-bin")
+        positives = [
+            'path=("$HOME/.local/bin" $path)\n',
+            "path=(${HOME}/.local/bin $path)\n",
+            "path=(~/.local/bin $path)\n",
+            "path=($HOME/.local/bin $path)\n",
+            'export path=("$HOME/.local/bin" $path)\n',
+            'path=(/opt/foo "$HOME/.local/bin" $path)\n',
+            'path=("/opt/foo" "${HOME}/.local/bin" $path)\n',
+        ]
+        for text in positives:
+            assert _detector_active(text, home=home, bin_dir=default_bin), text
+        assert _detector_active(
+            'path=("' + custom_bin + '" $path)\n', home=home, bin_dir=custom_bin
+        )
+        negatives = [
+            'path=("~/.local/bin" $path)\n',
+            "path=('~/.local/bin' $path)\n",
+            '# path=("$HOME/.local/bin" $path)\n',
+            'echo path=("$HOME/.local/bin" $path)\n',
+            "printf '%s\\n' 'path=(\"$HOME/.local/bin\" $path)'\n",
+            "myfunc() { echo hi; }\n",
+            'MYPATH="$HOME/.local/bin:$PATH"\n',
+            'other_path=("$HOME/.local/bin" $path)\n',
+            'path=("$HOME/.local/bin/tool" $path)\n',
+            'export PATH="$HOME/.local/bin/tool:$PATH"\n',
+            'path=("$HOME/.local/bin" $path\n',
+            'path=("/other/bin" $path)\n',
+            'export PATH="/other/bin:$PATH"\n',
+            "# added by gregg installer: ensure user-local binaries are on PATH\n",
+            'case ":$PATH:" in\n  *":$HOME/.local/bin:"*) ;;\n',
+            '  *) export PATH="$HOME/.local/bin:$PATH" ;;\n',
+            "esac\n",
+        ]
+        for text in negatives:
+            assert not _detector_active(text, home=home, bin_dir=default_bin), text
+        eggpool_block = (
+            "EGGPOOL_INSTALL_BIN_DIR='" + default_bin + "'\n"
+            'case ":$PATH:" in *":$EGGPOOL_INSTALL_BIN_DIR:"*) ;; '
+            '*) export PATH="$EGGPOOL_INSTALL_BIN_DIR:$PATH" ;; esac\n'
+        )
+        assert _detector_active(eggpool_block, home=home, bin_dir=default_bin)
+        assert _detector_active(
+            'export PATH="$HOME/.local/bin:$PATH"\n',
+            home=home,
+            bin_dir=default_bin,
+        )
+    with tempfile.TemporaryDirectory(prefix="eggpool-quoted-tilde-") as value:
+        root = Path(value)
+        releases = _fresh_binary_fixture(
+            root, version="0.8.1", raw_os="linux", raw_arch="x86_64"
+        )
+        home = root / "home"
+        home.mkdir(parents=True, exist_ok=True)
+        profile = home / ".bashrc"
+        authored = 'path=("~/.local/bin" $path)\n'
+        profile.write_text(authored, encoding="utf-8")
+        result = _run(
+            root,
+            release_fixture=releases,
+            allow_origin=True,
+            extra_env={"SHELL": "/bin/bash"},
+            expected=0,
+        )
+        assert "Future-shell profile: persisted" in result.stdout
+        changed = profile.read_text(encoding="utf-8")
+        assert changed.startswith(authored)
+        assert changed.count("EggPool PATH (managed") == 1
+        return {"case": "zsh-array-syntax-and-negative-matrix", "status": "pass"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
@@ -2435,6 +2756,11 @@ def main() -> int:
         _case_unsupported_shell_and_unsafe_custom_bin(),
         _case_failed_install_leaves_profile_unchanged(),
         _case_parent_shell_activation(),
+        _case_gregg_guarded_active_path_reused(),
+        _case_zsh_active_path_array_reused(),
+        _case_inactive_guard_does_not_suppress_append(),
+        _case_custom_bin_not_covered_by_gregg_default(),
+        _case_zsh_array_syntax_and_negative_matrix(),
         *_negative_cases(),
     ]
     print(json.dumps({"cases": results, "status": "pass"}, sort_keys=True))

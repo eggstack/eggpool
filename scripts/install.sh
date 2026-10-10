@@ -1126,8 +1126,60 @@ profile_bin_path_is_safe() {
 profile_has_active_bin() {
     local profile="$1" bin_dir="$2"
     [[ -f "$profile" && ! -L "$profile" ]] || return 1
+    # Read-only static detector (M005): recognizes working active shapes for
+    # the actual wanted directory only. Never sources the profile. Gregg
+    # guarded `case` blocks require the complete case/guard/export/esac shape;
+    # zsh tied `path=(...)` arrays are matched before discarding the `path=`
+    # prefix as discrete entries. Uncertain syntax stays inactive so the
+    # installer appends one safe guarded block rather than claiming active.
     awk -v want="$bin_dir" -v homebin="$HOME/.local/bin" '
+        function want_is_default() { return (want == homebin) }
+        function has_discrete(line, needle,   nlen, start, rel, pos, before, after) {
+            nlen = length(needle)
+            if (nlen == 0) return 0
+            start = 1
+            while (start <= length(line)) {
+                rel = index(substr(line, start), needle)
+                if (rel == 0) return 0
+                pos = start + rel - 1
+                if (pos > 1) before = substr(line, pos - 1, 1)
+                else before = ""
+                after = substr(line, pos + nlen, 1)
+                if (after ~ /[A-Za-z0-9_.\/-]/) { start = pos + nlen; continue }
+                if (before ~ /[A-Za-z0-9_.\/-]/) { start = pos + nlen; continue }
+                return 1
+            }
+            return 0
+        }
+        function gregg_targets(line) {
+            if (want_is_default()) {
+                if (has_discrete(line, "$HOME/.local/bin")) return 1
+                if (has_discrete(line, "${HOME}/.local/bin")) return 1
+            }
+            if (has_discrete(line, want)) return 1
+            return 0
+        }
+        function has_unquoted_tilde(line,   needle, nlen, start, rel, pos, before, after) {
+            needle = "~/.local/bin"
+            nlen = length(needle)
+            start = 1
+            while (start <= length(line)) {
+                rel = index(substr(line, start), needle)
+                if (rel == 0) return 0
+                pos = start + rel - 1
+                if (pos > 1) before = substr(line, pos - 1, 1)
+                else before = ""
+                after = substr(line, pos + nlen, 1)
+                if (after ~ /[A-Za-z0-9_.\/-]/) { start = pos + nlen; continue }
+                if (before ~ /[A-Za-z0-9_.\/-]/) { start = pos + nlen; continue }
+                if ((before == "\"" && after == "\"") || (before == "\047" && after == "\047")) { start = pos + nlen; continue }
+                return 1
+            }
+            return 0
+        }
+        BEGIN { gregg = 0; managed = 0; found = 0 }
         /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
         /^[[:space:]]*EGGPOOL_INSTALL_BIN_DIR[[:space:]]*=/ {
             value=$0
             sub(/^[^=]*=/, "", value)
@@ -1135,9 +1187,50 @@ profile_has_active_bin() {
             sub(/^["\047]/, "", value)
             sub(/["\047]$/, "", value)
             managed=(value == want)
+            gregg=0
             next
         }
+        /^[[:space:]]*case[[:space:]]/ && /:\$PATH:/ && /[[:space:]]in[[:space:]]*$/ {
+            gregg=1
+            next
+        }
+        gregg==1 {
+            if ($0 ~ /^[[:space:]]*\*/ && $0 ~ /\)/ && $0 ~ /;;/ && $0 !~ /export[[:space:]]+PATH[[:space:]]*=/) {
+                if (gregg_targets($0)) gregg=2
+                else gregg=0
+                next
+            }
+            gregg=0
+        }
+        gregg==2 {
+            if ($0 ~ /^[[:space:]]*\*\)/ && $0 ~ /export[[:space:]]+PATH[[:space:]]*=/ && $0 ~ /;;/) {
+                if (gregg_targets($0)) gregg=3
+                else gregg=0
+                next
+            }
+            gregg=0
+        }
+        gregg==3 {
+            if ($0 ~ /^[[:space:]]*esac[[:space:];]*$/) {
+                found=1
+                gregg=0
+                next
+            }
+            gregg=0
+        }
         managed && /case .*EGGPOOL_INSTALL_BIN_DIR/ && /export PATH=/ { found=1 }
+        /^[[:space:]]*(export[[:space:]]+)?path[[:space:]]*=[[:space:]]*\(/ {
+            if ($0 !~ /\)/) next
+            hit=0
+            if (has_discrete($0, want)) hit=1
+            else if (want_is_default()) {
+                if (has_discrete($0, "$HOME/.local/bin")) hit=1
+                else if (has_discrete($0, "${HOME}/.local/bin")) hit=1
+                else if (has_unquoted_tilde($0)) hit=1
+            }
+            if (hit) found=1
+            next
+        }
         /^[[:space:]]*(export[[:space:]]+)?PATH[[:space:]]*=/ || /^[[:space:]]*(export[[:space:]]+)?path[[:space:]]*=/ {
             line=$0
             sub(/^[^=]*=/, "", line)
@@ -1147,15 +1240,7 @@ profile_has_active_bin() {
                 token=parts[i]
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", token)
                 gsub(/[()]/, "", token)
-                if (token == want || (want == homebin && (token == "$HOME/.local/bin" || token == "${HOME}/.local/bin"))) found=1
-            }
-            # zsh array form: path=("$HOME/.local/bin" $path)
-            if (line ~ /(^|[[:space:]])path[[:space:]]*=/) {
-                n=split(line, parts, /[[:space:]()]+/)
-                for (i=1; i<=n; i++) {
-                    token=parts[i]
-                    if (token == want || (want == homebin && (token == "$HOME/.local/bin" || token == "${HOME}/.local/bin"))) found=1
-                }
+                if (token == want || (want_is_default() && (token == "$HOME/.local/bin" || token == "${HOME}/.local/bin"))) found=1
             }
         }
         END { exit found ? 0 : 1 }

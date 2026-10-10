@@ -22,7 +22,7 @@ def test_quick_installer_harness_passes() -> None:
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["status"] == "pass"
-    assert len(report["cases"]) == 73
+    assert len(report["cases"]) == 78
     # Regression guard: stale pipx must never block a fresh native install.
     cases = {item["case"] for item in report["cases"]}
     assert "fresh-linux-aarch64-stale-pipx-ignored" in cases
@@ -65,3 +65,10 @@ def test_quick_installer_harness_passes() -> None:
     assert "failed-config-transaction-does-not-edit-profile" in cases
     assert "documented-parent-shell-activation" in cases
     assert "package-manager-profile-uses-verified-owner-bin" in cases
+    # M005 corrective regressions: Gregg guarded block and zsh tied-array
+    # recognition without false positives.
+    assert "gregg-guarded-active-path-reused" in cases
+    assert "zsh-active-path-array-reused" in cases
+    assert "inactive-guard-does-not-suppress-append" in cases
+    assert "custom-bin-not-covered-by-gregg-default" in cases
+    assert "zsh-array-syntax-and-negative-matrix" in cases
