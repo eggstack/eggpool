@@ -481,4 +481,4 @@ security findings.
 | 1 | closed | `plans/implementation/deployment-packaging/001-binary-first-quick-installer.md` | `plans/closure/deployment-packaging/001-status.md` | none |
 | 2 | closed | `plans/implementation/deployment-packaging/002-installer-transaction-and-collision-corrective.md` | `plans/closure/deployment-packaging/002-status.md` | none |
 | 3 | closed | `plans/implementation/deployment-packaging/003-config-publication-ownership-corrective.md` | `plans/closure/deployment-packaging/003-status.md` | none |
-| 4 | ready | `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | pending `plans/closure/deployment-packaging/004-status.md` | none; M001–M003 closed |
+| 4 | closing | `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | pending `plans/closure/deployment-packaging/004-status.md` | Hosted Linux and macOS shell qualification pending |
