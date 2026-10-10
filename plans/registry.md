@@ -14,8 +14,9 @@ Canonical direction:
 
 Legacy archive (pre-251, immutable, top level): `plans/001-*` through
 `plans/250-*` plus `python_hotpath_dispatch_compression_optimization.md`.
-Most recently closed: Routing Selection M003 (bounded exact affinity LRU; Pi 5
-qualification passed; `plans/closure/routing-selection/003-status.md`).
+Most recently closed: Deployment and Packaging M004 (shell discovery and
+activation; hosted Linux Bash + macOS arm64 zsh passed;
+`plans/closure/deployment-packaging/004-status.md`).
 Legacy archive latest: Plan 250
 (EggServe 0.3.0 direct-Tower migration, `7879cbf9`). Plans 244–245, 215–220,
 241 remain historical per their own closure passes; the `146-*` duplicate
@@ -46,7 +47,7 @@ pair is a known numbering accident.
 | Routing selection | closed | `plans/subsystems/routing-selection-roadmap.md` | M003 closed — bounded exact affinity LRU | M001–M003 closed; no successor registered. |
 | Runtime efficiency | closed | `plans/subsystems/runtime-efficiency-roadmap.md` | M001–M003 closed — no successor registered | No M003-dependent plan was unblocked. Persistence M007 has since completed Pi 5/MMC qualification and was rejected on WAL convergence gates; production is unchanged. |
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
-| Deployment and packaging | active | `plans/subsystems/deployment-packaging-roadmap.md` | M004 closing — shell command discovery and activation corrective | M001–M003 closed; hosted Linux and native macOS shell qualification pending. |
+| Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M004 closed — shell command discovery and activation corrective | M001–M004 closed; no registered successor or blocked dependent plan. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
 
 ## Dependency-ready implementation plans
@@ -61,7 +62,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| Deployment and packaging | M004 — shell command discovery and activation corrective | closing | `plans/implementation/deployment-packaging/004-shell-command-discovery-and-activation-corrective.md` | Implementation `57af5bc`; waiting on native hosted shell evidence for closure. |
 
 
 ## Blocked work
@@ -82,6 +82,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| Deployment and packaging M004 — shell command discovery and activation corrective | closed — 73-case installer harness, Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/004-status.md`, implementation `57af5bc` + test hardening `45149d2`, CI `38026958264`, shell run `38026958268` |
 | Provider transport M006 — Eggress 1.0.12 dependency refresh and requalification | closed — all 16 registry-resolved Eggress crates at 1.0.12; provider/coordinator/wire and default/no-default workspace gates passed; release binary +520 bytes (+0.0017%); hosted CI and dependency audit green; no plan unblocked | `plans/closure/provider-transport/006-status.md`, implementation `d8be1599` |
 | Shared provider profile contract M001 — neutral provider-profile contract and OpenCode Go surface hints | closed — secret-free sans-I/O `eggpool-provider-profile` crate owns the contract and the single canonical bundled asset; EggPool projects all 23 providers onto an identical `ProviderConfig`; 30 reviewed non-fixed OpenCode Go hints; discovery is never credential proof; 930 workspace tests green; no in-repo plan unblocked, CodeGG unblocked at `9ac6a131` | `plans/closure/shared-provider-profile-contract/001-status.md`, implementation `9ac6a131` |
 | Persistence M010 — control/projection storage boundary architecture investigation | closed — schema-54 ownership/index inventory and test-only replay prototype complete; 12-to-2 modeled explicit secondary indexes, but 700-to-800 foreground row mutations and no lossless finite outage policy; no ADR or production split | `plans/closure/persistence/010-status.md`, implementation `dfa2a2ab` |
