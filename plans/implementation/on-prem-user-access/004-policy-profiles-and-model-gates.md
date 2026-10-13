@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 004 — Profile-based model authorization
 
-Status: blocked
+Status: ready
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 
@@ -25,12 +25,14 @@ or protocol conversion. **Hard dependency:** accepted M003 closure establishing
 stable principal propagation and persistent user identity. No model-access
 browser editor or consumption budget is delivered here.
 
-## 2. Why this milestone is blocked
+## 2. Readiness
 
-M001–M003 are not closed; profile assignment must not bypass an unauthenticated
-or unattributed path. Ready only after their security and lifecycle contracts
-are accepted. `plans/subsystems/on-prem-user-access-roadmap.md` defines
-scope and typed dependency chain.
+M001 and M002 are closed. M003 is conditionally closed with stable typed
+principal propagation and durable request ownership. Its unrelated update
+unit-test failures and deferred physical resource evidence are recorded in
+the M003 closure; they do not weaken M004's auth boundary.
+`plans/subsystems/on-prem-user-access-roadmap.md` defines scope and typed
+dependency chain.
 
 ## 3. Current implementation evidence
 
