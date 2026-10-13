@@ -55,7 +55,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
-| On-prem user access | M002 — browser sessions and route authorization | ready | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | Hard predecessor M001 is conditionally closed with its credential/schema contract accepted; physical Argon2 qualification remains assigned to M007. |
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 
 
@@ -64,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| — | — | — | — | No active implementation plans. |
+| On-prem user access | M002 — browser sessions and route authorization | active | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | M001 credential/schema contract accepted; SBC Argon2 qualification remains assigned to M007. |
 
 
 ## Blocked work
