@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M003 — principal propagation and attribution | active | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | M002 closed; implement stable authenticated principal and durable logical-request ownership. |
+| On-prem user access | M003 — principal propagation and attribution | closing | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | Implementation landed at `9af8787`; run closure audit for principal propagation and durable ownership. |
 
 
 ## Blocked work
