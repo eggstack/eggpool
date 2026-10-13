@@ -29,6 +29,17 @@ including `/v1/responses/compact`), and Anthropic Messages
 executable plus metadata/assets only. Repo-root `pyproject.toml` is
 tooling-only.
 
+EggPool's canonical operating profile is a single on-prem instance on SBC or ordinary
+local hardware, administered by one owner. An optional local-users mode serves
+small teams (target: fewer than approximately 50 named users) sharing
+operator-controlled routing to authorized provider APIs/subscriptions and
+self-hosted models. This is not a SaaS, enterprise IAM, or multi-organization
+hosting product; a 50-user capacity claim requires measured target evidence.
+Provider topology, upstream credentials, and routing configuration remain in
+operator-owned TOML/environment files; human identity, access profiles,
+sessions, individual credentials, user quotas, and usage statistics belong in
+SQLite. See accepted `plans/adrs/ADR-0002-on-prem-user-identity-and-policy-boundaries.md`.
+
 ## 2. End-state invariants (normative)
 
 1. **Generation-owned execution.** All inference work runs under a
@@ -70,6 +81,16 @@ tooling-only.
     test; it keeps direct/non-SSH proxy paths and rejects SSH proxy config
     as `TransportError::ProxyConfiguration` before dialing.
 
+11. **Single-instance local authority.** One installation has one administrative
+    domain. A first-run local admin bootstrap must not expose a shared default
+    password or allow remote creation of the first administrator; existing
+    installations require an explicit compatibility/migration path.
+12. **Identity-bound policy and accounting.** Inference authorization attaches a
+    trustworthy user principal at ingress and preserves it through model
+    aliases, concrete selection, retries, streaming, publication, and finalization.
+    User budget enforcement is separate from provider-account quota scoring;
+    access denial is never expressed as upstream provider unhealthiness.
+
 ## 3. Ownership boundaries (normative)
 
 - `runtime.rs` adapts CLI to operations; reusable lifecycle lives in
@@ -83,6 +104,11 @@ tooling-only.
 - Public `FiniteRequest` and `CompactAdmittedRequest` shapes are
   compatibility surfaces; compact execution may use a private single-owner
   admission representation internally.
+
+- Upstream `accounts` and account quotas describe provider credentials/capacity,
+  never downstream people. Durable human identities, policy versions, browser
+  sessions, client credentials, and user usage are separate database-owned facts.
+  Provider TOML and local admin access must not be writable by ordinary users.
 
 ## 4. Protocol and compatibility
 
@@ -101,6 +127,9 @@ narrowly scoped change.
 
 ## 6. Non-goals
 
+No hosted organization/tenant service, public self-registration, built-in VPN,
+built-in internet exposure, remote IAM/SSO requirement, or billing service.
+Off-LAN access is an operator-owned TLS reverse-proxy/VPN concern.
 No second HTTP abstraction or retry owner; no new restart/reload key lists;
 no buffering of arbitrary native streams; no EggPool SSH executor fallback
 (the exact-pinned Eggress outbound crate owns proxy transport); no Windows proxy support

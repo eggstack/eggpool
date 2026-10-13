@@ -10,6 +10,25 @@ this document is normative.
 
 ## Identity and lifecycle terms
 
+- **Instance** — one on-prem EggPool process/database/control domain with one
+  operator-administered provider configuration, not a hosted SaaS tenant.
+- **User** — a downstream human identity using EggPool; never equivalent to an
+  upstream provider account. The initial user is the local administrator.
+- **Provider account** — an upstream configured provider credential and its
+  health, scoring, and provider-quota state (`accounts` table).
+- **Principal** — authenticated downstream request identity (user ID and
+  optional client credential ID); never trusted from caller-supplied identity headers.
+- **Client credential** — revocable per-user secret for agent/API access, distinct
+  from a human password, browser session, and upstream provider secret.
+- **Profile** — named reusable downstream model-authorization, preferred-model,
+  and usage-budget policy assigned to a user; not an upstream provider profile.
+- **Effective user policy** — versioned intersection of instance restrictions,
+  user overrides, and the assigned profile. It governs concrete/virtual models
+  and user budgets; it is distinct from provider quota and health state.
+- **User budget reservation** — durable pre-dispatch hold against an enforceable
+  user/model allowance, settled or compensated once for a logical request.
+
+
 - **RuntimeGeneration** — an immutable, atomically published snapshot of all
   runtime-owned services for one configuration epoch
   (`rust/src/runtime_lifecycle/`). Published by `RuntimeManager`; retired
