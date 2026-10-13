@@ -240,7 +240,7 @@ plan is not an implemented capability.
 | M001 | conditionally closed | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | `plans/closure/on-prem-user-access/001-status.md` | Physical Le Potato/Pi Argon2 latency/RSS qualification carried to M007. |
 | M002 | closed | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | `plans/closure/on-prem-user-access/002-status.md` | Browser sessions, managed route authorization and transport posture accepted; SBC hash qualification remains M007 evidence. |
 | M003 | conditionally closed | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | `plans/closure/on-prem-user-access/003-status.md` | Stable principal accepted; unrelated update unit-test failure and physical resource evidence are explicit conditions. |
-| M004 | ready | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | — | M003 principal and attribution contract accepted. |
+| M004 | active | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | — | M003 principal and attribution contract accepted. |
 | M005 | blocked | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | — | Hard: M004 closure |
 | M006 | blocked | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | — | Hard: M005 closure |
 | M007 | blocked | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | — | Hard: M006 closure; operational hardware |
