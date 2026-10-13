@@ -6,10 +6,19 @@ pub(super) async fn chat_completions(
     Extension(_raw_body_reservation): Extension<
         Arc<crate::request::resource_budget::RawBodyReservation>,
     >,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_inference(state, ClientSurface::ChatCompletions, headers, body, lease).await
+    handle_inference(
+        state,
+        ClientSurface::ChatCompletions,
+        headers,
+        body,
+        lease,
+        principal,
+    )
+    .await
 }
 
 pub(super) async fn messages(
@@ -18,10 +27,19 @@ pub(super) async fn messages(
     Extension(_raw_body_reservation): Extension<
         Arc<crate::request::resource_budget::RawBodyReservation>,
     >,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_inference(state, ClientSurface::Messages, headers, body, lease).await
+    handle_inference(
+        state,
+        ClientSurface::Messages,
+        headers,
+        body,
+        lease,
+        principal,
+    )
+    .await
 }
 
 pub(super) async fn responses(
@@ -30,10 +48,19 @@ pub(super) async fn responses(
     Extension(_raw_body_reservation): Extension<
         Arc<crate::request::resource_budget::RawBodyReservation>,
     >,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    handle_inference(state, ClientSurface::Responses, headers, body, lease).await
+    handle_inference(
+        state,
+        ClientSurface::Responses,
+        headers,
+        body,
+        lease,
+        principal,
+    )
+    .await
 }
 
 /// Historical remote-compaction endpoint (`POST /v1/responses/compact`).
@@ -49,6 +76,7 @@ pub(super) async fn responses_compact(
     Extension(_raw_body_reservation): Extension<
         Arc<crate::request::resource_budget::RawBodyReservation>,
     >,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -57,7 +85,16 @@ pub(super) async fn responses_compact(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let proxy_request_id = crate::coordinator::new_proxy_request_id();
-    handle_finite_compact(state, headers, body, session, proxy_request_id, lease).await
+    handle_finite_compact(
+        state,
+        headers,
+        body,
+        session,
+        proxy_request_id,
+        lease,
+        principal,
+    )
+    .await
 }
 
 pub(super) async fn handle_finite_compact(
@@ -67,15 +104,17 @@ pub(super) async fn handle_finite_compact(
     session: Option<String>,
     proxy_request_id: String,
     lease: Arc<GenerationLease>,
+    principal: crate::identity::AuthenticatedPrincipal,
 ) -> Response {
     let surface = ClientSurface::Responses;
     let incoming = filtered_incoming_headers(&headers);
-    match crate::coordinator::execute_compact_finite(
+    match crate::coordinator::execute_compact_finite_attributed(
         lease.generation().inference(),
         body,
         incoming,
         session,
         proxy_request_id.clone(),
+        Some(principal.request_attribution()),
     )
     .await
     {
@@ -125,6 +164,7 @@ pub(super) async fn handle_inference(
     headers: HeaderMap,
     body: Bytes,
     lease: Arc<GenerationLease>,
+    principal: crate::identity::AuthenticatedPrincipal,
 ) -> Response {
     let session = headers
         .get("x-eggpool-route-session")
@@ -132,13 +172,14 @@ pub(super) async fn handle_inference(
         .map(str::to_owned);
     let proxy_request_id = crate::coordinator::new_proxy_request_id();
     let incoming = filtered_incoming_headers(&headers);
-    match crate::coordinator::execute_endpoint(
+    match crate::coordinator::execute_endpoint_attributed(
         lease.generation().inference(),
         surface,
         body,
         incoming,
         session,
         proxy_request_id,
+        Some(principal.request_attribution()),
     )
     .await
     {

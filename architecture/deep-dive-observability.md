@@ -126,6 +126,12 @@ correctness-critical request/accounting lifecycle rows stay durable.
 Shutdown performs one deadline-bounded metrics flush before the database
 closes.
 
+Downstream user ownership lives on durable request rows, separate from the
+provider/account-keyed `usage_rollups` dimensions. User history is queried by
+owner through a bounded indexed repository and excludes internal selector
+children from logical-request views. Routine metrics, routing traces, and
+diagnostics still omit user IDs, credential IDs, scopes, prompts, and tokens.
+
 ## Verification
 
 ```bash

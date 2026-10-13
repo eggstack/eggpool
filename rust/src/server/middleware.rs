@@ -7,8 +7,8 @@ pub(super) async fn authenticate(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let path = request.uri().path();
-    if is_unconditionally_public(path) {
+    let path = request.uri().path().to_owned();
+    if is_unconditionally_public(&path) {
         return next.run(request).await;
     }
     let access_state = match crate::identity::access_state(&state.database).await {
@@ -16,7 +16,7 @@ pub(super) async fn authenticate(
         Err(_) => return auth_unavailable(),
     };
     if legacy_server_key_allowed(Some(&access_state)) {
-        if !requires_auth(path, &state.server)
+        if !requires_auth(&path, &state.server)
             || state.server.api_key.is_none()
             || state
                 .server
@@ -24,19 +24,30 @@ pub(super) async fn authenticate(
                 .as_deref()
                 .is_some_and(|key| verify_api_key(request.headers(), key))
         {
+            let mut request = request;
+            if personal_credential_allowed(&path) {
+                request
+                    .extensions_mut()
+                    .insert(crate::identity::AuthenticatedPrincipal::legacy_shared_key());
+            }
             return next.run(request).await;
         }
         return unauthorized("Invalid or missing API key");
     }
-    if personal_credential_allowed(path)
+    if personal_credential_allowed(&path)
         && let Some(token) = provided_api_key(request.headers())
-        && crate::identity::verify_api_token(&state.database, token)
-            .await
-            .unwrap_or(false)
     {
-        return next.run(request).await;
+        match crate::identity::verify_api_token_principal(&state.database, token).await {
+            Ok(Some(principal)) => {
+                let mut request = request;
+                request.extensions_mut().insert(principal);
+                return next.run(request).await;
+            }
+            Ok(None) => {}
+            Err(_) => return auth_unavailable(),
+        }
     }
-    if personal_credential_allowed(path) {
+    if personal_credential_allowed(&path) {
         return unauthorized("Invalid or missing personal API credential");
     }
 
@@ -48,12 +59,12 @@ pub(super) async fn authenticate(
         Ok(None) => return unauthorized("Sign in required"),
         Err(_) => return auth_unavailable(),
     };
-    let account_surface = matches!(path, "/account" | "/account/password" | "/logout");
+    let account_surface = matches!(path.as_str(), "/account" | "/account/password" | "/logout");
     if principal.role != "admin" && !account_surface {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     if principal.must_change_password
-        && !matches!(path, "/account" | "/account/password" | "/logout")
+        && !matches!(path.as_str(), "/account" | "/account/password" | "/logout")
     {
         return axum::response::Redirect::to("/account?password=required").into_response();
     }
@@ -79,6 +90,16 @@ pub(super) async fn authenticate(
             .into_response();
     }
     let mut request = request;
+    request
+        .extensions_mut()
+        .insert(crate::identity::AuthenticatedPrincipal {
+            user_id: Some(principal.user_id.clone()),
+            credential_id: Some(principal.session_id.clone()),
+            role: Some(principal.role.clone()),
+            scopes: vec!["inference".to_owned(), "discovery".to_owned()],
+            auth_epoch: Some(principal.auth_epoch),
+            kind: crate::identity::PrincipalKind::BrowserSession,
+        });
     request.extensions_mut().insert(principal);
     next.run(request).await
 }

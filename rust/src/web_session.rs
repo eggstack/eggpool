@@ -21,6 +21,8 @@ const LOGIN_BUCKET_LIMIT: usize = 2048;
 
 static LOGIN_FAILURES: OnceLock<std::sync::Mutex<HashMap<String, LoginBucket>>> = OnceLock::new();
 
+type SessionRow = (String, String, String, String, i64, i64, String, String);
+
 #[derive(Debug, Error)]
 pub enum WebSessionError {
     #[error("session entropy unavailable")]
@@ -33,10 +35,12 @@ pub enum WebSessionError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
+    pub session_id: String,
     pub user_id: String,
     pub username: String,
     pub role: String,
     pub must_change_password: bool,
+    pub auth_epoch: i64,
     csrf_digest: String,
 }
 
@@ -92,16 +96,16 @@ pub async fn authenticate(
     let expected = digest(session_token);
     database
         .with_transaction(move |connection| {
-            let row: Option<(String, String, String, i64, String, String)> = connection.query_row(
-                "SELECT u.id, u.username, u.role, u.must_change_password, s.digest, s.csrf_digest \
+            let row: Option<SessionRow> = connection.query_row(
+                "SELECT s.id, u.id, u.username, u.role, u.must_change_password, u.auth_epoch, s.digest, s.csrf_digest \
                  FROM web_sessions s JOIN users u ON u.id = s.user_id \
                  WHERE s.selector = ?1 AND s.revoked_at IS NULL \
                  AND s.expires_at > CURRENT_TIMESTAMP \
                  AND s.last_used_at > datetime('now', '-12 hours') AND u.state = 'active'",
                 [&selector],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
             ).optional()?;
-            let Some((user_id, username, role, must_change_password, stored, csrf_digest)) = row else {
+            let Some((session_id, user_id, username, role, must_change_password, auth_epoch, stored, csrf_digest)) = row else {
                 return Ok(None);
             };
             if !constant_time_equal(stored.as_bytes(), expected.as_bytes()) {
@@ -113,10 +117,12 @@ pub async fn authenticate(
                 [&selector],
             )?;
             Ok(Some(Principal {
+                session_id,
                 user_id,
                 username,
                 role,
                 must_change_password: must_change_password != 0,
+                auth_epoch,
                 csrf_digest,
             }))
         })

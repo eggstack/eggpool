@@ -514,6 +514,12 @@ async fn c013_attempt_submission_observes_native_alias_and_one_request() {
         client_protocol: "openai".into(),
         upstream_protocol: "openai".into(),
         attempt_number: 1,
+        user_id: None,
+        credential_id: None,
+        auth_epoch: None,
+        principal_kind: eggpool::identity::PrincipalKind::LegacySharedKey,
+        request_kind: eggpool::identity::AttributedRequestKind::Logical,
+        parent_proxy_request_id: None,
     };
     let mut incoming = http::HeaderMap::new();
     incoming.insert("x-allowed", "forwarded".parse().unwrap());

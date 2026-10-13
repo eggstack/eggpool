@@ -101,13 +101,12 @@ Request ingestion is bounded by `[server].max_request_body_bytes` (default 10 Mi
 
 ## Authentication
 
-Inference endpoints (`/v1/*`), the integration profile
-(`/api/integrations/*`), and runtime/update/status endpoints
-(`/api/stats/runtime`, `/api/stats/update`, `/api/status`) always require the
-server API key whenever one is configured. Ordinary dashboard pages and their
-non-sensitive JSON data are public while `[dashboard].public = true` (the
-default) and require the key when it is `false`. The key is sent as
-`Authorization: Bearer <key>` for OpenAI-compatible endpoints or
-`x-api-key: <key>` for Anthropic-compatible endpoints. Health, readiness, and
-static assets are unauthenticated, and a loopback-only install without a
-configured key remains open for local development.
+In `legacy_unmigrated`, the shared server key keeps its legacy behavior. After
+local identity initialization, inference uses per-user agent tokens and
+browser sessions; the legacy key is retired. A personal token grants only its
+inference/discovery scopes and does not grant dashboard or account access.
+Browser sessions authenticate the web surface, with CSRF proof required for
+state-changing requests. In managed mode, `[dashboard].public` does not make
+dashboard or `/api/*` data public. Health, readiness, login, and static assets
+are unauthenticated. See [deployment](deployment.md) and [firewall](firewall.md)
+for operator-managed HTTPS termination, trusted proxy, and loopback guidance.

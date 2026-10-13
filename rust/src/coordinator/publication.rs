@@ -35,6 +35,12 @@ pub struct FinalizationIdentity {
     pub client_protocol: String,
     pub upstream_protocol: String,
     pub attempt_number: i64,
+    pub user_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub auth_epoch: Option<i64>,
+    pub principal_kind: crate::identity::PrincipalKind,
+    pub request_kind: crate::identity::AttributedRequestKind,
+    pub parent_proxy_request_id: Option<String>,
 }
 
 /// The local ownership conversion record for one durable publication.
@@ -185,6 +191,8 @@ pub enum PublicationError {
     Injected { stage: PublicationStage },
     #[error("duplicate publication conflicts with existing request identity {proxy_request_id:?}")]
     DuplicateConflict { proxy_request_id: String },
+    #[error("authenticated request principal changed before durable publication")]
+    PrincipalChanged,
     #[error("replacement attempt cannot publish before the prior attempt converges")]
     PriorAttemptNotFinalized,
     #[error("claim transition failed: {0}")]
@@ -227,7 +235,7 @@ pub enum PublicationOutcome {
     Published(Box<PublishedAttempt>),
     /// A duplicate invocation observed the already-published attempt. The
     /// incoming claim has been rolled back and must not be released again.
-    AlreadyPublished(FinalizationIdentity),
+    AlreadyPublished(Box<FinalizationIdentity>),
 }
 
 #[derive(Debug)]
@@ -238,8 +246,9 @@ enum TransactionOutcome {
         reservation_id: i64,
         routing_decision_id: i64,
     },
-    Observed(FinalizationIdentity),
+    Observed(Box<FinalizationIdentity>),
     Conflict,
+    PrincipalChanged,
     PriorAttemptNotFinalized,
 }
 
@@ -272,10 +281,19 @@ impl PublicationService {
         claim: SelectionClaim,
         input: PublicationInput,
     ) -> Result<PublicationOutcome, PublicationError> {
+        self.publish_attributed(claim, input, None).await
+    }
+
+    pub async fn publish_attributed(
+        &self,
+        claim: SelectionClaim,
+        input: PublicationInput,
+        attribution: Option<crate::identity::RequestAttribution>,
+    ) -> Result<PublicationOutcome, PublicationError> {
         let service = self.clone();
         let (sender, receiver) = oneshot::channel();
         tokio::spawn(async move {
-            let outcome = service.publish_owned(claim, input).await;
+            let outcome = service.publish_owned(claim, input, attribution).await;
             if let Err(outcome) = sender.send(outcome) {
                 service.compensate_lost_delivery(outcome).await;
             }
@@ -291,7 +309,11 @@ impl PublicationService {
         &self,
         claim: SelectionClaim,
         input: PublicationInput,
+        attribution: Option<crate::identity::RequestAttribution>,
     ) -> Result<PublicationOutcome, PublicationError> {
+        let attribution = attribution.unwrap_or_else(|| {
+            crate::identity::AuthenticatedPrincipal::legacy_shared_key().request_attribution()
+        });
         if let Err(error) = self.validate(&claim, &input) {
             return self.rollback_after_error(claim, error);
         }
@@ -306,13 +328,18 @@ impl PublicationService {
             Ok(prepared) => prepared,
             Err(error) => return self.rollback_after_error(claim, error),
         };
-        let transaction = self.publish_transaction(&claim, &input, prepared).await;
+        let transaction = self
+            .publish_transaction(&claim, &input, &attribution, prepared)
+            .await;
         let transaction = match transaction {
             Ok(value) => value,
             Err(error) => return self.rollback_after_error(claim, error),
         };
         if matches!(transaction, TransactionOutcome::PriorAttemptNotFinalized) {
             return self.rollback_after_error(claim, PublicationError::PriorAttemptNotFinalized);
+        }
+        if matches!(transaction, TransactionOutcome::PrincipalChanged) {
+            return self.rollback_after_error(claim, PublicationError::PrincipalChanged);
         }
 
         let TransactionOutcome::Created {
@@ -338,6 +365,9 @@ impl PublicationService {
                         proxy_request_id: input.proxy_request_id,
                     },
                 ),
+                TransactionOutcome::PrincipalChanged => {
+                    self.rollback_after_error(claim, PublicationError::PrincipalChanged)
+                }
                 TransactionOutcome::Created { .. } => Err(PublicationError::InvalidInput(
                     "unexpected created outcome after duplicate-publication branch".to_owned(),
                 )),
@@ -347,7 +377,14 @@ impl PublicationService {
             };
         };
 
-        let identity = self.identity(&claim, &input, request_id, attempt_id, reservation_id);
+        let identity = self.identity(
+            &claim,
+            &input,
+            &attribution,
+            request_id,
+            attempt_id,
+            reservation_id,
+        );
         let receipt = RuntimePublicationReceipt {
             pending_request_added: true,
             pending_tokens_added: true,
@@ -419,10 +456,12 @@ impl PublicationService {
         &self,
         claim: &SelectionClaim,
         input: &PublicationInput,
+        attribution: &crate::identity::RequestAttribution,
         prepared: PreparedRoutingDecisionRow,
     ) -> Result<TransactionOutcome, PublicationError> {
         let database = self.database.clone();
         let input = input.clone();
+        let attribution = attribution.clone();
         let account_name = claim.account_name().to_owned();
         let account_id = claim.account_id();
         let provider_id = claim.provider_id().to_owned();
@@ -434,9 +473,47 @@ impl PublicationService {
         let transaction_injector = injector.clone();
         let result = database
             .with_named_transaction(crate::db::TransactionKind::Publication, move |connection| {
+                if let Some(user_id) = attribution.user_id.as_deref() {
+                    let current: Option<(String, i64)> = connection
+                        .query_row(
+                            "SELECT state, auth_epoch FROM users WHERE id = ?1",
+                            [user_id],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    if !current.is_some_and(|(state, epoch)| {
+                        state == "active" && Some(epoch) == attribution.auth_epoch
+                    }) {
+                        return Ok(TransactionOutcome::PrincipalChanged);
+                    }
+                    if let Some(credential_id) = attribution.credential_id.as_deref() {
+                        let credential_active: bool = match attribution.principal_kind {
+                            crate::identity::PrincipalKind::AgentToken => connection.query_row(
+                                "SELECT EXISTS(SELECT 1 FROM user_credentials \
+                                 WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL \
+                                 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP))",
+                                (credential_id, user_id),
+                                |row| row.get(0),
+                            )?,
+                            crate::identity::PrincipalKind::BrowserSession => connection.query_row(
+                                "SELECT EXISTS(SELECT 1 FROM web_sessions \
+                                 WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL \
+                                 AND expires_at > CURRENT_TIMESTAMP \
+                                 AND last_used_at > datetime('now', '-12 hours'))",
+                                (credential_id, user_id),
+                                |row| row.get(0),
+                            )?,
+                            crate::identity::PrincipalKind::LegacySharedKey => true,
+                        };
+                        if !credential_active {
+                            return Ok(TransactionOutcome::PrincipalChanged);
+                        }
+                    }
+                }
                 let existing = connection
                     .query_row(
-                        "SELECT id, account_id, model_id, provider_id, protocol, streamed, status\n\
+                        "SELECT id, account_id, model_id, provider_id, protocol, streamed, status,\n\
+                                user_id, credential_id, auth_epoch, principal_kind, request_kind, parent_proxy_request_id\n\
                          FROM requests WHERE proxy_request_id = ?1",
                         [&input.proxy_request_id],
                         |row| {
@@ -448,6 +525,12 @@ impl PublicationService {
                                 row.get::<_, String>(4)?,
                                 row.get::<_, i64>(5)?,
                                 row.get::<_, String>(6)?,
+                                row.get::<_, Option<String>>(7)?,
+                                row.get::<_, Option<String>>(8)?,
+                                row.get::<_, Option<i64>>(9)?,
+                                row.get::<_, String>(10)?,
+                                row.get::<_, String>(11)?,
+                                row.get::<_, Option<String>>(12)?,
                             ))
                         },
                     )
@@ -461,11 +544,23 @@ impl PublicationService {
                     existing_protocol,
                     existing_streamed,
                     existing_status,
+                    existing_user_id,
+                    existing_credential_id,
+                    existing_auth_epoch,
+                    existing_principal_kind,
+                    existing_request_kind,
+                    existing_parent_proxy_request_id,
                 )) = existing
                 {
                     if existing_model_id != model_id
                         || existing_protocol != input.client_protocol
                         || existing_streamed != i64::from(input.streamed)
+                        || existing_user_id != attribution.user_id
+                        || existing_credential_id != attribution.credential_id
+                        || existing_auth_epoch != attribution.auth_epoch
+                        || existing_principal_kind != attribution.principal_kind.as_str()
+                        || existing_request_kind != attribution.request_kind.as_str()
+                        || existing_parent_proxy_request_id != attribution.parent_proxy_request_id
                     {
                         return Ok(TransactionOutcome::Conflict);
                     }
@@ -519,7 +614,7 @@ impl PublicationService {
                             [existing_account_id],
                             |row| row.get::<_, String>(0),
                         )?;
-                        return Ok(TransactionOutcome::Observed(FinalizationIdentity {
+                        return Ok(TransactionOutcome::Observed(Box::new(FinalizationIdentity {
                             proxy_request_id: input.proxy_request_id,
                             db_request_id: request_id,
                             attempt_id,
@@ -532,7 +627,13 @@ impl PublicationService {
                             client_protocol: input.client_protocol,
                             upstream_protocol,
                             attempt_number: input.attempt_number,
-                        }));
+                            user_id: attribution.user_id,
+                            credential_id: attribution.credential_id,
+                            auth_epoch: attribution.auth_epoch,
+                            principal_kind: attribution.principal_kind,
+                            request_kind: attribution.request_kind,
+                            parent_proxy_request_id: attribution.parent_proxy_request_id,
+                        })));
                     }
                     if input.attempt_number > 1 {
                         let prior_attempt = connection
@@ -596,9 +697,11 @@ impl PublicationService {
                 connection.execute(
                     "INSERT INTO requests\n\
                      (account_id, model_id, status, protocol, streamed,\n\
-                      reserved_microdollars, proxy_request_id, provider_id, first_attempt_at)\n\
+                      reserved_microdollars, proxy_request_id, provider_id, first_attempt_at,\n\
+                      user_id, credential_id, auth_epoch, principal_kind, request_kind, parent_proxy_request_id)\n\
                      VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7,\n\
-                             CASE WHEN ?8 = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)",
+                             CASE WHEN ?8 = 1 THEN CURRENT_TIMESTAMP ELSE NULL END,\n\
+                             ?9, ?10, ?11, ?12, ?13, ?14)",
                     params![
                         account_id,
                         model_id,
@@ -608,6 +711,12 @@ impl PublicationService {
                         input.proxy_request_id,
                         provider_id,
                         i64::from(input.attempt_number == 1),
+                        attribution.user_id,
+                        attribution.credential_id,
+                        attribution.auth_epoch,
+                        attribution.principal_kind.as_str(),
+                        attribution.request_kind.as_str(),
+                        attribution.parent_proxy_request_id,
                     ],
                 )?;
                 let request_id = connection.last_insert_rowid();
@@ -747,6 +856,7 @@ impl PublicationService {
         &self,
         claim: &SelectionClaim,
         input: &PublicationInput,
+        attribution: &crate::identity::RequestAttribution,
         request_id: i64,
         attempt_id: i64,
         reservation_id: i64,
@@ -764,6 +874,12 @@ impl PublicationService {
             client_protocol: input.client_protocol.clone(),
             upstream_protocol: input.upstream_protocol.clone(),
             attempt_number: input.attempt_number,
+            user_id: attribution.user_id.clone(),
+            credential_id: attribution.credential_id.clone(),
+            auth_epoch: attribution.auth_epoch,
+            principal_kind: attribution.principal_kind,
+            request_kind: attribution.request_kind,
+            parent_proxy_request_id: attribution.parent_proxy_request_id.clone(),
         }
     }
 

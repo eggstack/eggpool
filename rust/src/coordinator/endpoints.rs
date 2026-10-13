@@ -113,6 +113,8 @@ pub enum EndpointError {
     BodyTooLarge,
     #[error("Duplicate request identity")]
     PublicationConflict,
+    #[error("Authentication changed")]
+    PrincipalChanged,
     #[error("Routing claim failed")]
     Claim,
     #[error("Provider attempt failed")]
@@ -175,6 +177,7 @@ impl EndpointError {
             | Self::InvalidStream
             | Self::Admission => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::PrincipalChanged => StatusCode::UNAUTHORIZED,
             Self::NoEligibleRoute | Self::Attempt => StatusCode::SERVICE_UNAVAILABLE,
             Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
@@ -486,6 +489,7 @@ fn map_stream_error(error: super::StreamingCoordinatorError) -> EndpointError {
 fn map_publication_error(error: super::PublicationError) -> EndpointError {
     match error {
         super::PublicationError::DuplicateConflict { .. } => EndpointError::PublicationConflict,
+        super::PublicationError::PrincipalChanged => EndpointError::PrincipalChanged,
         super::PublicationError::InvalidInput(_) => EndpointError::Admission,
         super::PublicationError::ClaimIdentity(_)
         | super::PublicationError::Claim(_)
@@ -584,6 +588,7 @@ async fn resolve_concrete(
     mut parsed: ParsedRequestBody,
     session_header: Option<&str>,
     proxy_request_id: &str,
+    attribution: Option<&crate::identity::RequestAttribution>,
 ) -> Result<ResolvedInference, EndpointError> {
     let model_value = model_field(parsed.object()?)?;
     // Exact virtual-alias match comes before concrete provider parsing.
@@ -624,6 +629,7 @@ async fn resolve_concrete(
         &router,
         session_header,
         proxy_request_id,
+        attribution,
     )
     .await
 }
@@ -635,6 +641,7 @@ async fn resolve_virtual(
     router: &CompiledModelRouter,
     session_header: Option<&str>,
     proxy_request_id: &str,
+    attribution: Option<&crate::identity::RequestAttribution>,
 ) -> Result<ResolvedInference, EndpointError> {
     // Build the early canonical view for the semantic prompt and affinity
     // identity. Admission here is bounded by the same body ceiling.
@@ -646,7 +653,8 @@ async fn resolve_virtual(
     let known = state.known_providers.clone();
     let registry_virtual = state.registry.clone();
     let selector = SemanticSelector::new(state.finite.clone(), known)
-        .with_virtual_check(move |model| registry_virtual.is_virtual(model));
+        .with_virtual_check(move |model| registry_virtual.is_virtual(model))
+        .with_attribution(attribution.map(|principal| principal.selector_child(proxy_request_id)));
     if router.sticky
         && let Some(identity) = identity
     {
@@ -806,6 +814,27 @@ pub async fn execute_endpoint(
     session_header: Option<String>,
     proxy_request_id: String,
 ) -> Result<EndpointExecution, EndpointError> {
+    execute_endpoint_attributed(
+        state,
+        surface,
+        raw_body,
+        incoming_headers,
+        session_header,
+        proxy_request_id,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn execute_endpoint_attributed(
+    state: &InferenceState,
+    surface: ClientSurface,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    session_header: Option<String>,
+    proxy_request_id: String,
+    attribution: Option<crate::identity::RequestAttribution>,
+) -> Result<EndpointExecution, EndpointError> {
     let parsed =
         parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
             AdmissionError::BodyTooLarge { .. } => EndpointError::BodyTooLarge,
@@ -820,6 +849,7 @@ pub async fn execute_endpoint(
         parsed,
         session_header.as_deref(),
         &proxy_request_id,
+        attribution.as_ref(),
     )
     .await?;
     let admitted = admit_resolved(
@@ -845,11 +875,16 @@ pub async fn execute_endpoint(
         // `from_admitted` only fails with `InvalidFacts`, which the typed
         // mapper already classifies as `Admission`.
         .map_err(map_stream_error)?;
-        let execution = state
-            .streaming
-            .execute(request)
-            .await
-            .map_err(map_stream_error)?;
+        let execution = match attribution.clone() {
+            Some(attribution) => {
+                state
+                    .streaming
+                    .execute_attributed(request, attribution)
+                    .await
+            }
+            None => state.streaming.execute(request).await,
+        }
+        .map_err(map_stream_error)?;
         Ok(EndpointExecution::Stream(
             Box::new(execution),
             resolved.virtual_resolution,
@@ -866,11 +901,11 @@ pub async fn execute_endpoint(
         // `from_admitted` only fails with `InvalidFacts`, which the typed
         // mapper already classifies as `Admission`.
         .map_err(map_finite_error)?;
-        let execution = state
-            .finite
-            .execute(request)
-            .await
-            .map_err(map_finite_error)?;
+        let execution = match attribution {
+            Some(attribution) => state.finite.execute_attributed(request, attribution).await,
+            None => state.finite.execute(request).await,
+        }
+        .map_err(map_finite_error)?;
         Ok(EndpointExecution::Finite(
             Box::new(execution),
             resolved.virtual_resolution,
@@ -897,6 +932,25 @@ pub async fn execute_compact_finite(
     session_header: Option<String>,
     proxy_request_id: String,
 ) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
+    execute_compact_finite_attributed(
+        state,
+        raw_body,
+        incoming_headers,
+        session_header,
+        proxy_request_id,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn execute_compact_finite_attributed(
+    state: &InferenceState,
+    raw_body: Bytes,
+    incoming_headers: HeaderMap,
+    session_header: Option<String>,
+    proxy_request_id: String,
+    attribution: Option<crate::identity::RequestAttribution>,
+) -> Result<(FiniteExecution, Option<VirtualResolution>), EndpointError> {
     const SURFACE: ClientSurface = ClientSurface::Responses;
     let parsed =
         parse_request_body(raw_body, state.max_body_bytes).map_err(|error| match error {
@@ -920,6 +974,7 @@ pub async fn execute_compact_finite(
         parsed,
         session_header.as_deref(),
         &proxy_request_id,
+        attribution.as_ref(),
     )
     .await?;
     let compact = admit_compact_parsed_request(
@@ -947,6 +1002,7 @@ pub async fn execute_compact_finite(
             incoming_headers,
             compact,
             routing_facts,
+            attribution,
         )
         .await
         .map_err(map_finite_error)?;

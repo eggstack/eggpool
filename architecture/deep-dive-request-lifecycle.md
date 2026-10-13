@@ -31,6 +31,12 @@ adapts the response, and converges durable state.
 - `authenticate`/`requires_auth` enforce constant-time `Bearer`/`x-api-key`
   auth; `/api/integrations/*`, `/api/stats/runtime`, `/api/stats/update`,
   `/api/status`, and all `/v1/*` stay authenticated.
+  For authenticated inference, middleware installs a typed
+  `AuthenticatedPrincipal`: personal agent tokens resolve user, credential,
+  scopes, and auth epoch from SQLite; browser sessions resolve the same user
+  and session identity; the staged shared-key path is explicitly marked
+  `legacy_shared_key` with no downstream user ID. Request headers never set
+  the principal.
   `finish_empty_transport_body` only drains provably bodyless requests.
 
 ## 2. Endpoint classification (one parse, one call)
@@ -53,7 +59,10 @@ adapts the response, and converges durable state.
   the ingress `Bytes` handle via refcount; provider-qualified rewrite
   re-encodes only on an actual model-id change); virtual aliases resolve through
   `SemanticSelector` over the same `FiniteCoordinator` with recursion refusal
-  and affinity commit in the endpoints layer only.
+  and affinity commit in the endpoints layer only. The typed principal is
+  passed through virtual selection too; selector dispatches persist as
+  `internal_selector` children linked to the parent proxy request ID, so
+  they remain attributable without counting as another logical user request.
 - `EndpointError::status` maps admission errors; `endpoint_error_body` shapes
   OpenAI vs Messages envelopes truncated to 512 bytes. `new_proxy_request_id`
   mints the opaque proxy identity; `coordinator/attempt.rs::add_forwarded_headers`
@@ -106,8 +115,13 @@ adapts the response, and converges durable state.
 - `PublicationService::publish` converts one routing claim into durable
   `requests`/`request_attempts`/`reservations`/`routing_decisions` rows plus a
   `FinalizationIdentity`; duplicates observe `AlreadyPublished`, conflicts fail
-  closed. The worker survives caller cancellation and compensates lost
-  delivery.
+  closed. The request row stores owner user ID, credential/session ID, auth
+  epoch, principal kind, request kind, and optional selector parent. The
+  publication transaction rechecks active user/credential state before
+  dispatch; the immutable owner fields travel in `FinalizationIdentity` and
+  must still match before terminalization. Null user IDs remain explicitly
+  legacy/unattributed history. The worker survives caller cancellation and
+  compensates lost delivery.
 - `FinalizationSupervisor::register`/`wait` retains terminal ownership;
   `DurableFinalizer::finalize_request` vs `finalize_failed_attempt` separate
   terminal from retry-cleanup convergence. `CrashReconciler::reconcile_once`

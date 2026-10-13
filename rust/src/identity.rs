@@ -63,10 +63,156 @@ pub struct UserSummary {
     pub must_change_password: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserRequestSummary {
+    pub proxy_request_id: Option<String>,
+    pub model_id: String,
+    pub provider_id: String,
+    pub status: String,
+    pub started_at: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_microdollars: i64,
+}
+
+/// Return a bounded, content-free request history for one user. Internal
+/// selector children are excluded so downstream callers see logical requests.
+pub async fn recent_user_requests(
+    database: &Database,
+    user_id: &str,
+    limit: usize,
+) -> Result<Vec<UserRequestSummary>, IdentityError> {
+    let user_id = user_id.to_owned();
+    let limit = limit.clamp(1, 500) as i64;
+    database
+        .call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT proxy_request_id, model_id, provider_id, status, started_at,\
+                        COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),\
+                        COALESCE(cost_microdollars, 0)\
+                 FROM requests WHERE user_id = ?1 AND request_kind = 'logical'\
+                 ORDER BY started_at DESC, id DESC LIMIT ?2",
+            )?;
+            let rows = statement.query_map((user_id, limit), |row| {
+                Ok(UserRequestSummary {
+                    proxy_request_id: row.get(0)?,
+                    model_id: row.get(1)?,
+                    provider_id: row.get(2)?,
+                    status: row.get(3)?,
+                    started_at: row.get(4)?,
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    cost_microdollars: row.get(7)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct IssuedCredential {
     pub user_id: String,
     pub token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum PrincipalKind {
+    AgentToken,
+    BrowserSession,
+    LegacySharedKey,
+}
+
+impl PrincipalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentToken => "agent_token",
+            Self::BrowserSession => "browser_session",
+            Self::LegacySharedKey => "legacy_shared_key",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedPrincipal {
+    pub user_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub role: Option<String>,
+    pub scopes: Vec<String>,
+    pub auth_epoch: Option<i64>,
+    pub kind: PrincipalKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum AttributedRequestKind {
+    Logical,
+    InternalSelector,
+}
+
+impl AttributedRequestKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Logical => "logical",
+            Self::InternalSelector => "internal_selector",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestAttribution {
+    pub user_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub auth_epoch: Option<i64>,
+    pub principal_kind: PrincipalKind,
+    pub request_kind: AttributedRequestKind,
+    pub parent_proxy_request_id: Option<String>,
+}
+
+impl RequestAttribution {
+    pub fn selector_child(&self, parent_proxy_request_id: &str) -> Self {
+        Self {
+            request_kind: AttributedRequestKind::InternalSelector,
+            parent_proxy_request_id: Some(parent_proxy_request_id.to_owned()),
+            ..self.clone()
+        }
+    }
+}
+
+impl AuthenticatedPrincipal {
+    pub fn legacy_shared_key() -> Self {
+        Self {
+            user_id: None,
+            credential_id: None,
+            role: None,
+            scopes: vec!["inference".to_owned()],
+            auth_epoch: None,
+            kind: PrincipalKind::LegacySharedKey,
+        }
+    }
+
+    pub fn is_user_principal(&self) -> bool {
+        self.user_id.is_some()
+    }
+
+    pub fn request_attribution(&self) -> RequestAttribution {
+        RequestAttribution {
+            user_id: self.user_id.clone(),
+            credential_id: self.credential_id.clone(),
+            auth_epoch: self.auth_epoch,
+            principal_kind: self.kind,
+            request_kind: AttributedRequestKind::Logical,
+            parent_proxy_request_id: None,
+        }
+    }
+
+    pub fn selector_attribution(&self, parent_proxy_request_id: &str) -> RequestAttribution {
+        RequestAttribution {
+            request_kind: AttributedRequestKind::InternalSelector,
+            parent_proxy_request_id: Some(parent_proxy_request_id.to_owned()),
+            ..self.request_attribution()
+        }
+    }
 }
 
 /// Create the sole initial administrator and an inference-only personal key
@@ -216,7 +362,7 @@ pub async fn reset_password(
     let result = database
         .with_transaction(move |connection| {
             let changed = connection.execute(
-                "UPDATE users SET password_hash = ?1, must_change_password = 0, updated_at = CURRENT_TIMESTAMP WHERE normalized_username = ?2 AND state = 'active'",
+                "UPDATE users SET password_hash = ?1, must_change_password = 0, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE normalized_username = ?2 AND state = 'active'",
                 (&password_hash, &normalized),
             )?;
             if changed == 0 {
@@ -402,41 +548,62 @@ pub async fn verify_password(
 /// Resolve a high-entropy personal token by its non-secret selector. Only the
 /// digest is stored; the final digest check is fixed length and branchless.
 pub async fn verify_api_token(database: &Database, token: &str) -> Result<bool, IdentityError> {
+    Ok(verify_api_token_principal(database, token).await?.is_some())
+}
+
+pub async fn verify_api_token_principal(
+    database: &Database,
+    token: &str,
+) -> Result<Option<AuthenticatedPrincipal>, IdentityError> {
     let Some(rest) = token.strip_prefix("epk1_") else {
-        return Ok(false);
+        return Ok(None);
     };
     let Some((selector, _secret)) = rest.split_once('_') else {
-        return Ok(false);
+        return Ok(None);
     };
     if selector.len() != 16
         || !selector.bytes().all(|byte| byte.is_ascii_hexdigit())
         || token.len() > 128
     {
-        return Ok(false);
+        return Ok(None);
     }
     let failed_digest = digest(token);
     if failed_token_recently_seen(&failed_digest) {
-        return Ok(false);
+        return Ok(None);
     }
     let selector = selector.to_owned();
     let expected = failed_digest.clone();
     database.call(move |connection| {
-        let stored: Option<String> = connection.query_row(
-            "SELECT c.digest FROM user_credentials c JOIN users u ON u.id = c.user_id WHERE c.selector = ?1 AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > CURRENT_TIMESTAMP) AND u.state = 'active'",
+        let stored: Option<(String, String, String, String, i64)> = connection.query_row(
+            "SELECT c.digest, c.id, c.user_id, c.scopes, u.auth_epoch FROM user_credentials c JOIN users u ON u.id = c.user_id WHERE c.selector = ?1 AND c.revoked_at IS NULL AND (c.expires_at IS NULL OR c.expires_at > CURRENT_TIMESTAMP) AND u.state = 'active'",
             [&selector],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         ).optional()?;
-        let Some(stored) = stored else {
+        let Some((stored, credential_id, user_id, scopes, auth_epoch)) = stored else {
             remember_failed_token(&failed_digest);
-            return Ok(false);
+            return Ok(None);
         };
         let matches = constant_time_equal(stored.as_bytes(), expected.as_bytes());
         if matches {
             connection.execute("UPDATE user_credentials SET last_used_at = CURRENT_TIMESTAMP WHERE selector = ?1 AND (last_used_at IS NULL OR last_used_at < datetime('now', '-15 minutes'))", [&selector])?;
+            let scopes = scopes
+                .split(',')
+                .map(str::trim)
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_owned)
+                .collect();
+            Ok(Some(AuthenticatedPrincipal {
+                user_id: Some(user_id),
+                credential_id: Some(credential_id),
+                role: Some("agent".to_owned()),
+                scopes,
+                auth_epoch: Some(auth_epoch),
+                kind: PrincipalKind::AgentToken,
+            }))
         } else {
             remember_failed_token(&failed_digest);
+            Ok(None)
         }
-        Ok(matches)
     }).await.map_err(IdentityError::Database)
 }
 

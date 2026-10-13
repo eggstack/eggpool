@@ -417,6 +417,7 @@ pub struct SemanticSelector {
     known_providers: BTreeSet<String>,
     max_response_bytes: usize,
     is_virtual: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    attribution: Option<crate::identity::RequestAttribution>,
 }
 
 impl std::fmt::Debug for SemanticSelector {
@@ -425,6 +426,7 @@ impl std::fmt::Debug for SemanticSelector {
             .debug_struct("SemanticSelector")
             .field("known_providers", &self.known_providers)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("has_attribution", &self.attribution.is_some())
             .finish()
     }
 }
@@ -436,7 +438,16 @@ impl SemanticSelector {
             known_providers,
             max_response_bytes: SELECTOR_MAX_RESPONSE_BYTES,
             is_virtual: std::sync::Arc::new(|_| false),
+            attribution: None,
         }
+    }
+
+    pub fn with_attribution(
+        mut self,
+        attribution: Option<crate::identity::RequestAttribution>,
+    ) -> Self {
+        self.attribution = attribution;
+        self
     }
 
     pub fn with_virtual_check(
@@ -708,11 +719,15 @@ impl SemanticSelector {
         )
         .map_err(|error| SelectorDispatchError::Admission(error.to_string()))?;
         request.routing_facts.provider_id = provider_pin;
-        let execution = self
-            .coordinator
-            .execute(request)
-            .await
-            .map_err(|error| SelectorDispatchError::Dispatch(error.to_string()))?;
+        let execution = match self.attribution.clone() {
+            Some(attribution) => {
+                self.coordinator
+                    .execute_attributed(request, attribution)
+                    .await
+            }
+            None => self.coordinator.execute(request).await,
+        }
+        .map_err(|error| SelectorDispatchError::Dispatch(error.to_string()))?;
         let status = execution.response.status.as_u16();
         let body = execution.response.body.clone();
         // Converge retained C006 ownership before reading the route ID so a

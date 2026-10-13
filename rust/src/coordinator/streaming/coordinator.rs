@@ -206,6 +206,22 @@ impl StreamingCoordinator {
         &self,
         request: StreamRequest,
     ) -> Result<StreamingExecution, StreamingCoordinatorError> {
+        self.execute_inner(request, None).await
+    }
+
+    pub(crate) async fn execute_attributed(
+        &self,
+        request: StreamRequest,
+        attribution: crate::identity::RequestAttribution,
+    ) -> Result<StreamingExecution, StreamingCoordinatorError> {
+        self.execute_inner(request, Some(attribution)).await
+    }
+
+    async fn execute_inner(
+        &self,
+        request: StreamRequest,
+        attribution: Option<crate::identity::RequestAttribution>,
+    ) -> Result<StreamingExecution, StreamingCoordinatorError> {
         if request.admitted.canonical.origin.client_surface() != Some(request.client_surface)
             || request.routing_facts.canonical_model_id != request.admitted.canonical.model
             || !request.admitted.canonical.stream
@@ -400,7 +416,11 @@ impl StreamingCoordinator {
                 true,
                 i64::from(attempt_number),
             );
-            let published = match self.publication.publish(claim, publication_input).await? {
+            let published = match self
+                .publication
+                .publish_attributed(claim, publication_input, attribution.clone())
+                .await?
+            {
                 PublicationOutcome::Published(value) => value,
                 PublicationOutcome::AlreadyPublished(_) => {
                     return Err(StreamingCoordinatorError::Publication(

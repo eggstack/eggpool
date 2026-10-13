@@ -301,6 +301,12 @@ fn attempt_preparation_expands_path_and_never_debugs_credentials() {
         client_protocol: "openai".into(),
         upstream_protocol: "openai".into(),
         attempt_number: 1,
+        user_id: None,
+        credential_id: None,
+        auth_epoch: None,
+        principal_kind: eggpool::identity::PrincipalKind::LegacySharedKey,
+        request_kind: eggpool::identity::AttributedRequestKind::Logical,
+        parent_proxy_request_id: None,
     };
     let attempt = builder
         .prepare(AttemptInput {

@@ -328,7 +328,8 @@ impl DurableFinalizer {
             move |connection| {
             let request = connection
                 .query_row(
-                    "SELECT account_id, model_id, provider_id, protocol, streamed, status
+                    "SELECT account_id, model_id, provider_id, protocol, streamed, status,
+                            user_id, credential_id, auth_epoch, principal_kind, request_kind, parent_proxy_request_id
                      FROM requests WHERE id = ?1",
                     [identity.db_request_id],
                     |row| {
@@ -339,11 +340,30 @@ impl DurableFinalizer {
                             row.get::<_, String>(3)?,
                             row.get::<_, i64>(4)?,
                             row.get::<_, String>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                            row.get::<_, Option<i64>>(8)?,
+                            row.get::<_, String>(9)?,
+                            row.get::<_, String>(10)?,
+                            row.get::<_, Option<String>>(11)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((account_id, model_id, provider_id, protocol, _streamed, current)) = request
+            let Some((
+                account_id,
+                model_id,
+                provider_id,
+                protocol,
+                _streamed,
+                current,
+                user_id,
+                credential_id,
+                auth_epoch,
+                principal_kind,
+                request_kind,
+                parent_proxy_request_id,
+            )) = request
             else {
                 return Ok(TxnResult::Invariant {
                     entity: "request",
@@ -353,6 +373,12 @@ impl DurableFinalizer {
             };
             let request_identity_matches = model_id == identity.model_id
                 && protocol == identity.client_protocol
+                && user_id == identity.user_id
+                && credential_id == identity.credential_id
+                && auth_epoch == identity.auth_epoch
+                && principal_kind == identity.principal_kind.as_str()
+                && request_kind == identity.request_kind.as_str()
+                && parent_proxy_request_id == identity.parent_proxy_request_id
                 && (!terminalize_request
                     || (account_id == identity.account_id
                         && provider_id == identity.provider_id));
