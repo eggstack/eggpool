@@ -7,26 +7,28 @@ pub(super) async fn authenticate(
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    if !requires_auth(request.uri().path(), &state.server) {
+    let path = request.uri().path();
+    if is_unconditionally_public(path) {
         return next.run(request).await;
     }
-    let personal_allowed = personal_credential_allowed(request.uri().path());
-    let access_state = crate::identity::access_state(&state.database).await.ok();
-    if state.server.api_key.as_deref().is_none()
-        && legacy_server_key_allowed(access_state.as_deref())
-    {
-        return next.run(request).await;
+    let access_state = match crate::identity::access_state(&state.database).await {
+        Ok(access_state) => access_state,
+        Err(_) => return auth_unavailable(),
+    };
+    if legacy_server_key_allowed(Some(&access_state)) {
+        if !requires_auth(path, &state.server)
+            || state.server.api_key.is_none()
+            || state
+                .server
+                .api_key
+                .as_deref()
+                .is_some_and(|key| verify_api_key(request.headers(), key))
+        {
+            return next.run(request).await;
+        }
+        return unauthorized("Invalid or missing API key");
     }
-    if state
-        .server
-        .api_key
-        .as_deref()
-        .is_some_and(|key| verify_api_key(request.headers(), key))
-        && legacy_server_key_allowed(access_state.as_deref())
-    {
-        return next.run(request).await;
-    }
-    if personal_allowed
+    if personal_credential_allowed(path)
         && let Some(token) = provided_api_key(request.headers())
         && crate::identity::verify_api_token(&state.database, token)
             .await
@@ -34,13 +36,51 @@ pub(super) async fn authenticate(
     {
         return next.run(request).await;
     }
-    (
-        StatusCode::UNAUTHORIZED,
-        axum::Json(json!({
-            "detail": "Invalid or missing API key"
-        })),
-    )
-        .into_response()
+    if personal_credential_allowed(path) {
+        return unauthorized("Invalid or missing personal API credential");
+    }
+
+    let Some(session_token) = crate::web_session::session_cookie_value(request.headers()) else {
+        return unauthorized("Sign in required");
+    };
+    let principal = match crate::web_session::authenticate(&state.database, &session_token).await {
+        Ok(Some(principal)) => principal,
+        Ok(None) => return unauthorized("Sign in required"),
+        Err(_) => return auth_unavailable(),
+    };
+    let account_surface = matches!(path, "/account" | "/account/password" | "/logout");
+    if principal.role != "admin" && !account_surface {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    if principal.must_change_password
+        && !matches!(path, "/account" | "/account/password" | "/logout")
+    {
+        return axum::response::Redirect::to("/account?password=required").into_response();
+    }
+    let connection = request
+        .extensions()
+        .get::<eggserve_server::interop::ConnectionInfoExt>();
+    let secure = super::auth::request_is_secure(
+        connection.map(|extension| &extension.0),
+        request.headers(),
+        &state.server,
+    );
+    if !super::auth::web_auth_transport_allowed(
+        connection.map(|extension| &extension.0),
+        request.headers(),
+        &state.server,
+    ) || (is_unsafe_method(request.method())
+        && !super::auth::same_origin(request.headers(), secure))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "Cross-origin or insecure request rejected.",
+        )
+            .into_response();
+    }
+    let mut request = request;
+    request.extensions_mut().insert(principal);
+    next.run(request).await
 }
 
 fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
@@ -48,11 +88,42 @@ fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
 }
 
 fn personal_credential_allowed(path: &str) -> bool {
-    path.starts_with("/v1/") || path == "/api/integrations/v1/profile"
+    (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
+        || path == "/api/integrations/v1/profile"
+}
+
+fn is_unconditionally_public(path: &str) -> bool {
+    path == "/v1/healthz"
+        || path == "/v1/readyz"
+        || path.starts_with("/static/")
+        || path == "/login"
+}
+
+fn is_unsafe_method(method: &http::Method) -> bool {
+    matches!(
+        *method,
+        http::Method::POST | http::Method::PUT | http::Method::PATCH | http::Method::DELETE
+    )
+}
+
+fn unauthorized(detail: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::Json(json!({ "detail": detail })),
+    )
+        .into_response()
+}
+
+fn auth_unavailable() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Authentication service unavailable.",
+    )
+        .into_response()
 }
 
 pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
-    if path == "/v1/healthz" || path == "/v1/readyz" || path.starts_with("/static/") {
+    if is_unconditionally_public(path) {
         return false;
     }
     // EggPool-specific integration profile is always authenticated. It must
@@ -236,10 +307,27 @@ fn backpressure_response(surface: crate::wire::ir::ClientSurface, detail: Vec<u8
 
 pub(super) fn validate_server_key(config: &Config) -> Result<(), ServerError> {
     let key = config.resolved_server_api_key();
-    if !is_loopback_host(&config.server.host) && key.is_none() {
+    if key.as_deref().is_some_and(|value| !valid_key_shape(value)) {
         return Err(ServerError::InvalidApiKey);
     }
-    if key.as_deref().is_some_and(|value| !valid_key_shape(value)) {
+    Ok(())
+}
+
+pub(super) fn validate_server_access(
+    config: &Config,
+    access_state: &str,
+) -> Result<(), ServerError> {
+    validate_server_key(config)?;
+    if access_state == "fresh_uninitialized" && config.resolved_server_api_key().is_none() {
+        return Err(ServerError::StartupConflict {
+            detail: "fresh database requires local administrator bootstrap before serving"
+                .to_owned(),
+        });
+    }
+    if access_state == "legacy_unmigrated"
+        && !is_loopback_host(&config.server.host)
+        && config.resolved_server_api_key().is_none()
+    {
         return Err(ServerError::InvalidApiKey);
     }
     Ok(())

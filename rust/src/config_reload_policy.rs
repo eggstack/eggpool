@@ -883,6 +883,10 @@ const FIELD_DISPOSITIONS: &[(&str, ReloadDisposition)] = &[
         ReloadDisposition::Live,
     ),
     ("security.allowed_hosts", ReloadDisposition::RestartRequired),
+    (
+        "security.allow_insecure_web_auth",
+        ReloadDisposition::RestartRequired,
+    ),
     ("security.cors_origins", ReloadDisposition::RestartRequired),
     (
         "security.persist_redacted_error_detail",

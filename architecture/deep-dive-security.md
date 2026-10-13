@@ -20,34 +20,47 @@ structured events.
 capitalization) or the `x-api-key` header, pads both sides to fixed
 512-byte buffers, and folds the full pads before combining with the shape
 bits — so shape validity never short-circuits the compare. Provided and
-expected values must both satisfy `valid_key_shape()`. `validate_server_key()`
-fails startup closed when a non-loopback bind has no key or any key has a
-bad shape; a loopback listener without a key is allowed by design but logs
-a loud unauthenticated-loopback warning. `requires_auth()` exempts only
-`/v1/healthz`, `/v1/readyz`, and `/static/*`; inference (`/v1/*`),
-`/api/integrations/*`, `/api/stats/runtime`, `/api/stats/update`, and
-`/api/status` are always authenticated, and dashboard pages plus remaining
-`/api/*` routes require a key only once `[dashboard].public` is off. The
-integration profile never inherits a dashboard-public exemption.
+expected values must both satisfy `valid_key_shape()`. A shared server key is
+required for a non-loopback `legacy_unmigrated` installation; malformed
+configured keys fail startup. After local identity initialization, keyless
+listeners are allowed because protected routes use a personal agent token or
+browser session. Keyless loopback legacy mode retains its explicit
+unauthenticated warning. Legacy route behavior remains unchanged: health,
+readiness, and static assets are public; sensitive agent/operational routes
+require the shared key; ordinary dashboard pages follow
+`[dashboard].public`.
 
-After local identity initialization, the configured global key is limited to
-agent surfaces; personal credentials are checked against their selector and
-stored digest on each request. A new empty schema is marked
+After local identity initialization, the configured global key is not
+accepted on any route. Personal credentials are checked against their
+selector and stored digest on each agent request. A new empty schema is marked
 `fresh_uninitialized`, and a keyless listener refuses to start until local
-bootstrap. The public read-only dashboard behavior remains a separate legacy
-configuration choice.
+bootstrap. In `admin_initialized` and `managed`, the public-dashboard setting
+does not expose dashboard or `/api/*` data. Browser login/account routes are
+session-only; agent credentials cannot access them. Health/readiness and
+static assets remain public. Unknown `/api/*` routes require an administrator
+session before normal 404 handling.
 
 Downstream human identity is separate from provider `accounts`. Migration 55
-adds local `users`, `user_credentials`, and `user_access_state`; passwords use
-bounded Argon2id hashes, and personal `epk1` credentials store only a SHA-256
-digest plus a random selector. Password hashing runs in a bounded blocking
-worker pool outside the SQLite gate. Personal credentials authenticate only
-inference, `/v1/models`, and the scoped integration-profile endpoint; they do
-not authenticate dashboard/admin paths. `eggpool users reset-password`
-revokes the user's API credentials. The existing configured server key stays
-available as a legacy shared key until the later managed-mode transition.
-Upgraded schemas remain `legacy_unmigrated` until an operator explicitly
-creates the first local identity.
+adds local users, credentials, and access state; migration 56 adds opaque
+browser sessions with only token and CSRF digests stored. Passwords use
+bounded Argon2id hashes, and personal `epk1` credentials and `eps1` sessions
+store a SHA-256 digest plus a random selector. Password hashing runs in a
+bounded blocking worker pool outside the SQLite gate. Personal credentials
+authenticate only inference, `/v1/models`, and the scoped integration-profile
+endpoint; sessions authenticate dashboard administration and account routes
+but never inference. `eggpool users reset-password` revokes API credentials
+and browser sessions. The configured shared key stops authenticating when the
+first local identity is created. Upgraded schemas remain `legacy_unmigrated`
+until that identity is initialized.
+
+Sessions have a 12-hour idle bound and 7-day absolute expiry. Cookies are
+HttpOnly, SameSite=Lax, root-path scoped, and Secure when the accepted
+connection is HTTPS. Unsafe browser forms require same-origin Origin/Referer
+and a session-bound CSRF token. Remote login requires HTTPS or a trusted proxy
+peer listed as a literal IP in `security.trusted_proxies` that sends one
+`X-Forwarded-Proto: https` value. Other forwarded headers do not establish
+trust. `security.allow_insecure_web_auth` is an explicit development override
+and emits a startup warning.
 Failed personal-token lookups use a 256-entry, one-second negative cache keyed
 by token digest. Successful token lookups are not cached, so revocation takes
 effect on the next request.

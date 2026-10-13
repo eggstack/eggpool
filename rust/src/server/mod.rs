@@ -6,11 +6,13 @@
 //! Handlers invoke one coordinator entry point; routing/retry/finalization
 //! live in the coordinator, not here.
 
+mod auth;
 mod dashboard;
 mod health;
 mod inference;
 mod middleware;
 
+use auth::{account_page, login_page, login_submit, logout_submit, password_change};
 use dashboard::{
     accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, latency_page,
     model_detail_page, models_page, overview, pings_page, reliability_page, routing_page,
@@ -24,20 +26,29 @@ use health::{
 };
 use inference::{chat_completions, messages, responses, responses_compact};
 use middleware::{
-    admit_inference_body, authenticate, is_loopback_host, map_generation_error, validate_server_key,
+    admit_inference_body, authenticate, is_loopback_host, map_generation_error,
+    validate_server_access, validate_server_key,
 };
 
-/// Loud startup warning when running without an API key (loopback dev mode
-/// only). Non-loopback without a key is already a startup error via
-/// `validate_server_key`; loopback without a key is wide open by design and
-/// must be operator-visible. See `docs/deployment.md`.
-fn warn_if_unauthenticated_loopback(config: &Config) {
-    if config.resolved_server_api_key().is_none() && is_loopback_host(&config.server.host) {
+/// Loud startup warning while a legacy loopback instance remains keyless.
+fn warn_if_unauthenticated_loopback(config: &Config, access_state: &str) {
+    if access_state == "legacy_unmigrated"
+        && config.resolved_server_api_key().is_none()
+        && is_loopback_host(&config.server.host)
+    {
         tracing::warn!(
             host = config.server.host.as_str(),
             "server.api_key is not configured: loopback listener is UNAUTHENTICATED (dev convenience). \
              Set [server].api_key (or api_key_env) before binding a non-loopback host; \
              see docs/deployment.md"
+        );
+    }
+}
+
+fn warn_if_insecure_web_auth(config: &Config) {
+    if config.security.allow_insecure_web_auth {
+        tracing::warn!(
+            "security.allow_insecure_web_auth is enabled: remote browser passwords and session cookies may travel over plaintext HTTP"
         );
     }
 }
@@ -655,6 +666,8 @@ pub struct ServerState {
     dashboard_refresh_interval_s: u64,
     configured_server_threads: u32,
     database_path: String,
+    trusted_proxy_ips: Vec<String>,
+    allow_insecure_web_auth: bool,
     started_at: Instant,
 }
 
@@ -670,6 +683,8 @@ impl ServerState {
             database_path: Config::runtime_path(&config.database.path)
                 .to_string_lossy()
                 .into_owned(),
+            trusted_proxy_ips: config.security.trusted_proxies.clone(),
+            allow_insecure_web_auth: config.security.allow_insecure_web_auth,
             started_at: Instant::now(),
         }
     }
@@ -771,7 +786,6 @@ pub async fn run_with_digest(
     config_path: Option<std::path::PathBuf>,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
     ensure_start_state(&config).await?;
     if config.server.threads != 1 {
         tracing::warn!(
@@ -808,6 +822,9 @@ pub async fn run_with_digest(
             detail: "fresh database requires `eggpool onboard` or `eggpool users bootstrap` before serving".to_owned(),
         });
     }
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -960,7 +977,6 @@ pub async fn serve_listener(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -968,10 +984,27 @@ pub async fn serve_listener(
             return Err(error.into());
         }
     };
-    if let Err(error) = db::MigrationRunner::new(&database).run().await {
-        let _ = database.close().await;
-        return Err(error.into());
+    let migration_state = match db::MigrationRunner::new(&database).run().await {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
+    if migration_state.applied_this_run.len() == db::MigrationRunner::migrations().len() {
+        crate::identity::mark_fresh_uninitialized(&database).await?;
     }
+    let access_state = crate::identity::access_state(&database).await?;
+    if config.resolved_server_api_key().is_none() && access_state == "fresh_uninitialized" {
+        let _ = database.close().await;
+        return Err(ServerError::StartupConflict {
+            detail: "fresh database requires local administrator bootstrap before serving"
+                .to_owned(),
+        });
+    }
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;
         return Err(error);
@@ -1028,7 +1061,10 @@ pub async fn serve_listener_with_inference(
     listener: TcpListener,
 ) -> Result<(), ServerError> {
     validate_server_key(&config)?;
-    warn_if_unauthenticated_loopback(&config);
+    let access_state = crate::identity::access_state(&database).await?;
+    validate_server_access(&config, &access_state)?;
+    warn_if_unauthenticated_loopback(&config, &access_state);
+    warn_if_insecure_web_auth(&config);
     let process = match ProcessRuntime::new_with_config(database.clone(), &config) {
         Ok(process) => process,
         Err(error) => {
@@ -1079,6 +1115,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/static/chart.js", get(static_chart_js))
         .route("/static/favicon.svg", get(static_favicon))
         .route("/static/theme.css", get(theme_css));
+
+    router = router
+        .route("/login", get(login_page).post(login_submit))
+        .route("/account", get(account_page))
+        .route("/account/password", post(password_change))
+        .route("/logout", post(logout_submit));
 
     if dashboard {
         router = router
@@ -1178,6 +1220,8 @@ mod tests {
             dashboard_refresh_interval_s: 60,
             configured_server_threads: 1,
             database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: Vec::new(),
+            allow_insecure_web_auth: false,
             started_at: Instant::now(),
         }
     }

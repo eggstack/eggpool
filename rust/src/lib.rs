@@ -28,6 +28,7 @@ pub mod runtime_lifecycle;
 pub mod server;
 pub mod task_supervisor;
 pub mod version;
+pub mod web_session;
 pub mod wire;
 
 pub use cli::{Cli, Command};

@@ -76,6 +76,7 @@ eggfetch-core = { version = "=0.2.2", default-features = false, features = [
     "tls-rustls",
 ] }
 eggserve-server = { version = "=0.4.0", default-features = false, features = ["tower"] }
+eggserve-primitives = "=0.2.2"
 getrandom = "0.3.4"
 eggpool-client-config = { version = "0.1.0", path = "crates/eggpool-client-config" }
 eggpool-model-routing = { version = "0.1.0", path = "crates/eggpool-model-routing" }

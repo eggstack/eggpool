@@ -452,7 +452,10 @@ impl Default for DashboardConfig {
 #[serde(deny_unknown_fields, default)]
 pub struct SecurityConfig {
     pub allowed_hosts: Vec<String>,
+    pub allow_insecure_web_auth: bool,
     pub cors_origins: Vec<String>,
+    /// Literal proxy IPs whose single `X-Forwarded-Proto: https` value may
+    /// establish the external scheme for browser authentication.
     pub trusted_proxies: Vec<String>,
     pub redact_headers: Vec<String>,
     pub persist_redacted_error_detail: bool,
@@ -463,6 +466,7 @@ impl Default for SecurityConfig {
             allowed_hosts: Vec::new(),
             cors_origins: Vec::new(),
             trusted_proxies: Vec::new(),
+            allow_insecure_web_auth: false,
             redact_headers: vec!["authorization".into(), "x-api-key".into()],
             persist_redacted_error_detail: false,
         }
@@ -1548,6 +1552,13 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<(), ConfigError> {
+        for proxy in &self.security.trusted_proxies {
+            if proxy.parse::<std::net::IpAddr>().is_err() {
+                return Err(ConfigError::validation(
+                    "security.trusted_proxies entries must be literal IP addresses",
+                ));
+            }
+        }
         let wire_registry = crate::wire::WireProfileRegistry::embedded().map_err(|error| {
             ConfigError::validation(format!("invalid wire profile registry: {error}"))
         })?;

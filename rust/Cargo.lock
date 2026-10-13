@@ -1007,6 +1007,7 @@ dependencies = [
  "eggress-protocol-trojan",
  "eggress-server",
  "eggress-uri",
+ "eggserve-primitives",
  "eggserve-server",
  "getrandom 0.3.4",
  "http",

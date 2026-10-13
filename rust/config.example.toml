@@ -437,10 +437,13 @@ cleanup_max_rows_per_pass = 5000
 [security]
 allowed_hosts = []
 cors_origins = []
-# Honor X-Forwarded-For/X-Real-IP only when the immediate peer is listed here.
+# Honor forwarded client-attribution headers only when the immediate peer is
+# listed here. For browser login over proxy-terminated HTTPS, EggPool also
+# trusts X-Forwarded-Proto: https only from an exact listed peer IP.
 # Configure only proxies that overwrite or correctly append these headers;
-# X-Forwarded-For uses the nearest untrusted hop in the chain.
-# An empty list ignores forwarded client-attribution headers.
+# X-Forwarded-For uses the nearest untrusted hop in the chain. Entries must be
+# literal IP addresses, not hostnames or CIDRs. An empty list ignores all
+# forwarded headers for trust decisions.
 #
 # List both IPv4 and IPv6 loopback addresses explicitly when the proxy is
 # reached over IPv6 loopback (for example ``::1`` from a client on the
@@ -448,6 +451,9 @@ cors_origins = []
 # back to the peer address and ignore forwarded headers in that case.
 # trusted_proxies = ["127.0.0.1", "::1"]
 trusted_proxies = []
+# Set true only for a deliberately insecure development deployment. Remote
+# browser authentication otherwise requires direct HTTPS or a trusted proxy.
+allow_insecure_web_auth = false
 redact_headers = ["authorization", "x-api-key"]
 persist_redacted_error_detail = false
 

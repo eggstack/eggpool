@@ -25,6 +25,8 @@ const HASH_CONCURRENCY: usize = 2;
 
 static HASH_SLOTS: OnceLock<Semaphore> = OnceLock::new();
 static FAILED_TOKEN_DIGESTS: OnceLock<Mutex<VecDeque<(String, Instant)>>> = OnceLock::new();
+static DUMMY_PASSWORD_HASH: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+const DUMMY_PASSWORD: &str = "eggpool-invalid-login-dummy-password";
 const FAILED_TOKEN_CAPACITY: usize = 256;
 const FAILED_TOKEN_TTL: Duration = Duration::from_secs(1);
 
@@ -38,6 +40,8 @@ pub enum IdentityError {
     InvalidCredentialLabel,
     #[error("an administrator is already initialized")]
     AdminAlreadyInitialized,
+    #[error("identity access state cannot be moved to managed")]
+    InvalidAccessTransition,
     #[error("user was not found")]
     UserNotFound,
     #[error("credential entropy unavailable")]
@@ -167,6 +171,25 @@ pub async fn access_state(database: &Database) -> Result<String, IdentityError> 
         .map_err(IdentityError::Database)
 }
 
+pub async fn enable_managed(database: &Database) -> Result<(), IdentityError> {
+    let changed = database
+        .with_transaction(|connection| {
+            connection.execute(
+                "UPDATE user_access_state SET state = 'managed', updated_at = CURRENT_TIMESTAMP \
+                 WHERE singleton = 1 AND state = 'admin_initialized' \
+                 AND EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND state = 'active')",
+                [],
+            )?;
+            Ok(connection.changes())
+        })
+        .await?;
+    if changed == 1 || access_state(database).await?.as_str() == "managed" {
+        Ok(())
+    } else {
+        Err(IdentityError::InvalidAccessTransition)
+    }
+}
+
 pub async fn mark_fresh_uninitialized(database: &Database) -> Result<(), IdentityError> {
     database
         .with_transaction(|connection| {
@@ -201,6 +224,10 @@ pub async fn reset_password(
             }
             connection.execute(
                 "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = (SELECT id FROM users WHERE normalized_username = ?1) AND revoked_at IS NULL",
+                [&normalized],
+            )?;
+            connection.execute(
+                "UPDATE web_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = (SELECT id FROM users WHERE normalized_username = ?1) AND revoked_at IS NULL",
                 [&normalized],
             )?;
             Ok(())
@@ -322,8 +349,12 @@ pub async fn verify_password(
     if password.len() > MAX_PASSWORD_BYTES {
         return Ok(None);
     }
+    let dummy_hash = DUMMY_PASSWORD_HASH
+        .get_or_try_init(|| async { hash_password(DUMMY_PASSWORD).await })
+        .await?
+        .clone();
     let normalized = validate_username(username)?.to_ascii_lowercase();
-    let password_hash: Option<(String, UserSummary)> = database.call(move |connection| {
+    let account: Option<(String, UserSummary)> = database.call(move |connection| {
         connection.query_row(
             "SELECT id, username, role, state, must_change_password, password_hash FROM users WHERE normalized_username = ?1",
             [&normalized],
@@ -336,12 +367,9 @@ pub async fn verify_password(
             },
         ).optional()
     }).await.map_err(IdentityError::Database)?;
-    let Some((password_hash, user)) = password_hash else {
-        return Ok(None);
-    };
-    if user.state != "active" {
-        return Ok(None);
-    }
+    let (password_hash, user) = account
+        .map(|(password_hash, user)| (password_hash, Some(user)))
+        .unwrap_or((dummy_hash, None));
     let permit = HASH_SLOTS
         .get_or_init(|| Semaphore::new(HASH_CONCURRENCY))
         .acquire()
@@ -365,7 +393,10 @@ pub async fn verify_password(
     .await
     .map_err(|_| IdentityError::HashWorker)??;
     drop(permit);
-    Ok(verified.then_some(user))
+    Ok(verified
+        .then_some(user)
+        .flatten()
+        .filter(|user| user.state == "active"))
 }
 
 /// Resolve a high-entropy personal token by its non-secret selector. Only the

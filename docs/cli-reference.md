@@ -58,7 +58,8 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool users list` | List local usernames, role and status |
 | `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--show-secret` allows non-TTY output) |
 | `eggpool users revoke USER` | Revoke all personal API tokens for a user |
-| `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens (`--password-stdin` supported) |
+| `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
+| `eggpool users enable-managed` | Retire the legacy key path after clearing `[server].api_key`/`api_key_env` and setting `dashboard.public = false` |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 
@@ -83,11 +84,14 @@ Command list verified against `eggpool help` (0.8.2).
 
 Full deploy commands reference: [deployment.md](deployment.md#deploy-commands-reference)
 
-Personal tokens are independent of the legacy `[server].api_key`. They are
-stored as digests and can authenticate inference, `/v1/models`, and the
-integration profile; they do not grant dashboard or administrative access.
+Personal tokens are stored as digests and can authenticate inference,
+`/v1/models`, and the integration profile; they do not grant dashboard or
+administrative access. The shared `[server].api_key` authenticates only legacy
+`legacy_unmigrated` installations and stops working after local identity
+initialization. Browser sessions use HttpOnly cookies and protect logout and
+password changes with same-origin checks plus a session-bound CSRF token.
 Passwords are never accepted as command-line arguments. Local CLI access is
-the recovery authority.
+the recovery authority; password reset revokes API credentials and sessions.
 
 ## Agents & updates
 

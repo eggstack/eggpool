@@ -685,8 +685,22 @@ async fn open_operational_database(
 
 async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
+    if matches!(&command, crate::cli::UsersCommand::EnableManaged)
+        && (config.resolved_server_api_key().is_some() || config.dashboard.public)
+    {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "retire server.api_key/api_key_env and set dashboard.public = false before enabling managed access",
+        ));
+    }
     let database = open_operational_database(&config, false).await?;
     match command {
+        crate::cli::UsersCommand::EnableManaged => {
+            crate::identity::enable_managed(&database)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!("Managed browser and personal-token access is enabled.");
+        }
         crate::cli::UsersCommand::List => {
             let users = crate::identity::list_users(&database)
                 .await

@@ -118,11 +118,14 @@ the embedded `rust/assets/dashboard/themes/*.toml` set parsed into CSS
 variables. Static assets carry explicit cache headers; failures to read
 dashboard data never block inference.
 
-Default auth posture: `[dashboard].public` defaults to `true`, so ordinary
-pages and non-sensitive stats data render without an API key. Inference
-(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
-endpoints never inherit that exemption and stay authenticated;
-`eggpool dashboard public --off` restores key auth on ordinary pages and data.
+Legacy auth posture: `[dashboard].public` defaults to `true`, so ordinary
+pages and non-sensitive stats data in `legacy_unmigrated` deployments render
+without an API key. After identity initialization, dashboard pages and every
+`/api/*` route require a browser session regardless of this setting; agent
+tokens remain limited to inference, model discovery, and the integration
+profile. `eggpool dashboard public --off` retains its legacy behavior, while
+`eggpool users enable-managed` requires `dashboard.public = false` before the
+managed transition.
 
 ## Safety invariants
 

@@ -405,11 +405,26 @@ single-event-loop default (`threads = 1`).
 
 `eggpool onboard` keeps any explicit operator bind address and never rewrites
 it to loopback; newly initialized configs carry the canonical `0.0.0.0` LAN
-bind. The server API key generated during onboarding still guards inference
-(`/v1/*`), integration (`/api/integrations/*`), and runtime/update/status
-endpoints even though the human-facing dashboard is public by default. Use
-`eggpool dashboard public --off` to require the API key on ordinary dashboard
-pages and data as well.
+bind. Before local identity initialization, the configured server API key
+retains legacy behavior and the public read-only dashboard setting applies.
+After the first local administrator is created, the shared key is no longer
+accepted; personal tokens authenticate agent surfaces, while dashboard and
+admin routes require a browser session regardless of `dashboard.public`.
+
+For managed operation, remove `[server].api_key` and unset its configured
+environment variable, then set `dashboard.public = false` and run
+`eggpool users enable-managed`. That command refuses the transition while the
+shared key or public-dashboard setting remains. Non-loopback listeners may
+then run without a shared server key because protected routes require a
+personal token or browser session.
+
+Browser password login is allowed over loopback HTTP. For remote browser use,
+terminate TLS at an operator-managed proxy and add the proxy's literal peer IP
+to `[security].trusted_proxies`; EggPool accepts only a single
+`X-Forwarded-Proto: https` from that peer. The proxy must preserve the public
+Host header and the firewall must prevent direct access around the proxy. The
+optional `[security].allow_insecure_web_auth = true` switch is for isolated
+development only and emits a startup warning.
 
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
@@ -577,7 +592,7 @@ sudo nano /etc/eggpool/env
 #
 # [server]
 # host = "0.0.0.0"         # canonical LAN bind (set "127.0.0.1" for loopback-only)
-# port = 11300             # a server API key is required for non-loopback binds
+# port = 11300             # legacy installs need a key; managed installs use per-user credentials
 #
 # [database]
 # path = "/var/lib/eggpool/usage.sqlite3"
@@ -852,14 +867,17 @@ sudo journalctl -u eggpool -n 50 --no-pager
 ### Cannot connect from LAN
 
 1. Verify that the explicit config selected `server.host = "0.0.0.0"` (or
-   another non-loopback address) and configured `[server].api_key` or
-   `[server].api_key_env`.
+   another non-loopback address). Legacy installs need `[server].api_key` or
+   `[server].api_key_env`; managed installs authenticate with personal tokens
+   and browser sessions.
 2. Check firewall: `ss -tlnp | grep 11300`
 3. See `docs/firewall.md`
 
-The copyable SBC profile stays on loopback by default. Shared startup and
-`check-config` validation reject LAN or wildcard binding without the existing
-simple server API key; loopback-only development may remain unauthenticated.
+The copyable SBC profile stays on loopback by default. A non-loopback legacy
+install requires the shared server key. After identity initialization, a
+keyless listener is allowed, but protected routes still require personal
+credentials or a browser session; unauthenticated loopback behavior is limited
+to the explicit legacy state.
 
 ### Headless server + desktop workgroup
 

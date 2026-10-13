@@ -86,7 +86,7 @@ fn exact_r001_field_dispositions_are_ported() {
         .map(|(path, disposition)| ((*path).to_owned(), disposition.to_string()))
         .collect::<Vec<_>>();
     assert_eq!(actual, expected);
-    assert_eq!(actual.len(), 154);
+    assert_eq!(actual.len(), 155);
     assert_eq!(
         actual
             .iter()
@@ -99,16 +99,17 @@ fn exact_r001_field_dispositions_are_ported() {
             .iter()
             .filter(|(_, disposition)| disposition == "restart_required")
             .count(),
-        93
+        94
     );
 }
 
 #[test]
 fn serialized_schema_projection_is_the_coverage_guard() {
-    let expected = oracle_policy_rows()
+    let mut expected = oracle_policy_rows()
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
+    expected.sort();
     assert_eq!(schema_paths().expect("schema projection"), expected);
 }
 

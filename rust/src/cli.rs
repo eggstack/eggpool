@@ -153,6 +153,8 @@ pub enum UsersCommand {
     Token(UserTokenArgs),
     /// Revoke every API credential owned by one user.
     Revoke(UserNameArgs),
+    /// Retire legacy access after public dashboard access is disabled.
+    EnableManaged,
 }
 
 #[derive(Debug, clap::Args)]

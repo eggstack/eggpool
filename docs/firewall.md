@@ -67,6 +67,24 @@ host = "127.0.0.1"
 
 No firewall rules are needed in this case.
 
+## Browser administration
+
+Legacy inference clients use the shared server key only while the database is
+`legacy_unmigrated`. After local identity initialization, EggPool retires that
+key and requires personal API tokens for inference and browser sessions for
+dashboard administration. Remote browser password login must reach EggPool
+through operator-managed HTTPS termination. Add the proxy's exact peer IP to
+`[security].trusted_proxies`; only that peer's single
+`X-Forwarded-Proto: https` header is trusted. The proxy should preserve the
+public `Host` header, and the firewall should allow port 11300 only from that
+proxy. Do not expose the backend port directly to clients when trusting a
+proxy.
+
+Loopback HTTP sign-in is supported for local administration. The optional
+`[security].allow_insecure_web_auth = true` setting permits remote HTTP only
+for isolated development and logs a warning because passwords and session
+cookies then travel without TLS.
+
 ## Verify
 
 ```bash
