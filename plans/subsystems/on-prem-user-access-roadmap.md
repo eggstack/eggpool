@@ -237,8 +237,8 @@ plan is not an implemented capability.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 | ready | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | — | None |
-| M002 | blocked | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | — | Hard: M001 closure |
+| M001 | conditionally closed | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | `plans/closure/on-prem-user-access/001-status.md` | Physical Le Potato/Pi Argon2 latency/RSS qualification carried to M007. |
+| M002 | ready | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | — | M001 credential/schema contract accepted; SBC qualification remains M007 evidence. |
 | M003 | blocked | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | — | Hard: M002 closure |
 | M004 | blocked | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | — | Hard: M003 closure |
 | M005 | blocked | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | — | Hard: M004 closure |

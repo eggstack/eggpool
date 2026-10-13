@@ -49,12 +49,13 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 ready — local admin bootstrap and client credentials | ADR-0002 accepted; M002–M007 blocked in sequence on their predecessors. Canonical single-admin SBC/LAN path and provider TOML ownership remain unchanged. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 ready — browser sessions and route authorization | M001 credential/schema contract is accepted; physical SBC hash qualification is carried to M007. Canonical single-admin SBC/LAN path and provider TOML ownership remain unchanged. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
+| On-prem user access | M002 — browser sessions and route authorization | ready | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | Hard predecessor M001 is conditionally closed with its credential/schema contract accepted; physical Argon2 qualification remains assigned to M007. |
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 
 
@@ -63,14 +64,13 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M001 — admin bootstrap and client credentials | closing | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Implementation landed at `ecdc313`; final shared matrix and release evidence are being recorded. |
+| — | — | — | — | No active implementation plans. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M002 — browser sessions and route authorization (`plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md`) | Hard: M001 closure and validated admin credential/schema migration. |
 | On-prem user access | M003 — principal propagation and attribution (`plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md`) | Hard: M002 closure and stable principal/scope contract. |
 | On-prem user access | M004 — profile-based model authorization (`plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md`) | Hard: M003 closure; all request paths carry durable user identity. |
 | On-prem user access | M005 — user/model budgets (`plans/implementation/on-prem-user-access/005-durable-user-budgets.md`) | Hard: M004 closure and verified concrete-model policy checks. |
@@ -90,6 +90,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M001 — admin bootstrap and client credentials | conditionally closed — migration 55, local admin and personal-token lifecycle, legacy-key cutover, 939 workspace tests passed; physical SBC Argon2 qualification carried to M007; M002 promoted to ready | `plans/closure/on-prem-user-access/001-status.md`, implementation `ecdc313` |
 | Deployment and packaging M005 — active PATH integration detection corrective | closed — 78-case installer harness (73 baseline + 5 new Gregg/array regressions), Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/005-status.md`, implementation `576b462d`, CI `38030165909`, shell run `38030165862` |
 | Deployment and packaging M004 — shell command discovery and activation corrective | closed — 73-case installer harness, Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/004-status.md`, implementation `57af5bc` + test hardening `45149d2`, CI `38026958264`, shell run `38026958268` |
 | Provider transport M006 — Eggress 1.0.12 dependency refresh and requalification | closed — all 16 registry-resolved Eggress crates at 1.0.12; provider/coordinator/wire and default/no-default workspace gates passed; release binary +520 bytes (+0.0017%); hosted CI and dependency audit green; no plan unblocked | `plans/closure/provider-transport/006-status.md`, implementation `d8be1599` |
@@ -390,3 +391,14 @@ selection, runtime efficiency, shared provider profile contract, and dashboard
 remain closed with no successor. No deployment-packaging successor is registered;
 future hardening (attestations, system/root distribution, additional targets)
 requires new bounded plans.
+
+Unblock audit (on-prem user access M001 conditionally closed, implementation
+`ecdc313`, `plans/closure/on-prem-user-access/001-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the subsystem dependency graph,
+and the ready/active/blocked registry tables. M002's hard M001 credential and
+schema dependency is satisfied by the accepted closure and was promoted to
+ready. M003 remains blocked on M002 and its stable principal/scope contract;
+M004 remains blocked on M003 attribution; M005 on M004 policy gates; M006 on
+M005 durable budgets; M007 on M006 and physical qualification. No other
+registered plan depends on M001. The M001 Argon2 SBC measurement condition is
+carried into M007, so promotion of M002 does not assert physical sizing.
