@@ -181,6 +181,17 @@ sudo systemctl start eggpool
 
 Migrations are idempotent and safe to run multiple times.
 
+Schema migration 55 adds the local downstream identity tables. Backups made
+after that migration include usernames, password hashes, token digests,
+revocation state, and access lifecycle state. They do not contain plaintext
+passwords or API tokens. After restoring an older backup, the migration is
+applied by `eggpool migrate` or normal server startup; existing provider
+accounts and keys remain owned by TOML/environment as before.
+SQLite migrations are forward-only: an older executable may reject a database
+that has reached schema 55. Roll back by restoring a protected backup made
+before the upgrade together with the matching older binary; do not point an
+older executable at the upgraded database.
+
 ## Uninstall
 
 To remove EggPool entirely, run:

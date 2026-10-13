@@ -14,6 +14,7 @@ pub mod coordinator;
 pub mod db;
 mod error;
 pub mod health;
+pub mod identity;
 pub mod model_router;
 pub mod operations;
 pub mod provider_profile;

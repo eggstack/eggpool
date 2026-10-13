@@ -10,11 +10,27 @@ pub(super) async fn authenticate(
     if !requires_auth(request.uri().path(), &state.server) {
         return next.run(request).await;
     }
+    let personal_allowed = personal_credential_allowed(request.uri().path());
+    let access_state = crate::identity::access_state(&state.database).await.ok();
+    if state.server.api_key.as_deref().is_none()
+        && legacy_server_key_allowed(access_state.as_deref())
+    {
+        return next.run(request).await;
+    }
     if state
         .server
         .api_key
         .as_deref()
-        .is_none_or(|key| verify_api_key(request.headers(), key))
+        .is_some_and(|key| verify_api_key(request.headers(), key))
+        && legacy_server_key_allowed(access_state.as_deref())
+    {
+        return next.run(request).await;
+    }
+    if personal_allowed
+        && let Some(token) = provided_api_key(request.headers())
+        && crate::identity::verify_api_token(&state.database, token)
+            .await
+            .unwrap_or(false)
     {
         return next.run(request).await;
     }
@@ -25,6 +41,14 @@ pub(super) async fn authenticate(
         })),
     )
         .into_response()
+}
+
+fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
+    access_state == Some("legacy_unmigrated")
+}
+
+fn personal_credential_allowed(path: &str) -> bool {
+    path.starts_with("/v1/") || path == "/api/integrations/v1/profile"
 }
 
 pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
@@ -239,6 +263,22 @@ pub(super) fn verify_api_key(headers: &HeaderMap, expected: &str) -> bool {
     // Non-UTF8 header values map to `""` (fail-closed, same as absent).
     // There is deliberately no per-request log or counter here: this runs on
     // every request, and the outcome is already observable as a 401.
+    let provided = provided_api_key(headers).unwrap_or("");
+    let left = fixed_key(provided);
+    let right = fixed_key(expected);
+    // Always fold over the full 512-byte pads before combining with the
+    // shape bits, so shape validity does not short-circuit the compare.
+    let different = left
+        .iter()
+        .zip(right.iter())
+        .fold(0u8, |accumulator, (a, b)| accumulator | (a ^ b));
+    let provided_ok = u8::from(valid_key_shape(provided));
+    let expected_ok = u8::from(valid_key_shape(expected));
+    let match_ok = u8::from(different == 0);
+    (provided_ok & expected_ok & match_ok) == 1
+}
+
+fn provided_api_key(headers: &HeaderMap) -> Option<&str> {
     let authorization = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -257,18 +297,7 @@ pub(super) fn verify_api_key(headers: &HeaderMap, expected: &str) -> bool {
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or("");
-    let left = fixed_key(provided);
-    let right = fixed_key(expected);
-    // Always fold over the full 512-byte pads before combining with the
-    // shape bits, so shape validity does not short-circuit the compare.
-    let different = left
-        .iter()
-        .zip(right.iter())
-        .fold(0u8, |accumulator, (a, b)| accumulator | (a ^ b));
-    let provided_ok = u8::from(valid_key_shape(provided));
-    let expected_ok = u8::from(valid_key_shape(expected));
-    let match_ok = u8::from(different == 0);
-    (provided_ok & expected_ok & match_ok) == 1
+    (!provided.is_empty()).then_some(provided)
 }
 
 pub(super) fn fixed_key(value: &str) -> [u8; 512] {
@@ -283,4 +312,35 @@ pub(super) fn fixed_key(value: &str) -> [u8; 512] {
 
 pub(super) fn is_loopback_host(host: &str) -> bool {
     crate::config::is_loopback_host(host)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{legacy_server_key_allowed, personal_credential_allowed};
+
+    #[test]
+    fn global_server_key_is_valid_only_before_identity_cutover() {
+        assert!(legacy_server_key_allowed(Some("legacy_unmigrated")));
+        assert!(!legacy_server_key_allowed(Some("fresh_uninitialized")));
+        assert!(!legacy_server_key_allowed(Some("admin_initialized")));
+        assert!(!legacy_server_key_allowed(Some("managed")));
+        assert!(!legacy_server_key_allowed(None));
+    }
+
+    #[test]
+    fn personal_credentials_are_limited_to_agent_surfaces() {
+        for path in [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses",
+            "/v1/responses/compact",
+            "/v1/models",
+            "/api/integrations/v1/profile",
+        ] {
+            assert!(personal_credential_allowed(path), "{path}");
+        }
+        for path in ["/", "/api/status", "/api/stats/runtime", "/api/users"] {
+            assert!(!personal_credential_allowed(path), "{path}");
+        }
+    }
 }

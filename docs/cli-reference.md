@@ -12,7 +12,7 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool stop` | Stop the running server |
 | `eggpool restart` | Fully restart the server (stop then start) |
 | `eggpool rehash` | Apply supported config changes live without restart (`--json` for structured output) |
-| `eggpool onboard` | Interactive onboarding wizard |
+| `eggpool onboard` | Interactive onboarding wizard; a fresh database prompts for an initial administrator |
 | `eggpool ensure-running` | Ensure server is running (no full runtime snapshot) |
 | `eggpool croncheck` | Fast-path cron watchdog check (no server connection) |
 
@@ -54,6 +54,11 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool edit` | Edit config in $EDITOR |
 | `eggpool getkey` | Print the server API key |
 | `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
+| `eggpool users bootstrap` | Create the initial local administrator (`--password-stdin` for unattended input) |
+| `eggpool users list` | List local usernames, role and status |
+| `eggpool users token USER` | Issue a personal inference/discovery token (`--label` optional; `--show-secret` allows non-TTY output) |
+| `eggpool users revoke USER` | Revoke all personal API tokens for a user |
+| `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens (`--password-stdin` supported) |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 
@@ -77,6 +82,12 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool deploy all` | Print every deployment snippet in sequence |
 
 Full deploy commands reference: [deployment.md](deployment.md#deploy-commands-reference)
+
+Personal tokens are independent of the legacy `[server].api_key`. They are
+stored as digests and can authenticate inference, `/v1/models`, and the
+integration profile; they do not grant dashboard or administrative access.
+Passwords are never accepted as command-line arguments. Local CLI access is
+the recovery authority.
 
 ## Agents & updates
 

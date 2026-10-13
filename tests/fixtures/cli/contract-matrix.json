@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "plan": "O001",
-  "command_count": 65,
+  "command_count": 71,
   "commands": [
     {"path": "accounts", "owner": "O007", "options": []},
     {"path": "accounts explain", "owner": "O007", "options": ["--model", "--provider", "--protocol", "--scores", "--gates"]},
@@ -51,7 +51,7 @@
     {"path": "models", "owner": "O007", "options": []},
     {"path": "models refresh", "owner": "O007", "options": []},
     {"path": "newkey", "owner": "O004", "options": ["--show-old", "--show-secrets"]},
-    {"path": "onboard", "owner": "O004", "options": ["--providers"]},
+    {"path": "onboard", "owner": "O004", "options": ["--providers", "--admin-username", "--password-stdin", "--show-secret"]},
     {"path": "recover", "owner": "O006", "options": []},
     {"path": "rehash", "owner": "O003", "options": ["--json"]},
     {"path": "restart", "owner": "O003", "options": ["--timeout"]},
@@ -67,6 +67,12 @@
     {"path": "stop", "owner": "O003", "options": ["--timeout"]},
     {"path": "uninstall", "owner": "O009", "options": ["--yes", "--keep-data", "--keep-config", "--keep-path", "--deploy-artifacts"]},
     {"path": "update", "owner": "O008", "options": ["--check", "--from-source"]},
+    {"path": "users", "owner": "O004", "options": []},
+    {"path": "users bootstrap", "owner": "O004", "options": ["--password-stdin", "--show-secret"]},
+    {"path": "users list", "owner": "O004", "options": []},
+    {"path": "users reset-password", "owner": "O004", "options": ["--password-stdin", "--show-secret"]},
+    {"path": "users revoke", "owner": "O004", "options": []},
+    {"path": "users token", "owner": "O004", "options": ["--label", "--show-secret"]},
     {"path": "version", "owner": "O008", "options": []}
   ],
   "global_options": ["--config"],

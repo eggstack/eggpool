@@ -202,11 +202,14 @@ wire_api = "responses"
 supports_websockets = false
 ```
 
-Set `EGGPOOL_API_KEY` to EggPool's server key in the environment used to run Codex. Retrieve the current key without putting it in the TOML with:
+Set `EGGPOOL_API_KEY` to the user's personal token in the environment used to run Codex. Issue one locally and copy its one-time output with:
 
 ```bash
-export EGGPOOL_API_KEY="$(eggpool getkey)"
+eggpool users token admin
 ```
+
+`eggpool getkey` remains for existing legacy installations; avoid sharing that
+global key with new users.
 
 The default server port is `11300`; use `--base-url` when the server is configured differently. Generate a model-specific snippet with:
 
@@ -228,8 +231,12 @@ EggPool relies on Codex local compaction by default and does not advertise remot
 Image/tool capability is never claimed across a heterogeneous alias route. Neither variant embeds the resolved server key, so OpenCode output prints by default like Codex. Set the variable in the environment that launches OpenCode:
 
 ```bash
-export EGGPOOL_API_KEY="$(eggpool getkey)"
+eggpool users token admin
 ```
+
+Copy the one-time personal token into the environment that launches OpenCode.
+Existing single-owner installations may continue using `eggpool getkey` until
+they explicitly migrate away from the legacy shared server key.
 
 Managed OpenCode installation touches only the owned `eggpool` entry (plus its narrowly scoped parent key when EggPool creates it), preserving JSONC comments, trailing commas, indentation, ordering, unrelated providers, and nested settings byte-for-byte. A pre-existing `eggpool` entry is captured on first apply and restored exactly on `--remove`; an emptied parent key is removed only when it holds no comments. Global config lives at `~/.config/opencode/opencode.json` (`OPENCODE_CONFIG` overrides; Windows uses `%APPDATA%\opencode\opencode.json`). Ambiguous documents (both `provider` and `providers` present) and invalid JSONC fail closed with a bounded line/column location instead of a lossy rewrite.
 

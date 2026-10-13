@@ -49,6 +49,8 @@ pub enum Command {
     Modelinfo(ModelInfoCommand),
     #[command(subcommand)]
     Stats(StatsCommand),
+    #[command(subcommand)]
+    Users(UsersCommand),
     Onboard(OnboardArgs),
     Croncheck,
     EnsureRunning,
@@ -131,6 +133,53 @@ pub struct NewkeyArgs {
 pub struct OnboardArgs {
     #[arg(long, value_name = "PATH")]
     pub providers: Option<PathBuf>,
+    #[arg(long, default_value = "admin")]
+    pub admin_username: String,
+    #[arg(long)]
+    pub password_stdin: bool,
+    #[arg(long)]
+    pub show_secret: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersCommand {
+    /// Create the first administrator and personal inference credential.
+    Bootstrap(UserPasswordArgs),
+    /// Show local account names and status without secrets.
+    List,
+    /// Reset a user's password and revoke their API credentials.
+    ResetPassword(UserPasswordArgs),
+    /// Issue a new personal API credential. Plaintext is shown once.
+    Token(UserTokenArgs),
+    /// Revoke every API credential owned by one user.
+    Revoke(UserNameArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserPasswordArgs {
+    #[arg(default_value = "admin")]
+    pub username: String,
+    /// Read one password line from stdin instead of prompting on a TTY.
+    #[arg(long)]
+    pub password_stdin: bool,
+    /// Allow one-time token output when stdout is not a TTY.
+    #[arg(long)]
+    pub show_secret: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserTokenArgs {
+    pub username: String,
+    #[arg(long, default_value = "personal client")]
+    pub label: String,
+    /// Allow one-time token output when stdout is not a TTY.
+    #[arg(long)]
+    pub show_secret: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserNameArgs {
+    pub username: String,
 }
 #[derive(Debug, clap::Args)]
 pub struct TimeoutArgs {
@@ -450,6 +499,7 @@ impl Command {
             Self::Models(_) => "models",
             Self::Modelinfo(_) => "modelinfo",
             Self::Stats(_) => "stats",
+            Self::Users(_) => "users",
             Self::Onboard(_) => "onboard",
             Self::Croncheck => "croncheck",
             Self::EnsureRunning => "ensure-running",

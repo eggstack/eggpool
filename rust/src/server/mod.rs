@@ -79,6 +79,8 @@ use std::{path::Path, sync::Arc, time::Instant};
 pub enum ServerError {
     #[error("{0}")]
     Database(#[from] db::DatabaseError),
+    #[error("{0}")]
+    Identity(#[from] crate::identity::IdentityError),
     #[error("cannot bind listener: {0}")]
     Bind(#[from] std::io::Error),
     #[error("invalid server API key configuration")]
@@ -786,9 +788,25 @@ pub async fn run_with_digest(
         .map_err(crate::operations::process::ProcessError::Path)?;
     database_config.path = database_path.to_string_lossy().into_owned();
     let database = db::Database::open(database_config).await?;
-    if let Err(error) = db::MigrationRunner::new(&database).run().await {
+    let migration_state = match db::MigrationRunner::new(&database).run().await {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(error.into());
+        }
+    };
+    if migration_state.applied_this_run.len() == db::MigrationRunner::migrations().len()
+        && let Err(error) = crate::identity::mark_fresh_uninitialized(&database).await
+    {
         let _ = database.close().await;
         return Err(error.into());
+    }
+    let access_state = crate::identity::access_state(&database).await?;
+    if config.resolved_server_api_key().is_none() && access_state == "fresh_uninitialized" {
+        let _ = database.close().await;
+        return Err(ServerError::StartupConflict {
+            detail: "fresh database requires `eggpool onboard` or `eggpool users bootstrap` before serving".to_owned(),
+        });
     }
     if let Err(error) = sync_accounts(&config, &database).await {
         let _ = database.close().await;

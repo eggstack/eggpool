@@ -46,7 +46,22 @@ command is committed and verified, without overwriting an existing file, and
 prints the resolved config path.
 
 After install, `eggpool onboard` walks the operator through provider
-connections, configuration validation, and an optional server start.
+connections, configuration validation, and an optional server start. On a
+new database it also creates the initial local administrator with a
+non-default password and prints one personal API token once. For unattended
+bootstrap, pass `--password-stdin` and provide the password on stdin; the
+password is never accepted in argv. Secret output is suppressed when stdout
+is not a terminal unless `--show-secret` is explicitly passed. Existing databases keep their legacy
+authentication behavior until an operator explicitly initializes local user
+access.
+
+Manage local identities from the machine that owns the data directory with
+`eggpool users list`, `eggpool users token USER`, `eggpool users revoke USER`,
+and `eggpool users reset-password USER`. Personal tokens are for inference,
+model discovery, and the integration profile; they do not authorize dashboard
+or admin pages. The configured server API key remains a legacy shared
+inference credential during the staged migration. Do not share it with new
+users; issue an individual token instead.
 
 ### Updating EggPool
 

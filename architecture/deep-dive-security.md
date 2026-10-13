@@ -30,6 +30,28 @@ a loud unauthenticated-loopback warning. `requires_auth()` exempts only
 `/api/*` routes require a key only once `[dashboard].public` is off. The
 integration profile never inherits a dashboard-public exemption.
 
+After local identity initialization, the configured global key is limited to
+agent surfaces; personal credentials are checked against their selector and
+stored digest on each request. A new empty schema is marked
+`fresh_uninitialized`, and a keyless listener refuses to start until local
+bootstrap. The public read-only dashboard behavior remains a separate legacy
+configuration choice.
+
+Downstream human identity is separate from provider `accounts`. Migration 55
+adds local `users`, `user_credentials`, and `user_access_state`; passwords use
+bounded Argon2id hashes, and personal `epk1` credentials store only a SHA-256
+digest plus a random selector. Password hashing runs in a bounded blocking
+worker pool outside the SQLite gate. Personal credentials authenticate only
+inference, `/v1/models`, and the scoped integration-profile endpoint; they do
+not authenticate dashboard/admin paths. `eggpool users reset-password`
+revokes the user's API credentials. The existing configured server key stays
+available as a legacy shared key until the later managed-mode transition.
+Upgraded schemas remain `legacy_unmigrated` until an operator explicitly
+creates the first local identity.
+Failed personal-token lookups use a 256-entry, one-second negative cache keyed
+by token digest. Successful token lookups are not cached, so revocation takes
+effect on the next request.
+
 ## Headers, bodies, and redaction
 
 Provider credentials are added only at dispatch-header construction. Incoming

@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::{self, Write},
+    io::{self, BufRead, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     process::Command as OsCommand,
     time::Duration,
@@ -87,6 +87,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
             .await?
         }
         Some(Command::Onboard(args)) => onboard(&config_path, args).await?,
+        Some(Command::Users(command)) => users(&config_path, command).await?,
         Some(Command::Configsetup(command)) => configsetup(&config_path, command).await?,
         Some(Command::Configremote(args)) => configremote(&config_path, args).await?,
         Some(Command::Migrate) => migrate(&config_path).await?,
@@ -651,12 +652,135 @@ async fn open_operational_database(
     config: &config::Config,
     require_existing: bool,
 ) -> Result<crate::db::Database, BootstrapError> {
+    let path = config::Config::runtime_path(&config.database.path);
+    if path.exists()
+        && std::fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(true)
+    {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            format!(
+                "refusing symbolic-link or ambiguous database path: {}",
+                path.display()
+            ),
+        ));
+    }
     let database = open_maintenance_database(config, require_existing).await?;
-    if let Err(error) = crate::db::MigrationRunner::new(&database).run().await {
+    let migration_state = match crate::db::MigrationRunner::new(&database).run().await {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = database.close().await;
+            return Err(command_error(EXIT_VALIDATION, error.to_string()));
+        }
+    };
+    if migration_state.applied_this_run.len() == crate::db::MigrationRunner::migrations().len()
+        && let Err(error) = crate::identity::mark_fresh_uninitialized(&database).await
+    {
         let _ = database.close().await;
         return Err(command_error(EXIT_VALIDATION, error.to_string()));
     }
     Ok(database)
+}
+
+async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    let database = open_operational_database(&config, false).await?;
+    match command {
+        crate::cli::UsersCommand::List => {
+            let users = crate::identity::list_users(&database)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            if users.is_empty() {
+                println!("No local users. Run `eggpool users bootstrap` on a new installation.");
+            } else {
+                for user in users {
+                    println!(
+                        "{}\t{}\t{}\tmust_change_password={}",
+                        user.username, user.role, user.state, user.must_change_password
+                    );
+                }
+            }
+        }
+        crate::cli::UsersCommand::Bootstrap(args) => {
+            let password = read_user_password(args.password_stdin, true)?;
+            let (user, credential) =
+                crate::identity::bootstrap_admin(&database, &args.username, &password)
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!("Administrator {} created.", user.username);
+            print_one_time_secret(&credential.token, args.show_secret);
+        }
+        crate::cli::UsersCommand::ResetPassword(args) => {
+            let password = read_user_password(args.password_stdin, true)?;
+            crate::identity::reset_password(&database, &args.username, &password)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!(
+                "Password reset for {}; existing API credentials were revoked.",
+                args.username
+            );
+        }
+        crate::cli::UsersCommand::Token(args) => {
+            let credential =
+                crate::identity::issue_api_token(&database, &args.username, &args.label)
+                    .await
+                    .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!("Personal API credential for {} created.", args.username);
+            print_one_time_secret(&credential.token, args.show_secret);
+        }
+        crate::cli::UsersCommand::Revoke(args) => {
+            let count = crate::identity::revoke_api_tokens(&database, &args.username)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            println!("Revoked {count} API credential(s) for {}.", args.username);
+        }
+    }
+    database
+        .close()
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    Ok(())
+}
+
+fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, BootstrapError> {
+    let password = if from_stdin {
+        let mut value = String::new();
+        io::stdin()
+            .lock()
+            .take(1026)
+            .read_line(&mut value)
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        value.trim_end_matches(['\r', '\n']).to_owned()
+    } else {
+        if !io::stdin().is_terminal() {
+            return Err(command_error(
+                EXIT_VALIDATION,
+                "password input requires a TTY or --password-stdin",
+            ));
+        }
+        let first = rpassword::prompt_password("Administrator password: ")
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        if confirm {
+            let second = rpassword::prompt_password("Confirm password: ")
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+            if first != second {
+                return Err(command_error(EXIT_VALIDATION, "passwords do not match"));
+            }
+        }
+        first
+    };
+    Ok(password)
+}
+
+fn print_one_time_secret(secret: &str, explicitly_allowed: bool) {
+    if io::stdout().is_terminal() || explicitly_allowed {
+        println!("Save this personal API credential; it is shown once:\n{secret}");
+    } else {
+        println!(
+            "Credential plaintext withheld because stdout is not a TTY. Reissue with `eggpool users token USER --show-secret` on a secure console."
+        );
+    }
 }
 
 async fn accounts(path: &Path, command: crate::cli::AccountsCommand) -> Result<(), BootstrapError> {
@@ -1137,6 +1261,13 @@ async fn migrate(path: &Path) -> Result<(), BootstrapError> {
     let config = config::Config::from_toml(path)?;
     let database = open_maintenance_database(&config, false).await?;
     let result = crate::db::MigrationRunner::new(&database).run().await;
+    if result.as_ref().is_ok_and(|state| {
+        state.applied_this_run.len() == crate::db::MigrationRunner::migrations().len()
+    }) && let Err(error) = crate::identity::mark_fresh_uninitialized(&database).await
+    {
+        let _ = database.close().await;
+        return Err(command_error(EXIT_VALIDATION, error.to_string()));
+    }
     let close = database.close().await;
     match (result, close) {
         (Ok(state), Ok(())) => {
@@ -2084,6 +2215,30 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             println!("  Generated server API key");
         }
     }
+    let preflight_config = config::Config::from_toml(path).map_err(BootstrapError::from)?;
+    let preflight_database_path = config::Config::runtime_path(&preflight_config.database.path);
+    let bootstrap_admin = if !preflight_database_path.exists() {
+        true
+    } else {
+        let database = open_operational_database(&preflight_config, true).await?;
+        let access_state = crate::identity::access_state(&database)
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        let users = crate::identity::list_users(&database)
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        database
+            .close()
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        access_state == "fresh_uninitialized" && users.is_empty()
+    };
+    let admin_password = if bootstrap_admin {
+        println!("Create the local administrator for this new installation.");
+        Some(read_user_password(args.password_stdin, true)?)
+    } else {
+        None
+    };
     // Newly initialized configs already carry the canonical `0.0.0.0` LAN
     // bind default; existing configs keep their explicit operator host.
     // Onboarding never rewrites the bind address.
@@ -2111,10 +2266,26 @@ async fn onboard(path: &Path, args: crate::cli::OnboardArgs) -> Result<(), Boots
             break;
         }
     }
-    config::Config::from_toml(path)
-        .map_err(BootstrapError::from)?
+    let setup_config = config::Config::from_toml(path).map_err(BootstrapError::from)?;
+    setup_config
         .validate_account_credentials()
         .map_err(BootstrapError::from)?;
+    if bootstrap_admin {
+        let password = admin_password.ok_or_else(|| {
+            command_error(EXIT_VALIDATION, "administrator password was not collected")
+        })?;
+        let database = open_operational_database(&setup_config, false).await?;
+        let (user, credential) =
+            crate::identity::bootstrap_admin(&database, &args.admin_username, &password)
+                .await
+                .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        database
+            .close()
+            .await
+            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+        println!("Administrator {} created.", user.username);
+        print_one_time_secret(&credential.token, args.show_secret);
+    }
     println!("\nConnected {connected} provider(s).\n");
     let paths = RuntimePaths::resolve();
     if paths.pid_file.exists()

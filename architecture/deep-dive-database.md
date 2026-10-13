@@ -18,7 +18,18 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0054_*.sql` = versions 1–54) with `checksums.json` (`files` map, 54 entries): v1–v54, 54 files, validated by `MigrationRunner::validate_embedded_checksums` before any database use (`canonical_inventory_is_complete_and_immutable` guards first = 1, last = 54, len = 54). `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. History is never rewritten or renumbered; restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0055_*.sql` = versions 1–55) with `checksums.json` (`files` map, 55 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+
+`users`, `user_credentials`, and `user_access_state` hold usernames, password
+hashes, downstream roles, token digests, scopes, and explicit transition state.
+The initial admin and first personal token are committed atomically. Backups
+therefore carry the identity records and non-recoverable credential digests;
+plaintext passwords and API tokens are never stored.
+On a brand-new schema, migration entrypoints record `fresh_uninitialized`;
+onboarding can complete bootstrap after an interrupted setup, and a keyless
+fresh listener refuses to start. Existing databases start in
+`legacy_unmigrated` and retain their configured authentication until local
+identity initialization.
 
 ## Publication and finalization transactions
 
