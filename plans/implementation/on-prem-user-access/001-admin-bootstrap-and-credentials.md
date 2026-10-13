@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 001 — Admin bootstrap and client credentials
 
-Status: active
+Status: closing
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (architecture/roadmap authority committed on `plans/on-prem-small-team-user-access` at `81beec4e215e8991880d407ed2752d01ff88d58a`)
 

@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M001 — admin bootstrap and client credentials | active | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Implementation in progress; no production changes yet. |
+| On-prem user access | M001 — admin bootstrap and client credentials | closing | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Implementation landed at `ecdc313`; final shared matrix and release evidence are being recorded. |
 
 
 ## Blocked work
