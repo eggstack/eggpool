@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 ready — browser sessions and route authorization | M001 credential/schema contract is accepted; physical SBC hash qualification is carried to M007. Canonical single-admin SBC/LAN path and provider TOML ownership remain unchanged. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closing — browser sessions and route authorization | Implementation `087953a3` landed; closure audit is in progress. M001 credential/schema contract is accepted; physical SBC hash qualification is carried to M007. |
 
 ## Dependency-ready implementation plans
 
@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M002 — browser sessions and route authorization | active | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | M001 credential/schema contract accepted; SBC Argon2 qualification remains assigned to M007. |
+| On-prem user access | M002 — browser sessions and route authorization | closing | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | Implementation `087953a3`; closure evidence is being reconciled. |
 
 
 ## Blocked work
