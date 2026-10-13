@@ -49,12 +49,14 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 ready — local admin bootstrap and client credentials | ADR-0002 accepted; M002–M007 blocked in sequence on their predecessors. Canonical single-admin SBC/LAN path and provider TOML ownership remain unchanged. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M001 — admin bootstrap and client credentials | ready | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Hard: ADR-0002 accepted and current schema/CLI security boundary stable; no upstream dependency. |
 
 
 
@@ -68,6 +70,12 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| On-prem user access | M002 — browser sessions and route authorization (`plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md`) | Hard: M001 closure and validated admin credential/schema migration. |
+| On-prem user access | M003 — principal propagation and attribution (`plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md`) | Hard: M002 closure and stable principal/scope contract. |
+| On-prem user access | M004 — profile-based model authorization (`plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md`) | Hard: M003 closure; all request paths carry durable user identity. |
+| On-prem user access | M005 — user/model budgets (`plans/implementation/on-prem-user-access/005-durable-user-budgets.md`) | Hard: M004 closure and verified concrete-model policy checks. |
+| On-prem user access | M006 — admin/member web + personal integration (`plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md`) | Hard: M005 closure and durable user budget APIs. |
+| On-prem user access | M007 — target qualification and legacy migration (`plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md`) | Hard: M006 closure; operational physical SBC/ordinary host evidence. |
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 
