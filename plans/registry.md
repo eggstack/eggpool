@@ -49,13 +49,14 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closing — browser sessions and route authorization | Implementation `087953a3` landed; closure audit is in progress. M001 credential/schema contract is accepted; physical SBC hash qualification is carried to M007. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 ready | Browser session/route boundary is accepted; M001 SBC Argon2 qualification remains assigned to M007. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M003 — principal propagation and attribution | ready | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | Hard: M002 closure accepted; browser session, role, and agent credential route contract is stable. |
 
 
 
@@ -63,14 +64,12 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M002 — browser sessions and route authorization | closing | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | Implementation `087953a3`; closure evidence is being reconciled. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M003 — principal propagation and attribution (`plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md`) | Hard: M002 closure and stable principal/scope contract. |
 | On-prem user access | M004 — profile-based model authorization (`plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md`) | Hard: M003 closure; all request paths carry durable user identity. |
 | On-prem user access | M005 — user/model budgets (`plans/implementation/on-prem-user-access/005-durable-user-budgets.md`) | Hard: M004 closure and verified concrete-model policy checks. |
 | On-prem user access | M006 — admin/member web + personal integration (`plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md`) | Hard: M005 closure and durable user budget APIs. |
@@ -89,6 +88,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M002 — browser sessions and route authorization | closed — opaque sessions, CSRF, role-separated managed routes, trusted-proxy transport checks; 947 Rust tests passed, 1 ignored; M003 promoted to ready; SBC hash qualification remains with M007 | `plans/closure/on-prem-user-access/002-status.md`, implementation `087953a3` |
 | On-prem user access M001 — admin bootstrap and client credentials | conditionally closed — migration 55, local admin and personal-token lifecycle, legacy-key cutover, 939 workspace tests passed; physical SBC Argon2 qualification carried to M007; M002 promoted to ready | `plans/closure/on-prem-user-access/001-status.md`, implementation `ecdc313` |
 | Deployment and packaging M005 — active PATH integration detection corrective | closed — 78-case installer harness (73 baseline + 5 new Gregg/array regressions), Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/005-status.md`, implementation `576b462d`, CI `38030165909`, shell run `38030165862` |
 | Deployment and packaging M004 — shell command discovery and activation corrective | closed — 73-case installer harness, Linux Bash and macOS arm64 zsh hosted qualification, full CI; no dependent plan was unblocked | `plans/closure/deployment-packaging/004-status.md`, implementation `57af5bc` + test hardening `45149d2`, CI `38026958264`, shell run `38026958268` |
