@@ -56,7 +56,6 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M001 — admin bootstrap and client credentials | ready | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Hard: ADR-0002 accepted and current schema/CLI security boundary stable; no upstream dependency. |
 
 
 
@@ -64,6 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M001 — admin bootstrap and client credentials | active | `plans/implementation/on-prem-user-access/001-admin-bootstrap-and-credentials.md` | Implementation in progress; no production changes yet. |
 
 
 ## Blocked work
