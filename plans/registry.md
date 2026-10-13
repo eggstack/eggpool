@@ -56,7 +56,6 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M003 — principal propagation and attribution | ready | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | Hard: M002 closure accepted; browser session, role, and agent credential route contract is stable. |
 
 
 
@@ -64,6 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M003 — principal propagation and attribution | active | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | M002 closed; implement stable authenticated principal and durable logical-request ownership. |
 
 
 ## Blocked work
