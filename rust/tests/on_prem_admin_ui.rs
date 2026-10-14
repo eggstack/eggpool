@@ -6,7 +6,7 @@ use eggpool::{
     identity,
     model_policy::ModelPolicyService,
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
-    server::{ServerRuntime, ShutdownReason},
+    server::{ServerRuntime, ServerRuntimeHandle, ShutdownReason},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -59,6 +59,44 @@ async fn http_request(
     origin: Option<&str>,
     bearer: Option<&str>,
 ) -> String {
+    request_with_provenance(address, method, path, body, cookies, origin, None, bearer).await
+}
+
+/// A same-origin browser form POST sends `Origin` and `Referer` together, which
+/// is the header set the raw helper above never produces.
+#[allow(clippy::too_many_arguments)]
+async fn browser_form_post(
+    address: std::net::SocketAddr,
+    path: &str,
+    body: &str,
+    cookies: Option<&str>,
+    origin: &str,
+    referer: &str,
+) -> String {
+    request_with_provenance(
+        address,
+        "POST",
+        path,
+        body,
+        cookies,
+        Some(origin),
+        Some(referer),
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request_with_provenance(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookies: Option<&str>,
+    origin: Option<&str>,
+    referer: Option<&str>,
+    bearer: Option<&str>,
+) -> String {
     let mut stream = TcpStream::connect(address).await.expect("connect");
     let mut request =
         format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n");
@@ -73,6 +111,9 @@ async fn http_request(
     }
     if let Some(origin) = origin {
         request.push_str(&format!("Origin: {origin}\r\n"));
+    }
+    if let Some(referer) = referer {
+        request.push_str(&format!("Referer: {referer}\r\n"));
     }
     if let Some(token) = bearer {
         request.push_str(&format!("Authorization: Bearer {token}\r\n"));
@@ -611,5 +652,91 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         .expect("server shutdown completes")
         .unwrap()
         .unwrap();
+    database.close().await.unwrap();
+}
+
+/// Start the managed dashboard on an ephemeral loopback port.
+async fn managed_server(
+    database: &Database,
+) -> (
+    std::net::SocketAddr,
+    ServerRuntimeHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    let candidate =
+        RuntimeGenerationFactory::prepare(&process, config.clone(), "browser-signin".into(), 1)
+            .await
+            .expect("runtime generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    process
+        .install_initial_tasks((*manager).clone(), &config)
+        .await
+        .expect("tasks install");
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let _ = runtime.serve_listener(listener).await;
+    });
+    (address, handle, task)
+}
+
+#[tokio::test]
+async fn browser_sign_in_accepts_the_origin_and_referer_pair_a_real_browser_sends() {
+    let (_directory, database) = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    identity::bootstrap_admin(&database, "admin", "M011 strong admin password passphrase")
+        .await
+        .unwrap();
+    identity::enable_managed(&database).await.unwrap();
+    let (address, handle, task) = managed_server(&database).await;
+    let origin = format!("http://{address}");
+    let form = "username=admin&password=M011+strong+admin+password+passphrase";
+
+    // Chrome sends both headers on a same-origin form POST; rejecting that pair
+    // would make the admin and member sign-in screens unusable in any browser.
+    let signed_in = browser_form_post(
+        address,
+        "/login",
+        form,
+        None,
+        &origin,
+        &format!("{origin}/login"),
+    )
+    .await;
+    assert!(signed_in.starts_with("HTTP/1.1 303"), "{signed_in}");
+    assert!(signed_in.contains("eggpool_session="), "{signed_in}");
+    let (_, _csrf, cookies) = session_pair(&signed_in);
+
+    let users = http_request(address, "GET", "/users", "", Some(&cookies), None, None).await;
+    assert!(users.starts_with("HTTP/1.1 200"), "{users}");
+
+    // The same pair must still fail closed when the referer is cross-site.
+    let refused = browser_form_post(
+        address,
+        "/login",
+        form,
+        None,
+        &origin,
+        "https://attacker.test/login",
+    )
+    .await;
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    assert!(!refused.contains("eggpool_session="), "{refused}");
+
+    handle.request_shutdown(ShutdownReason::Requested);
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .expect("server shutdown completes")
+        .expect("server task joins");
     database.close().await.unwrap();
 }

@@ -10,6 +10,7 @@ Usage::
 
     uv run python scripts/qualification_dashboard_parity.py --skip-build
     uv run python scripts/qualification_dashboard_parity.py --skip-build --screenshots
+    uv run python scripts/qualification_dashboard_parity.py --skip-build --on-prem
 """
 
 # ruff: noqa: F405
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from ._shared import *  # noqa: F403
 from .fixtures import *  # noqa: F403
+from .on_prem import *  # noqa: F403
 from .oracle import *  # noqa: F403
 from .process import *  # noqa: F403
 from .report import *  # noqa: F403
@@ -47,6 +49,21 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--markdown", type=Path, default=DEFAULT_MARKDOWN)
     parser.add_argument("--screenshot-dir", type=Path)
+    parser.add_argument(
+        "--on-prem",
+        action="store_true",
+        help=(
+            "qualify the managed admin/member pages against the Rust-owned "
+            "approved reference instead of the historical Python oracle"
+        ),
+    )
+    parser.add_argument(
+        "--write-on-prem-reference",
+        action="store_true",
+        help=(
+            "freeze the current on-prem browser observations as the approved reference"
+        ),
+    )
     options = parser.parse_args()
     try:
         if options.write_manifest:
@@ -56,6 +73,27 @@ def main() -> int:
         if options.capture_oracle is not None:
             capture_oracle_snapshots(options.capture_oracle)
             print(f"Dashboard oracle captures written: {options.capture_oracle}")
+            return 0
+        if options.on_prem or options.write_on_prem_reference:
+            if not options.skip_build:
+                result = subprocess.run(
+                    ["cargo", "build", "--manifest-path", str(RUST_MANIFEST)],
+                    cwd=ROOT,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise QualificationError("Rust dashboard candidate failed to build")
+            with tempfile.TemporaryDirectory(prefix="eggpool-on-prem-browser-") as root:
+                print(
+                    json.dumps(
+                        qualify_on_prem_browser(
+                            root=Path(root),
+                            write_reference=options.write_on_prem_reference,
+                            screenshot_dir=options.screenshot_dir,
+                        ),
+                        indent=2,
+                    )
+                )
             return 0
         if options.shutdown_restart:
             if not options.skip_build:

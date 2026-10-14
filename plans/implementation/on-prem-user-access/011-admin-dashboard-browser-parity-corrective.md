@@ -1,8 +1,10 @@
 # On-Prem User Access M011 — Admin/member dashboard browser qualification
 
-Status: ready
+Status: implemented
 
-Repository baseline: `c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` on `plans/on-prem-small-team-user-access` (PR #7), schema 60, M001–M007 closure records as of 2026-10-13.
+Repository baseline: implemented as `d495d483` on `feat/auto-20261014-e526194d` (separate session; activation step skipped there — recorded here), integrated onto `plans/on-prem-small-team-user-access` (PR #7) post-M010. (Plan text cites `c18dcc20`/schema 60; superseded by later landings. Original baseline line retained below for traceability.)
+
+Repository baseline (original): `c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` on `plans/on-prem-small-team-user-access` (PR #7), schema 60, M001–M007 closure records as of 2026-10-13.
 
 Source roadmap:
 - `plans/subsystems/on-prem-user-access-roadmap.md#m011--adminmember-browser-qualification-corrective`

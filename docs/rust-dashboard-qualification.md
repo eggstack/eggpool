@@ -17,6 +17,41 @@ static bytes/content types, theme inventory, and referenced assets. Use
 `--skip-build` when `rust/target/debug/eggpool` already represents the source
 under review.
 
+## Split oracle contract
+
+Dashboard qualification has two references, and they are not interchangeable.
+
+The historical M001-M012 pages are compared against the frozen Python oracle
+pinned at `ORACLE_COMMIT`. That oracle only ever implemented those pages, so it
+can never serve as the reference for the on-prem admin and member pages that
+were added afterwards.
+
+The on-prem pages are therefore owned by EggPool itself. `--on-prem` starts one
+managed instance with a bootstrapped administrator, drives a real browser
+through both roles, and compares the result against a Rust-owned approved
+reference at `tests/fixtures/dashboard-on-prem-browser/reference.json`.
+
+```text
+uv run python scripts/qualification_dashboard_parity.py --skip-build --on-prem
+```
+
+That gate covers sign-in with and without JavaScript, administrator profile and
+user creation, suspend and reactivate, model override and budget editing,
+one-time personal token reveal, forced password change at first member login,
+member-only pages, and the negative matrix for anonymous, member, and personal
+agent credentials. Every admin and member page is checked at desktop, narrow
+mobile, and HiDPI viewports, and across every bundled theme. Each observation
+fails on duplicate IDs, horizontal overflow, an unbounded table, an unlabelled
+control, a missing viewport declaration, or any planted credential marker
+reaching the DOM.
+
+Re-freeze the reference only after reviewing the diff:
+
+```text
+uv run python scripts/qualification_dashboard_parity.py --skip-build --on-prem \
+  --write-on-prem-reference
+```
+
 ## Browser review procedure
 
 Use an existing local Chrome, Firefox, or equivalent browser against the

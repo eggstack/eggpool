@@ -261,37 +261,51 @@ pub(super) fn same_origin(headers: &HeaderMap, secure: bool) -> bool {
     if host_values.next().is_some() {
         return false;
     }
-    let origin_values = headers.get_all(header::ORIGIN).iter().collect::<Vec<_>>();
-    let referer_values = headers.get_all(header::REFERER).iter().collect::<Vec<_>>();
-    let origin = if !origin_values.is_empty() {
-        if origin_values.len() != 1 || !referer_values.is_empty() {
-            return false;
-        }
-        origin_values[0].to_str().ok()
-    } else if referer_values.len() == 1 {
-        referer_values[0].to_str().ok()
-    } else {
-        None
-    };
-    let Some(origin) = origin else { return false };
-    let Some((scheme, authority)) = origin_authority(origin) else {
-        return false;
-    };
     let expected_scheme = if secure { "https" } else { "http" };
-    if !scheme.eq_ignore_ascii_case(expected_scheme) {
-        return false;
-    }
     let Ok(expected_authority) = host.parse::<http::uri::Authority>() else {
         return false;
     };
-    let Ok(origin_authority) = authority.parse::<http::uri::Authority>() else {
-        return false;
-    };
-    expected_authority
-        .host()
-        .eq_ignore_ascii_case(origin_authority.host())
-        && effective_port(expected_authority.port_u16(), expected_scheme)
-            == effective_port(origin_authority.port_u16(), expected_scheme)
+    // A same-origin browser form POST carries `Origin` and `Referer` together, so
+    // every provenance header that is present has to agree. Requiring exactly one
+    // of them rejected real browsers while still accepting a bare `Referer`.
+    let mut seen = false;
+    for name in [header::ORIGIN, header::REFERER] {
+        let referer = name == header::REFERER;
+        let mut values = headers.get_all(&name).iter();
+        let Some(first) = values.next() else { continue };
+        seen = true;
+        // A duplicated header is ambiguous provenance; fail closed rather than
+        // silently preferring one of the values.
+        if values.next().is_some() {
+            return false;
+        }
+        let Ok(value) = first.to_str() else {
+            return false;
+        };
+        let allowed = if referer {
+            referer_authority(value)
+        } else {
+            origin_authority(value)
+        };
+        let Some((scheme, authority)) = allowed else {
+            return false;
+        };
+        if !scheme.eq_ignore_ascii_case(expected_scheme) {
+            return false;
+        }
+        let Ok(provenance_authority) = authority.parse::<http::uri::Authority>() else {
+            return false;
+        };
+        if !expected_authority
+            .host()
+            .eq_ignore_ascii_case(provenance_authority.host())
+            || effective_port(expected_authority.port_u16(), expected_scheme)
+                != effective_port(provenance_authority.port_u16(), expected_scheme)
+        {
+            return false;
+        }
+    }
+    seen
 }
 
 fn origin_authority(value: &str) -> Option<(&str, &str)> {
@@ -300,7 +314,27 @@ fn origin_authority(value: &str) -> Option<(&str, &str)> {
         return None;
     }
     let authority = remainder.split(['/', '?', '#']).next()?;
-    if authority.is_empty() || remainder[authority.len()..].contains(['?', '#']) {
+    if authority.is_empty()
+        || authority.contains('@')
+        || remainder[authority.len()..].contains(['?', '#'])
+    {
+        return None;
+    }
+    Some((scheme, authority))
+}
+
+/// Split a `Referer`, which unlike `Origin` may carry an ordinary path, query,
+/// or fragment, into the scheme and authority that matter for the same-origin
+/// comparison.
+fn referer_authority(value: &str) -> Option<(&str, &str)> {
+    let (scheme, remainder) = value.split_once("://")?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return None;
+    }
+    let authority = remainder.split(['/', '?', '#']).next()?;
+    // Userinfo would let `https://expected.test@attacker.test` read as the
+    // expected host, so ambiguous provenance is rejected outright.
+    if authority.is_empty() || authority.contains('@') || remainder.contains("://") {
         return None;
     }
     Some((scheme, authority))
@@ -337,7 +371,7 @@ fn login_html(message: Option<&str>) -> String {
 
 fn account_error_html(message: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Account</title><body><main><h1>Account</h1><p role=\"alert\">{}</p><p><a href=\"/account\">Return to account</a></p></main></body></html>",
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Account</title><body><main><h1>Account</h1><p role=\"alert\">{}</p><p><a href=\"/account\">Return to account</a></p></main></body></html>",
         html_escape(message)
     )
 }
@@ -381,6 +415,56 @@ mod tests {
     }
 
     #[test]
+    fn same_origin_accepts_the_header_set_a_browser_form_post_sends() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:11300"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://127.0.0.1:11300"),
+        );
+        headers.insert(
+            header::REFERER,
+            HeaderValue::from_static("http://127.0.0.1:11300/login"),
+        );
+        assert!(same_origin(&headers, false));
+        assert!(!same_origin(&headers, true));
+        // A real browser `Referer` may carry a query or fragment.
+        headers.insert(
+            header::REFERER,
+            HeaderValue::from_static("http://127.0.0.1:11300/login?next=%2Fusers"),
+        );
+        assert!(same_origin(&headers, false));
+    }
+
+    #[test]
+    fn same_origin_rejects_disagreeing_or_duplicated_provenance() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.test"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://example.test"),
+        );
+        headers.insert(
+            header::REFERER,
+            HeaderValue::from_static("https://attacker.test/login"),
+        );
+        assert!(!same_origin(&headers, true));
+        headers.insert(
+            header::REFERER,
+            HeaderValue::from_static("https://example.test/login"),
+        );
+        assert!(same_origin(&headers, true));
+        headers.append(
+            header::ORIGIN,
+            HeaderValue::from_static("https://example.test"),
+        );
+        assert!(!same_origin(&headers, true));
+        headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.test"));
+        assert!(!same_origin(&headers, true));
+    }
+
+    #[test]
     fn origin_parser_rejects_opaque_and_ambiguous_values() {
         assert_eq!(
             origin_authority("https://example.test/path"),
@@ -388,6 +472,12 @@ mod tests {
         );
         assert_eq!(origin_authority("null"), None);
         assert_eq!(origin_authority("https://example.test/?x=1"), None);
+        assert_eq!(
+            referer_authority("https://example.test/login?x=1#frag"),
+            Some(("https", "example.test"))
+        );
+        assert_eq!(referer_authority("https://user@host.example.test/x"), None);
+        assert_eq!(referer_authority("null"), None);
     }
 
     #[test]

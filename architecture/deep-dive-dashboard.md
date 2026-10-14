@@ -216,12 +216,31 @@ remain unavailable rather than being inferred by page rendering.
 The milestone evidence and source-to-panel review are recorded in
 `plans/closure/dashboard/004-status.md`.
 
+## On-prem admin and member browser qualification
+
+The frozen Python oracle in `scripts/dashboard_parity/` only ever implemented the
+historical M001-M012 pages. It is therefore the reference for those routes alone
+and is never reopened as evidence for the on-prem user-access pages. Those pages
+are owned by EggPool and are qualified by `scripts/dashboard_parity/on_prem.py`,
+which starts one managed instance, bootstraps an administrator through
+`eggpool users bootstrap`, and drives a real browser through both roles against
+a Rust-owned approved reference at
+`tests/fixtures/dashboard-on-prem-browser/reference.json`.
+
+Browser sign-in is gated by `server::auth::same_origin`. A same-origin browser
+form POST sends `Origin` and `Referer` together, so every provenance header that
+is present must agree with the request `Host`; duplicated or userinfo-bearing
+provenance still fails closed. Accepting only a lone `Origin` would have rejected
+every real browser while still admitting a bare `Referer`.
+
 ## Verification
 
 ```bash
 cargo test --manifest-path rust/Cargo.toml --test server_transport -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --test status_command -- --test-threads=1
 cargo test --manifest-path rust/Cargo.toml --lib server::dashboard::tests -- --test-threads=1
+cargo test --manifest-path rust/Cargo.toml --test on_prem_admin_ui -- --test-threads=1
 uv run python scripts/qualification_dashboard_parity.py --screenshots
 uv run python scripts/qualification_dashboard_parity.py --shutdown-restart
+uv run python scripts/qualification_dashboard_parity.py --skip-build --on-prem
 ```
