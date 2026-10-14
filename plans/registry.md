@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 ready | M005 durable user budgets are conditionally closed with explicit estimate/global-scope/recovery conditions; M006 is dependency-ready. M007 retains physical qualification. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 active | M006 exposes lower-layer identity, policy, budget, and client integration capabilities. M005 estimate/global-scope/recovery conditions remain; M007 retains physical qualification. |
 
 ## Dependency-ready implementation plans
 
@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M006 — web administration and personal client integration | ready | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | M001–M005 lower layers are accepted; expose them through secure DB-backed admin/member UI and personal client credentials. Show M005 estimate limitations accurately. |
+| On-prem user access | M006 — web administration and personal client integration | active | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | Build DB-backed admin/member UI and personal client flows; preserve CSRF, role fences, and M005 estimate limitations. |
 
 
 ## Blocked work
