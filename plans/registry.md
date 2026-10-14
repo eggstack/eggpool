@@ -49,14 +49,13 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 ready | M006 browser parity evidence and M005 estimate/global-scope/recovery conditions carry into M007; physical qualification remains operational. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 active | M006 browser parity evidence and M005 estimate/global-scope/recovery conditions carry into M007; physical qualification remains operational. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M007 — small-team qualification and legacy migration | ready | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | Hard M006 dependency satisfied by conditional closure; physical SBC and ordinary-host evidence remain operational acceptance gates. |
 
 
 
@@ -64,6 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M007 — small-team qualification and legacy migration | active | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | Run local synthetic migration, recovery, and security qualification; record physical evidence as unavailable. |
 
 
 ## Blocked work
