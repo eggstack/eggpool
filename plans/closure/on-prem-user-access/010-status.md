@@ -99,7 +99,7 @@ Local:
 - Strict Clippy default + no-default, `fmt --check`, `git diff --check`: pass.
 - Focused plan targets all green: `on_prem_budgets` 27, `on_prem_global_budgets` 16, `database_compatibility` 11, `coordinator_c010` 20, `coordinator_publication` 10, `coordinator_finalization` 11, `coordinator_c008` 34, `coordinator_c009` 13, `runtime_lifecycle_r009` 6, lib `operations::backup` 1, full lib 164 (incl. both M003-flagged updater tests, isolated and in-suite).
 - Tooling: ruff format (59 files) + check pass, pyright 0 errors, release-docs validator pass, `pytest tests/tooling/`: **165 passed, 1 skipped**, plus the installer harness run directly: **78/78 cases pass**.
-- Hosted CI: this push re-runs it; run recorded on push.
+- Hosted CI (PR #7, push `50d0f72d`): `check` **pass** on rerun (job `115989330297`, 8m27s); Linux Bash + macOS zsh installer shells **pass**. Two unrelated hosted-only events, both with evidence below: (1) the first `check` attempt failed on the pre-existing `runtime_lifecycle_r012::caller_cancellation` sleep race (flake, passes on rerun); (2) `cargo-deny` fails on four same-day rustls advisories against the untouched lockfile (separate dependency triage, not this milestone).
 
 ### Environment-gated note (not a product finding)
 
@@ -176,6 +176,8 @@ surfaces, or transitions). Observation artifact force-added per the
 |---|---|---|---|
 | Low | Pytest installer-harness timeout under host overload (load 36–50); harness itself 78/78 green when run directly. | CI truth for that target comes from hosted runners; local rerun timing only. | None — environment observation, re-check on a quiet host if needed. |
 | Low | Orphaned compensated-pending holds converge only at next restart. | Bounded reservation occupancy between compensation and restart. | None — matches the startup-reconciliation lifecycle; M012 SBC work may revisit if restart intervals matter. |
+| Low (external, not a milestone defect) | Hosted `check` first attempt failed `runtime_lifecycle_r012::caller_cancellation_and_busy_do_not_corrupt_reload_diagnostics` (`reload.in_progress` not yet set after fixed 20 ms sleeps). Local repeats: 2/15 fail on this branch; pre-M010 base binary passes 6/6 and branch binary 6/6 interleaved under the same load — a load-sensitive sleep race in an untouched reload test, not a budget regression. Rerun passes. | One red-then-green hosted cycle; no product impact. | None in this milestone. A future bounded lifecycle-hardening pass should replace the fixed sleeps with an observable-boundary rendezvous per repo convention. |
+| Medium (external, dependency triage) | Hosted `cargo-deny` fails on RUSTSEC-2026-0346/0347/0348/0349 against pinned `rustls 0.23.45`. `rust/Cargo.toml`, `rust/Cargo.lock`, and `deny.toml` are byte-identical to the green M013 push; the failure reproduces locally via `cargo deny check advisories` on the unmodified lockfile — a live-advisory-DB event, not an M010 change. | Pinned TLS stack carries four disclosed advisories until triaged. | Separate bounded dependency-packaging corrective (rustls bump ripples through the exact-pinned provider transport and needs the release-build + qualification workflow). Deliberately not folded into this budget milestone. |
 
 No critical, high, or medium findings.
 
