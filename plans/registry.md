@@ -49,27 +49,26 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008 & M011 ready; M009/M010/M012 dependency- or hardware-gated correctives | M001/M003/M005/M006/M007 are historically conditionally closed. No physical SBC/small-team capacity claim or hard USD/token guarantee is accepted yet. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008 closed; M009 & M011 ready; M010/M012 dependency- or hardware-gated correctives | M001/M003/M005/M006/M007 are historically conditionally closed. No physical SBC/small-team capacity claim or hard USD/token guarantee is accepted yet. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M009 — global-instance budget intersection | ready | `plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md` | Hard: M008 accepted closure, conservative reservation contract. |
 | On-prem user access | M011 — admin/member dashboard browser qualification | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | Parallel to budget work; pinned legacy-page oracle and new Rust-owned browser references required for full closure. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M008 — enforceable token/cost admission corrective | active | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | Corrective to conditionally closed M005/M006/M007; proof-or-reject hard admission plus truthful estimated compatibility. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M009 — global-instance budget intersection (`plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md`) | Hard: M008 accepted closure, conservative reservation contract. |
 | On-prem user access | M010 — budget crash/restore and v54 migration (`plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md`) | Hard: M008 and M009 accepted closures; global user-budget state machine stable. |
 | On-prem user access | M012 — physical SBC and small-team qualification (`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`) | Hard: M008–M011 accepted closures. Operational: provisioned physical SBC and reference ordinary Linux target; no capacity claim until measured. |
 
@@ -86,6 +85,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M008 — enforceable token/cost admission | closed — migration 61 enforcement mode + worst-case holds, proof-or-reject admission with zero-upstream denial, operator tariff trust boundary, 978 serial Rust tests + 979 no-default tests; only low findings (conservative over-reservation, provider-wide tariff, no HTTP-level denial test) | `plans/closure/on-prem-user-access/008-status.md`, implementation `0149a6c8` + carriage `ca77c547` |
 | On-prem user access M007 — small-team qualification, migration, and release hardening | conditionally closed — local 964 serial Rust tests + 166 tooling tests; hosted CI `38497388228`, installer qualification `38497388225`, and dependency audit `38497388244` pass; seven synthetic loopback requests complete with no reservations left; physical Pi/Le Potato capacity and schema-54 restore remain unmeasured, so no 49-user or concurrency claim | `plans/closure/on-prem-user-access/007-status.md`, local artifact `artifacts/qualification/on-prem-user-access-m007-local.json` |
 | On-prem user access M006 — web administration and personal client integration | conditionally closed — migration 60, session/role/CSRF-fenced admin and member screens, one-time/revocable personal credentials, bounded audit/list reads, 964 serial Rust tests + 166 tooling tests; browser parity captures and M005 estimate/physical evidence carried into M007 | `plans/closure/on-prem-user-access/006-status.md`, implementation `a3f2d00a` |
 | On-prem user access M004 — profile-based model authorization | closed — migration 58, exact profile and user policy, concrete-dispatch checks, filtered model discovery and policy ETag; default/no-default compile gates and 957 all-target tests passed; M005 promoted to ready | `plans/closure/on-prem-user-access/004-status.md`, implementation `f537df4`, concurrency fixture `c53bf4d` |
