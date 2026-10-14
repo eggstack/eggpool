@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 006 — Web administration and personal client integration
 
-Status: blocked
+Status: ready
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 
@@ -26,11 +26,15 @@ view their accessible models/usage. A personal client profile works with
 OpenCode, Codex and current Eggpool remote desktop helper. **Hard
 dependency:** accepted M005 closure (all lower layers/quotas functional).
 
-## 2. Why blocked
+## 2. Readiness and M005 conditions
 
-All admin mutation endpoints must rely on already-proven M002 sessions/CSRF,
-M003 principal, M004 authorization and M005 budget persistence. A static
-dashboard mock is not accepted capability evidence.
+Admin mutation endpoints rely on M002 sessions/CSRF, M003 principal, M004
+authorization and M005 budget persistence. M005 is conditionally closed:
+budget CRUD and bounded usage reads are available, while output-token and
+unpriced-USD limits remain estimates and global instance ceilings are absent.
+The M006 UI must label these dimensions accurately; do not present the current
+estimated limits as exact hard caps. A static dashboard mock is not accepted
+capability evidence.
 
 ## 3. Baseline
 
