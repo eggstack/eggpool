@@ -63,6 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M013 — transcode-eligibility admission bridge corrective | active | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | Corrective to closed M008 (hosted Q007 transcode failure); one-line restoration plus bridge guard. |
 
 
 ## Blocked work
