@@ -47,7 +47,6 @@ async fn credential_and_session_resolve_the_same_user_epoch() {
     )
     .await
     .unwrap();
-
     let agent = identity::verify_api_token_principal(&database, &credential.token)
         .await
         .unwrap()
@@ -232,6 +231,34 @@ async fn managed_inference_ignores_spoofed_user_headers_and_persists_token_owner
     )
     .await
     .unwrap();
+    database
+        .call(|connection| {
+            connection.execute(
+                "INSERT INTO users(id, username, normalized_username, role, password_hash)
+                 VALUES ('request-member', 'request-member', 'request-member', 'member', 'test-hash')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let member_credential = identity::issue_api_token(&database, "request-member", "budget-test")
+        .await
+        .unwrap();
+    eggpool::user_budget::UserBudgetService::new(database.clone())
+        .set_rule(
+            &admin.id,
+            &admin.id,
+            None,
+            eggpool::user_budget::BudgetWindow::Day,
+            eggpool::user_budget::BudgetLimits {
+                requests: Some(10),
+                concurrent: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
     let provider_listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let provider_address = provider_listener.local_addr().unwrap();
@@ -329,6 +356,22 @@ async fn managed_inference_ignores_spoofed_user_headers_and_persists_token_owner
         "policy revision is in the ETag: {profile}"
     );
     assert!(!profile.contains("attribution-model"), "{profile}");
+    let budget = get_request(address, "/api/user-budget", &credential.token).await;
+    assert!(budget.starts_with("HTTP/1.1 200"), "{budget}");
+    assert!(budget.contains("estimated_microdollars"), "{budget}");
+    assert!(budget.contains("max_requests"), "{budget}");
+    let member_budget = get_request(address, "/api/user-budget", &member_credential.token).await;
+    assert!(member_budget.starts_with("HTTP/1.1 200"), "{member_budget}");
+    let member_other_budget = get_request(
+        address,
+        &format!("/api/user-budget?user_id={}", admin.id),
+        &member_credential.token,
+    )
+    .await;
+    assert!(
+        member_other_budget.starts_with("HTTP/1.1 403"),
+        "{member_other_budget}"
+    );
     let persisted = database
         .call(|connection| {
             connection.query_row(

@@ -23,6 +23,7 @@ use dashboard::{
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
+    user_budget_api,
 };
 use inference::{chat_completions, messages, responses, responses_compact};
 use middleware::{
@@ -1106,6 +1107,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/stats/runtime", get(runtime_status))
         .route("/api/stats/update", get(update_status))
         .route("/api/status", get(status_api))
+        .route("/api/user-budget", get(user_budget_api))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(responses))
@@ -1250,6 +1252,7 @@ mod tests {
             "/v1/responses",
             "/v1/responses/compact",
             "/api/integrations/v1/profile",
+            "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",
             "/api/status",
@@ -1276,6 +1279,7 @@ mod tests {
         for path in [
             "/v1/models",
             "/api/integrations/v1/profile",
+            "/api/user-budget",
             "/api/stats/runtime",
             "/api/stats/update",
             "/api/status",

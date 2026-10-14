@@ -793,6 +793,66 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                 }
             }
         }
+        crate::cli::UsersCommand::Budget(command) => {
+            use crate::cli::UsersBudgetCommand as Budget;
+            match command {
+                Budget::Set(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let users = crate::identity::list_users(&database)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    let user = users
+                        .iter()
+                        .find(|user| user.username.eq_ignore_ascii_case(&args.username))
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    let window = match args.window.as_str() {
+                        "day" => crate::user_budget::BudgetWindow::Day,
+                        "month" => crate::user_budget::BudgetWindow::Month,
+                        _ => return Err(command_error(EXIT_VALIDATION, "invalid budget window")),
+                    };
+                    crate::user_budget::UserBudgetService::new(database.clone())
+                        .set_rule(
+                            &actor,
+                            &user.id,
+                            args.model_id.as_deref(),
+                            window,
+                            crate::user_budget::BudgetLimits {
+                                requests: args.max_requests,
+                                tokens: args.max_tokens,
+                                microdollars: args.max_microdollars,
+                                concurrent: args.max_concurrent,
+                            },
+                        )
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Budget rule for {} saved.", user.username);
+                }
+                Budget::Remove(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let users = crate::identity::list_users(&database)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    let user = users
+                        .iter()
+                        .find(|user| user.username.eq_ignore_ascii_case(&args.username))
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    let window = match args.window.as_str() {
+                        "day" => crate::user_budget::BudgetWindow::Day,
+                        "month" => crate::user_budget::BudgetWindow::Month,
+                        _ => return Err(command_error(EXIT_VALIDATION, "invalid budget window")),
+                    };
+                    let removed = crate::user_budget::UserBudgetService::new(database.clone())
+                        .remove_rule(&actor, &user.id, args.model_id.as_deref(), window)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Budget rule for {} {}.",
+                        user.username,
+                        if removed { "removed" } else { "was absent" }
+                    );
+                }
+            }
+        }
     }
     database
         .close()

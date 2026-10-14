@@ -116,3 +116,21 @@ focused on routing availability, usage, cost, and pricing exactness so the
 default Models view stays scannable. Pricing exactness follows the same
 request-cost labels used elsewhere in EggPool: `provider_reported`,
 `exact`, `derived`, `partial`, `estimated`, and `unknown`.
+
+## Local User Budgets
+
+Per-user request, token-estimate, estimated-microdollar, and concurrent
+request budgets are separate from these model context/output limits. Operators
+manage rules with `eggpool users budget set`; daily and monthly periods use
+UTC calendar windows. A hold is reserved atomically before provider dispatch,
+and retries extend the same logical request hold. User usage distinguishes
+provider-reported cost, local estimates, and conservative reservation fallback.
+Token holds use a bounded request-size estimate and observed terminal usage is
+settled afterward. The current estimate does not prove a requested maximum
+output bound for every protocol. Microdollar holds use EggPool's estimated
+pricing projection, including fallback rates when no model price is known;
+they do not prove a hard cost ceiling for unpriced self-hosted models, and are
+not an exact charge or invoice for flat-rate providers. Treat those dimensions
+as operational estimates until explicit output-bound and local-price admission
+gates are configured. See the [API reference](api-reference.md#authentication)
+for the authenticated `/api/user-budget` view.

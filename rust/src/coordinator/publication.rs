@@ -193,6 +193,8 @@ pub enum PublicationError {
     DuplicateConflict { proxy_request_id: String },
     #[error("authenticated request principal changed before durable publication")]
     PrincipalChanged,
+    #[error("user budget limit reached")]
+    BudgetExceeded,
     #[error("replacement attempt cannot publish before the prior attempt converges")]
     PriorAttemptNotFinalized,
     #[error("claim transition failed: {0}")]
@@ -249,6 +251,7 @@ enum TransactionOutcome {
     Observed(Box<FinalizationIdentity>),
     Conflict,
     PrincipalChanged,
+    BudgetExceeded,
     PriorAttemptNotFinalized,
 }
 
@@ -341,6 +344,9 @@ impl PublicationService {
         if matches!(transaction, TransactionOutcome::PrincipalChanged) {
             return self.rollback_after_error(claim, PublicationError::PrincipalChanged);
         }
+        if matches!(transaction, TransactionOutcome::BudgetExceeded) {
+            return self.rollback_after_error(claim, PublicationError::BudgetExceeded);
+        }
 
         let TransactionOutcome::Created {
             request_id,
@@ -367,6 +373,9 @@ impl PublicationService {
                 ),
                 TransactionOutcome::PrincipalChanged => {
                     self.rollback_after_error(claim, PublicationError::PrincipalChanged)
+                }
+                TransactionOutcome::BudgetExceeded => {
+                    self.rollback_after_error(claim, PublicationError::BudgetExceeded)
                 }
                 TransactionOutcome::Created { .. } => Err(PublicationError::InvalidInput(
                     "unexpected created outcome after duplicate-publication branch".to_owned(),
@@ -664,6 +673,23 @@ impl PublicationService {
                             return Ok(TransactionOutcome::PriorAttemptNotFinalized);
                         }
                     }
+                    if attribution.user_id.is_some() {
+                        if crate::user_budget::check_retry(
+                            connection,
+                            request_id,
+                            projected_tokens,
+                            projected_cost,
+                        )? == crate::user_budget::BudgetCheck::Exceeded
+                        {
+                            return Ok(TransactionOutcome::BudgetExceeded);
+                        }
+                        crate::user_budget::extend_reservation(
+                            connection,
+                            request_id,
+                            projected_tokens,
+                            projected_cost,
+                        )?;
+                    }
                     // A retry attempt on an existing pending request is valid
                     // only after the previous attempt's durable and local
                     // release boundary has converged.
@@ -689,6 +715,22 @@ impl PublicationService {
                         },
                     );
                 }
+
+                let budget_permit = if let Some(user_id) = attribution.user_id.as_deref() {
+                    let (check, permit) = crate::user_budget::check_initial(
+                        connection,
+                        user_id,
+                        &model_id,
+                        projected_tokens,
+                        projected_cost,
+                    )?;
+                    if check == crate::user_budget::BudgetCheck::Exceeded {
+                        return Ok(TransactionOutcome::BudgetExceeded);
+                    }
+                    Some(permit)
+                } else {
+                    None
+                };
 
                 fail_sql(
                     transaction_injector.as_ref(),
@@ -720,6 +762,22 @@ impl PublicationService {
                     ],
                 )?;
                 let request_id = connection.last_insert_rowid();
+                if let (Some(user_id), Some(permit)) =
+                    (attribution.user_id.as_deref(), budget_permit.as_ref())
+                {
+                    crate::user_budget::insert_reservation(
+                        connection,
+                        crate::user_budget::BudgetReservationSpec {
+                            request_id,
+                            user_id,
+                            model_id: &model_id,
+                            tokens: projected_tokens,
+                            microdollars: projected_cost,
+                            ttl_seconds: input.reservation_ttl_seconds,
+                        },
+                        permit,
+                    )?;
+                }
                 insert_attempt_rows(
                     connection,
                     transaction_injector.as_ref(),

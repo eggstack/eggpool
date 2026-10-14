@@ -7,6 +7,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/v1/models` | List models visible to the authenticated principal; managed users see only models allowed by their effective policy |
+| `GET` | `/api/user-budget` | Authenticated user rules and bounded usage; admins may add `?user_id=<id>` to inspect one user |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission |
@@ -114,3 +115,12 @@ Managed users receive policy-filtered model discovery, and runtime dispatch
 enforces the same rules even when a client submits a hidden model manually.
 The integration profile's ETag includes the policy revision so client caches
 refresh after an administrator changes model access.
+
+`GET /api/user-budget` is available to personal tokens and browser sessions.
+Members can read only their own rules and rollups; an active admin may select a
+target with `user_id`. The response identifies UTC calendar windows and reports
+integer microdollars as modeled/estimated usage, with separate
+`provider_reported_microdollars`, `local_estimated_microdollars`, and
+`reservation_fallback_microdollars` totals. Unknown usage consumes the
+reserved estimate and increments an explicit unknown counter. This API does
+not represent invoices or exact charges for flat-rate provider accounts.

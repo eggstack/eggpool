@@ -131,6 +131,15 @@ left `Pending` after a failed release. `record_success` and `apply_failure_effec
 health transitions owned at that boundary; model-scoped failures never advance the account
 circuit.
 
+User budgets are enforced later at the durable publication boundary, after the
+principal and concrete model are bound. `coordinator/publication.rs` checks
+every matching aggregate and exact-model UTC day/month rule and inserts a
+SQLite hold atomically with the request, attempt, and provider reservation.
+This is independent from account quota scoring and does not change the
+load-based selection order. Token holds use a bounded request-size estimate;
+microdollar holds use the existing estimated cost projection, including its
+fallback. They are not exact output-token or invoice caps.
+
 ## Invariants
 
 - Selection is deterministic and load-based; pricing/accounting never influences ranking.

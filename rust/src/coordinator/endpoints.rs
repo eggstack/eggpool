@@ -117,6 +117,8 @@ pub enum EndpointError {
     PrincipalChanged,
     #[error("Model is not authorized")]
     ModelForbidden,
+    #[error("User budget limit reached")]
+    BudgetExceeded,
     #[error("Routing claim failed")]
     Claim,
     #[error("Provider attempt failed")]
@@ -181,6 +183,7 @@ impl EndpointError {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::PrincipalChanged => StatusCode::UNAUTHORIZED,
             Self::ModelForbidden => StatusCode::FORBIDDEN,
+            Self::BudgetExceeded => StatusCode::TOO_MANY_REQUESTS,
             Self::NoEligibleRoute | Self::Attempt => StatusCode::SERVICE_UNAVAILABLE,
             Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
@@ -571,6 +574,7 @@ fn map_publication_error(error: super::PublicationError) -> EndpointError {
     match error {
         super::PublicationError::DuplicateConflict { .. } => EndpointError::PublicationConflict,
         super::PublicationError::PrincipalChanged => EndpointError::PrincipalChanged,
+        super::PublicationError::BudgetExceeded => EndpointError::BudgetExceeded,
         super::PublicationError::InvalidInput(_) => EndpointError::Admission,
         super::PublicationError::ClaimIdentity(_)
         | super::PublicationError::Claim(_)

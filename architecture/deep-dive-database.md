@@ -18,7 +18,7 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0058_*.sql` = versions 1–58) with `checksums.json` (`files` map, 58 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0059_*.sql` = versions 1–59) with `checksums.json` (`files` map, 59 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
 
 `users`, `user_credentials`, and `user_access_state` hold usernames, password
 hashes, downstream roles, token digests, scopes, and explicit transition state.
@@ -49,6 +49,21 @@ then retains an immutable policy snapshot for the admitted request. Exact
 instance denial has highest precedence, followed by user override, assigned
 profile rule, and the role-safe default. Policy state remains separate from
 provider topology and provider-account quota.
+
+`user_budget` keeps downstream budget enforcement separate from upstream
+`reservations`, `AccountQuota`, and provider scoring. Daily and monthly windows
+use UTC calendar boundaries. Publication checks exact user/model and
+user-aggregate rules and inserts an active hold in the same transaction as the
+request/attempt/provider reservation; a concurrent last-slot request cannot
+pass on a stale preflight. Retries extend that logical hold without
+incrementing its request count. Attempt facts are idempotently retained, and
+terminal finalization settles one daily and one monthly usage bucket in the
+same transaction that terminalizes the request. Unknown usage consumes the
+remaining estimate and increments explicit unknown counters. Provider-reported,
+locally estimated, and reservation-fallback microdollars remain distinct in the
+user rollup. Rule changes retain an actor/version audit row. `GET
+/api/user-budget` returns only the authenticated user's data unless an active
+admin asks for a target `user_id`.
 
 ## Publication and finalization transactions
 

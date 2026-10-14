@@ -131,6 +131,16 @@ adapts the response, and converges durable state.
   terminal from retry-cleanup convergence. `CrashReconciler::reconcile_once`
   converges crash leftovers to interrupted/released without replay or
   double-charge.
+- For managed principals, publication checks aggregate and exact-model
+  daily/monthly user budget rules and inserts the logical-request hold in that
+  same SQLite transaction. The hold survives failed attempts and is extended
+  by retries; it is not released until terminal settlement. Concurrency counts
+  all live holds across UTC window boundaries. Finalization records each
+  transitioned attempt once and settles one logical request in the terminal
+  transaction. Unknown usage consumes the remaining estimate and is marked
+  unknown in the indexed rollup. These remain estimate budgets: request-size
+  token projection and fallback microdollars do not prove exact output or
+  self-hosted cost bounds.
 - Reload policy is referenced, never duplicated: only
   `config_reload_policy.rs::classify_transition` decides reload vs restart.
 

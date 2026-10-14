@@ -1,0 +1,787 @@
+//! Durable downstream-user budgets, reservations, and bounded usage reads.
+
+use thiserror::Error;
+use tokio_rusqlite::rusqlite::{OptionalExtension, params};
+
+use crate::db::{Database, DatabaseError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetWindow {
+    Day,
+    Month,
+}
+
+impl BudgetWindow {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Month => "month",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UserBudgetRule {
+    pub id: i64,
+    pub model_id: Option<String>,
+    pub window: BudgetWindow,
+    pub max_requests: Option<i64>,
+    pub max_tokens: Option<i64>,
+    pub max_microdollars: Option<i64>,
+    pub max_concurrent: Option<i64>,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UserBudgetUsage {
+    pub model_id: String,
+    pub window: BudgetWindow,
+    pub window_start: String,
+    pub request_count: i64,
+    pub token_count: i64,
+    pub cost_microdollars: i64,
+    pub provider_reported_microdollars: i64,
+    pub local_estimated_microdollars: i64,
+    pub reservation_fallback_microdollars: i64,
+    pub unknown_token_requests: i64,
+    pub unknown_cost_requests: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BudgetLimits {
+    pub requests: Option<i64>,
+    pub tokens: Option<i64>,
+    pub microdollars: Option<i64>,
+    pub concurrent: Option<i64>,
+}
+
+#[derive(Debug, Error)]
+pub enum UserBudgetError {
+    #[error("invalid user budget rule")]
+    InvalidRule,
+    #[error("an active administrator is required")]
+    ActorNotAdmin,
+    #[error("user does not exist or is unavailable")]
+    UserUnavailable,
+    #[error("user budget database operation failed: {0}")]
+    Database(#[from] DatabaseError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MutationResult {
+    Updated,
+    Removed(bool),
+    ActorNotAdmin,
+    UserUnavailable,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserBudgetService {
+    database: Database,
+}
+
+impl UserBudgetService {
+    pub fn new(database: Database) -> Self {
+        Self { database }
+    }
+
+    pub async fn set_rule(
+        &self,
+        actor_id: &str,
+        user_id: &str,
+        model_id: Option<&str>,
+        window: BudgetWindow,
+        limits: BudgetLimits,
+    ) -> Result<(), UserBudgetError> {
+        if model_id.is_some_and(|value| value.is_empty() || value.trim() != value)
+            || [
+                limits.requests,
+                limits.tokens,
+                limits.microdollars,
+                limits.concurrent,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| value <= 0)
+            || [
+                limits.requests,
+                limits.tokens,
+                limits.microdollars,
+                limits.concurrent,
+            ]
+            .into_iter()
+            .all(|value| value.is_none())
+        {
+            return Err(UserBudgetError::InvalidRule);
+        }
+        let actor_id = actor_id.to_owned();
+        let user_id = user_id.to_owned();
+        let model_id = model_id.map(str::to_owned);
+        let window = window.as_str().to_owned();
+        let outcome = self.database
+            .with_transaction(move |connection| {
+                let actor: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                    [&actor_id],
+                    |row| row.get(0),
+                )?;
+                if !actor {
+                    return Ok(MutationResult::ActorNotAdmin);
+                }
+                let user_exists: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND state = 'active')",
+                    [&user_id],
+                    |row| row.get(0),
+                )?;
+                if !user_exists {
+                    return Ok(MutationResult::UserUnavailable);
+                }
+                connection.execute(
+                    "INSERT INTO user_budget_rules(
+                        user_id, model_id, window, max_requests, max_tokens,
+                        max_microdollars, max_concurrent, updated_by)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(user_id, ifnull(model_id, ''), window) DO UPDATE SET
+                        max_requests = excluded.max_requests,
+                        max_tokens = excluded.max_tokens,
+                        max_microdollars = excluded.max_microdollars,
+                        max_concurrent = excluded.max_concurrent,
+                        version = user_budget_rules.version + 1,
+                        updated_by = excluded.updated_by,
+                        updated_at = CURRENT_TIMESTAMP",
+                    params![
+                        user_id,
+                        model_id,
+                        window,
+                        limits.requests,
+                        limits.tokens,
+                        limits.microdollars,
+                        limits.concurrent,
+                        actor_id,
+                    ],
+                )?;
+                connection.execute(
+                    "INSERT INTO user_budget_rule_audit(
+                        user_id, actor_id, model_id, window, action, max_requests,
+                        max_tokens, max_microdollars, max_concurrent, rule_version)
+                     SELECT user_id, updated_by, model_id, window, 'set', max_requests,
+                            max_tokens, max_microdollars, max_concurrent, version
+                     FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
+                    params![user_id, model_id, window],
+                )?;
+                Ok(MutationResult::Updated)
+            })
+            .await
+            .map_err(UserBudgetError::Database)?;
+        match outcome {
+            MutationResult::Updated => Ok(()),
+            MutationResult::ActorNotAdmin => Err(UserBudgetError::ActorNotAdmin),
+            MutationResult::UserUnavailable => Err(UserBudgetError::UserUnavailable),
+            MutationResult::Removed(_) => Err(UserBudgetError::InvalidRule),
+        }
+    }
+
+    pub async fn remove_rule(
+        &self,
+        actor_id: &str,
+        user_id: &str,
+        model_id: Option<&str>,
+        window: BudgetWindow,
+    ) -> Result<bool, UserBudgetError> {
+        let actor_id = actor_id.to_owned();
+        let user_id = user_id.to_owned();
+        let model_id = model_id.map(str::to_owned);
+        let window = window.as_str().to_owned();
+        let outcome = self.database
+            .with_transaction(move |connection| {
+                let actor: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                    [&actor_id],
+                    |row| row.get(0),
+                )?;
+                if !actor {
+                    return Ok(MutationResult::ActorNotAdmin);
+                }
+                let previous = connection
+                    .query_row(
+                        "SELECT max_requests, max_tokens, max_microdollars, max_concurrent, version
+                         FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
+                        params![user_id, model_id, window],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<i64>>(0)?,
+                                row.get::<_, Option<i64>>(1)?,
+                                row.get::<_, Option<i64>>(2)?,
+                                row.get::<_, Option<i64>>(3)?,
+                                row.get::<_, i64>(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let removed = connection.execute(
+                    "DELETE FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
+                    params![user_id, model_id, window],
+                )? == 1;
+                if let Some((requests, tokens, cost, concurrent, version)) = previous {
+                    connection.execute(
+                        "INSERT INTO user_budget_rule_audit(
+                            user_id, actor_id, model_id, window, action, max_requests,
+                            max_tokens, max_microdollars, max_concurrent, rule_version)
+                         VALUES (?1, ?2, ?3, ?4, 'remove', ?5, ?6, ?7, ?8, ?9)",
+                        params![
+                            user_id,
+                            actor_id,
+                            model_id,
+                            window,
+                            requests,
+                            tokens,
+                            cost,
+                            concurrent,
+                            version + 1,
+                        ],
+                    )?;
+                }
+                Ok(MutationResult::Removed(removed))
+            })
+            .await
+            .map_err(UserBudgetError::Database)?;
+        match outcome {
+            MutationResult::Removed(changed) => Ok(changed),
+            MutationResult::ActorNotAdmin => Err(UserBudgetError::ActorNotAdmin),
+            MutationResult::Updated | MutationResult::UserUnavailable => {
+                Err(UserBudgetError::InvalidRule)
+            }
+        }
+    }
+
+    pub async fn rules(&self, user_id: &str) -> Result<Vec<UserBudgetRule>, UserBudgetError> {
+        let user_id = user_id.to_owned();
+        self.database
+            .call(move |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT id, model_id, window, max_requests, max_tokens,
+                            max_microdollars, max_concurrent, version
+                     FROM user_budget_rules WHERE user_id = ?1
+                     ORDER BY model_id IS NOT NULL, model_id, window",
+                )?;
+                statement
+                    .query_map([user_id], |row| {
+                        let window: String = row.get(2)?;
+                        Ok(UserBudgetRule {
+                            id: row.get(0)?,
+                            model_id: row.get(1)?,
+                            window: parse_window(&window),
+                            max_requests: row.get(3)?,
+                            max_tokens: row.get(4)?,
+                            max_microdollars: row.get(5)?,
+                            max_concurrent: row.get(6)?,
+                            version: row.get(7)?,
+                        })
+                    })?
+                    .collect()
+            })
+            .await
+            .map_err(UserBudgetError::Database)
+    }
+
+    pub async fn usage(
+        &self,
+        user_id: &str,
+        since_utc: &str,
+        limit: u16,
+    ) -> Result<Vec<UserBudgetUsage>, UserBudgetError> {
+        if since_utc.len() != 10 || limit == 0 || limit > 500 {
+            return Err(UserBudgetError::InvalidRule);
+        }
+        let user_id = user_id.to_owned();
+        let since_utc = since_utc.to_owned();
+        self.database
+            .call(move |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT model_id, window, window_start, request_count, token_count,
+                            cost_microdollars, provider_reported_microdollars,
+                            local_estimated_microdollars, reservation_fallback_microdollars,
+                            unknown_token_requests, unknown_cost_requests
+                     FROM user_budget_usage WHERE user_id = ?1 AND window_start >= ?2
+                     ORDER BY window_start DESC, model_id LIMIT ?3",
+                )?;
+                statement
+                    .query_map(params![user_id, since_utc, i64::from(limit)], |row| {
+                        let window: String = row.get(1)?;
+                        Ok(UserBudgetUsage {
+                            model_id: row.get(0)?,
+                            window: parse_window(&window),
+                            window_start: row.get(2)?,
+                            request_count: row.get(3)?,
+                            token_count: row.get(4)?,
+                            cost_microdollars: row.get(5)?,
+                            provider_reported_microdollars: row.get(6)?,
+                            local_estimated_microdollars: row.get(7)?,
+                            reservation_fallback_microdollars: row.get(8)?,
+                            unknown_token_requests: row.get(9)?,
+                            unknown_cost_requests: row.get(10)?,
+                        })
+                    })?
+                    .collect()
+            })
+            .await
+            .map_err(UserBudgetError::Database)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BudgetPermit {
+    pub policy_version: i64,
+    pub day_start: String,
+    pub month_start: String,
+}
+
+pub(crate) struct BudgetReservationSpec<'a> {
+    pub request_id: i64,
+    pub user_id: &'a str,
+    pub model_id: &'a str,
+    pub tokens: i64,
+    pub microdollars: i64,
+    pub ttl_seconds: i64,
+}
+
+struct BudgetCheckRequest<'a> {
+    user_id: &'a str,
+    model_id: &'a str,
+    permit: &'a BudgetPermit,
+    tokens: i64,
+    microdollars: i64,
+    new_request: bool,
+}
+
+pub(crate) struct BudgetAttemptSettlement {
+    pub request_id: i64,
+    pub attempt_id: i64,
+    pub attempt_transitioned: bool,
+    pub terminalize_request: bool,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_microdollars: i64,
+    pub provider_reported_microdollars: Option<i64>,
+    pub local_estimated_microdollars: Option<i64>,
+    pub tokens_known: bool,
+    pub cost_known: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BudgetCheck {
+    Allowed,
+    Exceeded,
+}
+
+pub(crate) fn check_initial(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    user_id: &str,
+    model_id: &str,
+    tokens: i64,
+    microdollars: i64,
+) -> Result<(BudgetCheck, BudgetPermit), tokio_rusqlite::rusqlite::Error> {
+    let (policy_version, day_start, month_start): (i64, String, String) = connection.query_row(
+        "SELECT revision, date('now'), strftime('%Y-%m-01', 'now') FROM policy_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let permit = BudgetPermit {
+        policy_version,
+        day_start,
+        month_start,
+    };
+    let exceeded = rules_exceeded(
+        connection,
+        BudgetCheckRequest {
+            user_id,
+            model_id,
+            permit: &permit,
+            tokens,
+            microdollars,
+            new_request: true,
+        },
+    )?;
+    Ok((
+        if exceeded {
+            BudgetCheck::Exceeded
+        } else {
+            BudgetCheck::Allowed
+        },
+        permit,
+    ))
+}
+
+pub(crate) fn check_retry(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    request_id: i64,
+    tokens: i64,
+    microdollars: i64,
+) -> Result<BudgetCheck, tokio_rusqlite::rusqlite::Error> {
+    let reservation = connection
+        .query_row(
+            "SELECT user_id, model_id, policy_version, day_start, month_start
+             FROM user_budget_reservations WHERE request_id = ?1 AND status = 'active'",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((user_id, model_id, policy_version, day_start, month_start)) = reservation else {
+        return Ok(BudgetCheck::Exceeded);
+    };
+    let permit = BudgetPermit {
+        policy_version,
+        day_start,
+        month_start,
+    };
+    let exceeded = rules_exceeded(
+        connection,
+        BudgetCheckRequest {
+            user_id: &user_id,
+            model_id: &model_id,
+            permit: &permit,
+            tokens,
+            microdollars,
+            new_request: false,
+        },
+    )?;
+    Ok(if exceeded {
+        BudgetCheck::Exceeded
+    } else {
+        BudgetCheck::Allowed
+    })
+}
+
+pub(crate) fn insert_reservation(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    spec: BudgetReservationSpec<'_>,
+    permit: &BudgetPermit,
+) -> Result<(), tokio_rusqlite::rusqlite::Error> {
+    connection.execute(
+        "INSERT INTO user_budget_reservations(
+            request_id, user_id, model_id, policy_version, day_start, month_start,
+            held_tokens, held_microdollars, status, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active',
+                 datetime('now', '+' || ?9 || ' seconds'))",
+        params![
+            spec.request_id,
+            spec.user_id,
+            spec.model_id,
+            permit.policy_version,
+            permit.day_start,
+            permit.month_start,
+            spec.tokens,
+            spec.microdollars,
+            spec.ttl_seconds,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn extend_reservation(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    request_id: i64,
+    tokens: i64,
+    microdollars: i64,
+) -> Result<(), tokio_rusqlite::rusqlite::Error> {
+    let changed = connection.execute(
+        "UPDATE user_budget_reservations SET held_tokens = held_tokens + ?1,
+             held_microdollars = held_microdollars + ?2
+         WHERE request_id = ?3 AND status = 'active'",
+        params![tokens, microdollars, request_id],
+    )?;
+    if changed != 1 {
+        return Err(tokio_rusqlite::rusqlite::Error::InvalidParameterName(
+            "active user budget reservation missing".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn rules_exceeded(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    check: BudgetCheckRequest<'_>,
+) -> Result<bool, tokio_rusqlite::rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT model_id, window, max_requests, max_tokens, max_microdollars, max_concurrent
+         FROM user_budget_rules WHERE user_id = ?1 AND (model_id IS NULL OR model_id = ?2)",
+    )?;
+    let rules = statement
+        .query_map(params![check.user_id, check.model_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (scope_model, window, max_requests, max_tokens, max_cost, max_concurrent) in rules {
+        let window_start = if window == "day" {
+            &check.permit.day_start
+        } else {
+            &check.permit.month_start
+        };
+        let model_filter = scope_model.as_deref();
+        let (used_requests, used_tokens, used_cost): (i64, i64, i64) =
+            if let Some(model) = model_filter {
+                connection.query_row(
+                    "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
+                        coalesce(sum(cost_microdollars), 0)
+                 FROM user_budget_usage WHERE user_id = ?1 AND model_id = ?2
+                   AND window = ?3 AND window_start = ?4",
+                    params![check.user_id, model, window, window_start],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?
+            } else {
+                connection.query_row(
+                    "SELECT coalesce(sum(request_count), 0), coalesce(sum(token_count), 0),
+                        coalesce(sum(cost_microdollars), 0)
+                 FROM user_budget_usage WHERE user_id = ?1 AND window = ?2 AND window_start = ?3",
+                    params![check.user_id, window, window_start],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?
+            };
+        let (held_requests, held_tokens, held_cost, active_count): (i64, i64, i64, i64) =
+            if let Some(model) = model_filter {
+                connection.query_row(
+                    "SELECT coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                              OR (?3 = 'month' AND month_start = ?4)
+                                         THEN held_requests ELSE 0 END), 0),
+                            coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                              OR (?3 = 'month' AND month_start = ?4)
+                                         THEN held_tokens ELSE 0 END), 0),
+                            coalesce(sum(CASE WHEN (?3 = 'day' AND day_start = ?4)
+                                              OR (?3 = 'month' AND month_start = ?4)
+                                         THEN held_microdollars ELSE 0 END), 0), count(*)
+                     FROM user_budget_reservations WHERE user_id = ?1 AND model_id = ?2
+                       AND status = 'active'",
+                    params![check.user_id, model, window, window_start],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?
+            } else {
+                connection.query_row(
+                    "SELECT coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                              OR (?2 = 'month' AND month_start = ?3)
+                                         THEN held_requests ELSE 0 END), 0),
+                            coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                              OR (?2 = 'month' AND month_start = ?3)
+                                         THEN held_tokens ELSE 0 END), 0),
+                            coalesce(sum(CASE WHEN (?2 = 'day' AND day_start = ?3)
+                                              OR (?2 = 'month' AND month_start = ?3)
+                                         THEN held_microdollars ELSE 0 END), 0), count(*)
+                     FROM user_budget_reservations WHERE user_id = ?1 AND status = 'active'",
+                    params![check.user_id, window, window_start],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?
+            };
+        let request_hold = i64::from(check.new_request);
+        if max_requests
+            .is_some_and(|limit| exceeds(limit, used_requests, held_requests, request_hold))
+            || max_tokens
+                .is_some_and(|limit| exceeds(limit, used_tokens, held_tokens, check.tokens))
+            || max_cost
+                .is_some_and(|limit| exceeds(limit, used_cost, held_cost, check.microdollars))
+            || max_concurrent
+                .is_some_and(|limit| exceeds(limit, active_count, i64::from(check.new_request), 0))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn record_attempt_and_maybe_settle(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    settlement: BudgetAttemptSettlement,
+) -> Result<(), tokio_rusqlite::rusqlite::Error> {
+    let BudgetAttemptSettlement {
+        request_id,
+        attempt_id,
+        attempt_transitioned,
+        terminalize_request,
+        input_tokens,
+        output_tokens,
+        cost_microdollars,
+        provider_reported_microdollars,
+        local_estimated_microdollars,
+        tokens_known,
+        cost_known,
+    } = settlement;
+    let reservation = connection
+        .query_row(
+            "SELECT user_id, model_id, day_start, month_start, held_tokens,
+                    held_microdollars, status
+             FROM user_budget_reservations WHERE request_id = ?1",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((user_id, model_id, day_start, month_start, held_tokens, held_cost, status)) =
+        reservation
+    else {
+        return Ok(());
+    };
+    if attempt_transitioned {
+        let provider_cost = provider_reported_microdollars.unwrap_or(0).max(0);
+        let local_cost = local_estimated_microdollars
+            .or_else(|| {
+                (provider_reported_microdollars.is_none() && cost_microdollars > 0)
+                    .then_some(cost_microdollars)
+            })
+            .unwrap_or(0)
+            .max(0);
+        let cost_source = if provider_reported_microdollars.is_some() {
+            "provider_reported"
+        } else if local_cost > 0 {
+            "local_estimated"
+        } else {
+            "unknown"
+        };
+        connection.execute(
+            "INSERT OR IGNORE INTO user_budget_attempt_usage(
+                attempt_id, request_id, input_tokens, output_tokens, cost_microdollars,
+                provider_reported_microdollars, local_estimated_microdollars,
+                cost_source, tokens_known, cost_known)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                attempt_id,
+                request_id,
+                input_tokens.max(0),
+                output_tokens.max(0),
+                cost_microdollars.max(0),
+                provider_cost,
+                local_cost,
+                cost_source,
+                i64::from(tokens_known),
+                i64::from(cost_known),
+            ],
+        )?;
+    }
+    if !terminalize_request || status == "settled" || status == "released" {
+        return Ok(());
+    }
+    if status != "active" {
+        return Err(tokio_rusqlite::rusqlite::Error::InvalidParameterName(
+            "unknown user budget reservation state".to_owned(),
+        ));
+    }
+    let (observed_tokens, observed_cost, provider_cost, local_cost, token_unknown, cost_unknown): (
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = connection.query_row(
+        "SELECT coalesce(sum(input_tokens + output_tokens), 0),
+                    coalesce(sum(cost_microdollars), 0),
+                    coalesce(sum(provider_reported_microdollars), 0),
+                    coalesce(sum(local_estimated_microdollars), 0),
+                    coalesce(sum(CASE WHEN tokens_known = 0 THEN 1 ELSE 0 END), 0),
+                    coalesce(sum(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END), 0)
+             FROM user_budget_attempt_usage WHERE request_id = ?1",
+        [request_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    let charged_tokens = if token_unknown > 0 {
+        held_tokens.max(observed_tokens)
+    } else {
+        observed_tokens
+    };
+    let charged_cost = if cost_unknown > 0 {
+        held_cost.max(observed_cost)
+    } else {
+        observed_cost
+    };
+    let fallback_cost = (charged_cost - provider_cost - local_cost).max(0);
+    for (window, start) in [("day", day_start.as_str()), ("month", month_start.as_str())] {
+        connection.execute(
+            "INSERT INTO user_budget_usage(
+                user_id, model_id, window, window_start, request_count, token_count,
+                cost_microdollars, provider_reported_microdollars,
+                local_estimated_microdollars, reservation_fallback_microdollars,
+                unknown_token_requests, unknown_cost_requests)
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(user_id, model_id, window, window_start) DO UPDATE SET
+                request_count = user_budget_usage.request_count + 1,
+                token_count = user_budget_usage.token_count + excluded.token_count,
+                cost_microdollars = user_budget_usage.cost_microdollars + excluded.cost_microdollars,
+                provider_reported_microdollars = user_budget_usage.provider_reported_microdollars + excluded.provider_reported_microdollars,
+                local_estimated_microdollars = user_budget_usage.local_estimated_microdollars + excluded.local_estimated_microdollars,
+                reservation_fallback_microdollars = user_budget_usage.reservation_fallback_microdollars + excluded.reservation_fallback_microdollars,
+                unknown_token_requests = user_budget_usage.unknown_token_requests + excluded.unknown_token_requests,
+                unknown_cost_requests = user_budget_usage.unknown_cost_requests + excluded.unknown_cost_requests,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                user_id,
+                model_id,
+                window,
+                start,
+                charged_tokens,
+                charged_cost,
+                provider_cost,
+                local_cost,
+                fallback_cost,
+                i64::from(token_unknown > 0),
+                i64::from(cost_unknown > 0),
+            ],
+        )?;
+    }
+    connection.execute(
+        "UPDATE user_budget_reservations SET status = 'settled', settled_at = CURRENT_TIMESTAMP,
+             observed_tokens = ?1, observed_microdollars = ?2,
+             token_usage_complete = ?3, cost_usage_complete = ?4
+         WHERE request_id = ?5 AND status = 'active'",
+        params![
+            observed_tokens,
+            observed_cost,
+            i64::from(token_unknown == 0),
+            i64::from(cost_unknown == 0),
+            request_id,
+        ],
+    )?;
+    Ok(())
+}
+
+fn exceeds(limit: i64, first: i64, second: i64, third: i64) -> bool {
+    i128::from(first) + i128::from(second) + i128::from(third) > i128::from(limit)
+}
+
+fn parse_window(value: &str) -> BudgetWindow {
+    if value == "month" {
+        BudgetWindow::Month
+    } else {
+        BudgetWindow::Day
+    }
+}

@@ -158,6 +158,45 @@ pub enum UsersCommand {
     /// Create and assign model-policy profiles during the CLI-only M004 phase.
     #[command(subcommand)]
     Policy(UsersPolicyCommand),
+    /// Set or remove durable per-user budget rules.
+    #[command(subcommand)]
+    Budget(UsersBudgetCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersBudgetCommand {
+    Set(UserBudgetSetArgs),
+    Remove(UserBudgetRemoveArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserBudgetSetArgs {
+    pub username: String,
+    #[arg(long)]
+    pub model_id: Option<String>,
+    #[arg(long, value_parser = ["day", "month"])]
+    pub window: String,
+    #[arg(long)]
+    pub max_requests: Option<i64>,
+    #[arg(long)]
+    pub max_tokens: Option<i64>,
+    #[arg(long)]
+    pub max_microdollars: Option<i64>,
+    #[arg(long)]
+    pub max_concurrent: Option<i64>,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserBudgetRemoveArgs {
+    pub username: String,
+    #[arg(long)]
+    pub model_id: Option<String>,
+    #[arg(long, value_parser = ["day", "month"])]
+    pub window: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, Subcommand)]

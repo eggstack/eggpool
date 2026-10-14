@@ -48,6 +48,11 @@ EggPool ships with `eggpool backup` that bundles `config.toml`, `.env`,
 and the SQLite database (plus `-wal`/`-shm` if present) into a single
 timestamped `.zip` archive.
 
+The database snapshot includes local users, budget rules and audit records,
+active budget holds, and settled user/model usage. Restoring the snapshot
+preserves the remaining budget state; crash reconciliation settles unknown
+in-flight use conservatively before new requests resume.
+
 ```bash
 # Default location: ~/backups/eggpool/
 eggpool backup

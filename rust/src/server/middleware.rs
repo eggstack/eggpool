@@ -59,7 +59,10 @@ pub(super) async fn authenticate(
         Ok(None) => return unauthorized("Sign in required"),
         Err(_) => return auth_unavailable(),
     };
-    let account_surface = matches!(path.as_str(), "/account" | "/account/password" | "/logout");
+    let account_surface = matches!(
+        path.as_str(),
+        "/account" | "/account/password" | "/logout" | "/api/user-budget"
+    );
     if principal.role != "admin" && !account_surface {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
@@ -111,6 +114,7 @@ fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {
 fn personal_credential_allowed(path: &str) -> bool {
     (path.starts_with("/v1/") && path != "/v1/healthz" && path != "/v1/readyz")
         || path == "/api/integrations/v1/profile"
+        || path == "/api/user-budget"
 }
 
 fn is_unconditionally_public(path: &str) -> bool {
@@ -160,6 +164,9 @@ pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
         return true;
     }
     if path == "/api/status" {
+        return true;
+    }
+    if path == "/api/user-budget" {
         return true;
     }
     if path.starts_with("/v1/") {

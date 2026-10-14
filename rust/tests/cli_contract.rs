@@ -179,3 +179,53 @@ fn local_model_policy_profile_commands_parse_with_exact_effects() {
         .is_err()
     );
 }
+
+#[test]
+fn local_user_budget_commands_parse_with_bounded_windows() {
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-requests",
+            "25",
+            "--max-tokens",
+            "100000",
+            "--max-concurrent",
+            "2",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "remove",
+            "member-a",
+            "--model-id",
+            "model-a",
+            "--window",
+            "month",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "rolling",
+            "--max-requests",
+            "25",
+        ])
+        .is_err()
+    );
+}

@@ -335,6 +335,43 @@ pub(super) fn parent_pid() -> serde_json::Value {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct UserBudgetQuery {
+    user_id: Option<String>,
+}
+
+pub(super) async fn user_budget_api(
+    State(state): State<AppState>,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
+    Query(query): Query<UserBudgetQuery>,
+) -> Response {
+    let Some(owner_id) = principal.user_id.as_deref() else {
+        return (StatusCode::UNAUTHORIZED, "Personal user access required.").into_response();
+    };
+    let target_id = query.user_id.as_deref().unwrap_or(owner_id);
+    if target_id != owner_id && principal.role.as_deref() != Some("admin") {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let budgets = crate::user_budget::UserBudgetService::new(state.database.clone());
+    let rules = match budgets.rules(target_id).await {
+        Ok(value) => value,
+        Err(_) => return degraded("user budget unavailable"),
+    };
+    let usage = match budgets.usage(target_id, "0000-01-01", 500).await {
+        Ok(value) => value,
+        Err(_) => return degraded("user budget unavailable"),
+    };
+    json_response(
+        StatusCode::OK,
+        json!({
+            "window_timezone": "UTC",
+            "cost_basis": "estimated_microdollars",
+            "rules": rules,
+            "usage": usage,
+        }),
+    )
+}
+
 pub(super) async fn readyz(State(state): State<AppState>) -> Response {
     let snapshot = readiness_snapshot(&state).await;
     if snapshot.ready {

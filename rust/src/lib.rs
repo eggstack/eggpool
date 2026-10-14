@@ -28,6 +28,7 @@ mod runtime;
 pub mod runtime_lifecycle;
 pub mod server;
 pub mod task_supervisor;
+pub mod user_budget;
 pub mod version;
 pub mod web_session;
 pub mod wire;
