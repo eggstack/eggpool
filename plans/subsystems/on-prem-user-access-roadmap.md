@@ -241,6 +241,6 @@ plan is not an implemented capability.
 | M002 | closed | `plans/implementation/on-prem-user-access/002-browser-sessions-and-route-auth.md` | `plans/closure/on-prem-user-access/002-status.md` | Browser sessions, managed route authorization and transport posture accepted; SBC hash qualification remains M007 evidence. |
 | M003 | conditionally closed | `plans/implementation/on-prem-user-access/003-principal-propagation-and-attribution.md` | `plans/closure/on-prem-user-access/003-status.md` | Stable principal accepted; unrelated update unit-test failure and physical resource evidence are explicit conditions. |
 | M004 | closed | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | `plans/closure/on-prem-user-access/004-status.md` | Profile rules, concrete-model gates and revision invalidation verified; M005 unblocked. |
-| M005 | ready | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | — | Hard: M004 closed; specify durable hold/settlement lifecycle before integration. |
+| M005 | active | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | — | M004 policy and concrete-model gates closed; implementing durable user budget lifecycle. |
 | M006 | blocked | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | — | Hard: M005 closure |
 | M007 | blocked | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | — | Hard: M006 closure; operational hardware |
