@@ -56,7 +56,7 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M010 — budget crash/restore and v54 migration | ready | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | Hard: M008 and M009 accepted closures; global user-budget state machine stable. |
+| On-prem user access | M010 — budget crash/restore and v54 migration | active | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | Hard: M008 and M009 accepted closures; global user-budget state machine stable. |
 | On-prem user access | M011 — admin/member dashboard browser qualification | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | Parallel to budget work; pinned legacy-page oracle and new Rust-owned browser references required for full closure. |
 
 ## Active implementation plans
