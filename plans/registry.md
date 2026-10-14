@@ -49,14 +49,13 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008/M009 closed; M010 & M011 ready; M012 dependency- or hardware-gated corrective | M001/M003/M005/M006/M007 are historically conditionally closed. M008/M009 close the hard token/USD reservation contract and global intersection on local evidence. No physical SBC/small-team capacity claim is accepted yet. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008/M009/M010/M013 closed; M011 ready; M012 dependency- or hardware-gated corrective | M001/M003/M005/M006/M007 are historically conditionally closed. M008/M009 close the hard token/USD reservation contract and global intersection on local evidence; M010 closes crash recovery and the v54 restore path. No physical SBC/small-team capacity claim is accepted yet. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M010 — budget crash/restore and v54 migration | active | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | Hard: M008 and M009 accepted closures; global user-budget state machine stable. |
 | On-prem user access | M011 — admin/member dashboard browser qualification | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | Parallel to budget work; pinned legacy-page oracle and new Rust-owned browser references required for full closure. |
 
 ## Active implementation plans
@@ -84,6 +83,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M010 — budget crash recovery and schema-54 restore | closed — additive reconciler hold release (no usage fold), frozen v54 image migrates 55–62 with legacy history intact, 1005 serial Rust tests + 1006 no-default + tooling green; only low findings | `plans/closure/on-prem-user-access/010-status.md`, implementation `be6248fc` |
 | On-prem user access M013 — transcode-eligibility admission bridge | closed — one-line restoration, bridge guard (fail-without/pass-with proven), Q007 loopback green, 993 serial Rust tests + 994 no-default + 166 tooling tests; only low findings | `plans/closure/on-prem-user-access/013-status.md`, implementation `4699ce11` |
 | On-prem user access M009 — global-instance budget intersection | closed — migration 62 instance scope, atomic cross-user last-slot holds (2/10/49 identities), no-bypass intersection incl. legacy keys, user-independent history, 992 serial Rust tests + 993 no-default tests; only low findings | `plans/closure/on-prem-user-access/009-status.md`, implementation `04264a18` |
 | On-prem user access M008 — enforceable token/cost admission | closed — migration 61 enforcement mode + worst-case holds, proof-or-reject admission with zero-upstream denial, operator tariff trust boundary, 978 serial Rust tests + 979 no-default tests; only low findings (conservative over-reservation, provider-wide tariff, no HTTP-level denial test) | `plans/closure/on-prem-user-access/008-status.md`, implementation `0149a6c8` + carriage `ca77c547` |

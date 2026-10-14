@@ -1,6 +1,6 @@
 # On-Prem User Access M010 — Budget crash recovery and schema-54 restore
 
-Status: active
+Status: implemented
 
 Repository baseline: `1218423b` on `plans/on-prem-small-team-user-access` (PR #7), schema 62, M008/M009/M013 closed as of 2026-10-14. (Plan text cites `c18dcc20`/schema 60; superseded by the M008/M009/M013 landings — activation records the actual baseline.)
 
