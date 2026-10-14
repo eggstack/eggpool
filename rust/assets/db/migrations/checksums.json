@@ -60,6 +60,7 @@
     "0058_model_policy.sql": "dc98951394abed29a02f48d75d2b72554da74d98de49563fa87c2548dd757fe2",
     "0059_user_budgets.sql": "6637f6242750639cf292359ab3f476ff1f43ee8d9cb7de99ca67a84088f49bc2",
     "0060_user_admin_audit.sql": "fe15aebc5a344aa25e049aaf554e8d7eaac69bd16134abbb41e24c390df8891c",
-    "0061_user_budget_enforcement.sql": "d19229166fed11622a3c924642705d78563e95bd02605123b7b2b9483ecf1a3f"
+    "0061_user_budget_enforcement.sql": "d19229166fed11622a3c924642705d78563e95bd02605123b7b2b9483ecf1a3f",
+    "0062_instance_budgets.sql": "bcb0999e1be7944512f082164f763671bb5ce1b6e82c071470d3ff5f03e5ebac"
   }
 }

@@ -82,6 +82,12 @@ omit for unknown price, `0` for verified free). Without a bound, hard-mode
 requests are denied before upstream dispatch — hard mode is unavailable rather
 than approximate. See [model limits](model-limits.md#local-user-budgets).
 
+An optional instance-wide ceiling (`eggpool users global-budget set` or the
+dashboard instance section) caps total consumption across all users and is
+intersected with every per-user rule. It covers unattributed legacy-key
+requests as well, survives user disable/delete, and needs no second database
+or writer. See [model limits](model-limits.md#instance-budget-ceilings).
+
 ### Updating EggPool
 
 ```bash

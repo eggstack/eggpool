@@ -868,6 +868,55 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                 }
             }
         }
+        crate::cli::UsersCommand::GlobalBudget(command) => {
+            use crate::cli::UsersGlobalBudgetCommand as GlobalBudget;
+            let window_of = |window: &str| match window {
+                "day" => Ok(crate::user_budget::BudgetWindow::Day),
+                "month" => Ok(crate::user_budget::BudgetWindow::Month),
+                _ => Err(command_error(EXIT_VALIDATION, "invalid budget window")),
+            };
+            let enforcement_of = |enforcement: &str| match enforcement {
+                "hard" => Ok(crate::user_budget::BudgetEnforcement::Hard),
+                "estimated" => Ok(crate::user_budget::BudgetEnforcement::Estimated),
+                _ => Err(command_error(EXIT_VALIDATION, "invalid budget enforcement")),
+            };
+            match command {
+                GlobalBudget::Set(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let window = window_of(args.window.as_str())?;
+                    let enforcement = enforcement_of(args.enforcement.as_str())?;
+                    crate::instance_budget::InstanceBudgetService::new(database.clone())
+                        .set_rule(
+                            &actor,
+                            args.model_id.as_deref(),
+                            window,
+                            crate::user_budget::BudgetLimits {
+                                requests: args.max_requests,
+                                tokens: args.max_tokens,
+                                microdollars: args.max_microdollars,
+                                concurrent: args.max_concurrent,
+                                enforcement,
+                            },
+                        )
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Instance budget ceiling saved ({}).", enforcement.as_str());
+                }
+                GlobalBudget::Remove(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let window = window_of(args.window.as_str())?;
+                    let removed =
+                        crate::instance_budget::InstanceBudgetService::new(database.clone())
+                            .remove_rule(&actor, args.model_id.as_deref(), window)
+                            .await
+                            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Instance budget ceiling {}.",
+                        if removed { "removed" } else { "was absent" }
+                    );
+                }
+            }
+        }
     }
     database
         .close()

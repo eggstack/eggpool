@@ -107,6 +107,19 @@ pub(in crate::server) struct UserBudgetForm {
 }
 
 #[derive(Deserialize)]
+pub(in crate::server) struct InstanceBudgetForm {
+    model_id: String,
+    window: String,
+    max_requests: String,
+    max_tokens: String,
+    max_microdollars: String,
+    max_concurrent: String,
+    /// Optional so older posted forms keep working; absent means estimated.
+    enforcement: Option<String>,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
 pub(in crate::server) struct TokenCreateForm {
     label: String,
     csrf: String,
@@ -196,7 +209,15 @@ pub(in crate::server) async fn users_page(
         Ok(profiles) => profiles,
         Err(_) => return degraded("user administration unavailable"),
     };
-    let body = render_users_admin(&users, &profiles, &csrf);
+    let instance_rules =
+        match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+            .rules()
+            .await
+        {
+            Ok(rules) => rules,
+            Err(_) => return degraded("user administration unavailable"),
+        };
+    let body = render_users_admin(&users, &profiles, &instance_rules, &csrf);
     dashboard_page_with_body(
         &state.server.dashboard_theme,
         "Users",
@@ -733,6 +754,101 @@ pub(in crate::server) async fn set_user_budget(
     {
         Ok(()) => mutation_redirect("/users"),
         Err(error) => mutation_error(error, "Could not save budget rule."),
+    }
+}
+
+fn parse_instance_limits(
+    form: &InstanceBudgetForm,
+) -> Result<crate::user_budget::BudgetLimits, &'static str> {
+    let limits = match (
+        parse_optional_limit(&form.max_requests),
+        parse_optional_limit(&form.max_tokens),
+        parse_optional_limit(&form.max_microdollars),
+        parse_optional_limit(&form.max_concurrent),
+    ) {
+        (Ok(requests), Ok(tokens), Ok(microdollars), Ok(concurrent)) => {
+            crate::user_budget::BudgetLimits {
+                requests,
+                tokens,
+                microdollars,
+                concurrent,
+                enforcement: crate::user_budget::BudgetEnforcement::Estimated,
+            }
+        }
+        _ => return Err("Budget limits must be positive integers."),
+    };
+    let enforcement = match form.enforcement.as_deref().map(str::trim) {
+        None | Some("") | Some("estimated") => crate::user_budget::BudgetEnforcement::Estimated,
+        Some("hard") => crate::user_budget::BudgetEnforcement::Hard,
+        Some(_) => return Err("Invalid budget enforcement mode."),
+    };
+    Ok(crate::user_budget::BudgetLimits {
+        enforcement,
+        ..limits
+    })
+}
+
+fn parse_instance_window(window: &str) -> Result<crate::user_budget::BudgetWindow, &'static str> {
+    match window {
+        "day" => Ok(crate::user_budget::BudgetWindow::Day),
+        "month" => Ok(crate::user_budget::BudgetWindow::Month),
+        _ => Err("Invalid budget window."),
+    }
+}
+
+pub(in crate::server) async fn set_instance_budget(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<InstanceBudgetForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let limits = match parse_instance_limits(&form) {
+        Ok(limits) => limits,
+        Err(message) => return bad_request(message),
+    };
+    let window = match parse_instance_window(form.window.as_str()) {
+        Ok(window) => window,
+        Err(message) => return bad_request(message),
+    };
+    let model_id = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
+    match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+        .set_rule(&session.user_id, model_id, window, limits)
+        .await
+    {
+        Ok(()) => mutation_redirect("/users"),
+        Err(error) => mutation_error(error, "Could not save instance budget rule."),
+    }
+}
+
+pub(in crate::server) async fn remove_instance_budget(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<InstanceBudgetForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let window = match parse_instance_window(form.window.as_str()) {
+        Ok(window) => window,
+        Err(message) => return bad_request(message),
+    };
+    let model_id = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
+    match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+        .remove_rule(&session.user_id, model_id, window)
+        .await
+    {
+        Ok(_) => mutation_redirect("/users"),
+        Err(error) => mutation_error(error, "Could not remove instance budget rule."),
     }
 }
 

@@ -131,7 +131,11 @@ not represent invoices or exact charges for flat-rate provider accounts.
 Requests denied because a hard rule cannot be bounded return HTTP 429 with a
 stable machine-readable message
 (`User budget hard limit is not enforceable for this request`) before any
-upstream submission.
+upstream submission. Administrator responses additionally include
+`instance_rules` and `instance_usage`: the single instance-wide ceiling
+intersected with every per-user rule. Members never receive instance fields,
+so one member cannot observe the shared ceiling or infer other users'
+consumption from it.
 
 With `[dashboard].enabled = true`, the dashboard also serves browser-session
 pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and

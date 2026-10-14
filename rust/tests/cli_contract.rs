@@ -279,4 +279,47 @@ fn local_user_budget_commands_parse_with_bounded_windows() {
         ])
         .is_err()
     );
+    // M009: instance ceilings share the window/enforcement contract without
+    // a user argument.
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "set",
+            "--window",
+            "month",
+            "--max-requests",
+            "1000",
+            "--enforcement",
+            "hard",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "remove",
+            "--window",
+            "month",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "global-budget",
+            "set",
+            "--window",
+            "month",
+            "--max-requests",
+            "1000",
+            "--enforcement",
+            "guaranteed",
+        ])
+        .is_err()
+    );
 }

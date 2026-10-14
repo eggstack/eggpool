@@ -147,11 +147,18 @@ adapts the response, and converges durable state.
   caller's explicit compatible output cap (`max_tokens`/`max_completion_tokens`
   on chat, `max_output_tokens` on Responses/compact, `max_tokens` on Anthropic
   Messages) converted at the operator-configured provider tariff — and deny
-  with `BudgetNotEnforceable` (429, no upstream submission) when unbounded,
+  with `BudgetNotEnforceable` (429, no   upstream submission) when unbounded,
   unpriced, or overflowing. The initial hard hold covers two attempt
   equivalents (concrete attempt plus unattributed selector overhead); retries
   extend by one equivalent after re-checking. Observed provider usage above
   the hold is settled visibly, never clamped.
+- An optional instance-global ceiling is intersected in the same publication
+  transaction for every admitted call, attributed or not: the request must
+  satisfy all applicable instance-global, instance-model, user-global, and
+  user-model rules before claim conversion, with one shared hold per scope so
+  concurrent users cannot both take the final slot and retries never
+  double-count. Global usage folds the same attempt rows at terminal
+  settlement; absent global rules, no global hold or row is written.
 - Reload policy is referenced, never duplicated: only
   `config_reload_policy.rs::classify_transition` decides reload vs restart.
 

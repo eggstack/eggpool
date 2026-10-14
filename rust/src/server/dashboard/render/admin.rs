@@ -3,6 +3,7 @@ use super::*;
 pub(in crate::server::dashboard) fn render_users_admin(
     users: &[crate::identity::UserSummary],
     profiles: &[crate::model_policy::PolicyProfileSummary],
+    instance_rules: &[crate::instance_budget::InstanceBudgetRule],
     csrf: &str,
 ) -> String {
     let options = profiles
@@ -61,8 +62,34 @@ pub(in crate::server::dashboard) fn render_users_admin(
             )
         })
         .collect::<String>();
+    let instance_rows = instance_rules
+        .iter()
+        .map(|rule| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><form method=\"post\" action=\"/admin/budget/instance/remove\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"model_id\" value=\"{}\"><input type=\"hidden\" name=\"window\" value=\"{}\"><input type=\"hidden\" name=\"max_requests\" value=\"\"><input type=\"hidden\" name=\"max_tokens\" value=\"\"><input type=\"hidden\" name=\"max_microdollars\" value=\"\"><input type=\"hidden\" name=\"max_concurrent\" value=\"\"><button type=\"submit\">Remove</button></form></td></tr>",
+                html_escape(rule.model_id.as_deref().unwrap_or("All models")),
+                html_escape(rule.window.as_str()),
+                html_escape(rule.enforcement.as_str()),
+                rule.max_requests
+                    .map_or_else(|| "—".to_owned(), |value| value.to_string()),
+                rule.max_tokens
+                    .map_or_else(|| "—".to_owned(), |value| value.to_string()),
+                rule.max_microdollars
+                    .map_or_else(|| "—".to_owned(), |value| value.to_string()),
+                rule.max_concurrent
+                    .map_or_else(|| "—".to_owned(), |value| value.to_string()),
+                html_escape(csrf),
+                html_escape(rule.model_id.as_deref().unwrap_or("")),
+                html_escape(rule.window.as_str()),
+            )
+        })
+        .collect::<String>();
+    let instance_section = format!(
+        "<section class=\"panel\"><h2>Instance budget ceilings</h2><p>One instance-wide ceiling intersected with every per-user rule: an admitted call must satisfy all applicable instance and user limits. Absent rules mean no additional cap. Members never see other users' usage here. Hard token rules need an explicit caller output cap; hard USD rules need an operator tariff in provider configuration.</p><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Instance budget rules\"><table><thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th><th>Actions</th></tr></thead><tbody>{instance_rows}</tbody></table></div><details><summary>Set instance ceiling</summary><form method=\"post\" action=\"/admin/budget/instance\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Mode <select name=\"enforcement\"><option value=\"estimated\">Estimated (approximate hold)</option><option value=\"hard\">Hard (prove worst-case bound or deny)</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Save instance ceiling</button></form></details></section>",
+        html_escape(csrf)
+    );
     format!(
-        "<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\"><option value=\"\">No profile</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\"><table><thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "{instance_section}<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\"><option value=\"\">No profile</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\"><table><thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
         html_escape(csrf)
     )
 }

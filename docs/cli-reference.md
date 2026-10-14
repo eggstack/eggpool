@@ -66,6 +66,8 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool users policy prefer PROFILE [MODEL]` | Set or clear a profile's allowed client recommendation |
 | `eggpool users budget set USER --window day\|month` | Set daily/monthly request, token, microdollar, and concurrency limits (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
 | `eggpool users budget remove USER --window day\|month` | Remove the matching user/model budget rule |
+| `eggpool users global-budget set --window day\|month` | Set an instance-wide ceiling intersected with every per-user rule (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
+| `eggpool users global-budget remove --window day\|month` | Remove the matching instance-wide ceiling |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 

@@ -18,13 +18,13 @@ use dashboard::{
     create_personal_token, create_profile, create_user, delete_profile, events_page,
     grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
     my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
-    remove_profile_rule, remove_user_override, reset_user_password, revoke_personal_token,
-    revoke_user_tokens, routing_page, runtime_page, set_profile_preference, set_profile_rule,
-    set_user_budget, set_user_override, set_user_state, static_chart_js, static_css,
-    static_favicon, static_js, stats_cache_observability, stats_cache_stability,
-    stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, sync_accounts,
-    theme_css, timeseries_api, timeseries_page, traces_page, update_profile, usage_page,
-    users_page,
+    remove_instance_budget, remove_profile_rule, remove_user_override, reset_user_password,
+    revoke_personal_token, revoke_user_tokens, routing_page, runtime_page, set_instance_budget,
+    set_profile_preference, set_profile_rule, set_user_budget, set_user_override, set_user_state,
+    static_chart_js, static_css, static_favicon, static_js, stats_cache_observability,
+    stats_cache_stability, stats_request_segmentation, stats_request_shaping, stats_transcoding,
+    summary, sync_accounts, theme_css, timeseries_api, timeseries_page, traces_page,
+    update_profile, usage_page, users_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
@@ -1162,6 +1162,11 @@ pub fn build_router(state: AppState) -> Router {
             .route("/admin/users/override", post(set_user_override))
             .route("/admin/users/override/remove", post(remove_user_override))
             .route("/admin/users/budget", post(set_user_budget))
+            .route("/admin/budget/instance", post(set_instance_budget))
+            .route(
+                "/admin/budget/instance/remove",
+                post(remove_instance_budget),
+            )
             .route("/admin/profiles/create", post(create_profile))
             .route("/admin/profiles/update", post(update_profile))
             .route("/admin/profiles/delete", post(delete_profile))

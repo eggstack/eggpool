@@ -711,6 +711,36 @@ impl PublicationService {
                             retry_hold.microdollars,
                         )?;
                     }
+                    // Instance-global intersection applies to every retry,
+                    // attributed or not. Requests that never took an
+                    // instance hold skip this path entirely.
+                    {
+                        let (instance_check, instance_hold) =
+                            crate::instance_budget::check_retry(
+                                connection,
+                                request_id,
+                                projected_tokens,
+                                projected_cost,
+                                input.budget_proof.as_ref(),
+                            )?;
+                        match instance_check {
+                            crate::user_budget::BudgetCheck::Exceeded => {
+                                return Ok(TransactionOutcome::BudgetExceeded);
+                            }
+                            crate::user_budget::BudgetCheck::NotEnforceable => {
+                                return Ok(TransactionOutcome::BudgetNotEnforceable);
+                            }
+                            crate::user_budget::BudgetCheck::Allowed => {}
+                        }
+                        if let Some(hold) = instance_hold {
+                            crate::instance_budget::extend_reservation(
+                                connection,
+                                request_id,
+                                hold.tokens,
+                                hold.microdollars,
+                            )?;
+                        }
+                    }
                     // A retry attempt on an existing pending request is valid
                     // only after the previous attempt's durable and local
                     // release boundary has converged.
@@ -759,6 +789,29 @@ impl PublicationService {
                 } else {
                     None
                 };
+                // Instance-global intersection covers every admitted call,
+                // including unattributed legacy-key requests, so no identity
+                // switch can bypass a shared ceiling. With no matching
+                // instance rule this takes no hold and writes no rows.
+                let instance_hold = {
+                    let (check, permit, hold) = crate::instance_budget::check_initial(
+                        connection,
+                        &model_id,
+                        projected_tokens,
+                        projected_cost,
+                        input.budget_proof.as_ref(),
+                    )?;
+                    match check {
+                        crate::user_budget::BudgetCheck::Exceeded => {
+                            return Ok(TransactionOutcome::BudgetExceeded);
+                        }
+                        crate::user_budget::BudgetCheck::NotEnforceable => {
+                            return Ok(TransactionOutcome::BudgetNotEnforceable);
+                        }
+                        crate::user_budget::BudgetCheck::Allowed => {}
+                    }
+                    permit.map(|permit| (permit, hold))
+                };
 
                 fail_sql(
                     transaction_injector.as_ref(),
@@ -798,6 +851,20 @@ impl PublicationService {
                         crate::user_budget::BudgetReservationSpec {
                             request_id,
                             user_id,
+                            model_id: &model_id,
+                            tokens: hold.tokens,
+                            microdollars: hold.microdollars,
+                            ttl_seconds: input.reservation_ttl_seconds,
+                            hold: *hold,
+                        },
+                        permit,
+                    )?;
+                }
+                if let Some((permit, hold)) = instance_hold.as_ref() {
+                    crate::instance_budget::insert_reservation(
+                        connection,
+                        crate::instance_budget::InstanceReservationSpec {
+                            request_id,
                             model_id: &model_id,
                             tokens: hold.tokens,
                             microdollars: hold.microdollars,

@@ -153,3 +153,23 @@ nothing is silently upgraded to a guarantee.
 
 See the [API reference](api-reference.md#authentication) for the
 authenticated `/api/user-budget` view.
+
+## Instance Budget Ceilings
+
+One optional instance-wide ceiling is intersected with every per-user rule:
+an admitted call must satisfy all applicable instance-global, instance-model,
+user-global, and user-model limits. Manage ceilings with
+`eggpool users global-budget set` (same windows, modes, and `--model-id`
+scoping; a blank model covers all models) or the admin dashboard's instance
+section. Absent ceilings mean no additional cap, and single-admin behavior is
+otherwise unchanged.
+
+The shared ceiling is enforced atomically: concurrent requests from different
+users cannot both take the final global slot, and no retry, alternate model,
+identity switch, or legacy-key request bypasses it — unattributed requests
+count against it too. Each logical request counts once across failover and
+retries; hard/estimated semantics and the operator-tariff trust boundary match
+the per-user contract above. Global counters never depend on a user row, so
+disabling or deleting a user preserves history and remaining headroom. Members
+see only their own rules and usage; instance ceilings and aggregate usage are
+admin-visible only.

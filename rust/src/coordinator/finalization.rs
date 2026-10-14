@@ -618,6 +618,31 @@ impl DurableFinalizer {
                         || data.cost_microdollars > 0,
                 },
             )?;
+            // Instance-global settlement folds the same attempt facts and is
+            // a no-op when the request never took an instance hold, so
+            // rule-free and unattributed requests keep their existing shape.
+            crate::instance_budget::record_attempt_and_maybe_settle(
+                connection,
+                crate::user_budget::BudgetAttemptSettlement {
+                    request_id: identity.db_request_id,
+                    attempt_id: identity.attempt_id,
+                    attempt_transitioned: attempt_changed == 1,
+                    terminalize_request,
+                    input_tokens: data.input_tokens,
+                    output_tokens: data.output_tokens,
+                    cost_microdollars: data.cost_microdollars,
+                    provider_reported_microdollars: data.provider_cost_microdollars,
+                    local_estimated_microdollars: data.local_cost_microdollars,
+                    tokens_known: data.input_tokens_reported.is_some()
+                        || data.output_tokens_reported.is_some()
+                        || data.total_tokens_reported.is_some()
+                        || data.input_tokens > 0
+                        || data.output_tokens > 0,
+                    cost_known: data.provider_cost_microdollars.is_some()
+                        || data.local_cost_microdollars.is_some()
+                        || data.cost_microdollars > 0,
+                },
+            )?;
             Ok(TxnResult::Success {
                 request_terminal: terminalize_request,
                 request_transitioned,

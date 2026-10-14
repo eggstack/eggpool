@@ -361,6 +361,29 @@ pub(super) async fn user_budget_api(
         Ok(value) => value,
         Err(_) => return degraded("user budget unavailable"),
     };
+    // Instance ceilings are admin-visible only: member responses keep their
+    // existing shape so one member can never observe the shared ceiling or
+    // infer other users' consumption from it.
+    if principal.role.as_deref() != Some("admin") {
+        return json_response(
+            StatusCode::OK,
+            json!({
+                "window_timezone": "UTC",
+                "cost_basis": "estimated_microdollars",
+                "rules": rules,
+                "usage": usage,
+            }),
+        );
+    }
+    let instance = crate::instance_budget::InstanceBudgetService::new(state.database.clone());
+    let instance_rules = match instance.rules().await {
+        Ok(value) => value,
+        Err(_) => return degraded("user budget unavailable"),
+    };
+    let instance_usage = match instance.usage("0000-01-01", 500).await {
+        Ok(value) => value,
+        Err(_) => return degraded("user budget unavailable"),
+    };
     json_response(
         StatusCode::OK,
         json!({
@@ -368,6 +391,8 @@ pub(super) async fn user_budget_api(
             "cost_basis": "estimated_microdollars",
             "rules": rules,
             "usage": usage,
+            "instance_rules": instance_rules,
+            "instance_usage": instance_usage,
         }),
     )
 }

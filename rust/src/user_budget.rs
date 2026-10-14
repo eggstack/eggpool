@@ -381,7 +381,7 @@ pub(crate) enum BudgetPriceSource {
 }
 
 impl BudgetPriceSource {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::OperatorTariff => "operator_tariff",
         }
@@ -415,8 +415,8 @@ pub struct BudgetProof {
 
 /// Initial hard-mode hold covers two single-attempt equivalents; each retry
 /// extends by one equivalent after re-checking limits.
-const HARD_HOLD_INITIAL_EQUIVALENTS: i128 = 2;
-const HARD_HOLD_RETRY_EQUIVALENTS: i128 = 1;
+pub(crate) const HARD_HOLD_INITIAL_EQUIVALENTS: i128 = 2;
+pub(crate) const HARD_HOLD_RETRY_EQUIVALENTS: i128 = 1;
 const MICRODOLLARS_PER_MILLION_TOKENS: i128 = 1_000_000;
 
 /// Token/cost amounts the publication transaction must hold, plus the
@@ -434,7 +434,7 @@ pub(crate) struct BudgetHold {
 /// Worst-case tokens billable by one attempt under a hard rule, or `None`
 /// when no conservative bound exists (unbounded output, negative input,
 /// non-positive or overflowing total). `None` always fails closed.
-fn single_attempt_worst_tokens(proof: &BudgetProof) -> Option<i64> {
+pub(crate) fn single_attempt_worst_tokens(proof: &BudgetProof) -> Option<i64> {
     let output = proof.requested_output_tokens.filter(|value| *value > 0)?;
     if proof.input_worst_case_tokens < 0 {
         return None;
@@ -448,7 +448,10 @@ fn single_attempt_worst_tokens(proof: &BudgetProof) -> Option<i64> {
 
 /// Worst-case microdollars for `tokens` at the operator tariff, or `None`
 /// when the tariff is unknown/negative or the conversion overflows.
-fn tariff_cost_microdollars(tokens: i64, tariff_per_million: Option<i64>) -> Option<i64> {
+pub(crate) fn tariff_cost_microdollars(
+    tokens: i64,
+    tariff_per_million: Option<i64>,
+) -> Option<i64> {
     let tariff = tariff_per_million.filter(|value| *value >= 0)?;
     if tokens < 0 {
         return None;
@@ -564,7 +567,7 @@ pub(crate) fn check_initial(
 /// Resolve the amounts a new logical request must hold. Hard dimensions use
 /// the proof's worst case; estimated dimensions keep the estimator's
 /// projection. Returns `None` when a hard dimension is unprovable.
-fn hold_for_admission(
+pub(crate) fn hold_for_admission(
     estimate_tokens: i64,
     estimate_microdollars: i64,
     proof: Option<&BudgetProof>,
@@ -613,7 +616,7 @@ fn hold_for_admission(
 /// Resolve the additional amounts one retry attempt must extend. The initial
 /// hold already covers two equivalents, so each retry adds one single-attempt
 /// equivalent under hard rules after re-checking limits.
-fn hold_for_retry(
+pub(crate) fn hold_for_retry(
     estimate_tokens: i64,
     estimate_microdollars: i64,
     proof: Option<&BudgetProof>,
@@ -657,7 +660,7 @@ fn hold_for_retry(
     })
 }
 
-fn checked_mul(value: i64, factor: i128) -> Option<i64> {
+pub(crate) fn checked_mul(value: i64, factor: i128) -> Option<i64> {
     let product = i128::from(value) * factor;
     if product < 0 || product > i128::from(i64::MAX) {
         return None;
@@ -666,7 +669,7 @@ fn checked_mul(value: i64, factor: i128) -> Option<i64> {
 }
 
 impl BudgetHold {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             tokens: 0,
             microdollars: 0,
@@ -924,6 +927,59 @@ fn rules_exceeded(
     Ok(false)
 }
 
+/// Record one transitioned attempt's usage facts idempotently. The attempt
+/// table is keyed by attempt/request only, so both user and instance-global
+/// settlement fold the same rows.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_attempt_usage(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    request_id: i64,
+    attempt_id: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    cost_microdollars: i64,
+    provider_reported_microdollars: Option<i64>,
+    local_estimated_microdollars: Option<i64>,
+    tokens_known: bool,
+    cost_known: bool,
+) -> Result<(), tokio_rusqlite::rusqlite::Error> {
+    let provider_cost = provider_reported_microdollars.unwrap_or(0).max(0);
+    let local_cost = local_estimated_microdollars
+        .or_else(|| {
+            (provider_reported_microdollars.is_none() && cost_microdollars > 0)
+                .then_some(cost_microdollars)
+        })
+        .unwrap_or(0)
+        .max(0);
+    let cost_source = if provider_reported_microdollars.is_some() {
+        "provider_reported"
+    } else if local_cost > 0 {
+        "local_estimated"
+    } else {
+        "unknown"
+    };
+    connection.execute(
+        "INSERT OR IGNORE INTO user_budget_attempt_usage(
+            attempt_id, request_id, input_tokens, output_tokens, cost_microdollars,
+            provider_reported_microdollars, local_estimated_microdollars,
+            cost_source, tokens_known, cost_known)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            attempt_id,
+            request_id,
+            input_tokens.max(0),
+            output_tokens.max(0),
+            cost_microdollars.max(0),
+            provider_cost,
+            local_cost,
+            cost_source,
+            i64::from(tokens_known),
+            i64::from(cost_known),
+        ],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn record_attempt_and_maybe_settle(
     connection: &tokio_rusqlite::rusqlite::Connection,
     settlement: BudgetAttemptSettlement,
@@ -941,6 +997,24 @@ pub(crate) fn record_attempt_and_maybe_settle(
         tokens_known,
         cost_known,
     } = settlement;
+    // Per-attempt usage facts are request-scoped, not user-scoped: they are
+    // recorded unconditionally so instance-global settlement (M009) can fold
+    // the same attempts for unattributed requests. Only the usage-bucket
+    // fold below is gated on a user reservation.
+    if attempt_transitioned {
+        record_attempt_usage(
+            connection,
+            request_id,
+            attempt_id,
+            input_tokens,
+            output_tokens,
+            cost_microdollars,
+            provider_reported_microdollars,
+            local_estimated_microdollars,
+            tokens_known,
+            cost_known,
+        )?;
+    }
     let reservation = connection
         .query_row(
             "SELECT user_id, model_id, day_start, month_start, held_tokens,
@@ -965,42 +1039,6 @@ pub(crate) fn record_attempt_and_maybe_settle(
     else {
         return Ok(());
     };
-    if attempt_transitioned {
-        let provider_cost = provider_reported_microdollars.unwrap_or(0).max(0);
-        let local_cost = local_estimated_microdollars
-            .or_else(|| {
-                (provider_reported_microdollars.is_none() && cost_microdollars > 0)
-                    .then_some(cost_microdollars)
-            })
-            .unwrap_or(0)
-            .max(0);
-        let cost_source = if provider_reported_microdollars.is_some() {
-            "provider_reported"
-        } else if local_cost > 0 {
-            "local_estimated"
-        } else {
-            "unknown"
-        };
-        connection.execute(
-            "INSERT OR IGNORE INTO user_budget_attempt_usage(
-                attempt_id, request_id, input_tokens, output_tokens, cost_microdollars,
-                provider_reported_microdollars, local_estimated_microdollars,
-                cost_source, tokens_known, cost_known)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                attempt_id,
-                request_id,
-                input_tokens.max(0),
-                output_tokens.max(0),
-                cost_microdollars.max(0),
-                provider_cost,
-                local_cost,
-                cost_source,
-                i64::from(tokens_known),
-                i64::from(cost_known),
-            ],
-        )?;
-    }
     if !terminalize_request || status == "settled" || status == "released" {
         return Ok(());
     }
@@ -1096,7 +1134,7 @@ pub(crate) fn record_attempt_and_maybe_settle(
     Ok(())
 }
 
-fn exceeds(limit: i64, first: i64, second: i64, third: i64) -> bool {
+pub(crate) fn exceeds(limit: i64, first: i64, second: i64, third: i64) -> bool {
     i128::from(first) + i128::from(second) + i128::from(third) > i128::from(limit)
 }
 

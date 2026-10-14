@@ -161,12 +161,55 @@ pub enum UsersCommand {
     /// Set or remove durable per-user budget rules.
     #[command(subcommand)]
     Budget(UsersBudgetCommand),
+    /// Set or remove instance-wide budget ceilings intersected with every
+    /// per-user rule. Requires an active administrator.
+    #[command(subcommand)]
+    GlobalBudget(UsersGlobalBudgetCommand),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum UsersBudgetCommand {
     Set(UserBudgetSetArgs),
     Remove(UserBudgetRemoveArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersGlobalBudgetCommand {
+    Set(UserGlobalBudgetSetArgs),
+    Remove(UserGlobalBudgetRemoveArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserGlobalBudgetSetArgs {
+    #[arg(long)]
+    pub model_id: Option<String>,
+    #[arg(long, value_parser = ["day", "month"])]
+    pub window: String,
+    #[arg(long)]
+    pub max_requests: Option<i64>,
+    #[arg(long)]
+    pub max_tokens: Option<i64>,
+    #[arg(long)]
+    pub max_microdollars: Option<i64>,
+    #[arg(long)]
+    pub max_concurrent: Option<i64>,
+    /// `estimated` keeps estimator projections (default, explicit); `hard`
+    /// requires a provable worst-case bound and fails closed when the request
+    /// or price cannot be bounded.
+    #[arg(long, default_value = "estimated", value_parser = ["hard", "estimated"])]
+    pub enforcement: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserGlobalBudgetRemoveArgs {
+    #[arg(long)]
+    pub model_id: Option<String>,
+    #[arg(long, value_parser = ["day", "month"])]
+    pub window: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, clap::Args)]

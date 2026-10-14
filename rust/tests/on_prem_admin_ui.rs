@@ -319,6 +319,61 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         "{invalid_budget_rejected}"
     );
 
+    // M009: instance ceilings are managed on the same admin page, visible in
+    // the global section, and fenced from member credentials.
+    assert!(
+        user_page.contains("Instance budget ceilings"),
+        "{user_page}"
+    );
+    let instance_form = format!(
+        "model_id=&window=day&max_requests=100&max_tokens=&max_microdollars=&max_concurrent=&enforcement=estimated&csrf={csrf}"
+    );
+    let instance_saved = http_request(
+        address,
+        "POST",
+        "/admin/budget/instance",
+        &instance_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        instance_saved.starts_with("HTTP/1.1 303"),
+        "{instance_saved}"
+    );
+    let users_after_instance = http_request(
+        address,
+        "GET",
+        "/users",
+        "",
+        Some(&admin_cookies),
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        users_after_instance.contains("All models"),
+        "{users_after_instance}"
+    );
+    let instance_remove_form = format!(
+        "model_id=&window=day&max_requests=&max_tokens=&max_microdollars=&max_concurrent=&csrf={csrf}"
+    );
+    let instance_removed = http_request(
+        address,
+        "POST",
+        "/admin/budget/instance/remove",
+        &instance_remove_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        instance_removed.starts_with("HTTP/1.1 303"),
+        "{instance_removed}"
+    );
+
     let missing_csrf =
         "username=intruder&password=M006+temporary+member+password&profile_id=&csrf=";
     let csrf_rejected = http_request(
@@ -380,6 +435,23 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     assert!(
         member_create_forbidden.starts_with("HTTP/1.1 403"),
         "{member_create_forbidden}"
+    );
+    let member_instance_post = format!(
+        "model_id=&window=day&max_requests=1&max_tokens=&max_microdollars=&max_concurrent=&enforcement=estimated&csrf={member_csrf}"
+    );
+    let member_instance_forbidden = http_request(
+        address,
+        "POST",
+        "/admin/budget/instance",
+        &member_instance_post,
+        Some(&member_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        member_instance_forbidden.starts_with("HTTP/1.1 403"),
+        "{member_instance_forbidden}"
     );
 
     let change_password = format!(
