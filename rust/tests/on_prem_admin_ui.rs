@@ -263,7 +263,61 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     .await;
     assert!(user_page.starts_with("HTTP/1.1 200"), "{user_page}");
     assert!(user_page.contains("member"), "{user_page}");
-    assert!(user_page.contains("Max tokens (estimated)"), "{user_page}");
+    // M008: the budget form distinguishes hard versus estimated enforcement
+    // instead of labeling every dimension an estimate.
+    assert!(user_page.contains("name=\"enforcement\""), "{user_page}");
+    assert!(
+        user_page.contains("Hard (prove worst-case bound or deny)"),
+        "{user_page}"
+    );
+    assert!(
+        user_page.contains("Estimated (approximate hold)"),
+        "{user_page}"
+    );
+
+    // M008: hard-mode budget rules are manageable through the admin form,
+    // invalid modes are rejected, and members see the mode on their page.
+    let budget_member_id = identity::list_users(&database)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|user| user.username == "member")
+        .expect("created member is listed")
+        .id;
+    let hard_budget_form = format!(
+        "user_id={budget_member_id}&model_id=&window=day&max_requests=&max_tokens=5000&max_microdollars=&max_concurrent=&enforcement=hard&csrf={csrf}"
+    );
+    let hard_budget_saved = http_request(
+        address,
+        "POST",
+        "/admin/users/budget",
+        &hard_budget_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        hard_budget_saved.starts_with("HTTP/1.1 303"),
+        "{hard_budget_saved}"
+    );
+    let invalid_budget_form = format!(
+        "user_id={budget_member_id}&model_id=&window=day&max_requests=&max_tokens=5000&max_microdollars=&max_concurrent=&enforcement=guaranteed&csrf={csrf}"
+    );
+    let invalid_budget_rejected = http_request(
+        address,
+        "POST",
+        "/admin/users/budget",
+        &invalid_budget_form,
+        Some(&admin_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        invalid_budget_rejected.starts_with("HTTP/1.1 400"),
+        "{invalid_budget_rejected}"
+    );
 
     let missing_csrf =
         "username=intruder&password=M006+temporary+member+password&profile_id=&csrf=";
@@ -382,6 +436,10 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
     .await;
     assert!(member_usage.starts_with("HTTP/1.1 200"), "{member_usage}");
     assert!(!member_usage.contains(&admin.username), "{member_usage}");
+    assert!(
+        member_usage.contains("<td>hard</td>"),
+        "member usage page must show the hard enforcement mode: {member_usage}"
+    );
 
     let token_form = format!("label=member+laptop&csrf={member_csrf}");
     let token_created = http_request(

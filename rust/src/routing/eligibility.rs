@@ -21,6 +21,13 @@ pub struct RoutingRequestFacts {
     pub request_surface: String,
     pub transcode_protocols: Vec<String>,
     pub projected_tokens: i64,
+    /// Byte-length upper bound on input tokens carried from admission. Hard
+    /// user-budget rules build their worst-case hold from this plus
+    /// `budget_requested_output_tokens`; estimated rules ignore both.
+    pub budget_input_worst_case_tokens: i64,
+    /// Caller-supplied compatible output cap, if any. `None` means
+    /// unbounded or unusable and fails closed under hard token rules.
+    pub budget_requested_output_tokens: Option<i64>,
     pub catalog_stale_after_s: Option<i64>,
     pub thinking: Option<ThinkingRequirement>,
     pub capability_policy: BTreeMap<String, String>,
@@ -51,6 +58,8 @@ impl RoutingRequestFacts {
             request_surface: "chat_completions".into(),
             transcode_protocols: Vec::new(),
             projected_tokens: 0,
+            budget_input_worst_case_tokens: 0,
+            budget_requested_output_tokens: None,
             catalog_stale_after_s: None,
             thinking: None,
             capability_policy: BTreeMap::new(),

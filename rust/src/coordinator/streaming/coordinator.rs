@@ -39,7 +39,7 @@ use crate::coordinator::{
     FinalizationData, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, NextAction, PublicationError, PublicationInput, PublicationOutcome,
     PublicationService, PublishedAttempt, RetryPolicy, RetryScope, WireResolver,
-    filter_response_headers, retry_after_from_headers,
+    budget_proof_for_claim, filter_response_headers, retry_after_from_headers,
 };
 
 /// End-to-end streaming coordinator for one immutable runtime generation.
@@ -409,13 +409,20 @@ impl StreamingCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
-            let publication_input = PublicationInput::new(
+            let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
                 request.client_surface.protocol(),
                 upstream_protocol,
                 true,
                 i64::from(attempt_number),
             );
+            publication_input.budget_proof = Some(budget_proof_for_claim(
+                &claim,
+                provider
+                    .budget
+                    .max_microdollars_per_million_tokens
+                    .and_then(|tariff| i64::try_from(tariff).ok()),
+            ));
             let published = match self
                 .publication
                 .publish_attributed(claim, publication_input, attribution.clone())

@@ -184,6 +184,12 @@ pub struct UserBudgetSetArgs {
     pub max_microdollars: Option<i64>,
     #[arg(long)]
     pub max_concurrent: Option<i64>,
+    /// `estimated` keeps estimator projections (default, explicit); `hard`
+    /// requires a provable worst-case bound and fails closed when the request
+    /// or price cannot be bounded. Existing rules stay estimated until an
+    /// admin explicitly promotes them.
+    #[arg(long, default_value = "estimated", value_parser = ["hard", "estimated"])]
+    pub enforcement: String,
     #[arg(long, default_value = "admin")]
     pub actor: String,
 }

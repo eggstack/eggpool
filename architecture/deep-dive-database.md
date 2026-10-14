@@ -18,7 +18,7 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0060_*.sql` = versions 1–60) with `checksums.json` (`files` map, 60 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups; migration 60 adds bounded secret-free administrative audit events. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0061_*.sql` = versions 1–61) with `checksums.json` (`files` map, 61 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups; migration 60 adds bounded secret-free administrative audit events; migration 61 adds the hard/estimated enforcement mode, worst-case hold facts, and price provenance to the budget tables. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
 
 `users`, `user_credentials`, and `user_access_state` hold usernames, password
 hashes, downstream roles, token digests, scopes, and explicit transition state.
@@ -56,14 +56,24 @@ use UTC calendar boundaries. Publication checks exact user/model and
 user-aggregate rules and inserts an active hold in the same transaction as the
 request/attempt/provider reservation; a concurrent last-slot request cannot
 pass on a stale preflight. Retries extend that logical hold without
-incrementing its request count. Attempt facts are idempotently retained, and
+incrementing its request count. Rules carry an explicit `hard`/`estimated`
+enforcement mode (migration 61; pre-existing rows are estimated, promotion is
+an explicit admin operation): estimated holds keep the request-size token
+projection and fallback microdollars, while hard holds reserve the admission
+worst case (input bound plus caller output cap, cost converted at the
+operator-configured `[providers.<id>.budget]` tariff) and record the bound
+plus price provenance on the reservation row. Unbounded output, unknown tariff,
+or arithmetic overflow denies with `BudgetNotEnforceable` before any upstream
+submission. Attempt facts are idempotently retained, and
 terminal finalization settles one daily and one monthly usage bucket in the
 same transaction that terminalizes the request. Unknown usage consumes the
-remaining estimate and increments explicit unknown counters. Provider-reported,
+remaining estimate and increments explicit unknown counters; provider-reported
+usage above a hard hold is settled visibly, never clamped. Provider-reported,
 locally estimated, and reservation-fallback microdollars remain distinct in the
-user rollup. Rule changes retain an actor/version audit row. `GET
+user rollup. Rule changes retain an actor/version/mode audit row. `GET
 /api/user-budget` returns only the authenticated user's data unless an active
-admin asks for a target `user_id`. Migration 60 adds `user_admin_audit`, a
+admin asks for a target `user_id`; each rule reports its enforcement mode.
+Migration 60 adds `user_admin_audit`, a
 bounded, secret-free actor/action/target record written transactionally with
 user, token, and profile administration mutations.
 

@@ -64,7 +64,7 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
 | `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |
 | `eggpool users policy prefer PROFILE [MODEL]` | Set or clear a profile's allowed client recommendation |
-| `eggpool users budget set USER --window day\|month` | Set daily/monthly request, token, estimated-microdollar, and concurrency limits (`--model-id` scopes an exact model) |
+| `eggpool users budget set USER --window day\|month` | Set daily/monthly request, token, microdollar, and concurrency limits (`--model-id` scopes an exact model; `--enforcement hard\|estimated`, default `estimated`) |
 | `eggpool users budget remove USER --window day\|month` | Remove the matching user/model budget rule |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |

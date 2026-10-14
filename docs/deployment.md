@@ -72,6 +72,16 @@ models. A browser-issued token is shown once in a no-store response; set it as
 Remote browser login must use the operator's TLS proxy and trusted-proxy setup
 below: LAN reachability alone does not encrypt passwords or cookies.
 
+Budget rules are `estimated` by default. Promoting a rule to `hard` requires
+proof the proxy can actually bound: hard token rules need clients to send an
+explicit output cap, and hard USD rules need a conservative operator tariff on
+every provider those users can reach, configured as
+`[providers.<id>.budget] max_microdollars_per_million_tokens` (microdollars
+per million tokens, covering the most expensive model on that provider;
+omit for unknown price, `0` for verified free). Without a bound, hard-mode
+requests are denied before upstream dispatch — hard mode is unavailable rather
+than approximate. See [model limits](model-limits.md#local-user-budgets).
+
 ### Updating EggPool
 
 ```bash

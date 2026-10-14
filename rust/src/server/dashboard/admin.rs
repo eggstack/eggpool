@@ -101,6 +101,8 @@ pub(in crate::server) struct UserBudgetForm {
     max_tokens: String,
     max_microdollars: String,
     max_concurrent: String,
+    /// Optional so older posted forms keep working; absent means estimated.
+    enforcement: Option<String>,
     csrf: String,
 }
 
@@ -705,9 +707,19 @@ pub(in crate::server) async fn set_user_budget(
                 tokens,
                 microdollars,
                 concurrent,
+                enforcement: crate::user_budget::BudgetEnforcement::Estimated,
             }
         }
         _ => return bad_request("Budget limits must be positive integers."),
+    };
+    let enforcement = match form.enforcement.as_deref().map(str::trim) {
+        None | Some("") | Some("estimated") => crate::user_budget::BudgetEnforcement::Estimated,
+        Some("hard") => crate::user_budget::BudgetEnforcement::Hard,
+        Some(_) => return bad_request("Invalid budget enforcement mode."),
+    };
+    let limits = crate::user_budget::BudgetLimits {
+        enforcement,
+        ..limits
     };
     let window = match form.window.as_str() {
         "day" => crate::user_budget::BudgetWindow::Day,

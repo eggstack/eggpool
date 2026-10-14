@@ -810,6 +810,16 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         "month" => crate::user_budget::BudgetWindow::Month,
                         _ => return Err(command_error(EXIT_VALIDATION, "invalid budget window")),
                     };
+                    let enforcement = match args.enforcement.as_str() {
+                        "hard" => crate::user_budget::BudgetEnforcement::Hard,
+                        "estimated" => crate::user_budget::BudgetEnforcement::Estimated,
+                        _ => {
+                            return Err(command_error(
+                                EXIT_VALIDATION,
+                                "invalid budget enforcement",
+                            ));
+                        }
+                    };
                     crate::user_budget::UserBudgetService::new(database.clone())
                         .set_rule(
                             &actor,
@@ -821,11 +831,16 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                                 tokens: args.max_tokens,
                                 microdollars: args.max_microdollars,
                                 concurrent: args.max_concurrent,
+                                enforcement,
                             },
                         )
                         .await
                         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
-                    println!("Budget rule for {} saved.", user.username);
+                    println!(
+                        "Budget rule for {} saved ({}).",
+                        user.username,
+                        enforcement.as_str()
+                    );
                 }
                 Budget::Remove(args) => {
                     let actor = policy_actor_id(&database, &args.actor).await?;

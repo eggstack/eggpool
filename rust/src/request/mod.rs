@@ -9,10 +9,11 @@ pub mod limits;
 pub(crate) mod resource_budget;
 
 pub use admission::{
-    AdmissionError, AdmissionOptions, AdmittedRequest, CompactAdmittedRequest,
-    NativeFeatureSummary, NativeRequestPreservation, StaticRoutingFacts, admit_compact_request,
-    admit_request, affinity_identity_input, has_compaction_trigger, routing_request_facts,
-    thinking_requirement_from_intent, validate_responses_stateless_policy,
+    AdmissionError, AdmissionOptions, AdmittedRequest, BudgetAdmissionFacts,
+    CompactAdmittedRequest, NativeFeatureSummary, NativeRequestPreservation, StaticRoutingFacts,
+    admit_compact_request, admit_request, affinity_identity_input, budget_admission_facts,
+    has_compaction_trigger, routing_request_facts, thinking_requirement_from_intent,
+    validate_responses_stateless_policy,
 };
 
 pub(crate) use admission::{

@@ -108,6 +108,49 @@ impl std::fmt::Debug for NativeRequestPreservation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct BudgetAdmissionFacts {
+    /// Byte-length upper bound on input tokens: every token encodes at least
+    /// one ingress byte, so this is conservative for any byte-level
+    /// tokenizer, never an average. Hard-mode admission builds its
+    /// worst-case bound from this plus the caller's explicit output cap.
+    pub input_worst_case_tokens: i64,
+    /// The caller's explicit compatible output cap for the request surface
+    /// (`max_tokens`/`max_completion_tokens` on chat, `max_output_tokens`
+    /// on Responses/compact, `max_tokens` on Anthropic Messages).
+    /// `None` means unbounded, absent, or unusable — hard token rules must
+    /// fail closed on `None`. Admission never mutates caller fields to
+    /// manufacture a bound.
+    pub requested_output_tokens: Option<i64>,
+}
+
+/// Derive the budget proof facts for one parsed request body. Pure and
+/// total: an unusable output field degrades to `None` (hard-mode denial),
+/// never to an invented bound.
+pub fn budget_admission_facts(
+    raw_body_len: usize,
+    value: &Value,
+    surface: ClientSurface,
+    reservation_tokens: u64,
+    context_tokens: u64,
+) -> BudgetAdmissionFacts {
+    let byte_bound = raw_body_len.min(i64::MAX as usize) as i64;
+    let input_worst_case_tokens = byte_bound
+        .max(reservation_tokens.min(i64::MAX as u64) as i64)
+        .max(context_tokens.min(i64::MAX as u64) as i64)
+        .max(0);
+    let requested_output_tokens =
+        super::limits::requested_output_tokens(value, surface.protocol(), surface.as_str())
+            .ok()
+            .flatten()
+            .and_then(|bound| i64::try_from(bound).ok())
+            .filter(|bound| *bound > 0);
+    BudgetAdmissionFacts {
+        input_worst_case_tokens,
+        requested_output_tokens,
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub struct AdmittedRequest {
     pub canonical: CanonicalRequest,
@@ -115,6 +158,7 @@ pub struct AdmittedRequest {
     pub raw_body_bytes: usize,
     pub reservation_tokens: u64,
     pub context_tokens: u64,
+    pub budget_facts: BudgetAdmissionFacts,
 }
 
 impl std::fmt::Debug for AdmittedRequest {
@@ -188,6 +232,7 @@ pub struct CompactAdmittedRequest {
     pub raw_body_bytes: usize,
     pub reservation_tokens: u64,
     pub context_tokens: u64,
+    pub budget_facts: BudgetAdmissionFacts,
 }
 
 impl std::fmt::Debug for CompactAdmittedRequest {
@@ -204,7 +249,12 @@ impl std::fmt::Debug for CompactAdmittedRequest {
 
 impl CompactAdmittedRequest {
     pub fn routing_facts(&self, inputs: &StaticRoutingFacts) -> RoutingRequestFacts {
-        routing_request_facts_from_parts(&self.canonical, self.reservation_tokens, inputs)
+        routing_request_facts_from_parts(
+            &self.canonical,
+            self.reservation_tokens,
+            inputs,
+            self.budget_facts,
+        )
     }
 
     pub fn affinity_identity(&self, explicit_session: Option<&str>) -> AffinityIdentityInput {
@@ -276,6 +326,15 @@ pub(crate) fn admit_parsed_request(
     } else {
         None
     };
+    // The output bound is read from the parsed object before `value` moves
+    // into native preservation (Responses) or is dropped (other surfaces).
+    let budget_facts = budget_admission_facts(
+        raw_body.len(),
+        &value,
+        options.client_surface,
+        reservation_tokens,
+        context_tokens,
+    );
     let native_preservation = native_summary.map(|summary| NativeRequestPreservation {
         source_surface: options.client_surface,
         parsed: value,
@@ -287,6 +346,7 @@ pub(crate) fn admit_parsed_request(
         raw_body_bytes: raw_body.len(),
         reservation_tokens,
         context_tokens,
+        budget_facts,
     })
 }
 
@@ -396,6 +456,13 @@ pub(crate) fn admit_compact_parsed_request(
     let context_tokens =
         estimate_context_input_tokens(&raw_body, &value, options.extra_context_tokens);
     let summary = native_feature_summary(object);
+    let budget_facts = budget_admission_facts(
+        raw_body.len(),
+        &value,
+        ClientSurface::Responses,
+        reservation_tokens,
+        context_tokens,
+    );
     Ok(CompactAdmittedRequest {
         canonical,
         native_preservation: NativeRequestPreservation {
@@ -406,6 +473,7 @@ pub(crate) fn admit_compact_parsed_request(
         raw_body_bytes: raw_body.len(),
         reservation_tokens,
         context_tokens,
+        budget_facts,
     })
 }
 
@@ -413,13 +481,19 @@ pub fn routing_request_facts(
     admitted: &AdmittedRequest,
     inputs: &StaticRoutingFacts,
 ) -> RoutingRequestFacts {
-    routing_request_facts_from_parts(&admitted.canonical, admitted.reservation_tokens, inputs)
+    routing_request_facts_from_parts(
+        &admitted.canonical,
+        admitted.reservation_tokens,
+        inputs,
+        admitted.budget_facts,
+    )
 }
 
 fn routing_request_facts_from_parts(
     canonical: &CanonicalRequest,
     reservation_tokens: u64,
     inputs: &StaticRoutingFacts,
+    budget_facts: BudgetAdmissionFacts,
 ) -> RoutingRequestFacts {
     let mut facts =
         RoutingRequestFacts::from_model_id(&canonical.model, &inputs.known_provider_ids);
@@ -427,8 +501,9 @@ fn routing_request_facts_from_parts(
     let client_surface = admitted_client_surface(canonical);
     facts.client_protocol = Some(client_surface.protocol().into());
     facts.request_surface = client_surface.as_str().into();
-    facts.transcode_protocols = inputs.transcode_protocols.clone();
     facts.projected_tokens = reservation_tokens.min(i64::MAX as u64) as i64;
+    facts.budget_input_worst_case_tokens = budget_facts.input_worst_case_tokens;
+    facts.budget_requested_output_tokens = budget_facts.requested_output_tokens;
     facts.catalog_stale_after_s = inputs.catalog_stale_after_s;
     facts.thinking = thinking_requirement_from_intent(&canonical.reasoning);
     facts.capability_policy = inputs.capability_policy.clone();
@@ -752,6 +827,7 @@ mod tests {
             raw_body_bytes: compact.raw_body_bytes,
             reservation_tokens: compact.reservation_tokens,
             context_tokens: compact.context_tokens,
+            budget_facts: compact.budget_facts,
         };
         let inputs = StaticRoutingFacts::default();
         assert_eq!(

@@ -138,9 +138,20 @@ adapts the response, and converges durable state.
   all live holds across UTC window boundaries. Finalization records each
   transitioned attempt once and settles one logical request in the terminal
   transaction. Unknown usage consumes the remaining estimate and is marked
-  unknown in the indexed rollup. These remain estimate budgets: request-size
-  token projection and fallback microdollars do not prove exact output or
-  self-hosted cost bounds.
+  unknown in the indexed rollup. Request and concurrency caps are strictly
+  enforceable in both modes. Token/cost rules carry an explicit `hard` or
+  `estimated` mode (migration 61, default estimated): estimated rules keep the
+  request-size token projection and fallback microdollars, which do not prove
+  exact output or self-hosted cost bounds; hard rules admit only requests with
+  a provable worst-case bound — admission-carried input bound plus the
+  caller's explicit compatible output cap (`max_tokens`/`max_completion_tokens`
+  on chat, `max_output_tokens` on Responses/compact, `max_tokens` on Anthropic
+  Messages) converted at the operator-configured provider tariff — and deny
+  with `BudgetNotEnforceable` (429, no upstream submission) when unbounded,
+  unpriced, or overflowing. The initial hard hold covers two attempt
+  equivalents (concrete attempt plus unattributed selector overhead); retries
+  extend by one equivalent after re-checking. Observed provider usage above
+  the hold is settled visibly, never clamped.
 - Reload policy is referenced, never duplicated: only
   `config_reload_policy.rs::classify_transition` decides reload vs restart.
 

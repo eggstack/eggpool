@@ -510,6 +510,15 @@ enabled = false
 # # proxy_url = "ss://chacha20:password@proxy.example.com:8388"
 # # proxy_url_env = "GOROUTER_PERSONAL_PROXY_URL"
 #
+# [providers.opencode-go.budget]
+# Optional conservative price ceiling for hard USD budget rules, in
+# microdollars per million tokens. Omitted means unknown price: hard USD
+# rules fail closed for this provider. Zero is an explicit verified
+# zero-cost declaration (free local model), distinct from unknown. The
+# tariff must cover the most expensive model on this provider; estimator
+# fallbacks are never a hard price.
+# max_microdollars_per_million_tokens = 3000000  # $3/MTok ceiling
+#
 # [providers.opencode-go.auth]
 # The selected wire surface supplies endpoint-specific auth.
 # mode = "bearer"

@@ -21,6 +21,31 @@ impl BudgetWindow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetEnforcement {
+    Hard,
+    #[default]
+    Estimated,
+}
+
+impl BudgetEnforcement {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Hard => "hard",
+            Self::Estimated => "estimated",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hard" => Some(Self::Hard),
+            "estimated" => Some(Self::Estimated),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UserBudgetRule {
     pub id: i64,
@@ -30,6 +55,7 @@ pub struct UserBudgetRule {
     pub max_tokens: Option<i64>,
     pub max_microdollars: Option<i64>,
     pub max_concurrent: Option<i64>,
+    pub enforcement: BudgetEnforcement,
     pub version: i64,
 }
 
@@ -54,6 +80,7 @@ pub struct BudgetLimits {
     pub tokens: Option<i64>,
     pub microdollars: Option<i64>,
     pub concurrent: Option<i64>,
+    pub enforcement: BudgetEnforcement,
 }
 
 #[derive(Debug, Error)]
@@ -119,6 +146,7 @@ impl UserBudgetService {
         let user_id = user_id.to_owned();
         let model_id = model_id.map(str::to_owned);
         let window = window.as_str().to_owned();
+        let enforcement = limits.enforcement.as_str().to_owned();
         let outcome = self.database
             .with_transaction(move |connection| {
                 let actor: bool = connection.query_row(
@@ -140,16 +168,17 @@ impl UserBudgetService {
                 connection.execute(
                     "INSERT INTO user_budget_rules(
                         user_id, model_id, window, max_requests, max_tokens,
-                        max_microdollars, max_concurrent, updated_by)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                     ON CONFLICT(user_id, ifnull(model_id, ''), window) DO UPDATE SET
-                        max_requests = excluded.max_requests,
-                        max_tokens = excluded.max_tokens,
-                        max_microdollars = excluded.max_microdollars,
-                        max_concurrent = excluded.max_concurrent,
-                        version = user_budget_rules.version + 1,
-                        updated_by = excluded.updated_by,
-                        updated_at = CURRENT_TIMESTAMP",
+                        max_microdollars, max_concurrent, enforcement, updated_by)
+                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                      ON CONFLICT(user_id, ifnull(model_id, ''), window) DO UPDATE SET
+                         max_requests = excluded.max_requests,
+                         max_tokens = excluded.max_tokens,
+                         max_microdollars = excluded.max_microdollars,
+                         max_concurrent = excluded.max_concurrent,
+                         enforcement = excluded.enforcement,
+                         version = user_budget_rules.version + 1,
+                         updated_by = excluded.updated_by,
+                         updated_at = CURRENT_TIMESTAMP",
                     params![
                         user_id,
                         model_id,
@@ -158,16 +187,17 @@ impl UserBudgetService {
                         limits.tokens,
                         limits.microdollars,
                         limits.concurrent,
+                        enforcement,
                         actor_id,
                     ],
                 )?;
                 connection.execute(
                     "INSERT INTO user_budget_rule_audit(
                         user_id, actor_id, model_id, window, action, max_requests,
-                        max_tokens, max_microdollars, max_concurrent, rule_version)
-                     SELECT user_id, updated_by, model_id, window, 'set', max_requests,
-                            max_tokens, max_microdollars, max_concurrent, version
-                     FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
+                        max_tokens, max_microdollars, max_concurrent, enforcement, rule_version)
+                      SELECT user_id, updated_by, model_id, window, 'set', max_requests,
+                             max_tokens, max_microdollars, max_concurrent, enforcement, version
+                      FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
                     params![user_id, model_id, window],
                 )?;
                 Ok(MutationResult::Updated)
@@ -205,8 +235,8 @@ impl UserBudgetService {
                 }
                 let previous = connection
                     .query_row(
-                        "SELECT max_requests, max_tokens, max_microdollars, max_concurrent, version
-                         FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
+                        "SELECT max_requests, max_tokens, max_microdollars, max_concurrent, enforcement, version
+                          FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
                         params![user_id, model_id, window],
                         |row| {
                             Ok((
@@ -214,7 +244,8 @@ impl UserBudgetService {
                                 row.get::<_, Option<i64>>(1)?,
                                 row.get::<_, Option<i64>>(2)?,
                                 row.get::<_, Option<i64>>(3)?,
-                                row.get::<_, i64>(4)?,
+                                row.get::<_, String>(4)?,
+                                row.get::<_, i64>(5)?,
                             ))
                         },
                     )
@@ -223,12 +254,12 @@ impl UserBudgetService {
                     "DELETE FROM user_budget_rules WHERE user_id = ?1 AND model_id IS ?2 AND window = ?3",
                     params![user_id, model_id, window],
                 )? == 1;
-                if let Some((requests, tokens, cost, concurrent, version)) = previous {
+                if let Some((requests, tokens, cost, concurrent, enforcement, version)) = previous {
                     connection.execute(
                         "INSERT INTO user_budget_rule_audit(
                             user_id, actor_id, model_id, window, action, max_requests,
-                            max_tokens, max_microdollars, max_concurrent, rule_version)
-                         VALUES (?1, ?2, ?3, ?4, 'remove', ?5, ?6, ?7, ?8, ?9)",
+                            max_tokens, max_microdollars, max_concurrent, enforcement, rule_version)
+                          VALUES (?1, ?2, ?3, ?4, 'remove', ?5, ?6, ?7, ?8, ?9, ?10)",
                         params![
                             user_id,
                             actor_id,
@@ -238,6 +269,7 @@ impl UserBudgetService {
                             tokens,
                             cost,
                             concurrent,
+                            enforcement,
                             version + 1,
                         ],
                     )?;
@@ -261,13 +293,14 @@ impl UserBudgetService {
             .call(move |connection| {
                 let mut statement = connection.prepare(
                     "SELECT id, model_id, window, max_requests, max_tokens,
-                            max_microdollars, max_concurrent, version
-                     FROM user_budget_rules WHERE user_id = ?1
-                     ORDER BY model_id IS NOT NULL, model_id, window",
+                            max_microdollars, max_concurrent, enforcement, version
+                      FROM user_budget_rules WHERE user_id = ?1
+                      ORDER BY model_id IS NOT NULL, model_id, window",
                 )?;
                 statement
                     .query_map([user_id], |row| {
                         let window: String = row.get(2)?;
+                        let enforcement: String = row.get(7)?;
                         Ok(UserBudgetRule {
                             id: row.get(0)?,
                             model_id: row.get(1)?,
@@ -276,7 +309,9 @@ impl UserBudgetService {
                             max_tokens: row.get(4)?,
                             max_microdollars: row.get(5)?,
                             max_concurrent: row.get(6)?,
-                            version: row.get(7)?,
+                            enforcement: BudgetEnforcement::parse(&enforcement)
+                                .unwrap_or(BudgetEnforcement::Estimated),
+                            version: row.get(8)?,
                         })
                     })?
                     .collect()
@@ -337,6 +372,94 @@ pub(crate) struct BudgetPermit {
     pub month_start: String,
 }
 
+/// Conservative price provenance recorded with each held reservation.
+/// Only the operator tariff is ever recorded; estimated holds keep a NULL
+/// price source so estimates can never be mistaken for a hard price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BudgetPriceSource {
+    OperatorTariff,
+}
+
+impl BudgetPriceSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::OperatorTariff => "operator_tariff",
+        }
+    }
+}
+
+/// Per-request worst-case proof assembled by the coordinator from admission
+/// facts (input/output bounds), the operator tariff snapshot for the selected
+/// provider, and nothing else. Every value is an immutable request property;
+/// the publication transaction only decides against it, so there is no
+/// check-then-dispatch gap.
+///
+/// Formal accounting assumptions (M008 corrective):
+/// - `input_worst_case_tokens` is a byte-length upper bound on input tokens
+///   (every token encodes at least one ingress byte), never an average.
+/// - `requested_output_tokens` is the caller's explicit compatible output cap
+///   for the request surface; `None` means unbounded or unusable.
+/// - One attempt can bill at most `input + output`. The initial hold covers
+///   two attempt-equivalents (the concrete attempt plus one selector/overhead
+///   equivalent, because selector dispatch is unattributed by design); each
+///   retry extends by one equivalent after re-checking.
+/// - Hard USD converts worst-case tokens through the operator-configured
+///   provider tariff only. Estimator fallbacks (EWMA/family/global generic)
+///   are never a hard price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetProof {
+    pub input_worst_case_tokens: i64,
+    pub requested_output_tokens: Option<i64>,
+    pub tariff_microdollars_per_million_tokens: Option<i64>,
+}
+
+/// Initial hard-mode hold covers two single-attempt equivalents; each retry
+/// extends by one equivalent after re-checking limits.
+const HARD_HOLD_INITIAL_EQUIVALENTS: i128 = 2;
+const HARD_HOLD_RETRY_EQUIVALENTS: i128 = 1;
+const MICRODOLLARS_PER_MILLION_TOKENS: i128 = 1_000_000;
+
+/// Token/cost amounts the publication transaction must hold, plus the
+/// auditable worst-case facts recorded with the reservation row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BudgetHold {
+    pub tokens: i64,
+    pub microdollars: i64,
+    pub enforcement: BudgetEnforcement,
+    pub bound_tokens: i64,
+    pub bound_microdollars: i64,
+    pub price_source: Option<BudgetPriceSource>,
+}
+
+/// Worst-case tokens billable by one attempt under a hard rule, or `None`
+/// when no conservative bound exists (unbounded output, negative input,
+/// non-positive or overflowing total). `None` always fails closed.
+fn single_attempt_worst_tokens(proof: &BudgetProof) -> Option<i64> {
+    let output = proof.requested_output_tokens.filter(|value| *value > 0)?;
+    if proof.input_worst_case_tokens < 0 {
+        return None;
+    }
+    let single = i128::from(proof.input_worst_case_tokens) + i128::from(output);
+    if single <= 0 || single > i128::from(i64::MAX) {
+        return None;
+    }
+    Some(single as i64)
+}
+
+/// Worst-case microdollars for `tokens` at the operator tariff, or `None`
+/// when the tariff is unknown/negative or the conversion overflows.
+fn tariff_cost_microdollars(tokens: i64, tariff_per_million: Option<i64>) -> Option<i64> {
+    let tariff = tariff_per_million.filter(|value| *value >= 0)?;
+    if tokens < 0 {
+        return None;
+    }
+    let cost = i128::from(tokens) * i128::from(tariff) / MICRODOLLARS_PER_MILLION_TOKENS;
+    if cost > i128::from(i64::MAX) {
+        return None;
+    }
+    Some(cost as i64)
+}
+
 pub(crate) struct BudgetReservationSpec<'a> {
     pub request_id: i64,
     pub user_id: &'a str,
@@ -344,15 +467,23 @@ pub(crate) struct BudgetReservationSpec<'a> {
     pub tokens: i64,
     pub microdollars: i64,
     pub ttl_seconds: i64,
+    pub hold: BudgetHold,
 }
 
 struct BudgetCheckRequest<'a> {
     user_id: &'a str,
-    model_id: &'a str,
     permit: &'a BudgetPermit,
-    tokens: i64,
-    microdollars: i64,
     new_request: bool,
+}
+
+struct LoadedBudgetRule {
+    scope_model: Option<String>,
+    window: String,
+    max_requests: Option<i64>,
+    max_tokens: Option<i64>,
+    max_cost: Option<i64>,
+    max_concurrent: Option<i64>,
+    enforcement: BudgetEnforcement,
 }
 
 pub(crate) struct BudgetAttemptSettlement {
@@ -373,6 +504,10 @@ pub(crate) struct BudgetAttemptSettlement {
 pub(crate) enum BudgetCheck {
     Allowed,
     Exceeded,
+    /// A hard rule applies but its worst case is unprovable (unbounded
+    /// output, unknown tariff, overflow). Callers must deny before any
+    /// upstream submission; this is never coerced into an estimate.
+    NotEnforceable,
 }
 
 pub(crate) fn check_initial(
@@ -381,7 +516,8 @@ pub(crate) fn check_initial(
     model_id: &str,
     tokens: i64,
     microdollars: i64,
-) -> Result<(BudgetCheck, BudgetPermit), tokio_rusqlite::rusqlite::Error> {
+    proof: Option<&BudgetProof>,
+) -> Result<(BudgetCheck, BudgetPermit, BudgetHold), tokio_rusqlite::rusqlite::Error> {
     let (policy_version, day_start, month_start): (i64, String, String) = connection.query_row(
         "SELECT revision, date('now'), strftime('%Y-%m-01', 'now') FROM policy_state WHERE singleton = 1",
         [],
@@ -392,16 +528,27 @@ pub(crate) fn check_initial(
         day_start,
         month_start,
     };
+    let rules = load_matching_rules(connection, user_id, model_id)?;
+    let hard_token = rules
+        .iter()
+        .any(|rule| rule.enforcement == BudgetEnforcement::Hard && rule.max_tokens.is_some());
+    let hard_cost = rules
+        .iter()
+        .any(|rule| rule.enforcement == BudgetEnforcement::Hard && rule.max_cost.is_some());
+    let Some(hold) = hold_for_admission(tokens, microdollars, proof, hard_token, hard_cost) else {
+        return Ok((BudgetCheck::NotEnforceable, permit, BudgetHold::empty()));
+    };
     let exceeded = rules_exceeded(
         connection,
         BudgetCheckRequest {
             user_id,
-            model_id,
             permit: &permit,
-            tokens,
-            microdollars,
             new_request: true,
         },
+        &rules,
+        hold,
+        tokens,
+        microdollars,
     )?;
     Ok((
         if exceeded {
@@ -410,7 +557,125 @@ pub(crate) fn check_initial(
             BudgetCheck::Allowed
         },
         permit,
+        hold,
     ))
+}
+
+/// Resolve the amounts a new logical request must hold. Hard dimensions use
+/// the proof's worst case; estimated dimensions keep the estimator's
+/// projection. Returns `None` when a hard dimension is unprovable.
+fn hold_for_admission(
+    estimate_tokens: i64,
+    estimate_microdollars: i64,
+    proof: Option<&BudgetProof>,
+    hard_token: bool,
+    hard_cost: bool,
+) -> Option<BudgetHold> {
+    let single = proof.and_then(single_attempt_worst_tokens);
+    let hold_tokens = if hard_token {
+        let single = single?;
+        checked_mul(single, HARD_HOLD_INITIAL_EQUIVALENTS)?
+    } else {
+        estimate_tokens.max(0)
+    };
+    let hold_microdollars = if hard_cost {
+        let tariff = proof.and_then(|proof| proof.tariff_microdollars_per_million_tokens);
+        // Cost-hard-only rules still need attempt-equivalent coverage on the
+        // token side before converting through the tariff.
+        let cost_tokens = if hard_token {
+            hold_tokens
+        } else {
+            checked_mul(estimate_tokens.max(0), HARD_HOLD_INITIAL_EQUIVALENTS)?
+        };
+        tariff_cost_microdollars(cost_tokens, tariff)?
+    } else {
+        estimate_microdollars.max(0)
+    };
+    let enforcement = if hard_token || hard_cost {
+        BudgetEnforcement::Hard
+    } else {
+        BudgetEnforcement::Estimated
+    };
+    Some(BudgetHold {
+        tokens: hold_tokens,
+        microdollars: hold_microdollars,
+        enforcement,
+        bound_tokens: if hard_token { hold_tokens } else { 0 },
+        bound_microdollars: if hard_cost { hold_microdollars } else { 0 },
+        price_source: if hard_cost {
+            Some(BudgetPriceSource::OperatorTariff)
+        } else {
+            None
+        },
+    })
+}
+
+/// Resolve the additional amounts one retry attempt must extend. The initial
+/// hold already covers two equivalents, so each retry adds one single-attempt
+/// equivalent under hard rules after re-checking limits.
+fn hold_for_retry(
+    estimate_tokens: i64,
+    estimate_microdollars: i64,
+    proof: Option<&BudgetProof>,
+    hard_token: bool,
+    hard_cost: bool,
+) -> Option<BudgetHold> {
+    let single = proof.and_then(single_attempt_worst_tokens);
+    let extra_tokens = if hard_token {
+        let single = single?;
+        checked_mul(single, HARD_HOLD_RETRY_EQUIVALENTS)?
+    } else {
+        estimate_tokens.max(0)
+    };
+    let extra_microdollars = if hard_cost {
+        let tariff = proof.and_then(|proof| proof.tariff_microdollars_per_million_tokens);
+        let cost_tokens = if hard_token {
+            extra_tokens
+        } else {
+            checked_mul(estimate_tokens.max(0), HARD_HOLD_RETRY_EQUIVALENTS)?
+        };
+        tariff_cost_microdollars(cost_tokens, tariff)?
+    } else {
+        estimate_microdollars.max(0)
+    };
+    let enforcement = if hard_token || hard_cost {
+        BudgetEnforcement::Hard
+    } else {
+        BudgetEnforcement::Estimated
+    };
+    Some(BudgetHold {
+        tokens: extra_tokens,
+        microdollars: extra_microdollars,
+        enforcement,
+        bound_tokens: if hard_token { extra_tokens } else { 0 },
+        bound_microdollars: if hard_cost { extra_microdollars } else { 0 },
+        price_source: if hard_cost {
+            Some(BudgetPriceSource::OperatorTariff)
+        } else {
+            None
+        },
+    })
+}
+
+fn checked_mul(value: i64, factor: i128) -> Option<i64> {
+    let product = i128::from(value) * factor;
+    if product < 0 || product > i128::from(i64::MAX) {
+        return None;
+    }
+    Some(product as i64)
+}
+
+impl BudgetHold {
+    fn empty() -> Self {
+        Self {
+            tokens: 0,
+            microdollars: 0,
+            enforcement: BudgetEnforcement::Estimated,
+            bound_tokens: 0,
+            bound_microdollars: 0,
+            price_source: None,
+        }
+    }
 }
 
 pub(crate) fn check_retry(
@@ -418,7 +683,8 @@ pub(crate) fn check_retry(
     request_id: i64,
     tokens: i64,
     microdollars: i64,
-) -> Result<BudgetCheck, tokio_rusqlite::rusqlite::Error> {
+    proof: Option<&BudgetProof>,
+) -> Result<(BudgetCheck, BudgetHold), tokio_rusqlite::rusqlite::Error> {
     let reservation = connection
         .query_row(
             "SELECT user_id, model_id, policy_version, day_start, month_start
@@ -436,29 +702,45 @@ pub(crate) fn check_retry(
         )
         .optional()?;
     let Some((user_id, model_id, policy_version, day_start, month_start)) = reservation else {
-        return Ok(BudgetCheck::Exceeded);
+        return Ok((BudgetCheck::Exceeded, BudgetHold::empty()));
     };
     let permit = BudgetPermit {
         policy_version,
         day_start,
         month_start,
     };
+    // Hard flags come from the current rules, not the original permit: a
+    // rule promoted to hard after admission must still gate the retry.
+    let rules = load_matching_rules(connection, &user_id, &model_id)?;
+    let hard_token = rules
+        .iter()
+        .any(|rule| rule.enforcement == BudgetEnforcement::Hard && rule.max_tokens.is_some());
+    let hard_cost = rules
+        .iter()
+        .any(|rule| rule.enforcement == BudgetEnforcement::Hard && rule.max_cost.is_some());
+    let Some(hold) = hold_for_retry(tokens, microdollars, proof, hard_token, hard_cost) else {
+        return Ok((BudgetCheck::NotEnforceable, BudgetHold::empty()));
+    };
     let exceeded = rules_exceeded(
         connection,
         BudgetCheckRequest {
             user_id: &user_id,
-            model_id: &model_id,
             permit: &permit,
-            tokens,
-            microdollars,
             new_request: false,
         },
+        &rules,
+        hold,
+        tokens,
+        microdollars,
     )?;
-    Ok(if exceeded {
-        BudgetCheck::Exceeded
-    } else {
-        BudgetCheck::Allowed
-    })
+    Ok((
+        if exceeded {
+            BudgetCheck::Exceeded
+        } else {
+            BudgetCheck::Allowed
+        },
+        hold,
+    ))
 }
 
 pub(crate) fn insert_reservation(
@@ -469,9 +751,10 @@ pub(crate) fn insert_reservation(
     connection.execute(
         "INSERT INTO user_budget_reservations(
             request_id, user_id, model_id, policy_version, day_start, month_start,
-            held_tokens, held_microdollars, status, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active',
-                 datetime('now', '+' || ?9 || ' seconds'))",
+            held_tokens, held_microdollars, status, expires_at,
+            enforcement, bound_tokens, bound_microdollars, price_source)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active',
+                  datetime('now', '+' || ?9 || ' seconds'), ?10, ?11, ?12, ?13)",
         params![
             spec.request_id,
             spec.user_id,
@@ -482,6 +765,10 @@ pub(crate) fn insert_reservation(
             spec.tokens,
             spec.microdollars,
             spec.ttl_seconds,
+            spec.hold.enforcement.as_str(),
+            spec.hold.bound_tokens,
+            spec.hold.bound_microdollars,
+            spec.hold.price_source.map(BudgetPriceSource::as_str),
         ],
     )?;
     Ok(())
@@ -507,33 +794,64 @@ pub(crate) fn extend_reservation(
     Ok(())
 }
 
+fn load_matching_rules(
+    connection: &tokio_rusqlite::rusqlite::Connection,
+    user_id: &str,
+    model_id: &str,
+) -> Result<Vec<LoadedBudgetRule>, tokio_rusqlite::rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT model_id, window, max_requests, max_tokens, max_microdollars,
+                max_concurrent, enforcement
+          FROM user_budget_rules WHERE user_id = ?1 AND (model_id IS NULL OR model_id = ?2)",
+    )?;
+    statement
+        .query_map(params![user_id, model_id], |row| {
+            let enforcement: String = row.get(6)?;
+            Ok(LoadedBudgetRule {
+                scope_model: row.get(0)?,
+                window: row.get(1)?,
+                max_requests: row.get(2)?,
+                max_tokens: row.get(3)?,
+                max_cost: row.get(4)?,
+                max_concurrent: row.get(5)?,
+                enforcement: BudgetEnforcement::parse(&enforcement)
+                    .unwrap_or(BudgetEnforcement::Estimated),
+            })
+        })?
+        .collect()
+}
+
 fn rules_exceeded(
     connection: &tokio_rusqlite::rusqlite::Connection,
     check: BudgetCheckRequest<'_>,
+    rules: &[LoadedBudgetRule],
+    hold: BudgetHold,
+    estimate_tokens: i64,
+    estimate_microdollars: i64,
 ) -> Result<bool, tokio_rusqlite::rusqlite::Error> {
-    let mut statement = connection.prepare(
-        "SELECT model_id, window, max_requests, max_tokens, max_microdollars, max_concurrent
-         FROM user_budget_rules WHERE user_id = ?1 AND (model_id IS NULL OR model_id = ?2)",
-    )?;
-    let rules = statement
-        .query_map(params![check.user_id, check.model_id], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                row.get::<_, Option<i64>>(5)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-    for (scope_model, window, max_requests, max_tokens, max_cost, max_concurrent) in rules {
-        let window_start = if window == "day" {
+    for rule in rules {
+        let window_start = if rule.window == "day" {
             &check.permit.day_start
         } else {
             &check.permit.month_start
         };
-        let model_filter = scope_model.as_deref();
+        let window = rule.window.as_str();
+        // A hard row enforces its token/cost caps against the worst-case
+        // hold; an estimated row keeps the estimator projection even when a
+        // sibling hard row reserves worst-case amounts. Request and
+        // concurrency caps are strictly enforceable in both modes.
+        let token_add = if rule.enforcement == BudgetEnforcement::Hard && rule.max_tokens.is_some()
+        {
+            hold.tokens
+        } else {
+            estimate_tokens.max(0)
+        };
+        let cost_add = if rule.enforcement == BudgetEnforcement::Hard && rule.max_cost.is_some() {
+            hold.microdollars
+        } else {
+            estimate_microdollars.max(0)
+        };
+        let model_filter = rule.scope_model.as_deref();
         let (used_requests, used_tokens, used_cost): (i64, i64, i64) =
             if let Some(model) = model_filter {
                 connection.query_row(
@@ -587,13 +905,17 @@ fn rules_exceeded(
                 )?
             };
         let request_hold = i64::from(check.new_request);
-        if max_requests
+        if rule
+            .max_requests
             .is_some_and(|limit| exceeds(limit, used_requests, held_requests, request_hold))
-            || max_tokens
-                .is_some_and(|limit| exceeds(limit, used_tokens, held_tokens, check.tokens))
-            || max_cost
-                .is_some_and(|limit| exceeds(limit, used_cost, held_cost, check.microdollars))
-            || max_concurrent
+            || rule
+                .max_tokens
+                .is_some_and(|limit| exceeds(limit, used_tokens, held_tokens, token_add))
+            || rule
+                .max_cost
+                .is_some_and(|limit| exceeds(limit, used_cost, held_cost, cost_add))
+            || rule
+                .max_concurrent
                 .is_some_and(|limit| exceeds(limit, active_count, i64::from(check.new_request), 0))
         {
             return Ok(true);

@@ -719,6 +719,7 @@ pub struct ProviderConfig {
     pub models_endpoint: Option<ProviderModelsEndpointConfig>,
     pub static_models: Vec<ProviderStaticModelConfig>,
     pub verify: ProviderVerifyConfig,
+    pub budget: ProviderBudgetConfig,
 }
 impl Default for ProviderConfig {
     fn default() -> Self {
@@ -752,8 +753,26 @@ impl Default for ProviderConfig {
             models_endpoint: None,
             static_models: Vec::new(),
             verify: ProviderVerifyConfig::default(),
+            budget: ProviderBudgetConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ProviderBudgetConfig {
+    /// Operator-specified conservative price ceiling for this provider in
+    /// microdollars per million tokens. This is the ONLY price source hard
+    /// USD budget rules trust: estimator fallbacks (EWMA, family, generic)
+    /// are never a hard price. `None` means unknown price, so hard USD
+    /// admission fails closed for this provider. `Some(0)` is an explicit
+    /// verified zero-cost declaration (free local model), distinct from
+    /// unknown. Applies to every model dispatched to this provider, so it
+    /// must cover the most expensive one; per-model refinement is a
+    /// non-goal. Live-reloadable like other provider fields; each admitted
+    /// request snapshots the tariff of its generation, and in-flight holds
+    /// keep their original reservation.
+    pub max_microdollars_per_million_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1957,6 +1976,15 @@ fn validate_provider(
                 "provider stream timeout is invalid",
             ));
         }
+    }
+    if provider
+        .budget
+        .max_microdollars_per_million_tokens
+        .is_some_and(|tariff| tariff > i64::MAX as u64)
+    {
+        return Err(ConfigError::validation(
+            "provider.budget.max_microdollars_per_million_tokens must fit in a signed 64-bit integer",
+        ));
     }
     if provider
         .stream_timeouts

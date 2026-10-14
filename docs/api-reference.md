@@ -122,8 +122,16 @@ target with `user_id`. The response identifies UTC calendar windows and reports
 integer microdollars as modeled/estimated usage, with separate
 `provider_reported_microdollars`, `local_estimated_microdollars`, and
 `reservation_fallback_microdollars` totals. Unknown usage consumes the
-reserved estimate and increments an explicit unknown counter. This API does
+reserved estimate and increments an explicit unknown counter. Each rule carries
+an `enforcement` mode: `hard` rules enforce a provable worst-case bound (token
+rules require an explicit caller output cap; USD rules require an
+operator-configured provider tariff) and deny otherwise, while `estimated`
+rules use approximate holds and are never a guaranteed cap. This API does
 not represent invoices or exact charges for flat-rate provider accounts.
+Requests denied because a hard rule cannot be bounded return HTTP 429 with a
+stable machine-readable message
+(`User budget hard limit is not enforceable for this request`) before any
+upstream submission.
 
 With `[dashboard].enabled = true`, the dashboard also serves browser-session
 pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and

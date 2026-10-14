@@ -119,18 +119,37 @@ request-cost labels used elsewhere in EggPool: `provider_reported`,
 
 ## Local User Budgets
 
-Per-user request, token-estimate, estimated-microdollar, and concurrent
-request budgets are separate from these model context/output limits. Operators
-manage rules with `eggpool users budget set`; daily and monthly periods use
-UTC calendar windows. A hold is reserved atomically before provider dispatch,
-and retries extend the same logical request hold. User usage distinguishes
-provider-reported cost, local estimates, and conservative reservation fallback.
-Token holds use a bounded request-size estimate and observed terminal usage is
-settled afterward. The current estimate does not prove a requested maximum
-output bound for every protocol. Microdollar holds use EggPool's estimated
-pricing projection, including fallback rates when no model price is known;
-they do not prove a hard cost ceiling for unpriced self-hosted models, and are
-not an exact charge or invoice for flat-rate providers. Treat those dimensions
-as operational estimates until explicit output-bound and local-price admission
-gates are configured. See the [API reference](api-reference.md#authentication)
-for the authenticated `/api/user-budget` view.
+Per-user request, token, microdollar, and concurrent request budgets are
+separate from these model context/output limits. Operators manage rules with
+`eggpool users budget set` (`--enforcement hard|estimated`, default
+`estimated`); daily and monthly periods use UTC calendar windows. A hold is
+reserved atomically before provider dispatch, and retries extend the same
+logical request hold. User usage distinguishes provider-reported cost, local
+estimates, and conservative reservation fallback.
+
+Each rule is explicitly `hard` or `estimated`, visible in the dashboard,
+`GET /api/user-budget`, and the stored audit history. Pre-existing rules are
+`estimated` and stay that way until an administrator explicitly promotes them;
+nothing is silently upgraded to a guarantee.
+
+- `estimated` (default): token holds use a bounded request-size estimate and
+  microdollar holds use EggPool's estimated pricing projection, including
+  fallback rates when no model price is known. These are operational
+  approximations, not an exact charge or invoice for flat-rate providers, and
+  not a hard ceiling.
+- `hard`: token rules admit only requests carrying an explicit caller output
+  cap compatible with the request surface, and reserve a conservative
+  worst-case bound (admission input bound plus that cap, covering the concrete
+  attempt plus selector overhead; retries extend per attempt after
+  re-checking). USD rules additionally require an operator-configured
+  conservative tariff (`[providers.<id>.budget]
+  max_microdollars_per_million_tokens`); unpriced providers fail closed, an
+  explicit zero tariff means verified free, and estimator fallbacks are never
+  a hard price. Requests that cannot be bounded — unbounded output, unknown
+  tariff, arithmetic overflow — are denied with a stable 429
+  (`User budget hard limit is not enforceable for this request`) before any
+  upstream submission. Observed provider usage above a hard hold is settled
+  visibly, never clamped.
+
+See the [API reference](api-reference.md#authentication) for the
+authenticated `/api/user-budget` view.

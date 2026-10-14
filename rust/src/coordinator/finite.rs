@@ -36,7 +36,8 @@ use super::{
     FinalizationError, FinalizationIdentity, FinalizationOutcome, FinalizationResult,
     FinalizationSupervisor, PostCommitInterruption, PublicationError, PublicationInput,
     PublicationOutcome, PublicationService, PublishedAttempt, RetryPolicy,
-    RuntimePublicationReceipt, WireResolver, release_claim, retry_after_from_headers,
+    RuntimePublicationReceipt, WireResolver, budget_proof_for_claim, release_claim,
+    retry_after_from_headers,
 };
 
 const MAX_CLIENT_ERROR_BYTES: usize = 512;
@@ -391,6 +392,7 @@ impl FiniteRequest {
             raw_body_bytes: compact.raw_body_bytes,
             reservation_tokens: compact.reservation_tokens,
             context_tokens: compact.context_tokens,
+            budget_facts: compact.budget_facts,
         };
         Ok(Self {
             proxy_request_id: proxy_request_id.into(),
@@ -434,6 +436,7 @@ impl FiniteRequest {
             raw_body_bytes: compact.raw_body_bytes,
             reservation_tokens: compact.reservation_tokens,
             context_tokens: compact.context_tokens,
+            budget_facts: compact.budget_facts,
         };
         Ok(Self {
             proxy_request_id: proxy_request_id.into(),
@@ -788,13 +791,24 @@ impl FiniteCoordinator {
                 .iter()
                 .any(|candidate| !attempted.contains(&candidate.surface()));
             let upstream_protocol = protocol_for_surface(candidate.surface());
-            let publication_input = PublicationInput::new(
+            let mut publication_input = PublicationInput::new(
                 request.proxy_request_id.clone(),
                 request.client_surface.protocol(),
                 upstream_protocol,
                 false,
                 i64::from(attempt_number),
             );
+            // Worst-case budget proof travels with the publication so the
+            // atomic hold decision sees the admission output bound and the
+            // operator tariff for the selected provider. The tariff snapshot
+            // belongs to this generation; in-flight holds keep theirs.
+            publication_input.budget_proof = Some(budget_proof_for_claim(
+                &claim,
+                provider
+                    .budget
+                    .max_microdollars_per_million_tokens
+                    .and_then(|tariff| i64::try_from(tariff).ok()),
+            ));
             let published = match self
                 .publication
                 .publish_attributed(claim, publication_input, request.attribution.clone())

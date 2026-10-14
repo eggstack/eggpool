@@ -41,7 +41,7 @@ pub(in crate::server::dashboard) fn render_users_admin(
                 html_escape(csrf), html_escape(&user.id)
             );
             let budget_form = format!(
-                "<details><summary>Set budget</summary><form method=\"post\" action=\"/admin/users/budget\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens (estimated) <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars (estimated) <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"user_id\" value=\"{}\"><button type=\"submit\">Save budget</button></form></details>",
+                "<details><summary>Set budget</summary><form method=\"post\" action=\"/admin/users/budget\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Mode <select name=\"enforcement\"><option value=\"estimated\">Estimated (approximate hold)</option><option value=\"hard\">Hard (prove worst-case bound or deny)</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"user_id\" value=\"{}\"><button type=\"submit\">Save budget</button></form></details><p>Hard token rules admit only requests with an explicit caller output cap and reserve a worst-case bound; hard USD rules additionally require an operator tariff in provider configuration. Estimated rules use approximate holds and are never a hard ceiling.</p>",
                 html_escape(csrf), html_escape(&user.id)
             );
             let token_form = format!(
@@ -127,9 +127,10 @@ pub(in crate::server::dashboard) fn render_my_usage(
         .iter()
         .map(|rule| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 html_escape(rule.model_id.as_deref().unwrap_or("All models")),
                 html_escape(rule.window.as_str()),
+                html_escape(rule.enforcement.as_str()),
                 rule.max_requests
                     .map_or_else(|| "—".to_owned(), |value| value.to_string()),
                 rule.max_tokens
@@ -155,7 +156,7 @@ pub(in crate::server::dashboard) fn render_my_usage(
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Token and microdollar values are estimates; estimated USD is not an invoice or a guaranteed cap for unpriced models. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2><table><thead><tr><th>Model</th><th>Window</th><th>Max requests</th><th>Max tokens (estimated)</th><th>Max microdollars (estimated)</th><th>Max concurrent</th></tr></thead><tbody>{rule_rows}</tbody></table><h2>Settled usage</h2><table><thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table><p><a href=\"/my-account\">My account</a></p></section>",
+        "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Rules marked <code>hard</code> enforce a provable worst-case bound (token rules need an explicit caller output cap; USD rules need an operator tariff) and deny otherwise; rules marked <code>estimated</code> use approximate holds and are not a guaranteed cap. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2><table><thead><tr><th>Model</th><th>Window</th><th>Mode</th><th>Max requests</th><th>Max tokens</th><th>Max microdollars</th><th>Max concurrent</th></tr></thead><tbody>{rule_rows}</tbody></table><h2>Settled usage</h2><table><thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table><p><a href=\"/my-account\">My account</a></p></section>",
         html_escape(user)
     )
 }

@@ -5,14 +5,18 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        DurableFinalizer, FinalizationData, FinalizationOutcome, PublicationError,
-        PublicationInput, PublicationOutcome, PublicationService,
+        DurableFinalizer, EndpointError, FinalizationData, FinalizationOutcome, PublicationError,
+        PublicationInput, PublicationOutcome, PublicationService, endpoint_error_body,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     identity::{AuthenticatedPrincipal, PrincipalKind},
     quota::{AccountQuota, QuotaEstimator},
     routing::{EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
-    user_budget::{BudgetLimits, BudgetWindow, UserBudgetError, UserBudgetService},
+    user_budget::{
+        BudgetEnforcement, BudgetLimits, BudgetProof, BudgetWindow, UserBudgetError,
+        UserBudgetService,
+    },
+    wire::ir::ClientSurface,
 };
 
 struct Fixture {
@@ -305,11 +309,19 @@ async fn rules_validate_admin_scope_and_usage_reads_are_bounded() {
                 tokens: Some(50_000),
                 microdollars: Some(10_000),
                 concurrent: Some(1),
+                ..Default::default()
             },
         )
         .await
         .expect("admin rule is recorded");
-    assert_eq!(budgets.rules("budget-member").await.unwrap().len(), 1);
+    let recorded = budgets.rules("budget-member").await.unwrap();
+    assert_eq!(recorded.len(), 1);
+    // Compatibility default: rules created without an explicit mode are
+    // estimated, never silently hard.
+    assert_eq!(
+        recorded[0].enforcement,
+        eggpool::user_budget::BudgetEnforcement::Estimated
+    );
     assert!(
         budgets
             .remove_rule(
@@ -473,4 +485,597 @@ async fn concurrent_limit_releases_only_after_terminal_settlement() {
         .release_all()
         .expect("test claim is released");
     fixture.database.close().await.unwrap();
+}
+
+// M008 hard-mode helpers: the proof carries admission output bounds plus the
+// operator tariff snapshot, mirroring what the coordinators assemble from
+// the claim snapshot and provider configuration.
+fn hard_input(
+    proxy_id: &str,
+    attempt: i64,
+    input_worst: i64,
+    output: Option<i64>,
+    tariff: Option<i64>,
+) -> PublicationInput {
+    let mut input = PublicationInput::new(proxy_id, "openai", "openai", false, attempt);
+    input.budget_proof = Some(BudgetProof {
+        input_worst_case_tokens: input_worst,
+        requested_output_tokens: output,
+        tariff_microdollars_per_million_tokens: tariff,
+    });
+    input
+}
+
+async fn hard_rule(budgets: &UserBudgetService, model_id: Option<&str>, limits: BudgetLimits) {
+    budgets
+        .set_rule(
+            "budget-admin",
+            "budget-member",
+            model_id,
+            BudgetWindow::Day,
+            limits,
+        )
+        .await
+        .expect("admin sets hard budget rule");
+}
+
+fn hard_limits(tokens: Option<i64>, microdollars: Option<i64>) -> BudgetLimits {
+    BudgetLimits {
+        tokens,
+        microdollars,
+        enforcement: BudgetEnforcement::Hard,
+        ..Default::default()
+    }
+}
+
+async fn table_counts(database: &Database) -> (i64, i64) {
+    database
+        .call(|connection| {
+            Ok((
+                connection.query_row("SELECT count(*) FROM requests", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                connection.query_row(
+                    "SELECT count(*) FROM user_budget_reservations",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await
+        .unwrap()
+}
+
+async fn reservation_hold(
+    database: &Database,
+    request_id: i64,
+) -> (i64, i64, String, i64, i64, Option<String>) {
+    database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT held_tokens, held_microdollars, enforcement,
+                        bound_tokens, bound_microdollars, price_source
+                 FROM user_budget_reservations WHERE request_id = ?1",
+                [request_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn hard_token_rule_admits_bounded_request_with_worst_case_hold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000), None)).await;
+    // Single-attempt worst case is 100 + 50 = 150; the initial hold covers
+    // two attempt-equivalents (concrete attempt plus selector overhead).
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-token", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("bounded request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+    let (held_tokens, held_micros, enforcement, bound_tokens, bound_micros, price) =
+        reservation_hold(&fixture.database, request_id).await;
+    assert_eq!(held_tokens, 300);
+    assert_eq!(enforcement, "hard");
+    assert_eq!(bound_tokens, 300);
+    // Token-hard leaves the cost dimension on the estimator projection: no
+    // hard price is claimed.
+    assert!(held_micros > 0, "estimated cost projection is preserved");
+    assert_eq!(bound_micros, 0);
+    assert_eq!(price, None);
+    assert_eq!(table_counts(&fixture.database).await, (1, 1));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_token_rule_denies_unbounded_request_without_upstream_io() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let result = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-unbounded", 1, 100, None, None),
+            Some(attribution()),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(PublicationError::BudgetNotEnforceable)),
+        "unbounded hard-token request must be denied as not enforceable, got {result:?}"
+    );
+    // Denial happens inside the publication transaction before claim
+    // conversion, so no request row exists for later dispatch.
+    assert_eq!(table_counts(&fixture.database).await, (0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_token_rule_denies_missing_proof_without_upstream_io() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let result = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            PublicationInput::new("budget-hard-noproof", "openai", "openai", false, 1),
+            Some(attribution()),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(PublicationError::BudgetNotEnforceable)
+    ));
+    assert_eq!(table_counts(&fixture.database).await, (0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_usd_rule_denies_unknown_price_without_upstream_io() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(None, Some(1_000_000))).await;
+    // A bounded token proof with no operator tariff still cannot prove a
+    // hard USD ceiling: estimator fallbacks are never a hard price.
+    let result = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-noprice", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(PublicationError::BudgetNotEnforceable)
+    ));
+    assert_eq!(table_counts(&fixture.database).await, (0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_usd_rule_admits_with_operator_tariff_hold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(None, Some(1_000_000))).await;
+    // Cost-hard-only: 42 estimate tokens times two equivalents at $3/MTok.
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-tariff", 1, 100, Some(50), Some(3_000_000)),
+            Some(attribution()),
+        )
+        .await
+        .expect("tariff-backed hard-USD request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    assert_eq!(
+        reservation_hold(&fixture.database, published.identity.db_request_id).await,
+        (
+            42,
+            252,
+            "hard".to_owned(),
+            0,
+            252,
+            Some("operator_tariff".to_owned())
+        )
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_token_and_usd_rule_admits_with_combined_worst_case_hold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(100_000), Some(1_000_000))).await;
+    // Worst case 150 tokens times two equivalents; USD converts the same
+    // 300-token bound at $3/MTok.
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-combined", 1, 100, Some(50), Some(3_000_000)),
+            Some(attribution()),
+        )
+        .await
+        .expect("combined hard rule publishes within bounds");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    assert_eq!(
+        reservation_hold(&fixture.database, published.identity.db_request_id).await,
+        (
+            300,
+            900,
+            "hard".to_owned(),
+            300,
+            900,
+            Some("operator_tariff".to_owned())
+        )
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_retry_denies_extension_beyond_remaining_budget() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(400), None)).await;
+    let service = PublicationService::new(fixture.database.clone());
+    let first = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-retry", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("initial 300-token hold fits the 400-token cap");
+    let PublicationOutcome::Published(first) = first else {
+        panic!("first attempt should publish");
+    };
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_failed_attempt(
+            &first.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::UpstreamError,
+                status_code: Some(502),
+                ..FinalizationData::default()
+            },
+            Some(first.claim),
+        )
+        .await
+        .expect("failed attempt keeps the logical hold");
+    // Retry would extend by one 150-token equivalent: 300 + 150 > 400.
+    let retry = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-retry", 2, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await;
+    assert!(
+        matches!(retry, Err(PublicationError::BudgetExceeded)),
+        "retry beyond remaining hard budget must be denied, got {retry:?}"
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_retry_extends_within_remaining_budget() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000), None)).await;
+    let service = PublicationService::new(fixture.database.clone());
+    let first = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-retry-ok", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("initial hold publishes");
+    let PublicationOutcome::Published(first) = first else {
+        panic!("first attempt should publish");
+    };
+    let proxy_request_id = first.identity.proxy_request_id.clone();
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_failed_attempt(
+            &first.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::UpstreamError,
+                status_code: Some(502),
+                ..FinalizationData::default()
+            },
+            Some(first.claim),
+        )
+        .await
+        .expect("failed attempt keeps the logical hold");
+    let retry = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input(&proxy_request_id, 2, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("retry within remaining hard budget publishes");
+    let PublicationOutcome::Published(retry) = retry else {
+        panic!("retry should publish");
+    };
+    // 300 initial + 150 retry extension, all inside the 1000-token cap.
+    let (held, _, _, _, _, _) =
+        reservation_hold(&fixture.database, retry.identity.db_request_id).await;
+    assert_eq!(held, 450);
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_overflow_and_nonpositive_output_fail_closed() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(i64::MAX), None)).await;
+    let service = PublicationService::new(fixture.database.clone());
+    for (label, output) in [
+        ("overflow", Some(i64::MAX)),
+        ("zero", Some(0)),
+        ("negative", Some(-5)),
+    ] {
+        let result = service
+            .publish_attributed(
+                claim(&fixture).await,
+                hard_input("budget-hard-overflow", 1, 100, output, None),
+                Some(attribution()),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(PublicationError::BudgetNotEnforceable)),
+            "{label} output bound must fail closed, got {result:?}"
+        );
+    }
+    assert_eq!(table_counts(&fixture.database).await, (0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn hard_settlement_records_provider_overrun_without_hiding() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(100_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-overrun", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    // The provider reports 400 tokens against a 300-token worst-case hold.
+    // Settlement must charge what was observed, not silently clamp to held.
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_request(
+            &published.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                input_tokens: 200,
+                output_tokens: 200,
+                input_tokens_reported: Some(200),
+                output_tokens_reported: Some(200),
+                ..FinalizationData::default()
+            },
+            Some(published.claim),
+        )
+        .await
+        .expect("terminal settlement records observed usage");
+    let usage = budgets
+        .usage("budget-member", "2026-01-01", 10)
+        .await
+        .expect("usage reads succeed");
+    assert!(
+        usage
+            .iter()
+            .all(|bucket| bucket.token_count == 400 && bucket.unknown_token_requests == 0),
+        "observed overrun must be charged visibly, got {usage:?}"
+    );
+    let observed = fixture
+        .database
+        .call({
+            let request_id = published.identity.db_request_id;
+            move |connection| {
+                connection.query_row(
+                    "SELECT observed_tokens FROM user_budget_reservations WHERE request_id = ?1",
+                    [request_id],
+                    |row| row.get::<_, i64>(0),
+                )
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(observed, 400);
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn zero_cost_tariff_admits_hard_usd_without_hold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(None, Some(1_000_000))).await;
+    // An explicit zero tariff is a verified free declaration, distinct from
+    // unknown price: hard USD admits with a zero hold.
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-hard-zerocost", 1, 100, Some(50), Some(0)),
+            Some(attribution()),
+        )
+        .await
+        .expect("verified zero-cost request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    assert_eq!(
+        reservation_hold(&fixture.database, published.identity.db_request_id).await,
+        (
+            42,
+            0,
+            "hard".to_owned(),
+            0,
+            0,
+            Some("operator_tariff".to_owned())
+        )
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn endpoint_error_maps_not_enforceable_to_stable_429() {
+    let error = EndpointError::BudgetNotEnforceable;
+    assert_eq!(error.status().as_u16(), 429);
+    assert_eq!(
+        error.to_string(),
+        "User budget hard limit is not enforceable for this request"
+    );
+    let body = endpoint_error_body(ClientSurface::ChatCompletions, &error.to_string());
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("error body is JSON");
+    assert_eq!(
+        parsed["error"]["message"].as_str(),
+        Some("User budget hard limit is not enforceable for this request")
+    );
+}
+
+#[tokio::test]
+async fn admission_extracts_per_surface_output_bounds() {
+    use eggpool::request::{AdmissionOptions, admit_compact_request, admit_request};
+
+    let chat_capped =
+        br#"{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":128}"#;
+    let admitted = admit_request(
+        chat_capped,
+        AdmissionOptions {
+            client_surface: ClientSurface::ChatCompletions,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("chat admission succeeds");
+    assert_eq!(admitted.budget_facts.requested_output_tokens, Some(128));
+    assert!(admitted.budget_facts.input_worst_case_tokens >= chat_capped.len() as i64);
+
+    let chat_uncapped = br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#;
+    let admitted = admit_request(
+        chat_uncapped,
+        AdmissionOptions {
+            client_surface: ClientSurface::ChatCompletions,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("uncapped chat admission succeeds");
+    assert_eq!(admitted.budget_facts.requested_output_tokens, None);
+
+    let chat_zero = br#"{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":0}"#;
+    let admitted = admit_request(
+        chat_zero,
+        AdmissionOptions {
+            client_surface: ClientSurface::ChatCompletions,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("zero-cap chat admission succeeds structurally");
+    // An unusable cap degrades to unbounded: hard rules fail closed on it.
+    assert_eq!(admitted.budget_facts.requested_output_tokens, None);
+
+    let responses_capped = br#"{"model":"m","input":"hi","max_output_tokens":64}"#;
+    let admitted = admit_request(
+        responses_capped,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("responses admission succeeds");
+    assert_eq!(admitted.budget_facts.requested_output_tokens, Some(64));
+
+    let messages_capped =
+        br#"{"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}"#;
+    let admitted = admit_request(
+        messages_capped,
+        AdmissionOptions {
+            client_surface: ClientSurface::Messages,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("messages admission succeeds");
+    assert_eq!(admitted.budget_facts.requested_output_tokens, Some(32));
+
+    let compact_capped = br#"{"model":"m","input":"history","max_output_tokens":16}"#;
+    let compact = admit_compact_request(
+        compact_capped,
+        AdmissionOptions {
+            client_surface: ClientSurface::Responses,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("compact admission succeeds");
+    assert_eq!(compact.budget_facts.requested_output_tokens, Some(16));
+}
+
+#[tokio::test]
+async fn provider_tariff_overflow_is_rejected_by_config_validation() {
+    let mut config = Config::default();
+    let mut provider = eggpool::config::ProviderConfig {
+        id: "provider-a".into(),
+        base_url: "https://provider.invalid/v1".into(),
+        protocols: vec!["openai".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    provider.accounts.push(eggpool::config::AccountConfig {
+        name: "budget-account".into(),
+        ..Default::default()
+    });
+    provider.budget.max_microdollars_per_million_tokens = Some(u64::MAX);
+    config.providers.insert("provider-a".into(), provider);
+    assert!(
+        config.validate().is_err(),
+        "tariffs beyond i64 must be rejected"
+    );
+
+    let mut config = Config::default();
+    let mut provider = eggpool::config::ProviderConfig {
+        id: "provider-a".into(),
+        base_url: "https://provider.invalid/v1".into(),
+        protocols: vec!["openai".into()],
+        auth: eggpool::config::ProviderAuthConfig {
+            mode: "none".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    provider.accounts.push(eggpool::config::AccountConfig {
+        name: "budget-account".into(),
+        ..Default::default()
+    });
+    provider.budget.max_microdollars_per_million_tokens = Some(3_000_000);
+    config.providers.insert("provider-a".into(), provider);
+    config.validate().expect("in-range tariff validates");
 }

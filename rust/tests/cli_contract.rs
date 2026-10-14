@@ -228,4 +228,55 @@ fn local_user_budget_commands_parse_with_bounded_windows() {
         ])
         .is_err()
     );
+    // M008: enforcement mode is explicit and bounded; the default stays
+    // estimated so existing rules are never silently promoted to hard.
+    let estimated = Cli::try_parse_from([
+        "eggpool",
+        "users",
+        "budget",
+        "set",
+        "member-a",
+        "--window",
+        "day",
+        "--max-tokens",
+        "100000",
+    ])
+    .expect("default enforcement parses");
+    let rendered = format!("{:?}", estimated.command);
+    assert!(
+        rendered.contains("enforcement: \"estimated\""),
+        "budget set defaults to estimated enforcement: {rendered}"
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-tokens",
+            "100000",
+            "--enforcement",
+            "hard",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "budget",
+            "set",
+            "member-a",
+            "--window",
+            "day",
+            "--max-tokens",
+            "100000",
+            "--enforcement",
+            "guaranteed",
+        ])
+        .is_err()
+    );
 }

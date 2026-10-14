@@ -74,6 +74,10 @@ pub struct PublicationInput {
     pub streamed: bool,
     pub attempt_number: i64,
     pub reservation_ttl_seconds: i64,
+    /// Worst-case budget proof assembled by the coordinator from admission
+    /// facts and the operator tariff snapshot. `None` preserves the
+    /// estimated-mode path; hard rules fail closed on `None`.
+    pub budget_proof: Option<crate::user_budget::BudgetProof>,
 }
 
 impl PublicationInput {
@@ -91,6 +95,7 @@ impl PublicationInput {
             streamed,
             attempt_number,
             reservation_ttl_seconds: DEFAULT_RESERVATION_TTL_SECONDS,
+            budget_proof: None,
         }
     }
 }
@@ -195,6 +200,8 @@ pub enum PublicationError {
     PrincipalChanged,
     #[error("user budget limit reached")]
     BudgetExceeded,
+    #[error("user budget hard limit is not enforceable for this request")]
+    BudgetNotEnforceable,
     #[error("replacement attempt cannot publish before the prior attempt converges")]
     PriorAttemptNotFinalized,
     #[error("claim transition failed: {0}")]
@@ -252,6 +259,7 @@ enum TransactionOutcome {
     Conflict,
     PrincipalChanged,
     BudgetExceeded,
+    BudgetNotEnforceable,
     PriorAttemptNotFinalized,
 }
 
@@ -347,6 +355,9 @@ impl PublicationService {
         if matches!(transaction, TransactionOutcome::BudgetExceeded) {
             return self.rollback_after_error(claim, PublicationError::BudgetExceeded);
         }
+        if matches!(transaction, TransactionOutcome::BudgetNotEnforceable) {
+            return self.rollback_after_error(claim, PublicationError::BudgetNotEnforceable);
+        }
 
         let TransactionOutcome::Created {
             request_id,
@@ -376,6 +387,9 @@ impl PublicationService {
                 }
                 TransactionOutcome::BudgetExceeded => {
                     self.rollback_after_error(claim, PublicationError::BudgetExceeded)
+                }
+                TransactionOutcome::BudgetNotEnforceable => {
+                    self.rollback_after_error(claim, PublicationError::BudgetNotEnforceable)
                 }
                 TransactionOutcome::Created { .. } => Err(PublicationError::InvalidInput(
                     "unexpected created outcome after duplicate-publication branch".to_owned(),
@@ -674,20 +688,27 @@ impl PublicationService {
                         }
                     }
                     if attribution.user_id.is_some() {
-                        if crate::user_budget::check_retry(
+                        let (retry_check, retry_hold) = crate::user_budget::check_retry(
                             connection,
                             request_id,
                             projected_tokens,
                             projected_cost,
-                        )? == crate::user_budget::BudgetCheck::Exceeded
-                        {
-                            return Ok(TransactionOutcome::BudgetExceeded);
+                            input.budget_proof.as_ref(),
+                        )?;
+                        match retry_check {
+                            crate::user_budget::BudgetCheck::Exceeded => {
+                                return Ok(TransactionOutcome::BudgetExceeded);
+                            }
+                            crate::user_budget::BudgetCheck::NotEnforceable => {
+                                return Ok(TransactionOutcome::BudgetNotEnforceable);
+                            }
+                            crate::user_budget::BudgetCheck::Allowed => {}
                         }
                         crate::user_budget::extend_reservation(
                             connection,
                             request_id,
-                            projected_tokens,
-                            projected_cost,
+                            retry_hold.tokens,
+                            retry_hold.microdollars,
                         )?;
                     }
                     // A retry attempt on an existing pending request is valid
@@ -716,18 +737,25 @@ impl PublicationService {
                     );
                 }
 
-                let budget_permit = if let Some(user_id) = attribution.user_id.as_deref() {
-                    let (check, permit) = crate::user_budget::check_initial(
+                let budget_hold = if let Some(user_id) = attribution.user_id.as_deref() {
+                    let (check, permit, hold) = crate::user_budget::check_initial(
                         connection,
                         user_id,
                         &model_id,
                         projected_tokens,
                         projected_cost,
+                        input.budget_proof.as_ref(),
                     )?;
-                    if check == crate::user_budget::BudgetCheck::Exceeded {
-                        return Ok(TransactionOutcome::BudgetExceeded);
+                    match check {
+                        crate::user_budget::BudgetCheck::Exceeded => {
+                            return Ok(TransactionOutcome::BudgetExceeded);
+                        }
+                        crate::user_budget::BudgetCheck::NotEnforceable => {
+                            return Ok(TransactionOutcome::BudgetNotEnforceable);
+                        }
+                        crate::user_budget::BudgetCheck::Allowed => {}
                     }
-                    Some(permit)
+                    Some((permit, hold))
                 } else {
                     None
                 };
@@ -762,8 +790,8 @@ impl PublicationService {
                     ],
                 )?;
                 let request_id = connection.last_insert_rowid();
-                if let (Some(user_id), Some(permit)) =
-                    (attribution.user_id.as_deref(), budget_permit.as_ref())
+                if let (Some(user_id), Some((permit, hold))) =
+                    (attribution.user_id.as_deref(), budget_hold.as_ref())
                 {
                     crate::user_budget::insert_reservation(
                         connection,
@@ -771,9 +799,10 @@ impl PublicationService {
                             request_id,
                             user_id,
                             model_id: &model_id,
-                            tokens: projected_tokens,
-                            microdollars: projected_cost,
+                            tokens: hold.tokens,
+                            microdollars: hold.microdollars,
                             ttl_seconds: input.reservation_ttl_seconds,
+                            hold: *hold,
                         },
                         permit,
                     )?;
@@ -1003,8 +1032,24 @@ fn fail_sql(
     Ok(())
 }
 
+/// Assemble the worst-case budget proof for one selected claim from the
+/// admission-carried facts on its snapshot and the operator tariff snapshot
+/// for the selected provider. `None` tariff means unknown price: hard USD
+/// rules fail closed downstream, estimated rules are unaffected.
+pub(crate) fn budget_proof_for_claim(
+    claim: &SelectionClaim,
+    tariff_microdollars_per_million_tokens: Option<i64>,
+) -> crate::user_budget::BudgetProof {
+    crate::user_budget::BudgetProof {
+        input_worst_case_tokens: claim.budget_input_worst_case_tokens(),
+        requested_output_tokens: claim.budget_requested_output_tokens(),
+        tariff_microdollars_per_million_tokens,
+    }
+}
+
 /// Deterministic routing-decision persistence facts prepared from a borrowed
 /// selection snapshot before the database gate is acquired (persistence
+/// M002). Only the bounded scalar/JSON facts that `insert_attempt_rows`
 /// M002). Only the bounded scalar/JSON facts that `insert_attempt_rows`
 /// persists travel into the worker transaction; the full runtime snapshot
 /// never crosses that boundary.
