@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 ready | Principal and durable-attribution contract accepted for M004; physical qualification remains assigned to M007. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closing | M004 implementation committed; closure evidence and M005 unblock audit in progress; physical qualification remains assigned to M007. |
 
 ## Dependency-ready implementation plans
 
@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M004 — profile-based model authorization | active | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | M003 conditionally closed; implement effective profiles and concrete-dispatch authorization. |
+| On-prem user access | M004 — profile-based model authorization | closing | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | Implementation `f537df4`; compile/test gates passed; closure record and dependency audit in progress. |
 
 
 ## Blocked work
