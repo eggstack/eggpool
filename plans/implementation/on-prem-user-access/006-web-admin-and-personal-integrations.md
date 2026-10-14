@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 006 — Web administration and personal client integration
 
-Status: active
+Status: closing
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 
