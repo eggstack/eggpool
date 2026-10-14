@@ -46,7 +46,7 @@ complete, while the physical capacity claims in its plan remain unqualified.
 | Installer/SBC/stability/service tooling | focused tooling selection | pass | 51 passed; fixtures were disposable and did not target a real install or hardware. |
 | 1/5/10/25/49 named-user capacity and explicit concurrency levels | physical qualification | not measured | No Pi 5/Le Potato target and no paired ordinary-Linux performance run were available. No capacity claim is made. |
 | M006 browser parity screenshots/interaction manifest | frozen dashboard oracle/browser harness | not run | Oracle worktree and required environment paths were unavailable. See M006 closure. |
-| Hosted CI | GitHub Actions | not run | All stated verification below is local. No hosted CI result is claimed. |
+| Hosted CI | GitHub Actions runs `38497388228`, `38497388225`, `38497388244` | pass | Main CI, Linux Bash/macOS zsh installer qualification, and cargo-deny dependency audit completed successfully after push. |
 
 ## 3. Production and qualification artifact manifest
 
@@ -63,7 +63,7 @@ request body, or prompt in the artifact.
 
 ## 4. Verification executed
 
-All commands below ran locally; hosted CI was not run.
+Commands below ran locally. Hosted workflow results are recorded separately.
 
 ### Commands run
 
@@ -100,7 +100,7 @@ git diff --check
 - Offline Q007 run: pass, 7/7 requests, 3/3 catalog models; 7 durable completions, no pending request, no active reservation; 4.832 seconds wall duration on the local host.
 - Ruff: 59 files formatted, checks passed. Pyright: 0 errors, 0 warnings, 0 informations.
 - Release documentation validator: pass, 7 docs checked. Runtime package-boundary validator: pass. `git diff --check`: pass.
-- The full Rust suite passed before the final test-only member-role denial assertion; the focused M006 browser target passed again after that assertion. No-default tests were not run because CI only requires no-default check/Clippy and the full default serial suite passed.
+- The full Rust suite passed before the final test-only member-role denial assertion; the focused M006 browser target passed again after that assertion. The pushed head then passed hosted CI run `38497388228` in 7m33s, including format, default/no-default Clippy/check, serial workspace tests, Ruff, Pyright, and the full tooling suite. Hosted installer qualification `38497388225` passed on Linux Bash and macOS zsh; dependency audit `38497388244` passed. No-default tests were not run because CI requires no-default check/Clippy only.
 
 ## 5. Invariant review
 
@@ -158,7 +158,6 @@ trusted-proxy configuration.
 | Medium | A restored schema-54 backup and cross-version identity/policy restore were not exercised. | Existing v11-to-v60 migration coverage and backup tests do not prove the exact schema-54 restore path. | Restore an actual protected schema-54 fixture into the target build; verify user IDs, credential revocation semantics, policy, budget holds/rollups, audit, and documented rollback to the matching old binary. |
 | Medium | M005 exact output-token and unknown-price USD caps, global instance ceilings, crash/restore qualification, and overhead measurements remain open. | Some user limits are estimates and there is no instance-wide aggregate cap; M006 UI labels those limits as estimates. | Preserve the M005 conditions; create a separate corrective plan if exact enforceable limits are required. |
 | Medium | M006 browser parity captures for newly added admin/member pages were not run. | Route/security evidence passes, but matched screenshot/interaction evidence is absent. | Run the pinned dashboard oracle/browser parity harness and record matched pages or intentional differences. |
-| Medium | Hosted CI was not observed. | Local verification is comprehensive but no remote CI status is claimed. | Confirm branch CI after push; record its actual result separately from this local closure. |
 
 ## 11. Roadmap disposition
 
