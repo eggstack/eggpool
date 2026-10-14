@@ -338,4 +338,4 @@ A ready plan is not an implemented capability.
 | M010 | ready | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | — | Hard: M008 and M009 closures accepted; global user-budget state machine stable. |
 | M011 | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | — | Independent implementation; operational browser/oracle artifacts required for full closure. |
 | M012 | blocked | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | — | Hard: M008–M011 closures; operational physical hardware evidence. |
-| M013 | active | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | — | Corrective to closed M008: one-line transcode-protocol restoration plus bridge guard; no hard dep beyond M008/M009 closures. |
+| M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |

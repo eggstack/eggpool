@@ -1,6 +1,6 @@
 # On-Prem User Access M013 — Transcode-eligibility admission bridge corrective
 
-Status: active
+Status: implemented
 
 Repository baseline: `ea56ddcb` on `plans/on-prem-small-team-user-access` (PR #7), schema 62, M008/M009 closures accepted.
 

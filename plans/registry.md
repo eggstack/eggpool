@@ -63,7 +63,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M013 — transcode-eligibility admission bridge corrective | active | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | Corrective to closed M008 (hosted Q007 transcode failure); one-line restoration plus bridge guard. |
 
 
 ## Blocked work
@@ -85,6 +84,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M013 — transcode-eligibility admission bridge | closed — one-line restoration, bridge guard (fail-without/pass-with proven), Q007 loopback green, 993 serial Rust tests + 994 no-default + 166 tooling tests; only low findings | `plans/closure/on-prem-user-access/013-status.md`, implementation `4699ce11` |
 | On-prem user access M009 — global-instance budget intersection | closed — migration 62 instance scope, atomic cross-user last-slot holds (2/10/49 identities), no-bypass intersection incl. legacy keys, user-independent history, 992 serial Rust tests + 993 no-default tests; only low findings | `plans/closure/on-prem-user-access/009-status.md`, implementation `04264a18` |
 | On-prem user access M008 — enforceable token/cost admission | closed — migration 61 enforcement mode + worst-case holds, proof-or-reject admission with zero-upstream denial, operator tariff trust boundary, 978 serial Rust tests + 979 no-default tests; only low findings (conservative over-reservation, provider-wide tariff, no HTTP-level denial test) | `plans/closure/on-prem-user-access/008-status.md`, implementation `0149a6c8` + carriage `ca77c547` |
 | On-prem user access M007 — small-team qualification, migration, and release hardening | conditionally closed — local 964 serial Rust tests + 166 tooling tests; hosted CI `38497388228`, installer qualification `38497388225`, and dependency audit `38497388244` pass; seven synthetic loopback requests complete with no reservations left; physical Pi/Le Potato capacity and schema-54 restore remain unmeasured, so no 49-user or concurrency claim | `plans/closure/on-prem-user-access/007-status.md`, local artifact `artifacts/qualification/on-prem-user-access-m007-local.json` |
