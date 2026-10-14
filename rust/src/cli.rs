@@ -155,6 +155,57 @@ pub enum UsersCommand {
     Revoke(UserNameArgs),
     /// Retire legacy access after public dashboard access is disabled.
     EnableManaged,
+    /// Create and assign model-policy profiles during the CLI-only M004 phase.
+    #[command(subcommand)]
+    Policy(UsersPolicyCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersPolicyCommand {
+    /// Create a named profile with an allow-all or default-deny base.
+    Create(PolicyProfileCreateArgs),
+    /// Add or replace one exact canonical or model/provider rule.
+    Rule(PolicyProfileRuleArgs),
+    /// Assign a profile to one local user.
+    Assign(PolicyProfileAssignArgs),
+    /// Set a permitted client recommendation, or clear it when omitted.
+    Prefer(PolicyProfilePreferArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PolicyProfileCreateArgs {
+    pub id: String,
+    pub name: String,
+    #[arg(value_parser = ["allow", "deny"])]
+    pub default_effect: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PolicyProfileRuleArgs {
+    pub profile_id: String,
+    pub model_id: String,
+    #[arg(value_parser = ["allow", "deny"])]
+    pub effect: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PolicyProfileAssignArgs {
+    pub username: String,
+    pub profile_id: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct PolicyProfilePreferArgs {
+    pub profile_id: String,
+    pub model_id: Option<String>,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, clap::Args)]

@@ -60,8 +60,18 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool users revoke USER` | Revoke all personal API tokens for a user |
 | `eggpool users reset-password USER` | Reset a local password and revoke that user's API tokens and browser sessions (`--password-stdin` supported) |
 | `eggpool users enable-managed` | Retire the legacy key path after clearing `[server].api_key`/`api_key_env` and setting `dashboard.public = false` |
+| `eggpool users policy create ID NAME allow\|deny` | Create an exact-rule model profile |
+| `eggpool users policy rule PROFILE MODEL allow\|deny` | Add or replace one exact model or `model/provider` rule |
+| `eggpool users policy assign USER PROFILE` | Assign a profile to a local user |
+| `eggpool users policy prefer PROFILE [MODEL]` | Set or clear a profile's allowed client recommendation |
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
+
+Policy commands are a local operator setup path until the admin dashboard
+offers profile editing. They write SQLite policy state directly; model IDs
+are exact and wildcards are rejected. `--actor ADMIN` records the active
+administrator responsible for each change. Restricted profiles should use
+`deny` as their default and add explicit allowed models.
 
 ## Maintenance
 

@@ -6,6 +6,7 @@ use eggpool::{
         MigrationRunner,
     },
     identity,
+    model_policy::ModelPolicyService,
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
     server::{ServerRuntime, ShutdownReason},
     web_session,
@@ -171,11 +172,24 @@ async fn provider_fixture(listener: TcpListener) {
 }
 
 async fn inference_request(address: std::net::SocketAddr, token: &str) -> String {
-    let body = br#"{"model":"attribution-model","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
+    inference_request_for_model(address, token, "attribution-model").await
+}
+
+async fn inference_request_for_model(
+    address: std::net::SocketAddr,
+    token: &str,
+    model: &str,
+) -> String {
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": false,
+    })
+    .to_string();
     let request = format!(
         "POST /v1/chat/completions HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nx-eggpool-user-id: spoofed-user\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
-        String::from_utf8_lossy(body)
+        body
     );
     let mut stream = TcpStream::connect(address).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -186,6 +200,23 @@ async fn inference_request(address: std::net::SocketAddr, token: &str) -> String
     )
     .await
     .expect("downstream response completes")
+    .unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+async fn get_request(address: std::net::SocketAddr, path: &str, token: &str) -> String {
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+    );
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        stream.read_to_end(&mut response),
+    )
+    .await
+    .expect("discovery response completes")
     .unwrap();
     String::from_utf8_lossy(&response).into_owned()
 }
@@ -208,6 +239,7 @@ async fn managed_inference_ignores_spoofed_user_headers_and_persists_token_owner
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_owned();
     config.server.api_key = None;
+    config.integrations.advertise_base_url = Some("https://pool.example/v1".to_owned());
     config.dashboard.public = false;
     config.models.startup_refresh = false;
     let provider = ProviderConfig {
@@ -274,6 +306,29 @@ async fn managed_inference_ignores_spoofed_user_headers_and_persists_token_owner
 
     let response = inference_request(address, &credential.token).await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    ModelPolicyService::new(database.clone())
+        .set_instance_denial("attribution-model", &admin.id, true)
+        .await
+        .unwrap();
+    let denied = inference_request(address, &credential.token).await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+    let qualified =
+        inference_request_for_model(address, &credential.token, "attribution-model/fixture").await;
+    assert!(qualified.starts_with("HTTP/1.1 403"), "{qualified}");
+    let models = get_request(address, "/v1/models", &credential.token).await;
+    assert!(models.starts_with("HTTP/1.1 200"), "{models}");
+    assert!(!models.contains("attribution-model"), "{models}");
+    let profile = get_request(address, "/api/integrations/v1/profile", &credential.token).await;
+    assert!(profile.starts_with("HTTP/1.1 200"), "{profile}");
+    assert!(
+        profile.to_ascii_lowercase().contains("etag: \""),
+        "{profile}"
+    );
+    assert!(
+        profile.contains("-p"),
+        "policy revision is in the ETag: {profile}"
+    );
+    assert!(!profile.contains("attribution-model"), "{profile}");
     let persisted = database
         .call(|connection| {
             connection.query_row(

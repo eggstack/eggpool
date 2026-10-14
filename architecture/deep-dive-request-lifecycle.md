@@ -36,7 +36,11 @@ adapts the response, and converges durable state.
   scopes, and auth epoch from SQLite; browser sessions resolve the same user
   and session identity; the staged shared-key path is explicitly marked
   `legacy_shared_key` with no downstream user ID. Request headers never set
-  the principal.
+  the principal. Managed user requests capture one immutable policy snapshot
+  before model resolution. Requested aliases, provider-qualified models,
+  selector models, and resolved concrete targets are checked against it before
+  concrete provider dispatch. Denial is a generic 403; policy reads fail
+  closed, and admitted work retains its snapshot.
   `finish_empty_transport_body` only drains provably bodyless requests.
 
 ## 2. Endpoint classification (one parse, one call)

@@ -87,7 +87,12 @@ Precedence: explicit `--base-url` wins, configured advertisement is next, and a 
 
 `configremote` is read-only: it never creates/rotates server keys, mutates config/transcoding, refreshes catalogs, or requires the service to be running. If the server key is missing it reports the prerequisite instead of manufacturing one. Output is secret-free (`EGGPOOL_API_KEY` reference only); `--format token` prints the raw `epc1` token and `--format json` prints the stable `eggpool.configremote/v1` object. Default human output prints version-pinned desktop bootstrap commands (see below); `--shell posix|powershell|all` selects the rendered shell (`auto` prints both), and `--no-bootstrap` prints the profile only.
 
-The token references `GET /api/integrations/v1/profile` (authenticated, revisioned) rather than embedding a model inventory, so it stays reusable as models change.
+The token references `GET /api/integrations/v1/profile` (authenticated,
+revisioned) rather than embedding a model inventory, so it stays reusable as
+models change. Managed users see only models allowed by their policy in the
+profile and `/v1/models`; dispatch enforces the same policy for concrete
+models, virtual aliases, and provider-qualified targets. The profile ETag
+includes the policy revision, so clients can refresh after an access change.
 
 ## Desktop Bootstrap
 

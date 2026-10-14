@@ -115,6 +115,8 @@ pub enum EndpointError {
     PublicationConflict,
     #[error("Authentication changed")]
     PrincipalChanged,
+    #[error("Model is not authorized")]
+    ModelForbidden,
     #[error("Routing claim failed")]
     Claim,
     #[error("Provider attempt failed")]
@@ -178,6 +180,7 @@ impl EndpointError {
             | Self::Admission => StatusCode::BAD_REQUEST,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::PrincipalChanged => StatusCode::UNAUTHORIZED,
+            Self::ModelForbidden => StatusCode::FORBIDDEN,
             Self::NoEligibleRoute | Self::Attempt => StatusCode::SERVICE_UNAVAILABLE,
             Self::Claim | Self::Finalization => StatusCode::INTERNAL_SERVER_ERROR,
             Self::MissingProvider { .. } | Self::MissingWireProfile { .. } | Self::Internal => {
@@ -287,6 +290,7 @@ pub struct InferenceState {
     max_body_bytes: usize,
     router: RoutingRouter,
     catalog_service: Option<Arc<CatalogService>>,
+    model_policy: Option<crate::model_policy::ModelPolicyService>,
 }
 
 impl std::fmt::Debug for InferenceState {
@@ -333,6 +337,31 @@ impl InferenceState {
         router: RoutingRouter,
         catalog_service: Option<Arc<CatalogService>>,
     ) -> Self {
+        Self::from_parts_with_model_policy(
+            finite,
+            streaming,
+            registry,
+            affinity,
+            known_providers,
+            max_body_bytes,
+            router,
+            catalog_service,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_model_policy(
+        finite: FiniteCoordinator,
+        streaming: StreamingCoordinator,
+        registry: ModelRouterRegistry,
+        affinity: Arc<ModelRouterAffinity>,
+        known_providers: BTreeSet<String>,
+        max_body_bytes: usize,
+        router: RoutingRouter,
+        catalog_service: Option<Arc<CatalogService>>,
+        model_policy: Option<crate::model_policy::ModelPolicyService>,
+    ) -> Self {
         let routing_inputs = [
             static_routing_facts(&known_providers, ClientSurface::ChatCompletions),
             static_routing_facts(&known_providers, ClientSurface::Responses),
@@ -348,6 +377,7 @@ impl InferenceState {
             max_body_bytes: max_body_bytes.max(1),
             router,
             catalog_service,
+            model_policy,
         }
     }
 
@@ -395,6 +425,53 @@ impl InferenceState {
         self.router.catalog_model_ids()
     }
 
+    pub fn discovery_model_ids(&self) -> Vec<String> {
+        let mut models = self.catalog_model_ids();
+        models.extend(self.registry.virtual_model_ids().map(str::to_owned));
+        models.sort();
+        models.dedup();
+        models
+    }
+
+    pub fn authorized_discovery_model_ids(
+        &self,
+        policy: &crate::model_policy::ModelPolicySnapshot,
+    ) -> Vec<String> {
+        let mut models = self
+            .catalog_model_ids()
+            .into_iter()
+            .filter(|model_id| policy.allows_catalog_id(model_id))
+            .collect::<Vec<_>>();
+        models.extend(self.authorized_virtual_model_ids(policy));
+        models.sort();
+        models.dedup();
+        models
+    }
+
+    pub fn authorized_virtual_model_ids(
+        &self,
+        policy: &crate::model_policy::ModelPolicySnapshot,
+    ) -> Vec<String> {
+        self.registry
+            .virtual_model_ids()
+            .filter(|model_id| {
+                let Some(router) = self.registry.get(model_id) else {
+                    return false;
+                };
+                policy.allows(model_id, None)
+                    && policy_allows_model_reference(
+                        policy,
+                        &router.selector_model,
+                        &self.known_providers,
+                    )
+                    && router.routes.iter().any(|route| {
+                        policy_allows_model_reference(policy, &route.model, &self.known_providers)
+                    })
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
     pub fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
     }
@@ -409,6 +486,10 @@ impl InferenceState {
 
     pub fn catalog_service(&self) -> Option<Arc<CatalogService>> {
         self.catalog_service.clone()
+    }
+
+    pub fn model_policy_service(&self) -> Option<crate::model_policy::ModelPolicyService> {
+        self.model_policy.clone()
     }
 }
 
@@ -591,10 +672,35 @@ async fn resolve_concrete(
     attribution: Option<&crate::identity::RequestAttribution>,
 ) -> Result<ResolvedInference, EndpointError> {
     let model_value = model_field(parsed.object()?)?;
+    let policy = match attribution.and_then(|principal| principal.user_id.as_deref()) {
+        Some(user_id) => Some(
+            state
+                .model_policy
+                .as_ref()
+                .ok_or(EndpointError::Internal)?
+                .snapshot(user_id)
+                .await
+                .map_err(|error| match error {
+                    crate::model_policy::ModelPolicyError::UserUnavailable => {
+                        EndpointError::PrincipalChanged
+                    }
+                    crate::model_policy::ModelPolicyError::InvalidPolicyInput
+                    | crate::model_policy::ModelPolicyError::PreferredModelDenied
+                    | crate::model_policy::ModelPolicyError::Database(_) => EndpointError::Internal,
+                })?,
+        ),
+        None => None,
+    };
+    let (requested_model, requested_provider) =
+        parse_provider_qualified_model(&model_value, &state.known_providers);
+    ensure_model_allowed(
+        policy.as_deref(),
+        &requested_model,
+        requested_provider.as_deref(),
+    )?;
     // Exact virtual-alias match comes before concrete provider parsing.
     let Some(router) = state.registry.get(model_value.trim()) else {
-        let (model_id, provider_id) =
-            parse_provider_qualified_model(&model_value, &state.known_providers);
+        let (model_id, provider_id) = (requested_model, requested_provider);
         // Strip any provider qualifier for the dispatched body: the upstream
         // does not understand EggPool's namespace. The qualifier survives as
         // a routing pin, matching the Python `provider_id` context field.
@@ -630,10 +736,41 @@ async fn resolve_concrete(
         session_header,
         proxy_request_id,
         attribution,
+        policy.as_deref(),
     )
     .await
 }
 
+fn ensure_model_allowed(
+    policy: Option<&crate::model_policy::ModelPolicySnapshot>,
+    model_id: &str,
+    provider_id: Option<&str>,
+) -> Result<(), EndpointError> {
+    if policy.is_some_and(|policy| !policy.allows(model_id, provider_id)) {
+        return Err(EndpointError::ModelForbidden);
+    }
+    Ok(())
+}
+
+fn ensure_concrete_model_allowed(
+    policy: Option<&crate::model_policy::ModelPolicySnapshot>,
+    model_name: &str,
+    known_providers: &BTreeSet<String>,
+) -> Result<(), EndpointError> {
+    let (model_id, provider_id) = parse_provider_qualified_model(model_name, known_providers);
+    ensure_model_allowed(policy, &model_id, provider_id.as_deref())
+}
+
+fn policy_allows_model_reference(
+    policy: &crate::model_policy::ModelPolicySnapshot,
+    model_name: &str,
+    known_providers: &BTreeSet<String>,
+) -> bool {
+    let (model_id, provider_id) = parse_provider_qualified_model(model_name, known_providers);
+    policy.allows(&model_id, provider_id.as_deref())
+}
+
+#[allow(clippy::too_many_arguments)] // Keeps immutable request, identity, and policy facts explicit.
 async fn resolve_virtual(
     state: &InferenceState,
     surface: ClientSurface,
@@ -642,6 +779,7 @@ async fn resolve_virtual(
     session_header: Option<&str>,
     proxy_request_id: &str,
     attribution: Option<&crate::identity::RequestAttribution>,
+    policy: Option<&crate::model_policy::ModelPolicySnapshot>,
 ) -> Result<ResolvedInference, EndpointError> {
     // Build the early canonical view for the semantic prompt and affinity
     // identity. Admission here is bounded by the same body ceiling.
@@ -655,6 +793,7 @@ async fn resolve_virtual(
     let selector = SemanticSelector::new(state.finite.clone(), known)
         .with_virtual_check(move |model| registry_virtual.is_virtual(model))
         .with_attribution(attribution.map(|principal| principal.selector_child(proxy_request_id)));
+    ensure_concrete_model_allowed(policy, &router.selector_model, &state.known_providers)?;
     if router.sticky
         && let Some(identity) = identity
     {
@@ -674,7 +813,7 @@ async fn resolve_virtual(
             crate::model_router::AffinityDecisionSource::Selector => SelectionSource::Selector,
             crate::model_router::AffinityDecisionSource::Default => SelectionSource::Default,
         };
-        return finish_virtual_resolution(
+        let resolved = finish_virtual_resolution(
             state,
             surface,
             parsed,
@@ -685,11 +824,13 @@ async fn resolve_virtual(
             source,
             resolution.cache_hit,
             resolution.decision.selector_attempts_for_metrics(),
-        );
+        )?;
+        ensure_concrete_model_allowed(policy, &resolved.concrete_model, &state.known_providers)?;
+        return Ok(resolved);
     }
     // Non-sticky, no session identity, or sticky=false bypass: direct select.
     let selection = selector.select(router, &canonical, surface).await;
-    finish_virtual_resolution(
+    let resolved = finish_virtual_resolution(
         state,
         surface,
         parsed,
@@ -700,11 +841,11 @@ async fn resolve_virtual(
         selection.source,
         false,
         selection.selector_attempts,
-    )
-    .map(|mut resolved| {
-        resolved.selector_latency_ms = selection.selector_latency_ms;
-        resolved
-    })
+    )?;
+    ensure_concrete_model_allowed(policy, &resolved.concrete_model, &state.known_providers)?;
+    let mut resolved = resolved;
+    resolved.selector_latency_ms = selection.selector_latency_ms;
+    Ok(resolved)
 }
 
 async fn selector_affinity_selection(
@@ -1256,7 +1397,7 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         retry_policy,
     );
     let known_providers: BTreeSet<String> = config.providers.keys().cloned().collect();
-    Ok(InferenceState::from_parts_with_catalog_service(
+    Ok(InferenceState::from_parts_with_model_policy(
         finite,
         streaming,
         model_registry,
@@ -1265,6 +1406,9 @@ pub(crate) async fn build_inference_state_with_shared_and_accounts(
         config.server.max_request_body_bytes as usize,
         router,
         Some(catalog_service),
+        Some(crate::model_policy::ModelPolicyService::new(
+            database.clone(),
+        )),
     ))
 }
 

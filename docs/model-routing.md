@@ -136,6 +136,28 @@ process restart. A safe rehash preserves entries only when the router's
 semantic fingerprint is unchanged; changing the selector, default, route
 target/description, or affinity policy causes the next request to reclassify.
 
+## Per-user model authorization
+
+Managed identities are checked against a versioned SQLite policy snapshot
+before provider/account routing. Policies use exact canonical model IDs and
+exact provider-qualified IDs in `model/provider` form. Instance-wide hard
+denials always win, then per-user overrides, profile rules, and the profile
+default. Restricted profiles default-deny models without an explicit allow;
+an administrator without an assigned profile retains unrestricted access.
+
+For a virtual alias, EggPool checks the alias, selector model, and resolved
+concrete route against the same snapshot. A selector, repair result, sticky
+affinity entry, provider qualifier, or compact Responses call cannot bypass a
+concrete-model denial. A denied request returns a generic 403 before the
+concrete model is submitted.
+
+`GET /v1/models` and `GET /api/integrations/v1/profile` return the catalog
+allowed for the authenticated user. The integration profile's HTTP ETag also
+contains the effective policy revision, so policy edits invalidate caches
+even when the visible model list stays the same. A stored preferred model is
+setup metadata. Inference authorizes the model a client explicitly requests
+and does not silently rewrite that request.
+
 ## Operations and troubleshooting
 
 The complete `[model_routers.*]` mapping is live-reloadable as one atomic field.

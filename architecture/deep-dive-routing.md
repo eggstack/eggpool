@@ -24,6 +24,16 @@ validates/compiles policy and `rust/src/model_router.rs` owns the Tokio affinity
 selector resolves a virtual model to one concrete model; it cannot pin an account, bypass
 health/quota, or reselect after submission.
 
+Downstream per-user model authorization is a separate earlier gate in
+`coordinator/endpoints.rs`. One immutable `ModelPolicySnapshot` is resolved for
+the authenticated user and checks the requested ID, the virtual alias, the
+selector model, and the resolved concrete route before ordinary account
+selection. Exact `model/provider` rules are supported; instance denials win
+over user overrides, which win over profile rules and defaults. An affinity
+hit and selector repair use the same request snapshot. A policy denial returns
+403 before the concrete provider attempt, while provider eligibility,
+health, quota, and fairness remain owned by this routing module.
+
 ## Eligibility gates
 
 `eligibility.rs::build_eligible_candidates` is the read-only gate. `EligibilityPolicy::from_config`

@@ -229,6 +229,14 @@ must-revalidate`, `ETag: "<revision>"` with `If-None-Match` → `304`.
 Errors are bounded and generic (`401`/`403` auth, `503` unavailable with no
 internal body).
 
+For a personal user principal, model rows and virtual aliases are filtered by
+the same effective model policy used at inference admission. The portable body
+revision remains its sanitized content hash; the HTTP ETag adds the persisted
+policy revision (`<content-revision>-p<policy-revision>`) so edits that do not
+change the visible projection still invalidate desktop caches. Restricted
+users with no assigned profile default-deny unknown models; administrators
+without an explicit profile retain the historical unrestricted default.
+
 ## OpenCode provider contracts
 
 Both variants render from the same conservative projection and never claim

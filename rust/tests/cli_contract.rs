@@ -128,3 +128,54 @@ fn configremote_parses_targets_and_options() {
     // Missing target fails closed.
     assert!(Cli::try_parse_from(["eggpool", "configremote"]).is_err());
 }
+
+#[test]
+fn local_model_policy_profile_commands_parse_with_exact_effects() {
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "create",
+            "restricted",
+            "Restricted",
+            "deny",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "rule",
+            "restricted",
+            "model-a/provider-a",
+            "allow",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "assign",
+            "member-a",
+            "restricted",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "policy",
+            "rule",
+            "restricted",
+            "model-a",
+            "maybe",
+        ])
+        .is_err()
+    );
+}

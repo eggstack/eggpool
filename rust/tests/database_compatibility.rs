@@ -39,8 +39,8 @@ async fn fresh_database_migrates_idempotently_and_preserves_pragmas() {
         .run()
         .await
         .expect("migrations apply");
-    assert_eq!(first.applied_versions.len(), 57);
-    assert_eq!(first.applied_this_run.len(), 57);
+    assert_eq!(first.applied_versions.len(), 58);
+    assert_eq!(first.applied_this_run.len(), 58);
     database
         .quick_check()
         .await
@@ -258,7 +258,7 @@ async fn python_historical_fixture_upgrades_and_repositories_round_trip() {
         .await
         .expect("current migrations apply");
     assert_eq!(state.applied_this_run.first(), Some(&12));
-    assert_eq!(state.applied_this_run.last(), Some(&57));
+    assert_eq!(state.applied_this_run.last(), Some(&58));
 
     let account = AccountRepository::new(&database)
         .get_by_name("historical-account")

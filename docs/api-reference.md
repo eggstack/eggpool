@@ -6,7 +6,7 @@ EggPool exposes OpenAI Chat Completions- and Anthropic Messages-compatible paths
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/models` | List available models |
+| `GET` | `/v1/models` | List models visible to the authenticated principal; managed users see only models allowed by their effective policy |
 | `POST` | `/v1/chat/completions` | OpenAI Chat Completions-compatible requests |
 | `POST` | `/v1/responses` | Stateless OpenAI Responses-compatible requests; canonical adaptation is allowed to eligible upstream surfaces |
 | `POST` | `/v1/responses/compact` | Bounded remote-compaction operation returning replacement history/checkpoint material; native compact-capable upstreams only, otherwise rejected before submission |
@@ -110,3 +110,7 @@ state-changing requests. In managed mode, `[dashboard].public` does not make
 dashboard or `/api/*` data public. Health, readiness, login, and static assets
 are unauthenticated. See [deployment](deployment.md) and [firewall](firewall.md)
 for operator-managed HTTPS termination, trusted proxy, and loopback guidance.
+Managed users receive policy-filtered model discovery, and runtime dispatch
+enforces the same rules even when a client submits a hidden model manually.
+The integration profile's ETag includes the policy revision so client caches
+refresh after an administrator changes model access.

@@ -18,7 +18,7 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0057_*.sql` = versions 1–57) with `checksums.json` (`files` map, 57 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0058_*.sql` = versions 1–58) with `checksums.json` (`files` map, 58 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
 
 `users`, `user_credentials`, and `user_access_state` hold usernames, password
 hashes, downstream roles, token digests, scopes, and explicit transition state.
@@ -40,6 +40,15 @@ semantic selector rows carry a parent proxy request ID and are excluded from
 logical user history queries. `identity::recent_user_requests` uses the
 `(user_id, started_at DESC, id DESC)` index, clamps reads to 500 rows, and
 returns content-free request facts.
+
+`model_policy` owns migration-58 profile and exact-model policy access. Policy
+mutations advance the singleton revision in the same SQLite transaction;
+database triggers also advance it when user state, role, or auth epoch changes.
+The bounded process cache checks that revision before serving a new request,
+then retains an immutable policy snapshot for the admitted request. Exact
+instance denial has highest precedence, followed by user override, assigned
+profile rule, and the role-safe default. Policy state remains separate from
+provider topology and provider-account quota.
 
 ## Publication and finalization transactions
 

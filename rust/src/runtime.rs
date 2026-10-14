@@ -749,12 +749,74 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                 .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!("Revoked {count} API credential(s) for {}.", args.username);
         }
+        crate::cli::UsersCommand::Policy(command) => {
+            use crate::cli::UsersPolicyCommand as Policy;
+            match command {
+                Policy::Create(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    crate::model_policy::ModelPolicyService::new(database.clone())
+                        .create_profile(&args.id, &args.name, &args.default_effect, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Model policy profile {} created.", args.id);
+                }
+                Policy::Rule(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    crate::model_policy::ModelPolicyService::new(database.clone())
+                        .set_profile_rule(&args.profile_id, &args.model_id, &args.effect, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Model rule for {} updated.", args.profile_id);
+                }
+                Policy::Assign(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    let users = crate::identity::list_users(&database)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    let user = users
+                        .iter()
+                        .find(|user| user.username.eq_ignore_ascii_case(&args.username))
+                        .ok_or_else(|| command_error(EXIT_VALIDATION, "user was not found"))?;
+                    crate::model_policy::ModelPolicyService::new(database.clone())
+                        .assign_profile(&user.id, &args.profile_id, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Model policy profile assigned to {}.", user.username);
+                }
+                Policy::Prefer(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    crate::model_policy::ModelPolicyService::new(database.clone())
+                        .set_profile_preference(&args.profile_id, args.model_id.as_deref(), &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!("Preferred model updated for {}.", args.profile_id);
+                }
+            }
+        }
     }
     database
         .close()
         .await
         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
     Ok(())
+}
+
+async fn policy_actor_id(
+    database: &crate::db::Database,
+    username: &str,
+) -> Result<String, BootstrapError> {
+    let users = crate::identity::list_users(database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    users
+        .into_iter()
+        .find(|user| {
+            user.username.eq_ignore_ascii_case(username)
+                && user.role == "admin"
+                && user.state == "active"
+        })
+        .map(|user| user.id)
+        .ok_or_else(|| command_error(EXIT_VALIDATION, "active administrator was not found"))
 }
 
 fn read_user_password(from_stdin: bool, confirm: bool) -> Result<String, BootstrapError> {

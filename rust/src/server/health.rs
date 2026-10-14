@@ -6,15 +6,27 @@ pub(super) async fn healthz() -> Response {
     json_response(StatusCode::OK, json!({"status": "ok"}))
 }
 
-pub(super) async fn models_api(State(state): State<AppState>) -> Response {
+pub(super) async fn models_api(
+    State(state): State<AppState>,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
+) -> Response {
     let lease = match state.runtime.acquire().await {
         Ok(lease) => lease,
         Err(_) => return degraded("runtime unavailable"),
     };
-    let data = lease
-        .generation()
-        .inference()
-        .catalog_model_ids()
+    let inference = lease.generation().inference();
+    let mut model_ids = inference.discovery_model_ids();
+    if let Some(user_id) = principal.user_id.as_deref() {
+        let Some(policy) = lease.generation().inference().model_policy_service() else {
+            return degraded("model policy unavailable");
+        };
+        let snapshot = match policy.snapshot(user_id).await {
+            Ok(snapshot) => snapshot,
+            Err(_) => return degraded("model policy unavailable"),
+        };
+        model_ids = inference.authorized_discovery_model_ids(&snapshot);
+    }
+    let data = model_ids
         .into_iter()
         .map(|model_id| {
             json!({
@@ -37,6 +49,7 @@ pub(super) async fn models_api(State(state): State<AppState>) -> Response {
 pub(super) async fn integration_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Extension(principal): Extension<crate::identity::AuthenticatedPrincipal>,
 ) -> Response {
     let lease = match state.runtime.acquire().await {
         Ok(lease) => lease,
@@ -58,7 +71,7 @@ pub(super) async fn integration_profile(
             );
         }
     };
-    let profile = match crate::operations::integrations::build_integration_profile(
+    let mut profile = match crate::operations::integrations::build_integration_profile(
         &config,
         &state.database,
         &base_url,
@@ -73,6 +86,57 @@ pub(super) async fn integration_profile(
             );
         }
     };
+    let mut policy_revision = None;
+    if let Some(user_id) = principal.user_id.as_deref() {
+        let Some(policy) = lease.generation().inference().model_policy_service() else {
+            return json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"detail": "integration profile unavailable"}),
+            );
+        };
+        let snapshot = match policy.snapshot(user_id).await {
+            Ok(snapshot) => snapshot,
+            Err(_) => {
+                return json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"detail": "integration profile unavailable"}),
+                );
+            }
+        };
+        let inference = lease.generation().inference();
+        let virtual_ids: std::collections::BTreeSet<String> = inference
+            .authorized_virtual_model_ids(&snapshot)
+            .into_iter()
+            .collect();
+        profile.models.extend(virtual_ids.iter().map(|model_id| {
+            eggpool_client_config::AgentModelProjection {
+                public_id: model_id.to_owned(),
+                display_name: model_id.to_owned(),
+                capabilities: eggpool_client_config::AgentModelCapabilities::conservative(),
+            }
+        }));
+        profile.models.retain(|model| {
+            if virtual_ids.contains(&model.public_id) {
+                snapshot.allows(&model.public_id, None)
+            } else {
+                snapshot.allows_catalog_id(&model.public_id)
+            }
+        });
+        profile = match eggpool_client_config::AgentIntegrationProfileV1::new(
+            &profile.base_url,
+            profile.models,
+            profile.capabilities,
+        ) {
+            Ok(profile) => profile,
+            Err(_) => {
+                return json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"detail": "integration profile unavailable"}),
+                );
+            }
+        };
+        policy_revision = Some(snapshot.revision());
+    }
     let body = match profile.canonical_json() {
         Ok(body) => body,
         Err(_) => {
@@ -88,14 +152,19 @@ pub(super) async fn integration_profile(
             json!({"detail": "integration profile unavailable"}),
         );
     }
-    let etag = format!("\"{}\"", profile.revision);
+    // The portable body's revision stays a content hash. HTTP caches also
+    // fence on policy revision, including same-content policy edits.
+    let etag_revision = policy_revision
+        .map(|revision| format!("{}-p{revision}", profile.revision))
+        .unwrap_or_else(|| profile.revision.clone());
+    let etag = format!("\"{etag_revision}\"");
     if let Some(if_none) = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
     {
         let matched = if_none.split(',').any(|candidate| {
             let candidate = candidate.trim().trim_start_matches("W/").trim_matches('"');
-            candidate == profile.revision
+            candidate == etag_revision
         });
         if matched {
             return (
