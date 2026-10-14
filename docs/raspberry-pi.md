@@ -234,6 +234,44 @@ scalars, and record unavailable hardware/tmpfs dimensions as `not measured`.
 This mode is diagnostic-only and does not justify a production durability or
 publication change by itself.
 
+### On-prem small-team envelope (M012, Pi 5 managed)
+
+On-prem milestone M012 qualified one managed Pi 5 as a solo/small-team
+envelope (closure `plans/closure/on-prem-user-access/012-status.md`). Target
+frozen at measurement: Raspberry Pi 5 Model B Rev 1.0, 4 cores, 8 GB RAM,
+Ubuntu 24.04.4, kernel 6.8.0-1065-raspi, ext4 on MMC (`mmcblk0p2`), release
+`0.8.2` built on-device (SHA-256 `8609119a…1538`, 34.9 MB, schema 62,
+WAL/NORMAL, one database worker, `threads = 1`). Inference and catalog use a
+synthetic administrator personal token; the shared server key is rejected for
+those surfaces (managed fencing), and `runtime-status` CLI plus the dashboard
+shell require a browser session (expected; full runtime projection remains
+available there per M011).
+
+Managed functional plus three fresh-root benchmark runs (30 samples,
+concurrency 4, 32-request batch) all pass with secret-free aggregates in
+`artifacts/qualification/on-prem-m012-pi5-functional.json` and
+`on-prem-m012-pi5-benchmark-run-{1,2,3}.json`: 25 functional cells, 145
+requests per benchmark run with zero pending/active reservations, backup,
+recovery, restart, and shutdown green. Sequential p50 is about 5 ms
+(finite/streaming) and 13–15 ms concurrent; streaming TTFT p95 is 4–19 ms.
+MMC tails reach seconds (concurrent p95 up to about 14 s, maxima similar) with
+no OOM, swap, drops, or WAL divergence; RSS stays about 20 MB baseline to
+20.8 MB peak. Argon2id logins (19 MiB, t=2, p=1, two slots) measure about
+51 ms p50 one-way idle and 71–73 ms two-way, unchanged under gentle inference
+load. Provisioning reaches 49 named users (one admin plus 48 members) at about
+51 ms p50 each with all spot logins passing; five personal tokens issue
+cleanly. Bounded concurrency 1/2/4/8 completes (1–2 at p50 5–6 ms with
+second-scale tails; 8 saturates at p50 about 4.1 s).
+
+Deploy accordingly: solo personal use is practical in one process with no
+extra services; up to 2–4 concurrent requests work with degraded tails; 8
+concurrent exceeds this Pi/MMC class. Forty-nine named users are inexpensive
+metadata, not 49 simultaneous generations — no 50-concurrent claim is made.
+Le Potato and a separate ordinary-Linux reference host were not measured here
+(docs promise Pi 4/Pi 5 only; paired same-Pi controls ground the solo
+deltas); 16-way concurrency was not attempted because 8-way already
+saturates.
+
 ## Verify from LAN
 
 1. Find Pi IP: `hostname -I`

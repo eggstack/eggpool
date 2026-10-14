@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008/M009/M010/M011/M013 closed; M012 hardware-gated corrective | M001/M003/M005/M006/M007 are historically conditionally closed. M008/M009 close the hard token/USD reservation contract and global intersection on local evidence; M010 closes crash recovery and the v54 restore path; M011 closes admin/member browser qualification. No physical SBC/small-team capacity claim is accepted yet. |
+| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M012 closed — physical SBC small-team qualification and final disposition | M001–M013 closed or historically conditionally closed with additive M008–M013 proof; Pi 5 managed envelope measured (solo practical, 49 named users inexpensive, 8-way exceeds hardware); no successor registered. |
 
 ## Dependency-ready implementation plans
 
@@ -67,7 +67,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M012 — physical SBC and small-team qualification (`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`) | Hard M008–M011 closures accepted; tooling boundary contracts landed (`tests/tooling/test_on_prem_sbc_qualification.py`, 9 tests); blocked solely on operational evidence: provisioned physical SBC and reference ordinary Linux target; blocked closure `plans/closure/on-prem-user-access/012-status.md`; no capacity claim until measured. |
+| _none_ | — | No blocked implementation plan is currently registered. |
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 
@@ -82,6 +82,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M012 — physical SBC small-team qualification and final disposition | closed — Pi 5 managed envelope measured (functional 25 cells + 3×30 benchmark batches all pass, 145/145 each, 0 pending/active; Argon2id 51 ms 1-way / 71–73 ms 2-way; 49 named users at 51 ms p50 with spot logins passing; concurrency 1/2/4/8 completes with 8-way saturating at p50 4.1 s); runner managed-auth corrective + 2 contract tests; solo practical, 49 users inexpensive metadata, no 50-concurrent claim; one medium (MMC tails exceed Sep-21 gates, envelope restricted) + six low findings, no high | `plans/closure/on-prem-user-access/012-status.md`, artifacts `artifacts/qualification/on-prem-m012-pi5-functional.json` + `on-prem-m012-pi5-benchmark-run-{1,2,3}.json`, docs `docs/raspberry-pi.md` envelope |
 | On-prem user access M011 — admin/member dashboard browser qualification | closed — frozen Python oracle rebuilt and run against head with 54 parity gaps, identical to the pre-M011 baseline (0 new, 0 resolved); on-prem admin/member pages qualified against a Rust-owned approved reference (70 observations, 22 captures) covering both roles, the negative matrix, no-JS sign-in, HiDPI/mobile/themed viewports, and a DOM credential-leak guard; browser sign-in, top-nav overflow at 1280px, unstyled usage pages, missing viewport declarations, unbounded tables, and budget labelling all corrected; 967 serial Rust tests and 175 tooling tests pass at the M011 baseline (re-verified post-integration — see integration note) | `plans/closure/on-prem-user-access/011-status.md` |
 | On-prem user access M010 — budget crash recovery and schema-54 restore | closed
 | On-prem user access M007 — small-team qualification, migration, and release hardening | conditionally closed — local 964 serial Rust tests + 166 tooling tests; hosted CI `38497388228`, installer qualification `38497388225`, and dependency audit `38497388244` pass; seven synthetic loopback requests complete with no reservations left; physical Pi/Le Potato capacity and schema-54 restore remain unmeasured, so no 49-user or concurrency claim | `plans/closure/on-prem-user-access/007-status.md`, local artifact `artifacts/qualification/on-prem-user-access-m007-local.json` |
@@ -462,3 +463,19 @@ production diff; no plan is promoted and nothing else declares these
 milestones as a dependency. No capacity, latency, Argon2, RSS, WAL, or
 named-user claim is accepted. When hardware is provisioned, resume at plan
 work packages 2–4 with predeclared gates.
+
+Unblock audit (on-prem user access M012 closed,
+`plans/closure/on-prem-user-access/012-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables at this commit.
+M012's hard dependency (accepted M008–M011 closures) was already satisfied;
+the operational requirement is now met with Pi 5 managed evidence
+(functional + 3× benchmark + Argon2 + 49 named users + 1/2/4/8 concurrency),
+so M012 moves `blocked` → `implemented`/`closed` and the on-prem roadmap
+moves `active` → `closed`. This pass lands the runner managed-auth corrective,
+two contract tests (11 total), four Pi 5 artifacts, and the `raspberry-pi.md`
+envelope with zero production diff. No plan is promoted: nothing else
+declares M012 as a dependency, M013 is already closed, and the only ready row
+(Persistence M011) is independent and unaffected. The blocked-work table is
+now empty. Future hardware-class or higher-concurrency claims require new
+bounded plans; this closure record is not to be rewritten.

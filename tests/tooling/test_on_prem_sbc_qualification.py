@@ -153,3 +153,32 @@ def test_m012_sbc_fixtures_carry_no_user_identity_matrix() -> None:
         assert "argon" not in text.lower()
         assert "__SBC_UPSTREAM__" in text
         assert "https://" not in text
+
+
+def test_m012_managed_bootstrap_secret_is_redacted() -> None:
+    from scripts.qualification_sbc import bounded
+
+    token = "epk1_0123456789abcdef_secret-part"
+    redacted = bounded(f"issued {token} for synthetic admin")
+    assert token not in redacted
+    assert "<redacted>" in redacted
+    assert bounded("Bearer q008-server-key") == "Bearer <redacted>"
+
+
+def test_m012_inference_paths_accept_a_managed_personal_token() -> None:
+    import inspect
+
+    from scripts.qualification_sbc import (
+        _benchmark_request,
+        _concurrent_finite_benchmark,
+        _request_timed,
+        _sequential_benchmark,
+    )
+
+    for function in (
+        _request_timed,
+        _benchmark_request,
+        _sequential_benchmark,
+        _concurrent_finite_benchmark,
+    ):
+        assert "api_token" in inspect.signature(function).parameters

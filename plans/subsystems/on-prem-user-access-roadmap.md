@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -337,5 +337,5 @@ A ready plan is not an implemented capability.
 | M009 | closed | `plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md` | `plans/closure/on-prem-user-access/009-status.md` | Instance-global intersection, atomic cross-user holds, user-independent history verified. |
 | M010 | closed | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | `plans/closure/on-prem-user-access/010-status.md` | Reconciliation releases crash-orphaned budget holds without folding usage; frozen v54 image migrates 55–62 with legacy history intact; ordinary-host gate observations recorded (not SBC evidence). |
 | M011 | closed | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | `plans/closure/on-prem-user-access/011-status.md` | Frozen Python oracle rebuilt and run with no new historical parity gaps; on-prem admin/member pages qualified against a Rust-owned approved reference. Browser sign-in and responsive/navigation defects corrected. |
-| M012 | blocked | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | `plans/closure/on-prem-user-access/012-status.md` (blocked) | Hard: M008–M011 closures; operational physical hardware evidence. Tooling boundary contracts landed (9 tests); named-user matrix, Argon2/resource measurement, and predeclared gates pending hardware. |
+| M012 | closed | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | `plans/closure/on-prem-user-access/012-status.md` (closed) | Pi 5 managed envelope measured (functional + 3× benchmark, Argon2, 49 named users, 1/2/4/8 concurrency); 8-way saturates, Le Potato/reference-host/16-way recorded as low-severity uncovered dimensions. |
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |

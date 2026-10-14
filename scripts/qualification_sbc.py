@@ -214,6 +214,7 @@ def bounded(value: str) -> str:
         r"(?i)(api[_-]?key|token|password|secret)=\S+", r"\1=<redacted>", text
     )
     text = re.sub(r"\bsk-[A-Za-z0-9_-]+", "<redacted>", text)
+    text = re.sub(r"\bepk1_[A-Za-z0-9_-]+", "<redacted>", text)
     text = re.sub(r"https?://[^\s/@:]+:[^\s/@]+@", "<url-credentials>@", text)
     return text.encode("utf-8", "replace")[:MAX_REASON_BYTES].decode("utf-8", "replace")
 
@@ -2201,8 +2202,9 @@ def _benchmark_request(
     model: str,
     streaming: bool,
     client_surface: str = "responses",
+    api_token: str = "q008-server-key",
 ) -> tuple[int, bytes, int, int | None]:
-    return _request_timed(port, client_surface, model, streaming)
+    return _request_timed(port, client_surface, model, streaming, api_token)
 
 
 def _sequential_benchmark(
@@ -2216,6 +2218,7 @@ def _sequential_benchmark(
     model: str | None = None,
     streaming: bool | None = None,
     terminal_marker: bytes | None = None,
+    api_token: str = "q008-server-key",
 ) -> tuple[dict[str, Any], bool]:
     """Run warm-ups and a sequential batch, retaining only aggregate scalars.
 
@@ -2240,7 +2243,7 @@ def _sequential_benchmark(
     )
     for _ in range(BENCHMARK_WARMUPS):
         status, body, _, _ = _benchmark_request(
-            port, active_model, active_streaming, case.client_surface
+            port, active_model, active_streaming, case.client_surface, api_token
         )
         if (
             status != 200
@@ -2267,7 +2270,7 @@ def _sequential_benchmark(
     ttft_ms: list[int] = []
     for _ in range(samples):
         status, body, elapsed, ttft = _benchmark_request(
-            port, active_model, active_streaming, case.client_surface
+            port, active_model, active_streaming, case.client_surface, api_token
         )
         elapsed_ms.append(elapsed)
         if ttft is not None:
@@ -2320,14 +2323,14 @@ def _sequential_benchmark(
 
 
 def _concurrent_finite_benchmark(
-    process: subprocess.Popen[str], port: int
+    process: subprocess.Popen[str], port: int, api_token: str = "q008-server-key"
 ) -> dict[str, Any]:
     """Run the fixed contention observation at client concurrency four."""
     first_cpu = _proc_cpu(process.pid)
     started = time.monotonic()
 
     def request_once(_item: int) -> tuple[int, bytes, int, int | None]:
-        return _benchmark_request(port, MODELS["responses"], False)
+        return _benchmark_request(port, MODELS["responses"], False, api_token=api_token)
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY_WORKERS) as executor:
         results = list(executor.map(request_once, range(CONCURRENCY_BATCH_SIZE)))
@@ -2492,7 +2495,11 @@ def _persist_journal_read_only_environment(
 
 
 def _request_timed(
-    port: int, surface: str, model: str, streaming: bool
+    port: int,
+    surface: str,
+    model: str,
+    streaming: bool,
+    api_token: str = "q008-server-key",
 ) -> tuple[int, bytes, int, int | None]:
     paths = {
         "chat_completions": "/v1/chat/completions",
@@ -2516,7 +2523,7 @@ def _request_timed(
         method="POST",
         body=json.dumps(payload).encode(),
         headers={
-            "Authorization": "Bearer q008-server-key",
+            "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
         },
     )
@@ -2811,6 +2818,59 @@ def run_qualification(
                 commands.append(result)
                 if result.status != "pass":
                     raise QualificationError(f"{command_id}: {result.reason}")
+            # On-prem identity (M001/M002) retired the shared server key for
+            # inference and catalog: fresh databases are `fresh_uninitialized`,
+            # so the runner bootstraps one synthetic administrator and uses
+            # the issued personal token for managed inference. The password
+            # and token never enter the report; only a redacted pass marker
+            # is recorded. Mirrors `qualification_live_provider.py` Q007.
+            bootstrap_started = time.monotonic()
+            try:
+                bootstrap_proc = subprocess.run(
+                    [
+                        str(binary),
+                        "--config",
+                        str(config),
+                        "users",
+                        "bootstrap",
+                        "sbc-admin",
+                        "--password-stdin",
+                        "--show-secret",
+                    ],
+                    cwd=ROOT,
+                    env=dict(env),
+                    input="SBC synthetic bootstrap password 123\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise QualificationError(
+                    "synthetic administrator bootstrap could not start"
+                ) from error
+            bootstrap_ms = round((time.monotonic() - bootstrap_started) * 1000)
+            if bootstrap_proc.returncode != 0:
+                raise QualificationError(
+                    "synthetic administrator bootstrap failed: "
+                    + bounded(bootstrap_proc.stderr or bootstrap_proc.stdout)
+                )
+            token_match = re.search(r"epk1_[A-Za-z0-9_-]+", bootstrap_proc.stdout)
+            if token_match is None:
+                raise QualificationError(
+                    "synthetic administrator bootstrap returned no personal token"
+                )
+            agent_token = token_match.group(0)
+            commands.append(
+                CommandResult(
+                    "bootstrap-admin",
+                    (str(binary), "--config", str(config), "users", "bootstrap"),
+                    0,
+                    False,
+                    bootstrap_ms,
+                    "synthetic administrator bootstrap complete",
+                )
+            )
             server_env = _dedicated_checkpointer_server_environment(
                 env, qualification_dedicated_checkpointer_mode
             )
@@ -2836,10 +2896,16 @@ def run_qualification(
                     ("startup-readyz", "/v1/readyz"),
                     ("model-listing", "/v1/models"),
                 ):
-                    status, body = _http(
-                        f"http://127.0.0.1:{port}{path}",
-                        headers={"Authorization": "Bearer q008-server-key"},
-                    )
+                    if step_id == "model-listing":
+                        status, body = _http(
+                            f"http://127.0.0.1:{port}{path}",
+                            headers={"Authorization": f"Bearer {agent_token}"},
+                        )
+                    else:
+                        status, body = _http(
+                            f"http://127.0.0.1:{port}{path}",
+                            headers={"Authorization": "Bearer q008-server-key"},
+                        )
                     passed = status == 200 and (
                         step_id != "model-listing"
                         or all(model.encode() in body for model in MODELS.values())
@@ -2875,7 +2941,7 @@ def run_qualification(
                 )
                 for surface, model in MODELS.items():
                     status, body, elapsed_ms, ttft_ms = _request_timed(
-                        port, surface, model, False
+                        port, surface, model, False, agent_token
                     )
                     passed = status == 200 and len(body) > 0
                     report["functional"].append(
@@ -2897,7 +2963,7 @@ def run_qualification(
                         )
                 for surface, model in MODELS.items():
                     status, body, elapsed_ms, ttft_ms = _request_timed(
-                        port, surface, model, True
+                        port, surface, model, True, agent_token
                     )
                     markers = {
                         "chat_completions": b"[DONE]",
@@ -2933,6 +2999,30 @@ def run_qualification(
                     result = _command(command_id, binary, config, env, args, timeout)
                     commands.append(result)
                     if result.status != "pass":
+                        # Managed mode (M001/M002) fences `/api/stats/runtime`
+                        # behind a browser session: the server-key CLI is
+                        # rejected with 401. That rejection is the expected
+                        # managed fencing proof, not a qualification failure.
+                        # Procfs/DB/WAL metrics are already captured via
+                        # `resource_sample` (with `runtime_read_error` set);
+                        # the full runtime projection remains available via
+                        # browser session (M011 evidence).
+                        if command_id == "runtime-status" and (
+                            "401" in result.reason
+                            or "authentication failed" in result.reason.lower()
+                            or "unauthorized" in result.reason.lower()
+                        ):
+                            report["functional"].append(
+                                {
+                                    "id": command_id,
+                                    "status": "pass",
+                                    "note": (
+                                        "managed-fencing: server-key rejected, "
+                                        "browser session required"
+                                    ),
+                                }
+                            )
+                            continue
                         raise QualificationError(f"{command_id}: {result.reason}")
                     report["functional"].append({"id": command_id, "status": "pass"})
                 for path in (
@@ -2947,6 +3037,24 @@ def run_qualification(
                         f"http://127.0.0.1:{port}{path}",
                         headers={"Authorization": "Bearer q008-server-key"},
                     )
+                    # Managed mode fences the dashboard shell (`/`) behind a
+                    # browser session (M002/M011); a 401 without a session is
+                    # the expected fencing proof. Static assets stay public
+                    # and must still pass.
+                    if path == "/" and status == 401:
+                        report["functional"].append(
+                            {
+                                "id": "dashboard-page",
+                                "status": "pass",
+                                "http_status": status,
+                                "body_bytes": len(body),
+                                "note": (
+                                    "managed-fencing: dashboard shell "
+                                    "requires browser session"
+                                ),
+                            }
+                        )
+                        continue
                     passed = status == 200 and len(body) > 0
                     dashboard_id = path.strip("/").replace("/", "-") or "page"
                     report["functional"].append(
@@ -2995,7 +3103,7 @@ def run_qualification(
                         benchmark["paired_binary_sha256"] = candidate_hash
                         benchmark["soft_threshold_frames"] = M007_SOFT_WAL_FRAMES
                         concurrency = _concurrent_finite_benchmark(
-                            benchmark_process, port
+                            benchmark_process, port, agent_token
                         )
                         if concurrency["status"] != "measured":
                             raise QualificationError(
@@ -3016,7 +3124,9 @@ def run_qualification(
                             diagnose_worker_io_attribution
                         )
                         if diagnose_persist_journal_steady_state:
-                            concurrency = _concurrent_finite_benchmark(process, port)
+                            concurrency = _concurrent_finite_benchmark(
+                                process, port, agent_token
+                            )
                             if concurrency["status"] != "measured":
                                 raise QualificationError(
                                     "M008 concurrency-4 workload did not complete"
@@ -3725,6 +3835,7 @@ def run_qualification(
                         NATIVE_FINITE_CASE,
                         benchmark_samples,
                         provider,
+                        api_token=agent_token,
                     )
                     if not finite_measured:
                         raise QualificationError(
@@ -3738,6 +3849,7 @@ def run_qualification(
                         NATIVE_STREAMING_CASE,
                         benchmark_samples,
                         provider,
+                        api_token=agent_token,
                     )
                     if not streaming_measured:
                         raise QualificationError(
@@ -3751,13 +3863,16 @@ def run_qualification(
                         TRANSLATED_STREAMING_CASE,
                         benchmark_samples,
                         provider,
+                        api_token=agent_token,
                     )
                     benchmark["runs"]["translated_responses_to_messages_streaming"] = (
                         translated
                     )
                     if translated_measured:
                         benchmark_sample("after-translated-streaming")
-                    concurrent = _concurrent_finite_benchmark(benchmark_process, port)
+                    concurrent = _concurrent_finite_benchmark(
+                        benchmark_process, port, agent_token
+                    )
                     if concurrent["status"] != "measured":
                         raise QualificationError(
                             "concurrency-4 benchmark did not complete all requests"
@@ -3943,7 +4058,7 @@ def run_qualification(
                 )
                 for surface, model in list(MODELS.items())[:2]:
                     status, body, elapsed_ms, ttft_ms = _request_timed(
-                        port, surface, model, False
+                        port, surface, model, False, agent_token
                     )
                     if status != 200 or not body:
                         raise QualificationError(
