@@ -140,3 +140,33 @@ async fn wildcard_and_noncanonical_policy_keys_are_rejected() {
     );
     database.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn concurrent_policy_edit_keeps_each_snapshot_consistent_and_refreshes_new_work() {
+    let database = database().await;
+    add_user(&database, "admin-a", "admin").await;
+    add_user(&database, "member-a", "member").await;
+    let policy = ModelPolicyService::new(database.clone());
+    let before = policy.snapshot("member-a").await.unwrap();
+    assert!(!before.allows("model-a", None));
+
+    let (edit, observed) = tokio::join!(
+        policy.set_user_override("member-a", "model-a", "allow", "admin-a"),
+        policy.snapshot("member-a"),
+    );
+    edit.unwrap();
+    let observed = observed.unwrap();
+    let after = policy.snapshot("member-a").await.unwrap();
+    if observed.revision() == before.revision() {
+        assert!(!observed.allows("model-a", None));
+    } else {
+        assert!(observed.allows("model-a", None));
+    }
+    assert!(after.revision() > before.revision());
+    assert!(after.allows("model-a", None));
+    assert!(
+        !before.allows("model-a", None),
+        "in-flight policy is immutable"
+    );
+    database.close().await.unwrap();
+}
