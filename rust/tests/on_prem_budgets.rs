@@ -1079,3 +1079,66 @@ async fn provider_tariff_overflow_is_rejected_by_config_validation() {
     config.providers.insert("provider-a".into(), provider);
     config.validate().expect("in-range tariff validates");
 }
+
+#[tokio::test]
+async fn hard_proof_flows_from_admission_through_claim_snapshot() {
+    use eggpool::coordinator::budget_proof_for_claim;
+    use eggpool::request::{AdmissionOptions, StaticRoutingFacts, admit_request};
+
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(
+        &budgets,
+        None,
+        hard_limits(Some(100_000_000), Some(1_000_000_000)),
+    )
+    .await;
+
+    // Admission extracts the caller output cap and the byte-length input
+    // bound; routing facts and the claim snapshot carry them untouched.
+    let body =
+        br#"{"model":"model-a","messages":[{"role":"user","content":"hi"}],"max_tokens":64}"#;
+    let admitted = admit_request(
+        body.as_slice(),
+        AdmissionOptions {
+            client_surface: ClientSurface::ChatCompletions,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("chat admission succeeds");
+    let mut inputs = StaticRoutingFacts::default();
+    inputs.known_provider_ids.insert("provider-a".into());
+    inputs.requested_protocol = Some("openai".into());
+    let facts = admitted.routing_facts(&inputs);
+    assert_eq!(facts.budget_requested_output_tokens, Some(64));
+    let claim = fixture
+        .router
+        .select_and_claim(&facts, &BTreeSet::new())
+        .await
+        .unwrap()
+        .expect("fixture route is selectable");
+    assert_eq!(claim.budget_requested_output_tokens(), Some(64));
+    assert!(claim.budget_input_worst_case_tokens() >= body.len() as i64);
+
+    // The coordinator assembles the proof exactly as production does:
+    // snapshot facts plus the selected provider's tariff snapshot.
+    let worst = claim.budget_input_worst_case_tokens() + 64;
+    let mut input = PublicationInput::new("budget-carriage", "openai", "openai", false, 1);
+    input.budget_proof = Some(budget_proof_for_claim(&claim, Some(3_000_000)));
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(claim, input, Some(attribution()))
+        .await
+        .expect("carried proof publishes under hard rules");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let (held_tokens, held_micros, enforcement, bound_tokens, bound_micros, price) =
+        reservation_hold(&fixture.database, published.identity.db_request_id).await;
+    assert_eq!(held_tokens, worst * 2);
+    assert_eq!(held_micros, worst * 2 * 3);
+    assert_eq!(enforcement, "hard");
+    assert_eq!(bound_tokens, worst * 2);
+    assert_eq!(bound_micros, worst * 2 * 3);
+    assert_eq!(price, Some("operator_tariff".to_owned()));
+    fixture.database.close().await.unwrap();
+}

@@ -36,11 +36,10 @@ pub use finite::{
     filter_response_headers,
 };
 
-pub(crate) use publication::budget_proof_for_claim;
 pub use publication::{
     FinalizationIdentity, PostCommitInterruption, PublicationError, PublicationFaultInjector,
     PublicationInput, PublicationOutcome, PublicationService, PublicationStage, PublishedAttempt,
-    RuntimePublicationReceipt,
+    RuntimePublicationReceipt, budget_proof_for_claim,
 };
 
 pub use reconciliation::{

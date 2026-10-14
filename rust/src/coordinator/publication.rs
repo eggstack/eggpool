@@ -1036,7 +1036,7 @@ fn fail_sql(
 /// admission-carried facts on its snapshot and the operator tariff snapshot
 /// for the selected provider. `None` tariff means unknown price: hard USD
 /// rules fail closed downstream, estimated rules are unaffected.
-pub(crate) fn budget_proof_for_claim(
+pub fn budget_proof_for_claim(
     claim: &SelectionClaim,
     tariff_microdollars_per_million_tokens: Option<i64>,
 ) -> crate::user_budget::BudgetProof {
