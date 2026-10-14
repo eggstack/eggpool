@@ -159,6 +159,19 @@ adapts the response, and converges durable state.
   concurrent users cannot both take the final slot and retries never
   double-count. Global usage folds the same attempt rows at terminal
   settlement; absent global rules, no global hold or row is written.
+- Crash recovery converges budget holds without folding usage. A restart
+  interrupts every `pending` request, and the same reconciliation pass
+  releases each active user/instance hold on those requests (`active →
+  released`, never settled): the logical request can never settle
+  afterwards, so the release is compensation, not credit, and unknown
+  upstream usage stays unknown. Settled holds and folded buckets are
+  untouched, and a stale duplicate terminal command conflicts instead of
+  re-folding. A retry under the same proxy ID after interruption is refused
+  at the duplicate gate (non-pending requests never re-enter admission), so
+  no hold is resurrected on dead work. Cancel terminalizes through the
+  normal terminal path and settles the hold conservatively at the held
+  amounts. Backups capture active holds verbatim as committed rows; a
+  restored image reconciles exactly like a crashed live database.
 - Reload policy is referenced, never duplicated: only
   `config_reload_policy.rs::classify_transition` decides reload vs restart.
 

@@ -186,18 +186,29 @@ sudo systemctl start eggpool
 
 Migrations are idempotent and safe to run multiple times.
 
-Schema migrations 55–60 add local downstream identity, browser sessions,
-policy profiles, user budgets, and administrative audit tables. Backups made
-after those migrations include usernames, password hashes, personal-token
+Schema migrations 55–62 add local downstream identity, browser sessions,
+policy profiles, user budgets with enforceable hold/settlement state
+(migration 61), instance-global budgets (migration 62), and administrative
+audit tables. Backups made after those migrations include usernames, password hashes, personal-token
 digests, session/CSRF digests, policy and budget state, bounded usage records,
 and secret-free audit facts. They do not contain plaintext passwords, API
-tokens, session cookies, or CSRF tokens. After restoring an older backup, the
+tokens, session cookies, or CSRF tokens. A backup taken while requests are in
+flight captures their pending rows and active budget holds exactly as
+committed; restoring such an image reconciles on next startup (pending
+requests interrupt, active holds release without folding usage) exactly like
+a crashed live database. After restoring an older backup, the
 migrations are applied by `eggpool migrate` or normal server startup; existing
 provider accounts and keys remain owned by TOML/environment as before.
+A schema-54 image restores and migrates forward through 55–62 with legacy
+requests, usage history, quarantine, and catalog state preserved; historical
+shared-key requests stay unattributed (`legacy_shared_key`, never converted
+to a fabricated human identity), and the upgraded database reports
+`legacy_unmigrated` until an administrator bootstraps.
 SQLite migrations are forward-only: an older executable may reject a database
-that has reached schema 60. Roll back by restoring a protected backup made
+that has reached schema 62. Roll back by restoring a protected backup made
 before the upgrade together with the matching older binary; do not point an
-older executable at the upgraded database.
+older executable at the upgraded database. Capture the protected backup
+before running `migrate`, not after.
 
 ## Uninstall
 

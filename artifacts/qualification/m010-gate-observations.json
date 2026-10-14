@@ -1,0 +1,44 @@
+{
+  "milestone": "on-prem-user-access M010 package D",
+  "purpose": "Paired ordinary-host SQLite gate observations for budget admission/settlement overhead (plan section 5D). Not physical-SBC capacity evidence; M012 owns that proof.",
+  "collected_at": "2026-10-14",
+  "host": {
+    "os": "macos",
+    "arch": "aarch64",
+    "kernel": "Darwin 25.6.0 RELEASE_ARM64_T6041",
+    "description": "ordinary Apple-Silicon laptop host, unloaded, single run"
+  },
+  "build": {
+    "profile": "debug (cargo test)",
+    "binary": "rust test target on_prem_global_budgets::paired_gate_observations_across_identities_and_rules",
+    "schema": 62,
+    "sqlite": "WAL, synchronous NORMAL, busy_timeout 5000ms, autocheckpoint 1000 pages"
+  },
+  "method": {
+    "workload": "sequential publish_attributed + terminal settle per distinct credential identity; no concurrency, no upstream I/O",
+    "modes": {
+      "baseline": "no budget rules, unattributed legacy-shared-key publication",
+      "user_estimated": "per-user estimated token+USD rules for every identity, estimator projection admission",
+      "user_hard_global_hard": "per-user rules plus one instance-global hard rule, worst-case proof admission"
+    },
+    "bounds": "per-operation anti-hang bound 30s only; no performance assertion in the test"
+  },
+  "cells": [
+    {"mode":"baseline","identities":1,"publish_us_min":651,"publish_us_p50":651,"publish_us_max":651,"settle_us_min":383,"settle_us_p50":383,"settle_us_max":383,"db_bytes":4096,"wal_bytes":1149512,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":831488,"requests":1,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":0},
+    {"mode":"user_estimated","identities":1,"publish_us_min":780,"publish_us_p50":780,"publish_us_max":780,"settle_us_min":733,"settle_us_p50":733,"settle_us_max":733,"db_bytes":4096,"wal_bytes":1219552,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":831488,"requests":1,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":2},
+    {"mode":"user_hard_global_hard","identities":1,"publish_us_min":910,"publish_us_p50":910,"publish_us_max":910,"settle_us_min":684,"settle_us_p50":684,"settle_us_max":684,"db_bytes":4096,"wal_bytes":1285472,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":831488,"requests":1,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":2},
+    {"mode":"baseline","identities":10,"publish_us_min":485,"publish_us_p50":571,"publish_us_max":733,"settle_us_min":272,"settle_us_p50":310,"settle_us_max":853,"db_bytes":4096,"wal_bytes":3246592,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":843776,"requests":10,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":0},
+    {"mode":"user_estimated","identities":10,"publish_us_min":585,"publish_us_p50":673,"publish_us_max":843,"settle_us_min":397,"settle_us_p50":467,"settle_us_max":521,"db_bytes":4096,"wal_bytes":3946992,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":843776,"requests":10,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":20},
+    {"mode":"user_hard_global_hard","identities":10,"publish_us_min":626,"publish_us_p50":722,"publish_us_max":2776,"settle_us_min":512,"settle_us_p50":598,"settle_us_max":702,"db_bytes":843776,"wal_bytes":4181832,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":843776,"requests":10,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":20},
+    {"mode":"baseline","identities":49,"publish_us_min":345,"publish_us_p50":424,"publish_us_max":2034,"settle_us_min":186,"settle_us_p50":224,"settle_us_max":529,"db_bytes":884736,"wal_bytes":4206552,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":925696,"requests":49,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":0},
+    {"mode":"user_estimated","identities":49,"publish_us_min":440,"publish_us_p50":498,"publish_us_max":876,"settle_us_min":332,"settle_us_p50":365,"settle_us_max":2545,"db_bytes":913408,"wal_bytes":4185952,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":950272,"requests":49,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":98},
+    {"mode":"user_hard_global_hard","identities":49,"publish_us_min":495,"publish_us_p50":588,"publish_us_max":2791,"settle_us_min":457,"settle_us_p50":503,"settle_us_max":1644,"db_bytes":954368,"wal_bytes":4317792,"shm_bytes":32768,"wal_bytes_after_checkpoint":0,"db_bytes_after_checkpoint":958464,"requests":49,"active_user_holds":0,"active_instance_holds":0,"user_usage_rows":98}
+  ],
+  "process_rss_kb_after_suite": 11984,
+  "reading": {
+    "publish_p50_49_identities_us": {"baseline": 424, "user_estimated": 498, "user_hard_global_hard": 588},
+    "settle_p50_49_identities_us": {"baseline": 224, "user_estimated": 365, "user_hard_global_hard": 503},
+    "worst_outlier_us": 2791,
+    "verdict": "Budget rules add sub-millisecond per-operation overhead in a debug build (worst observed outlier 2.8ms, cold first-touch). No active-hold leakage at any scale. WAL peaks at ~4.3MB for 49 sequential cycles and truncates cleanly on checkpoint; main DB stays under 1MB. No evidence of unacceptable gate-tenure widening from the global rollups; no storage redesign warranted."
+  }
+}

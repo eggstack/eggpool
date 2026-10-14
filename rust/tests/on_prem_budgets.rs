@@ -5,11 +5,13 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        DurableFinalizer, EndpointError, FinalizationData, FinalizationOutcome, PublicationError,
-        PublicationInput, PublicationOutcome, PublicationService, endpoint_error_body,
+        CrashReconciler, DurableFinalizer, EndpointError, FinalizationData, FinalizationError,
+        FinalizationOutcome, PublicationError, PublicationFaultInjector, PublicationInput,
+        PublicationOutcome, PublicationService, PublicationStage, endpoint_error_body,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
     identity::{AuthenticatedPrincipal, PrincipalKind},
+    operations::backup::BackupService,
     quota::{AccountQuota, QuotaEstimator},
     routing::{EligibilityPolicy, RoutingRequestFacts, RoutingRouter},
     user_budget::{
@@ -25,7 +27,11 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let database = Database::open(DatabaseConfig::default())
+    fixture_on(&DatabaseConfig::default()).await
+}
+
+async fn fixture_on(config: &DatabaseConfig) -> Fixture {
+    let database = Database::open(config.clone())
         .await
         .expect("database opens");
     MigrationRunner::new(&database)
@@ -1183,4 +1189,479 @@ async fn hard_proof_flows_from_admission_through_claim_snapshot() {
     assert_eq!(bound_micros, worst * 2 * 3);
     assert_eq!(price, Some("operator_tariff".to_owned()));
     fixture.database.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// M010 crash recovery: budget holds converge on restart without folding
+// usage, and a released hold never blocks the next admitted request.
+// ---------------------------------------------------------------------------
+
+async fn hold_status(database: &Database, request_id: i64) -> (String, Option<String>) {
+    database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT status, settled_at FROM user_budget_reservations WHERE request_id = ?1",
+                [request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+        .await
+        .unwrap()
+}
+
+async fn budget_row_counts(database: &Database) -> (i64, i64, i64) {
+    database
+        .call(|connection| {
+            Ok((
+                connection.query_row(
+                    "SELECT count(*) FROM user_budget_reservations WHERE status = 'active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                connection.query_row(
+                    "SELECT count(*) FROM user_budget_attempt_usage",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                connection.query_row("SELECT count(*) FROM user_budget_usage", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .await
+        .unwrap()
+}
+
+async fn concurrent_hard_rule(budgets: &UserBudgetService) {
+    budgets
+        .set_rule(
+            "budget-admin",
+            "budget-member",
+            None,
+            BudgetWindow::Day,
+            BudgetLimits {
+                tokens: Some(1_000_000),
+                concurrent: Some(1),
+                enforcement: BudgetEnforcement::Hard,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("admin sets concurrent hard budget rule");
+}
+
+#[tokio::test]
+async fn crash_after_publication_releases_user_hold_without_folding_usage() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    concurrent_hard_rule(&budgets).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-hold", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+    // The crash shape: committed publication, dead process. The hold is
+    // durably active and no usage has been folded.
+    assert_eq!(hold_status(&fixture.database, request_id).await.0, "active");
+    assert_eq!(budget_row_counts(&fixture.database).await, (1, 0, 0));
+    drop(published.claim);
+
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert_eq!(report.requests_interrupted, 1);
+    assert_eq!(report.user_budget_holds_released, 1);
+    assert_eq!(report.instance_budget_holds_released, 0);
+    assert!(report.classification.pending_requests_with_active_user_hold >= 1);
+
+    // The hold is compensation, not credit: released, never settled, and no
+    // usage bucket or attempt fact was folded.
+    assert_eq!(
+        hold_status(&fixture.database, request_id).await,
+        ("released".to_owned(), None)
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 0, 0));
+    let request_status: String = fixture
+        .database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT status FROM requests WHERE id = ?1",
+                [request_id],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(request_status, "interrupted");
+
+    // A second pass is a no-op: convergence is idempotent.
+    let second = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("second pass succeeds");
+    assert!(second.converged);
+    assert_eq!(second.user_budget_holds_released, 0);
+
+    // The released hold frees the single concurrency slot: the next
+    // admitted request publishes instead of wedging on a phantom hold.
+    let next = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-next", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("next request admits after crash release");
+    let PublicationOutcome::Published(next) = next else {
+        panic!("next request should publish");
+    };
+    assert_eq!(
+        hold_status(&fixture.database, next.identity.db_request_id)
+            .await
+            .0,
+        "active"
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn retry_after_crash_release_fails_closed_without_new_hold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-retry", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    drop(published.claim);
+    CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    // The interrupted request can never settle, so a retry under the same
+    // proxy id must deny instead of resurrecting a hold on dead work. The
+    // duplicate gate refuses non-pending requests before any budget or
+    // dispatch work happens.
+    let retry = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-retry", 2, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await;
+    assert!(
+        matches!(retry, Err(PublicationError::DuplicateConflict { .. })),
+        "retry on an interrupted request must fail closed, got {retry:?}"
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn compensated_publication_retry_reuses_hold_then_crash_releases_it() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let injector = PublicationFaultInjector::fail_once_at(PublicationStage::AfterCommit);
+    let service = PublicationService::new(fixture.database.clone()).with_fault_injector(injector);
+    let error = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-compensate", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect_err("post-commit interruption is surfaced");
+    let PublicationError::PostCommit { mut interruption } = error else {
+        panic!("expected retained post-commit identity");
+    };
+    let request_id = interruption.identity.db_request_id;
+    service
+        .compensate_post_commit(&mut interruption)
+        .await
+        .expect("compensation converges");
+    // In-process compensation releases the legacy reservation but keeps the
+    // request pending with its budget hold: a retry must reuse the same
+    // hold rather than leak a second one.
+    assert_eq!(hold_status(&fixture.database, request_id).await.0, "active");
+    let retry = service
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-compensate", 2, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("retry reuses the compensated hold");
+    let PublicationOutcome::Published(retried) = retry else {
+        panic!("retry should publish a second attempt");
+    };
+    assert_eq!(retried.identity.db_request_id, request_id);
+    assert_eq!(budget_row_counts(&fixture.database).await, (1, 0, 0));
+    // Crash before the retry dispatches: the extended hold converges on
+    // restart with no usage folded.
+    drop(retried.claim);
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert_eq!(report.user_budget_holds_released, 1);
+    assert_eq!(
+        hold_status(&fixture.database, request_id).await,
+        ("released".to_owned(), None)
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn settled_request_survives_restart_without_double_fold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-settled", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_request(
+            &published.identity,
+            FinalizationData::default(),
+            Some(published.claim),
+        )
+        .await
+        .expect("terminal request settles");
+    assert_eq!(
+        hold_status(&fixture.database, request_id).await.0,
+        "settled"
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 1, 2));
+    // A restart after settlement must not touch the settled hold or fold
+    // usage a second time.
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert_eq!(report.user_budget_holds_released, 0);
+    assert_eq!(report.instance_budget_holds_released, 0);
+    assert!(report.converged);
+    assert_eq!(
+        hold_status(&fixture.database, request_id).await.0,
+        "settled"
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 1, 2));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn duplicate_terminal_after_crash_release_cannot_double_fold() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-duplicate", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let identity = published.identity.clone();
+    drop(published.claim);
+    CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    // A stale duplicate terminal command for the interrupted request
+    // conflicts instead of folding usage onto a released hold.
+    let duplicate = DurableFinalizer::new(fixture.database.clone())
+        .finalize_request(&identity, FinalizationData::default(), None)
+        .await;
+    assert!(
+        matches!(duplicate, Err(FinalizationError::TerminalConflict { .. })),
+        "duplicate terminal must conflict, got {duplicate:?}"
+    );
+    assert_eq!(budget_row_counts(&fixture.database).await, (0, 0, 0));
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_terminalizes_and_settles_user_hold_conservatively() {
+    let fixture = fixture().await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-crash-cancel", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+    let held: i64 = fixture
+        .database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT held_microdollars FROM user_budget_reservations WHERE request_id = ?1",
+                [request_id],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_request(
+            &published.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::ClientCancelled,
+                ..FinalizationData::default()
+            },
+            Some(published.claim),
+        )
+        .await
+        .expect("cancel terminalizes");
+    // Cancel is terminal: the hold settles at the conservative unknown-usage
+    // charge and a restart leaves it untouched. Day and month buckets each
+    // carry the held charge exactly once.
+    assert_eq!(
+        hold_status(&fixture.database, request_id).await.0,
+        "settled"
+    );
+    let bucket_costs: Vec<i64> = fixture
+        .database
+        .call(|connection| {
+            let mut statement = connection
+                .prepare("SELECT cost_microdollars FROM user_budget_usage ORDER BY window")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .unwrap();
+    assert_eq!(bucket_costs, vec![held, held]);
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert!(report.converged);
+    assert_eq!(report.user_budget_holds_released, 0);
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn backup_during_active_reservation_captures_hold_verbatim() {
+    let directory = tempfile::tempdir().expect("temp root");
+    let config_path = directory.path().join("config.toml");
+    let db_path = directory.path().join("usage.sqlite3");
+    let mut config = Config::default();
+    config.database.path = db_path.display().to_string();
+    std::fs::write(&config_path, toml::to_string(&config).expect("config TOML"))
+        .expect("config writes");
+    let fixture = fixture_on(&DatabaseConfig {
+        path: db_path.display().to_string(),
+        ..Default::default()
+    })
+    .await;
+    let budgets = UserBudgetService::new(fixture.database.clone());
+    hard_rule(&budgets, None, hard_limits(Some(1_000_000), None)).await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim(&fixture).await,
+            hard_input("budget-backup-hold", 1, 100, Some(50), None),
+            Some(attribution()),
+        )
+        .await
+        .expect("bounded hard-token request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+
+    // Snapshot while the hold is active: the online backup must carry the
+    // pending request and its active hold exactly as committed.
+    let service = BackupService::from_config(&config_path, &config)
+        .with_output_dir(directory.path().join("backups"));
+    let archive = service
+        .create(&fixture.database)
+        .await
+        .expect("backup during active hold")
+        .archive;
+    BackupService::validate_archive(&archive).expect("archive validates");
+
+    // Restore over the live paths and prove the hold survived the round
+    // trip with its active status and held amounts intact. The WAL is
+    // checkpointed before close so no stale sidecar can shadow the
+    // restored image on reopen.
+    drop(published.claim);
+    fixture
+        .database
+        .call(|connection| {
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            Ok(())
+        })
+        .await
+        .expect("wal checkpoints");
+    fixture
+        .database
+        .close()
+        .await
+        .expect("live database closes");
+    let restored = service.recover(&archive).expect("restore");
+    assert_eq!(restored.database, db_path);
+    let reopened = Database::open(DatabaseConfig {
+        path: db_path.display().to_string(),
+        ..Default::default()
+    })
+    .await
+    .expect("restored database opens");
+    let request_status: String = reopened
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT status FROM requests WHERE id = ?1",
+                [request_id],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(request_status, "pending");
+    assert_eq!(hold_status(&reopened, request_id).await.0, "active");
+    // The restored copy reconciles exactly like a crashed live database:
+    // the request interrupts and the hold releases with no usage folded.
+    let report = CrashReconciler::new(reopened.clone())
+        .reconcile_once()
+        .await
+        .expect("restored database reconciles");
+    assert_eq!(report.requests_interrupted, 1);
+    assert_eq!(report.user_budget_holds_released, 1);
+    assert_eq!(hold_status(&reopened, request_id).await.0, "released");
+    reopened.close().await.expect("restored database closes");
 }

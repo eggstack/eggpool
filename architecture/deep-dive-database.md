@@ -132,6 +132,9 @@ Persistence M004 (`plans/closure/persistence/004-status.md`) collected 14 accept
 - Migrations immutable and checksum-pinned; unknown or mismatched ledgers fail closed.
 - `backup_to` is a primitive; orchestration, validation, and restore stay in `operations/backup.rs`.
 - Startup reconciliation repairs only covered states; ambiguity never resolves silently.
+  Covered budget states: active user/instance holds on interrupted requests
+  are released without folding usage; settled holds, usage buckets, and
+  attempt-usage facts are never mutated by reconciliation.
 
 ## Verification
 

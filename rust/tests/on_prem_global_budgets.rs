@@ -6,7 +6,7 @@ use eggpool::{
     accounts::{AccountRegistry, CredentialStore},
     catalog::{ModelCatalogCache, ModelInput, ProtocolResolutionStatus},
     coordinator::{
-        DurableFinalizer, FinalizationData, FinalizationOutcome, PublicationError,
+        CrashReconciler, DurableFinalizer, FinalizationData, FinalizationOutcome, PublicationError,
         PublicationInput, PublicationOutcome, PublicationService,
     },
     db::{Account, Database, DatabaseConfig, MigrationRunner},
@@ -23,7 +23,11 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let database = Database::open(DatabaseConfig::default())
+    fixture_on(&DatabaseConfig::default()).await
+}
+
+async fn fixture_on(config: &DatabaseConfig) -> Fixture {
+    let database = Database::open(config.clone())
         .await
         .expect("database opens");
     MigrationRunner::new(&database)
@@ -1000,4 +1004,379 @@ async fn no_global_rules_preserves_single_admin_parity() {
     }
     assert_eq!(instance_counts(&fixture.database).await, (2, 0, 0));
     fixture.database.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// M010 crash recovery: instance-global holds converge on restart without
+// folding usage, and a released global hold never blocks the next user.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn crash_after_publication_releases_instance_hold_without_folding_usage() {
+    let fixture = fixture().await;
+    let global = InstanceBudgetService::new(fixture.database.clone());
+    // One global concurrency slot shared by every user: a phantom hold
+    // would wedge the whole instance, not just one member.
+    set_global(
+        &global,
+        "budget-admin",
+        None,
+        BudgetLimits {
+            tokens: Some(1_000_000),
+            concurrent: Some(1),
+            enforcement: BudgetEnforcement::Hard,
+            ..Default::default()
+        },
+    )
+    .await;
+    let service = PublicationService::new(fixture.database.clone());
+    let outcome = service
+        .publish_attributed(
+            claim_for(&fixture, "model-a").await,
+            hard_input("global-crash-hold", 1, Some(50), None),
+            Some(attribution_for("budget-member")),
+        )
+        .await
+        .expect("bounded global request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    let request_id = published.identity.db_request_id;
+    assert_eq!(instance_counts(&fixture.database).await, (1, 1, 0));
+    drop(published.claim);
+
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert_eq!(report.requests_interrupted, 1);
+    assert_eq!(report.instance_budget_holds_released, 1);
+    // The attributed member request also carries a rule-free user hold for
+    // usage accounting; it converges in the same pass.
+    assert_eq!(report.user_budget_holds_released, 1);
+    assert!(
+        report
+            .classification
+            .pending_requests_with_active_instance_hold
+            >= 1
+    );
+    // Compensation, not credit: released, never settled, no usage folded.
+    assert_eq!(instance_counts(&fixture.database).await, (1, 0, 0));
+    let hold: (String, Option<String>) = fixture
+        .database
+        .call(move |connection| {
+            connection.query_row(
+                "SELECT status, settled_at FROM instance_budget_reservations WHERE request_id = ?1",
+                [request_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+        .await
+        .unwrap();
+    assert_eq!(hold, ("released".to_owned(), None));
+
+    // The freed global slot admits a different member's request: no
+    // instance-wide wedge from the phantom hold.
+    let next = service
+        .publish_attributed(
+            claim_for(&fixture, "model-a").await,
+            hard_input("global-crash-next", 1, Some(50), None),
+            Some(attribution_for("budget-member-2")),
+        )
+        .await
+        .expect("next member admits after crash release");
+    assert!(
+        matches!(next, PublicationOutcome::Published(_)),
+        "next member should publish"
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn settled_global_request_survives_restart_without_double_fold() {
+    let fixture = fixture().await;
+    let global = InstanceBudgetService::new(fixture.database.clone());
+    set_global(
+        &global,
+        "budget-admin",
+        None,
+        hard_limits(Some(1_000_000), None),
+    )
+    .await;
+    let outcome = PublicationService::new(fixture.database.clone())
+        .publish_attributed(
+            claim_for(&fixture, "model-a").await,
+            hard_input("global-crash-settled", 1, Some(50), None),
+            Some(attribution_for("budget-member")),
+        )
+        .await
+        .expect("bounded global request publishes");
+    let PublicationOutcome::Published(published) = outcome else {
+        panic!("request should publish");
+    };
+    DurableFinalizer::new(fixture.database.clone())
+        .finalize_request(
+            &published.identity,
+            FinalizationData {
+                outcome: FinalizationOutcome::Completed,
+                ..FinalizationData::default()
+            },
+            Some(published.claim),
+        )
+        .await
+        .expect("terminal request settles");
+    assert_eq!(instance_counts(&fixture.database).await, (1, 0, 2));
+    assert_eq!(instance_usage_requests(&fixture.database).await, 2);
+    // A restart after settlement touches neither the settled global hold
+    // nor the folded buckets.
+    let report = CrashReconciler::new(fixture.database.clone())
+        .reconcile_once()
+        .await
+        .expect("restart reconciliation succeeds");
+    assert!(report.converged);
+    assert_eq!(report.instance_budget_holds_released, 0);
+    assert_eq!(report.user_budget_holds_released, 0);
+    assert_eq!(instance_counts(&fixture.database).await, (1, 0, 2));
+    assert_eq!(instance_usage_requests(&fixture.database).await, 2);
+    fixture.database.close().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// M010 storage-pressure observations: paired baseline vs budget-rule
+// publish/settle latency, WAL footprint, and row counts for 1/10/49
+// distinct credential identities on ordinary local hardware. This is an
+// observation record, not a performance gate: per-op assertions are
+// generous anti-hang bounds only. Harness output lines prefixed with
+// M010_GATE_OBSERVATION carry the JSON cells archived under
+// artifacts/qualification/; M012 owns physical-SBC capacity proof.
+// ---------------------------------------------------------------------------
+
+use std::fmt::Write as _;
+
+async fn insert_measurement_members(database: &Database, count: usize) -> Vec<String> {
+    let names: Vec<String> = (0..count).map(|index| format!("measure-{index}")).collect();
+    let snapshot = names.clone();
+    database
+        .call(move |connection| {
+            for name in &snapshot {
+                connection.execute(
+                    "INSERT INTO users(id, username, normalized_username, role, password_hash)
+                     VALUES (?1, ?1, ?1, 'member', 'test-hash')",
+                    [name],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .expect("measurement members insert");
+    names
+}
+
+fn percentile(sorted: &mut [u128], ratio: f64) -> u128 {
+    sorted.sort_unstable();
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = ((sorted.len() as f64 - 1.0) * ratio).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
+}
+
+fn wal_footprint(dir: &std::path::Path, stem: &str) -> (u64, u64, u64) {
+    let size = |suffix: &str| {
+        std::fs::metadata(dir.join(format!("{stem}{suffix}")))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0)
+    };
+    (size(".sqlite3"), size(".sqlite3-wal"), size(".sqlite3-shm"))
+}
+
+fn process_rss_kb() -> Option<u64> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+#[tokio::test]
+async fn paired_gate_observations_across_identities_and_rules() {
+    let work_root = tempfile::tempdir().expect("work root");
+    for identities in [1_usize, 10, 49] {
+        for mode in ["baseline", "user_estimated", "user_hard_global_hard"] {
+            let stem = format!("m010-gate-{mode}-{identities}");
+            let fixture = fixture_on(&DatabaseConfig {
+                path: work_root
+                    .path()
+                    .join(format!("{stem}.sqlite3"))
+                    .display()
+                    .to_string(),
+                ..Default::default()
+            })
+            .await;
+            let members = insert_measurement_members(&fixture.database, identities).await;
+            if mode != "baseline" {
+                let users = UserBudgetService::new(fixture.database.clone());
+                for member in &members {
+                    users
+                        .set_rule(
+                            "budget-admin",
+                            member,
+                            None,
+                            BudgetWindow::Day,
+                            BudgetLimits {
+                                tokens: Some(1_000_000_000),
+                                microdollars: Some(1_000_000_000),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .expect("measurement user rule is set");
+                }
+            }
+            if mode == "user_hard_global_hard" {
+                let global = InstanceBudgetService::new(fixture.database.clone());
+                global
+                    .set_rule(
+                        "budget-admin",
+                        None,
+                        BudgetWindow::Day,
+                        BudgetLimits {
+                            requests: Some(1_000_000),
+                            tokens: Some(1_000_000_000),
+                            enforcement: BudgetEnforcement::Hard,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .expect("measurement global rule is set");
+            }
+            // Hard mode needs worst-case proofs; the other modes ride the
+            // estimator projection exactly as production does.
+            let service = PublicationService::new(fixture.database.clone());
+            let finalizer = DurableFinalizer::new(fixture.database.clone());
+            let mut publish_us: Vec<u128> = Vec::with_capacity(identities);
+            let mut settle_us: Vec<u128> = Vec::with_capacity(identities);
+            for (index, member) in members.iter().enumerate() {
+                let proxy = format!("{stem}-{index}");
+                let started = Instant::now();
+                let outcome = if mode == "baseline" {
+                    service
+                        .publish(
+                            claim_for(&fixture, "model-a").await,
+                            estimated_input(&proxy, 1),
+                        )
+                        .await
+                        .expect("baseline request publishes")
+                } else if mode == "user_hard_global_hard" {
+                    service
+                        .publish_attributed(
+                            claim_for(&fixture, "model-a").await,
+                            hard_input(&proxy, 1, Some(50), Some(3_000_000)),
+                            Some(attribution_for(member)),
+                        )
+                        .await
+                        .expect("hard request publishes")
+                } else {
+                    service
+                        .publish_attributed(
+                            claim_for(&fixture, "model-a").await,
+                            estimated_input(&proxy, 1),
+                            Some(attribution_for(member)),
+                        )
+                        .await
+                        .expect("estimated request publishes")
+                };
+                publish_us.push(started.elapsed().as_micros());
+                let PublicationOutcome::Published(published) = outcome else {
+                    panic!("measurement request should publish");
+                };
+                let started = Instant::now();
+                finalizer
+                    .finalize_request(
+                        &published.identity,
+                        FinalizationData {
+                            outcome: FinalizationOutcome::Completed,
+                            ..FinalizationData::default()
+                        },
+                        Some(published.claim),
+                    )
+                    .await
+                    .expect("measurement request settles");
+                settle_us.push(started.elapsed().as_micros());
+            }
+            for sample in publish_us.iter().chain(settle_us.iter()) {
+                assert!(
+                    *sample < 30_000_000,
+                    "per-operation anti-hang bound exceeded: {sample}us"
+                );
+            }
+            let (db_bytes, wal_bytes, shm_bytes) = wal_footprint(work_root.path(), &stem);
+            fixture
+                .database
+                .call(|connection| {
+                    connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+                    Ok(())
+                })
+                .await
+                .expect("wal checkpoints");
+            let (db_after, wal_after, shm_after) = wal_footprint(work_root.path(), &stem);
+            let rows: (i64, i64, i64, i64) = fixture
+                .database
+                .call(|connection| {
+                    Ok((
+                        connection.query_row("SELECT COUNT(*) FROM requests", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM user_budget_reservations WHERE status = 'active'",
+                            [],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        connection.query_row(
+                            "SELECT COUNT(*) FROM instance_budget_reservations WHERE status = 'active'",
+                            [],
+                            |row| row.get::<_, i64>(0),
+                        )?,
+                        connection.query_row("SELECT COUNT(*) FROM user_budget_usage", [], |row| {
+                            row.get::<_, i64>(0)
+                        })?,
+                    ))
+                })
+                .await
+                .expect("row counts read");
+            let mut cell = String::new();
+            write!(
+                cell,
+                "{{\"mode\":\"{mode}\",\"identities\":{identities},\
+                 \"publish_us_min\":{},\"publish_us_p50\":{},\"publish_us_max\":{},\
+                 \"settle_us_min\":{},\"settle_us_p50\":{},\"settle_us_max\":{},\
+                 \"db_bytes\":{db_bytes},\"wal_bytes\":{wal_bytes},\"shm_bytes\":{shm_bytes},\
+                 \"wal_bytes_after_checkpoint\":{wal_after},\"shm_bytes_after_checkpoint\":{shm_after},\
+                 \"db_bytes_after_checkpoint\":{db_after},\
+                 \"requests\":{},\"active_user_holds\":{},\"active_instance_holds\":{},\
+                 \"user_usage_rows\":{},\"arch\":\"{}\",\"os\":\"{}\",\"profile\":\"debug\"}}",
+                percentile(&mut publish_us.clone(), 0.0),
+                percentile(&mut publish_us.clone(), 0.5),
+                percentile(&mut publish_us.clone(), 1.0),
+                percentile(&mut settle_us.clone(), 0.0),
+                percentile(&mut settle_us.clone(), 0.5),
+                percentile(&mut settle_us.clone(), 1.0),
+                rows.0,
+                rows.1,
+                rows.2,
+                rows.3,
+                std::env::consts::ARCH,
+                std::env::consts::OS,
+            )
+            .expect("cell formats");
+            println!("M010_GATE_OBSERVATION {cell}");
+            fixture.database.close().await.expect("database closes");
+        }
+    }
+    if let Some(rss) = process_rss_kb() {
+        println!("M010_GATE_OBSERVATION {{\"rss_kb_after_suite\":{rss}}}");
+    }
 }
