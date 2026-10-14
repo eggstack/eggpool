@@ -56,15 +56,13 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M008 — enforceable token/cost admission corrective | ready | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | M005 published reservation interface accepted; strict bound-or-deny semantics and truthful estimated compatibility required. |
 | On-prem user access | M011 — admin/member dashboard browser qualification | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | Parallel to budget work; pinned legacy-page oracle and new Rust-owned browser references required for full closure. |
-
-
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M008 — enforceable token/cost admission corrective | active | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | Corrective to conditionally closed M005/M006/M007; proof-or-reject hard admission plus truthful estimated compatibility. |
 
 
 ## Blocked work
