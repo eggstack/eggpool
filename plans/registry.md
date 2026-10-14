@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 active | M005 budget lifecycle work active; physical qualification remains assigned to M007. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 closing | M005 implementation and verification complete; closure audit records remaining exact-cost/output and physical qualification evidence. |
 
 ## Dependency-ready implementation plans
 
@@ -63,7 +63,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M005 — durable user/model budgets | active | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | M004 is closed; implement atomic request holds, settlement, recovery and bounded user/model usage. |
+| On-prem user access | M005 — durable user/model budgets | closing | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | Atomic request holds, settlement/retry accounting and bounded user/model usage are implemented; closure audit underway. |
 
 
 ## Blocked work
