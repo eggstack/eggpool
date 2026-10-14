@@ -14,12 +14,17 @@ mod middleware;
 
 use auth::{account_page, login_page, login_submit, logout_submit, password_change};
 use dashboard::{
-    accounts_page, bandwidth_page, cache_page, events_page, grouped_timeseries_api, latency_page,
-    model_detail_page, models_page, overview, pings_page, reliability_page, routing_page,
-    runtime_page, static_chart_js, static_css, static_favicon, static_js,
-    stats_cache_observability, stats_cache_stability, stats_request_segmentation,
-    stats_request_shaping, stats_transcoding, summary, sync_accounts, theme_css, timeseries_api,
-    timeseries_page, traces_page,
+    accounts_page, assign_user_profile, audit_page, bandwidth_page, cache_page,
+    create_personal_token, create_profile, create_user, delete_profile, events_page,
+    grouped_timeseries_api, issue_admin_token, latency_page, model_detail_page, models_page,
+    my_account_page, my_models_page, overview, pings_page, profiles_page, reliability_page,
+    remove_profile_rule, remove_user_override, reset_user_password, revoke_personal_token,
+    revoke_user_tokens, routing_page, runtime_page, set_profile_preference, set_profile_rule,
+    set_user_budget, set_user_override, set_user_state, static_chart_js, static_css,
+    static_favicon, static_js, stats_cache_observability, stats_cache_stability,
+    stats_request_segmentation, stats_request_shaping, stats_transcoding, summary, sync_accounts,
+    theme_css, timeseries_api, timeseries_page, traces_page, update_profile, usage_page,
+    users_page,
 };
 use health::{
     healthz, integration_profile, models_api, readyz, runtime_status, status_api, update_status,
@@ -1122,6 +1127,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/login", get(login_page).post(login_submit))
         .route("/account", get(account_page))
         .route("/account/password", post(password_change))
+        .route("/my-account", get(my_account_page))
+        .route("/my-account/models", get(my_models_page))
+        .route("/account/tokens", post(create_personal_token))
+        .route("/account/tokens/revoke", post(revoke_personal_token))
+        .route("/usage", get(usage_page))
         .route("/logout", post(logout_submit));
 
     if dashboard {
@@ -1140,6 +1150,24 @@ pub fn build_router(state: AppState) -> Router {
             .route("/traces", get(traces_page))
             .route("/runtime", get(runtime_page))
             .route("/cache", get(cache_page))
+            .route("/users", get(users_page))
+            .route("/profiles", get(profiles_page))
+            .route("/admin/audit", get(audit_page))
+            .route("/admin/users/create", post(create_user))
+            .route("/admin/users/state", post(set_user_state))
+            .route("/admin/users/password", post(reset_user_password))
+            .route("/admin/users/token", post(issue_admin_token))
+            .route("/admin/users/revoke-tokens", post(revoke_user_tokens))
+            .route("/admin/users/profile", post(assign_user_profile))
+            .route("/admin/users/override", post(set_user_override))
+            .route("/admin/users/override/remove", post(remove_user_override))
+            .route("/admin/users/budget", post(set_user_budget))
+            .route("/admin/profiles/create", post(create_profile))
+            .route("/admin/profiles/update", post(update_profile))
+            .route("/admin/profiles/delete", post(delete_profile))
+            .route("/admin/profiles/rule", post(set_profile_rule))
+            .route("/admin/profiles/rule/remove", post(remove_profile_rule))
+            .route("/admin/profiles/prefer", post(set_profile_preference))
             .route("/api/stats/summary", get(summary))
             .route("/api/stats/transcoding", get(stats_transcoding))
             .route(

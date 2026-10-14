@@ -1,6 +1,7 @@
 use super::*;
 
 mod accounts;
+mod admin;
 mod cache;
 mod diagnostics;
 mod layout;
@@ -10,6 +11,7 @@ mod runtime;
 mod telemetry;
 
 pub(super) use accounts::*;
+pub(super) use admin::*;
 pub(super) use cache::*;
 pub(super) use diagnostics::*;
 pub(super) use layout::*;

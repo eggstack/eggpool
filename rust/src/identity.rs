@@ -44,6 +44,14 @@ pub enum IdentityError {
     InvalidAccessTransition,
     #[error("user was not found")]
     UserNotFound,
+    #[error("administrator privileges are required")]
+    AdministratorRequired,
+    #[error("the last active administrator cannot be disabled")]
+    LastAdminProtected,
+    #[error("username is already in use")]
+    UsernameConflict,
+    #[error("credential was not found")]
+    CredentialNotFound,
     #[error("credential entropy unavailable")]
     Entropy,
     #[error("password hashing worker failed")]
@@ -61,6 +69,24 @@ pub struct UserSummary {
     pub role: String,
     pub state: String,
     pub must_change_password: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialSummary {
+    pub id: String,
+    pub label: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminAuditEntry {
+    pub actor_id: String,
+    pub action: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,10 +113,10 @@ pub async fn recent_user_requests(
     database
         .call(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT proxy_request_id, model_id, provider_id, status, started_at,\
-                        COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),\
-                        COALESCE(cost_microdollars, 0)\
-                 FROM requests WHERE user_id = ?1 AND request_kind = 'logical'\
+                "SELECT proxy_request_id, model_id, provider_id, status, started_at, \
+                        COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), \
+                        COALESCE(cost_microdollars, 0) \
+                 FROM requests WHERE user_id = ?1 AND request_kind = 'logical' \
                  ORDER BY started_at DESC, id DESC LIMIT ?2",
             )?;
             let rows = statement.query_map((user_id, limit), |row| {
@@ -287,7 +313,8 @@ pub async fn list_users(database: &Database) -> Result<Vec<UserSummary>, Identit
     database
         .call(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, username, role, state, must_change_password FROM users ORDER BY username COLLATE NOCASE",
+                "SELECT id, username, role, state, must_change_password FROM users \
+                 ORDER BY username COLLATE NOCASE, id LIMIT 500",
             )?;
             let rows = statement.query_map([], |row| {
                 Ok(UserSummary {
@@ -302,6 +329,410 @@ pub async fn list_users(database: &Database) -> Result<Vec<UserSummary>, Identit
         })
         .await
         .map_err(IdentityError::Database)
+}
+
+/// Create a member with a one-time temporary password. The forced password
+/// change, managed-mode transition, and administrator audit row commit with
+/// the new user.
+pub async fn create_member(
+    database: &Database,
+    actor_id: &str,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    let username = validate_username(username)?;
+    let password_hash = hash_password(temporary_password).await?;
+    let id = random_hex(16)?;
+    let actor_id = actor_id.to_owned();
+    let normalized = username.to_ascii_lowercase();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let actor_is_admin: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                [&actor_id],
+                |row| row.get(0),
+            )?;
+            if !actor_is_admin {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let taken: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE normalized_username = ?1)",
+                [&normalized],
+                |row| row.get(0),
+            )?;
+            if taken {
+                return Ok(AdminMutation::Conflict);
+            }
+            connection.execute(
+                "INSERT INTO users(id, username, normalized_username, role, password_hash, must_change_password) \
+                 VALUES (?1, ?2, ?3, 'member', ?4, 1)",
+                (&id, &username, &normalized, &password_hash),
+            )?;
+            connection.execute(
+                "UPDATE user_access_state SET state = 'managed', updated_at = CURRENT_TIMESTAMP \
+                 WHERE singleton = 1 AND state IN ('admin_initialized', 'managed')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                 VALUES (?1, 'create_user', 'user', ?2)",
+                (&actor_id, &id),
+            )?;
+            Ok(AdminMutation::User(UserSummary {
+                id,
+                username,
+                role: "member".to_owned(),
+                state: "active".to_owned(),
+                must_change_password: true,
+            }))
+        })
+        .await?;
+    match outcome {
+        AdminMutation::User(user) => Ok(user),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        AdminMutation::Conflict => Err(IdentityError::UsernameConflict),
+        _ => Err(IdentityError::UserNotFound),
+    }
+}
+
+/// Disable or reactivate a downstream account. Disabling revokes sessions and
+/// credentials and advances auth_epoch in the same transaction.
+pub async fn set_user_enabled(
+    database: &Database,
+    actor_id: &str,
+    target_id: &str,
+    enabled: bool,
+) -> Result<(), IdentityError> {
+    let actor_id = actor_id.to_owned();
+    let target_id = target_id.to_owned();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let actor_is_admin: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                [&actor_id],
+                |row| row.get(0),
+            )?;
+            if !actor_is_admin {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let target: Option<(String, String)> = connection
+                .query_row(
+                    "SELECT role, state FROM users WHERE id = ?1",
+                    [&target_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((role, current_state)) = target else {
+                return Ok(AdminMutation::Missing);
+            };
+            let next_state = if enabled { "active" } else { "disabled" };
+            if current_state == next_state {
+                return Ok(AdminMutation::Done);
+            }
+            if !enabled && role == "admin" {
+                let active_admins: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND state = 'active'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if active_admins <= 1 {
+                    return Ok(AdminMutation::LastAdmin);
+                }
+            }
+            connection.execute(
+                "UPDATE users SET state = ?1, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+                (next_state, &target_id),
+            )?;
+            if !enabled {
+                connection.execute(
+                    "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND revoked_at IS NULL",
+                    [&target_id],
+                )?;
+                connection.execute(
+                    "UPDATE web_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND revoked_at IS NULL",
+                    [&target_id],
+                )?;
+            }
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) VALUES (?1, ?2, 'user', ?3)",
+                (&actor_id, if enabled { "reactivate_user" } else { "disable_user" }, &target_id),
+            )?;
+            Ok(AdminMutation::Done)
+        })
+        .await?;
+    match outcome {
+        AdminMutation::Done | AdminMutation::User(_) => Ok(()),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        AdminMutation::LastAdmin => Err(IdentityError::LastAdminProtected),
+        AdminMutation::Missing => Err(IdentityError::UserNotFound),
+        _ => Err(IdentityError::UsernameConflict),
+    }
+}
+
+/// Set a temporary password for an active user and revoke all existing
+/// sessions/credentials so the next browser login must change it.
+pub async fn admin_reset_password(
+    database: &Database,
+    actor_id: &str,
+    target_id: &str,
+    temporary_password: &str,
+) -> Result<(), IdentityError> {
+    let password_hash = hash_password(temporary_password).await?;
+    let actor_id = actor_id.to_owned();
+    let target_id = target_id.to_owned();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let actor_is_admin: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                [&actor_id],
+                |row| row.get(0),
+            )?;
+            if !actor_is_admin {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let changed = connection.execute(
+                "UPDATE users SET password_hash = ?1, must_change_password = 1, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND state = 'active'",
+                (&password_hash, &target_id),
+            )?;
+            if changed == 0 {
+                return Ok(AdminMutation::Missing);
+            }
+            connection.execute(
+                "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND revoked_at IS NULL",
+                [&target_id],
+            )?;
+            connection.execute(
+                "UPDATE web_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND revoked_at IS NULL",
+                [&target_id],
+            )?;
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) VALUES (?1, 'reset_password', 'user', ?2)",
+                (&actor_id, &target_id),
+            )?;
+            Ok(AdminMutation::Done)
+        })
+        .await?;
+    match outcome {
+        AdminMutation::Done | AdminMutation::User(_) => Ok(()),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        AdminMutation::Missing => Err(IdentityError::UserNotFound),
+        _ => Err(IdentityError::UserNotFound),
+    }
+}
+
+pub async fn list_user_credentials(
+    database: &Database,
+    user_id: &str,
+) -> Result<Vec<CredentialSummary>, IdentityError> {
+    let user_id = user_id.to_owned();
+    database
+        .call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT id, label, created_at, last_used_at, expires_at FROM user_credentials \
+                 WHERE user_id = ?1 AND revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 100",
+            )?;
+            statement
+                .query_map([user_id], |row| {
+                    Ok(CredentialSummary {
+                        id: row.get(0)?,
+                        label: row.get(1)?,
+                        created_at: row.get(2)?,
+                        last_used_at: row.get(3)?,
+                        expires_at: row.get(4)?,
+                    })
+                })?
+                .collect()
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
+pub async fn revoke_user_credential(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+    credential_id: &str,
+) -> Result<(), IdentityError> {
+    let actor_id = actor_id.to_owned();
+    let user_id = user_id.to_owned();
+    let credential_id = credential_id.to_owned();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let authorized: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                 ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
+                 WHERE actor.role = 'admin' OR actor.id = target.id)",
+                (&actor_id, &user_id),
+                |row| row.get(0),
+            )?;
+            if !authorized {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let changed = connection.execute(
+                "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP \
+                 WHERE id = ?1 AND user_id = ?2 AND revoked_at IS NULL",
+                (&credential_id, &user_id),
+            )?;
+            if changed == 0 {
+                return Ok(AdminMutation::Missing);
+            }
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                 VALUES (?1, 'revoke_token', 'credential', ?2)",
+                (&actor_id, &credential_id),
+            )?;
+            Ok(AdminMutation::Done)
+        })
+        .await?;
+    match outcome {
+        AdminMutation::Done | AdminMutation::User(_) => Ok(()),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        AdminMutation::Missing => Err(IdentityError::CredentialNotFound),
+        _ => Err(IdentityError::CredentialNotFound),
+    }
+}
+
+#[derive(Debug)]
+enum AdminMutation {
+    Done,
+    User(UserSummary),
+    TokenCount(u64),
+    Forbidden,
+    LastAdmin,
+    Missing,
+    Conflict,
+}
+
+pub async fn admin_audit(
+    database: &Database,
+    limit: usize,
+) -> Result<Vec<AdminAuditEntry>, IdentityError> {
+    let limit = limit.clamp(1, 500) as i64;
+    database
+        .call(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT actor_id, action, target_kind, target_id, created_at FROM ( \
+                   SELECT actor_id, action, target_kind, target_id, created_at, id AS row_id \
+                   FROM user_admin_audit \
+                   UNION ALL \
+                   SELECT actor_id, action, 'budget_rule' AS target_kind, CAST(user_id AS TEXT), \
+                          created_at, id AS row_id FROM user_budget_rule_audit \
+                 ) ORDER BY created_at DESC, row_id DESC LIMIT ?1",
+            )?;
+            statement
+                .query_map([limit], |row| {
+                    Ok(AdminAuditEntry {
+                        actor_id: row.get(0)?,
+                        action: row.get(1)?,
+                        target_kind: row.get(2)?,
+                        target_id: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                })?
+                .collect()
+        })
+        .await
+        .map_err(IdentityError::Database)
+}
+
+async fn issue_api_token_as(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+    label: &str,
+) -> Result<IssuedCredential, IdentityError> {
+    let label = label.trim().to_owned();
+    if label.is_empty() || label.len() > 80 {
+        return Err(IdentityError::InvalidCredentialLabel);
+    }
+    let id = random_hex(16)?;
+    let selector = random_hex(8)?;
+    let secret = random_hex(32)?;
+    let token = format!("epk1_{selector}_{secret}");
+    let digest = digest(&token);
+    let actor_id = actor_id.to_owned();
+    let user_id = user_id.to_owned();
+    let returned_user_id = user_id.clone();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let authorized: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                 ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
+                 WHERE actor.role = 'admin' OR actor.id = target.id)",
+                (&actor_id, &user_id),
+                |row| row.get(0),
+            )?;
+            if !authorized {
+                return Ok(AdminMutation::Forbidden);
+            }
+            connection.execute(
+                "INSERT INTO user_credentials(id, user_id, label, selector, digest, scopes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'inference,discovery,integrations')",
+                (&id, &user_id, &label, &selector, &digest),
+            )?;
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                 VALUES (?1, 'issue_token', 'credential', ?2)",
+                (&actor_id, &id),
+            )?;
+            Ok(AdminMutation::Done)
+        })
+        .await?;
+    match outcome {
+        AdminMutation::Done => Ok(IssuedCredential {
+            user_id: returned_user_id,
+            token,
+        }),
+        _ => Err(IdentityError::AdministratorRequired),
+    }
+}
+
+pub async fn issue_personal_api_token(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+    label: &str,
+) -> Result<IssuedCredential, IdentityError> {
+    issue_api_token_as(database, actor_id, user_id, label).await
+}
+
+pub async fn revoke_user_api_tokens(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+) -> Result<u64, IdentityError> {
+    let actor_id = actor_id.to_owned();
+    let user_id = user_id.to_owned();
+    let outcome = database
+        .with_transaction(move |connection| {
+            let authorized: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                 ON actor.id = ?1 AND actor.role = 'admin' AND actor.state = 'active' \
+                    AND target.id = ?2 AND target.state = 'active')",
+                (&actor_id, &user_id),
+                |row| row.get(0),
+            )?;
+            if !authorized {
+                return Ok(AdminMutation::Forbidden);
+            }
+            let revoked = connection.execute(
+                "UPDATE user_credentials SET revoked_at = CURRENT_TIMESTAMP \
+                 WHERE user_id = ?1 AND revoked_at IS NULL",
+                [&user_id],
+            )? as u64;
+            connection.execute(
+                "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                 VALUES (?1, 'revoke_user_tokens', 'user', ?2)",
+                (&actor_id, &user_id),
+            )?;
+            Ok(AdminMutation::TokenCount(revoked))
+        })
+        .await?;
+    match outcome {
+        AdminMutation::TokenCount(count) => Ok(count),
+        AdminMutation::Forbidden => Err(IdentityError::AdministratorRequired),
+        _ => Err(IdentityError::UserNotFound),
+    }
 }
 
 pub async fn access_state(database: &Database) -> Result<String, IdentityError> {

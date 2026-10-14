@@ -124,3 +124,15 @@ integer microdollars as modeled/estimated usage, with separate
 `reservation_fallback_microdollars` totals. Unknown usage consumes the
 reserved estimate and increments an explicit unknown counter. This API does
 not represent invoices or exact charges for flat-rate provider accounts.
+
+With `[dashboard].enabled = true`, the dashboard also serves browser-session
+pages for `/users`, `/profiles`, `/usage`, `/admin/audit`, `/my-account`, and
+`/my-account/models`. Mutations use same-origin, CSRF-protected form posts
+under `/admin/users/*`, `/admin/profiles/*`, and `/account/tokens*`.
+Administrator pages and writes require an active admin browser session;
+members can read only their own usage, model access, and credentials. Agent
+tokens never authenticate these pages. A newly issued token is returned once
+in a `no-store` response and omitted from the account page thereafter.
+Profile edits use a version check so a stale form cannot overwrite a newer
+edit. The audit view contains actor, action, target type, target ID, and time;
+it does not record passwords, token values, prompts, or request bodies.

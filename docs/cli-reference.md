@@ -69,11 +69,11 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool init-config` | Initialize config from template |
 | `eggpool dashboard public --on\|--off` | Toggle dashboard key requirement (default public) |
 
-Policy commands are a local operator setup path until the admin dashboard
-offers profile editing. They write SQLite policy state directly; model IDs
-are exact and wildcards are rejected. `--actor ADMIN` records the active
-administrator responsible for each change. Restricted profiles should use
-`deny` as their default and add explicit allowed models.
+Policy commands remain available as a local operator setup path alongside the
+admin dashboard. They write SQLite policy state directly; model IDs are exact
+and wildcards are rejected. `--actor ADMIN` records the active administrator
+responsible for each change. Restricted profiles should use `deny` as their
+default and add explicit allowed models.
 
 Budget commands are local operator controls. At least one positive limit is
 required; each rule is keyed by user, optional exact model, and UTC calendar

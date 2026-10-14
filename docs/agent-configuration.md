@@ -210,7 +210,7 @@ supports_websockets = false
 Set `EGGPOOL_API_KEY` to the user's personal token in the environment used to run Codex. Issue one locally and copy its one-time output with:
 
 ```bash
-eggpool users token admin
+eggpool users token USER
 ```
 
 `eggpool getkey` remains for existing legacy installations; avoid sharing that
@@ -236,7 +236,7 @@ EggPool relies on Codex local compaction by default and does not advertise remot
 Image/tool capability is never claimed across a heterogeneous alias route. Neither variant embeds the resolved server key, so OpenCode output prints by default like Codex. Set the variable in the environment that launches OpenCode:
 
 ```bash
-eggpool users token admin
+eggpool users token USER
 ```
 
 Copy the one-time personal token into the environment that launches OpenCode.

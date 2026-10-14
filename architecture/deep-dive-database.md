@@ -18,7 +18,7 @@ Commit/rollback ambiguity fails closed: body failure maps to `Transaction`/`Sqli
 
 ## Migrations
 
-Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0059_*.sql` = versions 1–59) with `checksums.json` (`files` map, 59 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
+Migrations are embedded from `rust/assets/db/migrations/` (zero-padded `0001_*.sql`…`0060_*.sql` = versions 1–60) with `checksums.json` (`files` map, 60 entries), validated by `MigrationRunner::validate_embedded_checksums` before any database use. Migration 55 adds downstream identity and credential storage without repurposing upstream `accounts`; migration 56 adds browser sessions and CSRF digests; migration 57 adds user/auth-epoch attribution to request rows and selector-parent linkage; migration 58 adds local model-policy profiles, exact rules, per-user overrides, instance denials, and a monotonic policy revision; migration 59 adds user budget rules, request holds, attempt usage, audit, and bounded user/model/time rollups; migration 60 adds bounded secret-free administrative audit events. Schema history is never rewritten or renumbered. `MigrationRunner::run` keeps the `_migrations` ledger, rejects unknown versions and ledger-name mismatches, refuses read-only migration, and applies all pending migrations in one atomic transaction. Restore validation additionally checks the staged ledger against this inventory.
 
 `users`, `user_credentials`, and `user_access_state` hold usernames, password
 hashes, downstream roles, token digests, scopes, and explicit transition state.
@@ -63,7 +63,9 @@ remaining estimate and increments explicit unknown counters. Provider-reported,
 locally estimated, and reservation-fallback microdollars remain distinct in the
 user rollup. Rule changes retain an actor/version audit row. `GET
 /api/user-budget` returns only the authenticated user's data unless an active
-admin asks for a target `user_id`.
+admin asks for a target `user_id`. Migration 60 adds `user_admin_audit`, a
+bounded, secret-free actor/action/target record written transactionally with
+user, token, and profile administration mutations.
 
 ## Publication and finalization transactions
 

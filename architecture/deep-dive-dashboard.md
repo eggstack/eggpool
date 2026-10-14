@@ -4,8 +4,10 @@ Back to [Architecture](README.md). See also the review index in
 [overview.md](overview.md) (§§3, 12): §3 is the birds-eye route topology,
 this file is the dashboard authority.
 
-`rust/src/server/dashboard/` is the dashboard subsystem (17 files: 8
-top-level plus 9 under `render/`). Its `mod.rs` is a
+`rust/src/server/dashboard/` is the dashboard subsystem (19 files: 9
+top-level plus 10 under `render/`). Its `admin.rs` owns bounded user,
+profile, usage, audit, and personal-token page handlers; `render/admin.rs`
+owns their pure HTML projections. Its `mod.rs` is a
 thin facade that preserves the route entry points consumed by
 `rust/src/server/mod.rs`. `routes.rs` owns page request parsing and bounded
 data gathering; `api.rs` owns dashboard JSON request parsing and projections;
@@ -48,7 +50,7 @@ unconditionally (inference at `/v1/chat/completions`, `/v1/messages`,
 `/static/dashboard.js`, `/static/chart.js` (served from
 `chart.umd.min.js`), `/static/favicon.svg`, `/static/theme.css`). The
 remaining dashboard surface below is dashboard-gated: it is registered
-only when `[dashboard].enabled`, for 14 pages + 8 JSON endpoints.
+only when `[dashboard].enabled`, for 17 dashboard-gated pages + 8 JSON endpoints.
 
 When `[dashboard].enabled`, the router additionally serves `/`, `/accounts`, `/models`,
 `/models/{*model_id}`, `/latency`, `/events`, `/timeseries`, `/bandwidth`,
@@ -97,6 +99,18 @@ provider state. Authenticated operational endpoints return metadata-only
 responses, and rendering escapes operator/provider-controlled values. Runtime
 and generation views distinguish active and retiring ownership without exposing
 raw prompts, credentials, cache keys, or provider bodies.
+
+The admin/member surface is owned by `dashboard/admin.rs` and the pure
+`render/admin.rs` renderer. `/users`, `/profiles`, and `/admin/audit` are
+registered only with the dashboard. `/my-account`, `/my-account/models`, and
+`/usage` are browser-session routes; all remain private after identity
+initialization even when `dashboard.public = true`. Admin handlers require an
+active admin browser principal and every mutation checks same-origin plus the
+session-bound CSRF token. Agent credentials cannot enter this surface.
+Personal credential plaintext is rendered only in the creation response,
+which is `no-store`; subsequent account reads contain only bounded labels and
+metadata. The persistent audit projection stores actor, action, target kind,
+target ID, and time, without request content or secrets.
 
 ## Rendering and themes
 

@@ -28,7 +28,7 @@ fn semantically_equivalent_reformatted_manifest_is_accepted() {
     let reformatted = serde_json::to_string(&value).expect("compact JSON");
 
     let parsed = build_support::parse_checksums(&reformatted);
-    assert_eq!(parsed.len(), 59);
+    assert_eq!(parsed.len(), 60);
     assert_eq!(
         parsed.get("0001_initial.sql").map(String::as_str),
         Some("2aa5800147fc3ef8cc35591c44564244dba138b4dbc92fc1779e4f88813912ad")
@@ -55,7 +55,7 @@ fn rust_owned_runtime_assets_are_complete_and_hash_locked() {
         serde_json::from_str(include_str!("../assets/runtime-manifest.json"))
             .expect("runtime asset manifest is valid JSON");
     assert_eq!(manifest.manifest_version, "runtime-assets.v1");
-    assert_eq!(manifest.schema_migration_count, 59);
+    assert_eq!(manifest.schema_migration_count, 60);
     assert!(manifest.schema_change);
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -58,6 +58,7 @@
     "0056_web_sessions.sql": "b35541860dbc9c258de617f6f5a9c0111de6428be3128cd79d962bdda9634167",
     "0057_request_attribution.sql": "d9b66c87ee15c0b88abcb27599dc7b80213cc67df988fa1ace50cf511012e87b",
     "0058_model_policy.sql": "dc98951394abed29a02f48d75d2b72554da74d98de49563fa87c2548dd757fe2",
-    "0059_user_budgets.sql": "6637f6242750639cf292359ab3f476ff1f43ee8d9cb7de99ca67a84088f49bc2"
+    "0059_user_budgets.sql": "6637f6242750639cf292359ab3f476ff1f43ee8d9cb7de99ca67a84088f49bc2",
+    "0060_user_admin_audit.sql": "fe15aebc5a344aa25e049aaf554e8d7eaac69bd16134abbb41e24c390df8891c"
   }
 }

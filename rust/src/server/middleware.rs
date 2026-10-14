@@ -16,6 +16,9 @@ pub(super) async fn authenticate(
         Err(_) => return auth_unavailable(),
     };
     if legacy_server_key_allowed(Some(&access_state)) {
+        if requires_browser_session(&path) {
+            return unauthorized("Browser session required");
+        }
         if !requires_auth(&path, &state.server)
             || state.server.api_key.is_none()
             || state
@@ -61,8 +64,15 @@ pub(super) async fn authenticate(
     };
     let account_surface = matches!(
         path.as_str(),
-        "/account" | "/account/password" | "/logout" | "/api/user-budget"
+        "/account"
+            | "/account/password"
+            | "/logout"
+            | "/api/user-budget"
+            | "/my-account"
+            | "/my-account/models"
+            | "/usage"
     );
+    let account_surface = account_surface || path.starts_with("/account/tokens");
     if principal.role != "admin" && !account_surface {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
@@ -117,6 +127,21 @@ fn personal_credential_allowed(path: &str) -> bool {
         || path == "/api/user-budget"
 }
 
+fn requires_browser_session(path: &str) -> bool {
+    matches!(
+        path,
+        "/account"
+            | "/account/password"
+            | "/logout"
+            | "/my-account"
+            | "/my-account/models"
+            | "/usage"
+            | "/users"
+            | "/profiles"
+    ) || path.starts_with("/account/tokens")
+        || path.starts_with("/admin/")
+}
+
 fn is_unconditionally_public(path: &str) -> bool {
     path == "/v1/healthz"
         || path == "/v1/readyz"
@@ -150,6 +175,20 @@ fn auth_unavailable() -> Response {
 pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
     if is_unconditionally_public(path) {
         return false;
+    }
+    if matches!(
+        path,
+        "/account"
+            | "/account/password"
+            | "/logout"
+            | "/my-account"
+            | "/my-account/models"
+            | "/usage"
+    ) || path.starts_with("/account/tokens")
+        || path.starts_with("/admin/")
+        || matches!(path, "/users" | "/profiles")
+    {
+        return true;
     }
     // EggPool-specific integration profile is always authenticated. It must
     // never inherit a dashboard/public exemption even when the dashboard is

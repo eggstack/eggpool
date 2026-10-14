@@ -53,6 +53,24 @@ pub struct ModelPolicySnapshot {
     instance_denials: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub default_effect: String,
+    pub preferred_model_id: Option<String>,
+    pub version: i64,
+    pub assigned_users: i64,
+    pub model_rules: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyProfileRuleSummary {
+    pub profile_id: String,
+    pub model_id: String,
+    pub effect: String,
+}
+
 impl ModelPolicySnapshot {
     /// Monotonic persisted revision used by discovery ETags and diagnostics.
     pub fn revision(&self) -> i64 {
@@ -146,8 +164,12 @@ impl ModelPolicyService {
         default_effect: &str,
         actor_id: &str,
     ) -> Result<(), ModelPolicyError> {
-        let id = id.to_owned();
+        let id = id.trim();
         let name = name.trim().to_owned();
+        if id.is_empty() || id.len() > 64 || name.is_empty() || name.len() > 64 {
+            return Err(ModelPolicyError::InvalidPolicyInput);
+        }
+        let id = id.to_owned();
         let default_effect = validate_effect(default_effect)?;
         let actor_id = actor_id.to_owned();
         self.database
@@ -157,10 +179,174 @@ impl ModelPolicyService {
                      VALUES (?1, ?2, ?3, ?4, ?4)",
                     (&id, &name, default_effect, &actor_id),
                 )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'create_profile', 'profile', ?2)",
+                    (&actor_id, &id),
+                )?;
                 Ok(())
             })
             .await?;
         Ok(())
+    }
+
+    pub async fn list_profiles(&self) -> Result<Vec<PolicyProfileSummary>, ModelPolicyError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT p.id, p.name, p.default_effect, p.preferred_model_id, p.version, \
+                            (SELECT COUNT(*) FROM user_profile_assignments a WHERE a.profile_id = p.id), \
+                            (SELECT COUNT(*) FROM profile_model_rules r WHERE r.profile_id = p.id) \
+                     FROM policy_profiles p ORDER BY p.name COLLATE NOCASE, p.id LIMIT 200",
+                )?;
+                statement
+                    .query_map([], |row| {
+                        Ok(PolicyProfileSummary {
+                            id: row.get(0)?,
+                            name: row.get(1)?,
+                            default_effect: row.get(2)?,
+                            preferred_model_id: row.get(3)?,
+                            version: row.get(4)?,
+                            assigned_users: row.get(5)?,
+                            model_rules: row.get(6)?,
+                        })
+                    })?
+                    .collect()
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn list_profile_rules(
+        &self,
+    ) -> Result<Vec<PolicyProfileRuleSummary>, ModelPolicyError> {
+        self.database
+            .call(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT profile_id, model_id, effect FROM profile_model_rules \
+                     ORDER BY profile_id, model_id LIMIT 2000",
+                )?;
+                statement
+                    .query_map([], |row| {
+                        Ok(PolicyProfileRuleSummary {
+                            profile_id: row.get(0)?,
+                            model_id: row.get(1)?,
+                            effect: row.get(2)?,
+                        })
+                    })?
+                    .collect()
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn remove_profile_rule(
+        &self,
+        profile_id: &str,
+        model_id: &str,
+        actor_id: &str,
+    ) -> Result<bool, ModelPolicyError> {
+        let model_id = validate_model_id(model_id)?.to_owned();
+        let profile_id = profile_id.to_owned();
+        let actor_id = actor_id.to_owned();
+        self.database
+            .with_transaction(move |connection| {
+                let removed = connection.execute(
+                    "DELETE FROM profile_model_rules WHERE profile_id = ?1 AND model_id = ?2",
+                    (&profile_id, &model_id),
+                )?;
+                if removed == 1 {
+                    connection.execute(
+                        "UPDATE policy_profiles SET version = version + 1, updated_by = ?2, \
+                         updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                        (&profile_id, &actor_id),
+                    )?;
+                    connection.execute(
+                        "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                         VALUES (?1, 'remove_profile_rule', 'profile', ?2)",
+                        (&actor_id, &profile_id),
+                    )?;
+                }
+                Ok(removed == 1)
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    /// Compare-and-swap profile metadata. A stale browser form gets a conflict
+    /// instead of silently overwriting a newer administrator edit.
+    pub async fn update_profile(
+        &self,
+        id: &str,
+        name: &str,
+        default_effect: &str,
+        expected_version: i64,
+        actor_id: &str,
+    ) -> Result<bool, ModelPolicyError> {
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.len() > 64 || expected_version <= 0 {
+            return Err(ModelPolicyError::InvalidPolicyInput);
+        }
+        let effect = validate_effect(default_effect)?;
+        let id = id.to_owned();
+        let actor_id = actor_id.to_owned();
+        self.database
+            .with_transaction(move |connection| {
+                let changed = connection.execute(
+                    "UPDATE policy_profiles SET name = ?1, default_effect = ?2, \
+                     version = version + 1, updated_by = ?3, updated_at = CURRENT_TIMESTAMP \
+                     WHERE id = ?4 AND version = ?5",
+                    (&name, effect, &actor_id, &id, expected_version),
+                )?;
+                if changed == 1 {
+                    connection.execute(
+                        "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                         VALUES (?1, 'update_profile', 'profile', ?2)",
+                        (&actor_id, &id),
+                    )?;
+                }
+                Ok(changed == 1)
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
+    }
+
+    pub async fn delete_profile(
+        &self,
+        id: &str,
+        expected_version: i64,
+        actor_id: &str,
+    ) -> Result<bool, ModelPolicyError> {
+        if expected_version <= 0 {
+            return Err(ModelPolicyError::InvalidPolicyInput);
+        }
+        let id = id.to_owned();
+        let actor_id = actor_id.to_owned();
+        self.database
+            .with_transaction(move |connection| {
+                let assigned: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM user_profile_assignments WHERE profile_id = ?1)",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                if assigned {
+                    return Ok(false);
+                }
+                let changed = connection.execute(
+                    "DELETE FROM policy_profiles WHERE id = ?1 AND version = ?2",
+                    (&id, expected_version),
+                )?;
+                if changed == 1 {
+                    connection.execute(
+                        "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                         VALUES (?1, 'delete_profile', 'profile', ?2)",
+                        (&actor_id, &id),
+                    )?;
+                }
+                Ok(changed == 1)
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
     }
 
     pub async fn set_profile_rule(
@@ -188,6 +374,11 @@ impl ModelPolicyService {
                     "UPDATE policy_profiles SET version = version + 1, updated_by = ?2, \
                      updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
                     (&profile_id, &actor_id),
+                )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'set_profile_rule', 'profile', ?2)",
+                    (&actor_id, &profile_id),
                 )?;
                 Ok(())
             })
@@ -244,6 +435,11 @@ impl ModelPolicyService {
                      WHERE id = ?1",
                     (&profile_id, model_id, &actor_id),
                 )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'set_profile_preference', 'profile', ?2)",
+                    (&actor_id, &profile_id),
+                )?;
                 Ok(())
             })
             .await
@@ -275,7 +471,7 @@ impl ModelPolicyService {
         let profile_id = profile_id.to_owned();
         let actor_id = actor_id.to_owned();
         self.database
-            .call(move |connection| {
+            .with_transaction(move |connection| {
                 connection.execute(
                     "INSERT INTO user_profile_assignments(user_id, profile_id, assigned_by) \
                      VALUES (?1, ?2, ?3) \
@@ -284,6 +480,11 @@ impl ModelPolicyService {
                          version = user_profile_assignments.version + 1, \
                          assigned_by = excluded.assigned_by, updated_at = CURRENT_TIMESTAMP",
                     (&user_id, &profile_id, &actor_id),
+                )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'assign_profile', 'user', ?2)",
+                    (&actor_id, &user_id),
                 )?;
                 Ok(())
             })
@@ -303,7 +504,7 @@ impl ModelPolicyService {
         let effect = validate_effect(effect)?;
         let actor_id = actor_id.to_owned();
         self.database
-            .call(move |connection| {
+            .with_transaction(move |connection| {
                 connection.execute(
                     "INSERT INTO user_policy_overrides(user_id, model_id, effect, updated_by) \
                      VALUES (?1, ?2, ?3, ?4) \
@@ -312,10 +513,43 @@ impl ModelPolicyService {
                          updated_at = CURRENT_TIMESTAMP",
                     (&user_id, &model_id, effect, &actor_id),
                 )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'set_user_override', 'user', ?2)",
+                    (&actor_id, &user_id),
+                )?;
                 Ok(())
             })
             .await?;
         Ok(())
+    }
+
+    pub async fn remove_user_override(
+        &self,
+        user_id: &str,
+        model_id: &str,
+        actor_id: &str,
+    ) -> Result<bool, ModelPolicyError> {
+        let user_id = user_id.to_owned();
+        let model_id = validate_model_id(model_id)?.to_owned();
+        let actor_id = actor_id.to_owned();
+        self.database
+            .with_transaction(move |connection| {
+                let removed = connection.execute(
+                    "DELETE FROM user_policy_overrides WHERE user_id = ?1 AND model_id = ?2",
+                    (&user_id, &model_id),
+                )?;
+                if removed == 1 {
+                    connection.execute(
+                        "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                         VALUES (?1, 'remove_user_override', 'user', ?2)",
+                        (&actor_id, &user_id),
+                    )?;
+                }
+                Ok(removed == 1)
+            })
+            .await
+            .map_err(ModelPolicyError::Database)
     }
 
     pub async fn set_instance_denial(
@@ -327,7 +561,7 @@ impl ModelPolicyService {
         let model_id = validate_model_id(model_id)?.to_owned();
         let actor_id = actor_id.to_owned();
         self.database
-            .call(move |connection| {
+            .with_transaction(move |connection| {
                 if denied {
                     connection.execute(
                         "INSERT INTO instance_model_denials(model_id, created_by) \
@@ -340,6 +574,15 @@ impl ModelPolicyService {
                         [&model_id],
                     )?;
                 }
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, ?2, 'model', ?3)",
+                    (
+                        &actor_id,
+                        if denied { "deny_model" } else { "allow_model" },
+                        &model_id,
+                    ),
+                )?;
                 Ok(())
             })
             .await?;

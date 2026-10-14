@@ -63,6 +63,15 @@ or admin pages. The configured server API key remains a legacy shared
 inference credential during the staged migration. Do not share it with new
 users; issue an individual token instead.
 
+With `[dashboard].enabled = true`, an administrator can manage users, profiles,
+budgets, tokens, and audit history in the embedded dashboard. New members
+receive a temporary password and must change it at first login. Members can
+manage their personal tokens and view only their own usage and accessible
+models. A browser-issued token is shown once in a no-store response; set it as
+`EGGPOOL_API_KEY` in the environment that launches the desktop client.
+Remote browser login must use the operator's TLS proxy and trusted-proxy setup
+below: LAN reachability alone does not encrypt passwords or cookies.
+
 ### Updating EggPool
 
 ```bash

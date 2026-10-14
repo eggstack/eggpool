@@ -352,3 +352,15 @@ duplicates renderers:
   proxy/agent/daemon, or
   dashboard assets, so publishing a Windows helper never implies Windows
   proxy support.
+
+## Personal client credentials
+
+After local identity initialization, a user can issue a personal agent token
+from `/my-account` or an active administrator can issue one for a selected
+member. The one-time `epk1` plaintext is returned in a no-store browser
+response; the account page displays only bounded credential metadata and
+revocation controls. Desktop clients continue to read the user's token from
+`EGGPOOL_API_KEY`; `configremote`, Codex, OpenCode, and `eggpool-connect` do
+not embed a global administrator key. Agent tokens remain scoped to inference,
+model discovery, the versioned integration profile, and the user's budget
+view. They do not authorize dashboard or administration routes.
