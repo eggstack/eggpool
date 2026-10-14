@@ -186,15 +186,16 @@ sudo systemctl start eggpool
 
 Migrations are idempotent and safe to run multiple times.
 
-Schema migrations 55 and 56 add local downstream identity and browser-session
-tables. Backups made after those migrations include usernames, password
-hashes, personal-token digests, session/CSRF digests, revocation state, and
-access lifecycle state. They do not contain plaintext passwords, API tokens,
-session cookies, or CSRF tokens. After restoring an older backup, the migration
-is applied by `eggpool migrate` or normal server startup; existing provider
-accounts and keys remain owned by TOML/environment as before.
+Schema migrations 55–60 add local downstream identity, browser sessions,
+policy profiles, user budgets, and administrative audit tables. Backups made
+after those migrations include usernames, password hashes, personal-token
+digests, session/CSRF digests, policy and budget state, bounded usage records,
+and secret-free audit facts. They do not contain plaintext passwords, API
+tokens, session cookies, or CSRF tokens. After restoring an older backup, the
+migrations are applied by `eggpool migrate` or normal server startup; existing
+provider accounts and keys remain owned by TOML/environment as before.
 SQLite migrations are forward-only: an older executable may reject a database
-that has reached schema 56. Roll back by restoring a protected backup made
+that has reached schema 60. Roll back by restoring a protected backup made
 before the upgrade together with the matching older binary; do not point an
 older executable at the upgraded database.
 

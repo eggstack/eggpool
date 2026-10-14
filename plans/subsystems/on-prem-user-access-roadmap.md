@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: active
+Status: closed
 
 Long-term references:
 
@@ -243,4 +243,4 @@ plan is not an implemented capability.
 | M004 | closed | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | `plans/closure/on-prem-user-access/004-status.md` | Profile rules, concrete-model gates and revision invalidation verified; M005 unblocked. |
 | M005 | conditionally closed | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | `plans/closure/on-prem-user-access/005-status.md` | Durable user holds and usage API verified; exact output-token and USD caps, global scope, crash/restore tests, and overhead measurements remain named conditions. |
 | M006 | conditionally closed | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | `plans/closure/on-prem-user-access/006-status.md` | Browser parity captures remain outstanding; M005 estimate conditions and physical qualification carry into M007. |
-| M007 | closing | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | — | Gather final local verification and record unmeasured physical SBC capacity evidence. |
+| M007 | conditionally closed | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | `plans/closure/on-prem-user-access/007-status.md` | Physical SBC capacity, exact schema-54 restore, dashboard parity, and inherited M005 conditions remain unqualified; no capacity claim. |

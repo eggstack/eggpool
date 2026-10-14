@@ -49,7 +49,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 closing | Gather M007 closure evidence; M005 estimate/global-scope/recovery, M006 parity, and physical qualification conditions remain explicit. |
+| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 conditionally closed | No implementation plan remains in this line. SBC capacity, exact schema-54 restore, dashboard parity, and M005 conditions remain explicit; no capacity claim. |
 
 ## Dependency-ready implementation plans
 
@@ -63,7 +63,6 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M007 — small-team qualification and legacy migration | closing | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | Gather final local verification and record physical qualification limits. |
 
 
 ## Blocked work
@@ -84,6 +83,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M007 — small-team qualification, migration, and release hardening | conditionally closed — 964 serial Rust tests + 166 tooling tests; focused transport/migration/lifecycle/finalization and installer/SBC harnesses pass; seven synthetic loopback requests complete with no reservations left; physical Pi/Le Potato capacity and schema-54 restore remain unmeasured, so no 49-user or concurrency claim | `plans/closure/on-prem-user-access/007-status.md`, local artifact `artifacts/qualification/on-prem-user-access-m007-local.json` |
 | On-prem user access M006 — web administration and personal client integration | conditionally closed — migration 60, session/role/CSRF-fenced admin and member screens, one-time/revocable personal credentials, bounded audit/list reads, 964 serial Rust tests + 166 tooling tests; browser parity captures and M005 estimate/physical evidence carried into M007 | `plans/closure/on-prem-user-access/006-status.md`, implementation `a3f2d00a` |
 | On-prem user access M004 — profile-based model authorization | closed — migration 58, exact profile and user policy, concrete-dispatch checks, filtered model discovery and policy ETag; default/no-default compile gates and 957 all-target tests passed; M005 promoted to ready | `plans/closure/on-prem-user-access/004-status.md`, implementation `f537df4`, concurrency fixture `c53bf4d` |
 | On-prem user access M005 — durable user/model budgets | conditionally closed — migration 59, transactional holds, retry/terminal settlement, bounded authenticated usage and 962 serial workspace tests; exact output/USD caps, global scope, crash/restore tests and overhead measurement remain explicit conditions; M006 promoted to ready | `plans/closure/on-prem-user-access/005-status.md`, implementation `49dc6ce` |
@@ -413,3 +413,13 @@ closure; they do not block preparatory compatibility and recovery work. No
 other registered plan declares M006 as a dependency, so no other plan was
 promoted. M005 estimate/global-scope/recovery findings and M001 Argon2 hardware
 measurement remain carried conditions.
+
+
+Unblock audit (on-prem user access M007 conditionally closed, implementation
+`a3f2d00a`, `plans/closure/on-prem-user-access/007-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M001–M007 are
+terminal and no successor or downstream plan declares this workstream as a
+dependency. No plan was promoted. The physical SBC, exact schema-54 restore,
+dashboard parity, M005 budget, and hosted-CI conditions remain visible in the
+closure; no named-user capacity claim is supported by the local synthetic run.
