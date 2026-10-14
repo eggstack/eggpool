@@ -310,6 +310,23 @@ async fn two_user_browser_journey_fences_admin_data_and_personal_credentials() {
         forbidden_users.starts_with("HTTP/1.1 403"),
         "{forbidden_users}"
     );
+    let member_admin_post = format!(
+        "username=intruder&password=M006+temporary+member+password&profile_id=&csrf={member_csrf}"
+    );
+    let member_create_forbidden = http_request(
+        address,
+        "POST",
+        "/admin/users/create",
+        &member_admin_post,
+        Some(&member_cookies),
+        Some(&origin),
+        None,
+    )
+    .await;
+    assert!(
+        member_create_forbidden.starts_with("HTTP/1.1 403"),
+        "{member_create_forbidden}"
+    );
 
     let change_password = format!(
         "current_password=M006+temporary+member+password&new_password=M006+new+member+password+passphrase&csrf={member_csrf}"

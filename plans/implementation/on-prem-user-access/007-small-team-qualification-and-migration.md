@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 007 — Small-team qualification, migration and release hardening
 
-Status: blocked
+Status: ready
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 
@@ -25,11 +25,15 @@ guide rather than an invented 50-concurrent-request SLA.
 **Hard dependency:** accepted M006 closure. Real target hardware is an
 operational evidence requirement, not a paper substitute.
 
-## 2. Why blocked
+## 2. Readiness and remaining qualification gate
 
-The full end-to-end human/admin/client/budget capability does not yet
-exist. Run no performance claims against mocked earlier stages.
-Target-host qualification cannot be replaced by CI x86 timings.
+M006 is conditionally closed with the admin/member route journey and
+user-scoped client behavior implemented. M006's dashboard parity and M005's
+estimate/recovery findings are carried into this qualification pass. Physical
+SBC capacity evidence is still unavailable on the current macOS x86_64 host;
+run reproducible synthetic/local checks now, but make no SBC or 49-named-user
+capacity claim without explicitly provisioned target hardware. CI and hosted
+ARM timings cannot replace physical Pi/Le Potato measurements.
 
 ## 3. Baseline evidence
 

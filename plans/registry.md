@@ -49,13 +49,14 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 closing | Gather M006 closure evidence; M005 estimate/global-scope/recovery conditions remain; M007 retains physical qualification. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 ready | M006 browser parity evidence and M005 estimate/global-scope/recovery conditions carry into M007; physical qualification remains operational. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M007 — small-team qualification and legacy migration | ready | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | Hard M006 dependency satisfied by conditional closure; physical SBC and ordinary-host evidence remain operational acceptance gates. |
 
 
 
@@ -63,14 +64,12 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M006 — web administration and personal client integration | closing | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | Gather required route, user-journey, browser, docs, and verification evidence. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M007 — target qualification and legacy migration (`plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md`) | Hard: M006 closure; operational physical SBC/ordinary host evidence. |
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 
@@ -85,6 +84,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M006 — web administration and personal client integration | conditionally closed — migration 60, session/role/CSRF-fenced admin and member screens, one-time/revocable personal credentials, bounded audit/list reads, 964 serial Rust tests + 166 tooling tests; browser parity captures and M005 estimate/physical evidence carried into M007 | `plans/closure/on-prem-user-access/006-status.md`, implementation `a3f2d00a` |
 | On-prem user access M004 — profile-based model authorization | closed — migration 58, exact profile and user policy, concrete-dispatch checks, filtered model discovery and policy ETag; default/no-default compile gates and 957 all-target tests passed; M005 promoted to ready | `plans/closure/on-prem-user-access/004-status.md`, implementation `f537df4`, concurrency fixture `c53bf4d` |
 | On-prem user access M005 — durable user/model budgets | conditionally closed — migration 59, transactional holds, retry/terminal settlement, bounded authenticated usage and 962 serial workspace tests; exact output/USD caps, global scope, crash/restore tests and overhead measurement remain explicit conditions; M006 promoted to ready | `plans/closure/on-prem-user-access/005-status.md`, implementation `49dc6ce` |
 | On-prem user access M003 — principal propagation and attribution | conditionally closed — typed principal and durable logical request ownership across finite, stream, compact, retries, and selector child; 953 integration tests passed, 1 ignored; two unrelated update unit-test failures and physical measurement carried as explicit conditions; M004 promoted to ready | `plans/closure/on-prem-user-access/003-status.md`, implementation `9af8787a` |
@@ -401,3 +401,15 @@ M004 remains blocked on M003 attribution; M005 on M004 policy gates; M006 on
 M005 durable budgets; M007 on M006 and physical qualification. No other
 registered plan depends on M001. The M001 Argon2 SBC measurement condition is
 carried into M007, so promotion of M002 does not assert physical sizing.
+
+
+Unblock audit (on-prem user access M006 conditionally closed, implementation
+`a3f2d00a`, `plans/closure/on-prem-user-access/006-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M007's hard M006
+dependency is satisfied and it is promoted to ready. Its physical SBC and
+ordinary-host measurements remain operational evidence required for M007
+closure; they do not block preparatory compatibility and recovery work. No
+other registered plan declares M006 as a dependency, so no other plan was
+promoted. M005 estimate/global-scope/recovery findings and M001 Argon2 hardware
+measurement remain carried conditions.
