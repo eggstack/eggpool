@@ -1037,6 +1037,48 @@ async fn admission_extracts_per_surface_output_bounds() {
 }
 
 #[tokio::test]
+async fn admission_preserves_routing_inputs_for_transcode_eligibility() {
+    use eggpool::request::{AdmissionOptions, StaticRoutingFacts, admit_request};
+
+    // Regression guard: routing facts built from admission must carry the
+    // transcode protocols (and other routing inputs) untouched, or
+    // cross-surface requests lose upstream eligibility with no admission
+    // error. M008 dropped this copy and broke messages-to-responses
+    // transcoding while native surfaces kept passing.
+    let body = br#"{"model":"m","max_tokens":32,"messages":[{"role":"user","content":"hi"}]}"#;
+    let admitted = admit_request(
+        body.as_slice(),
+        AdmissionOptions {
+            client_surface: ClientSurface::Messages,
+            ..AdmissionOptions::default()
+        },
+    )
+    .expect("messages admission succeeds");
+    let mut inputs = StaticRoutingFacts {
+        requested_protocol: Some("anthropic".into()),
+        transcode_protocols: vec!["openai".into(), "anthropic".into(), "gemini".into()],
+        catalog_stale_after_s: Some(60),
+        now: 1_700_000_000,
+        ..StaticRoutingFacts::default()
+    };
+    inputs.capability_policy.insert("k".into(), "v".into());
+    let facts = admitted.routing_facts(&inputs);
+    assert_eq!(
+        facts.transcode_protocols,
+        vec![
+            "openai".to_owned(),
+            "anthropic".to_owned(),
+            "gemini".to_owned()
+        ]
+    );
+    assert_eq!(facts.requested_protocol.as_deref(), Some("anthropic"));
+    assert_eq!(facts.catalog_stale_after_s, Some(60));
+    assert_eq!(facts.now, 1_700_000_000);
+    assert_eq!(facts.request_surface, "messages");
+    assert_eq!(facts.budget_requested_output_tokens, Some(32));
+}
+
+#[tokio::test]
 async fn provider_tariff_overflow_is_rejected_by_config_validation() {
     let mut config = Config::default();
     let mut provider = eggpool::config::ProviderConfig {

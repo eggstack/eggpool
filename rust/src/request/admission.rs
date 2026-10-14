@@ -501,6 +501,7 @@ fn routing_request_facts_from_parts(
     let client_surface = admitted_client_surface(canonical);
     facts.client_protocol = Some(client_surface.protocol().into());
     facts.request_surface = client_surface.as_str().into();
+    facts.transcode_protocols = inputs.transcode_protocols.clone();
     facts.projected_tokens = reservation_tokens.min(i64::MAX as u64) as i64;
     facts.budget_input_worst_case_tokens = budget_facts.input_worst_case_tokens;
     facts.budget_requested_output_tokens = budget_facts.requested_output_tokens;
