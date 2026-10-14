@@ -45,7 +45,7 @@ this record.
 | D — Baseline/candidate pairing discipline | `test_m012_control_candidate_modes_are_explicit_and_exclusive` | pass (contract) | Control/candidate modes explicit, mutually exclusive, phase-diagnostic-bound. |
 | E — M008–M011 closure cross-reference | Closure records `008/009/010/011/013-status.md` | pass | Hard contracts (token/cost admission, global intersection, crash recovery, browser qualification, transcode eligibility) accepted on local evidence. |
 | E — Focused regression targets | `on_prem_budgets` 27, `on_prem_identity` 3, `server_transport` 14, `runtime_lifecycle_r009` 6 | pass | macOS local; explicitly not physical evidence. |
-| E — Whole-workspace hosted CI | Branch CI at pre-closure baseline | pass (prior) | `check` 7m51s pass on rerun; installer shells pass; `cargo-deny` fails on pre-existing rustls advisories (separate triage). Current-head CI pending push. |
+| E — Whole-workspace hosted CI | Branch CI at closure head `820fdc98` | pass | `check` 7m52s pass; both installer shells pass; `cargo-deny` fails on pre-existing rustls advisories with lockfile unchanged (separate dependency triage, as at M010/M011). |
 | Work package 1 — tooling harness + fixture validations | `tests/tooling/test_on_prem_sbc_qualification.py` 9 passed; `test_qualification_sbc.py` 41 passed | pass | Manifest, redaction, target binding, concurrency-vs-users, pairing contracts green. |
 
 ## 3. Production implementation evidence
