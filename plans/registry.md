@@ -49,13 +49,15 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 conditionally closed; M006 conditionally closed; M007 conditionally closed | No implementation plan remains in this line. SBC capacity, exact schema-54 restore, dashboard parity, and M005 conditions remain explicit; no capacity claim. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M008 & M011 ready; M009/M010/M012 dependency- or hardware-gated correctives | M001/M003/M005/M006/M007 are historically conditionally closed. No physical SBC/small-team capacity claim or hard USD/token guarantee is accepted yet. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M008 — enforceable token/cost admission corrective | ready | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | M005 published reservation interface accepted; strict bound-or-deny semantics and truthful estimated compatibility required. |
+| On-prem user access | M011 — admin/member dashboard browser qualification | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | Parallel to budget work; pinned legacy-page oracle and new Rust-owned browser references required for full closure. |
 
 
 
@@ -69,6 +71,9 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
+| On-prem user access | M009 — global-instance budget intersection (`plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md`) | Hard: M008 accepted closure, conservative reservation contract. |
+| On-prem user access | M010 — budget crash/restore and v54 migration (`plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md`) | Hard: M008 and M009 accepted closures; global user-budget state machine stable. |
+| On-prem user access | M012 — physical SBC and small-team qualification (`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`) | Hard: M008–M011 accepted closures. Operational: provisioned physical SBC and reference ordinary Linux target; no capacity claim until measured. |
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 

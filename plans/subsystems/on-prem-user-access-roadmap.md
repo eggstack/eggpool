@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -73,23 +73,44 @@ as authority, custom upstream per-user provider secrets, or a published
 
 ## 4. Current state
 
-- `rust/src/server/middleware.rs` checks a single inbound key; nonloopback
-  requires a server key but keyless loopback is accepted.
-- `rust/src/config.rs` defaults `server.host=0.0.0.0`, dashboard public.
-- `rust/src/server/mod.rs` registers private/public dashboard and /v1 routes;
-  `rust/src/server/health.rs` globally projects /v1/models and integration.
-- `rust/assets/db/migrations/0001_initial.sql` defines upstream `accounts`;
-  migrations through 0054; `0032_usage_rollups.sql` aggregates by upstream
-  provider/model/account, not downstream human.
-- `rust/src/coordinator/endpoints.rs`, `publication.rs`, `finalization.rs`
-  own the request lifecycle; `rust/src/model_router.rs` and
-  `coordinator/semantic.rs` select virtual concrete targets.
-- `rust/src/quota/` and `routing/eligibility.rs` own provider capacity;
-  `rust/src/db/connection.rs` has one SQLite gate.
-- `rust/src/operations/integrations.rs`, `eggpool-client-config` and
-  `eggpool-connect` reference the global key/profile today.
-- `docs/deployment.md`, `docs/agent-configuration.md` and dashboard
-  parity fixtures reflect the pre-user state.
+M001–M007 were implemented on PR #7 from baseline
+`c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` and
+each has a retained closure record. M002 and M004 are closed.
+M001, M003, M005, M006 and M007 are **conditionally closed**,
+not equivalent to release qualification.
+
+The current Rust implementation contains:
+- Append-only SQLite identity/session/request-attribution/policy/budget/admin
+  migrations **0055–0060**; `rust/src/identity.rs`, `web_session.rs`,
+  `model_policy.rs`, `user_budget.rs`.
+- `rust/src/server/middleware.rs` / `auth.rs`: personal agent tokens,
+  opaque browser sessions, CSRF and managed-route role fencing.
+- `rust/src/coordinator/endpoints.rs`, `publication.rs`,
+  `finalization.rs`: per-request principal, concrete-model authorization
+  and downstream-user budget holds/usage settlement.
+- `rust/src/server/dashboard/admin.rs` and `render/admin.rs`:
+  admin/member user, profile, budget, usage and audit views.
+- `rust/tests/on_prem_*.rs` and successful local/hosted default CI;
+  the M007 synthetic provider artifact exercises seven loopback requests.
+
+Remaining verified gaps (see immutable closure records M001/M003/M005–M007):
+- M005 token/USD hard-limit semantics are not proven from estimated holds;
+  unknown-price models can receive generic USD estimates; **global instance
+  ceilings are absent**.
+- Budget-specific process-crash and actual schema-54 restored-backup
+  qualification, plus ordinary-host SQLite-gate overhead measurements,
+  were not performed.
+- M006 new admin/member pages lack browser screenshot/interaction
+  qualification. The Python oracle applies to pre-existing pages only.
+- Physical Pi/Le Potato Argon2/SQLite/WAL/TTFT and 1/5/10/25/49 **named**
+  user workloads are unmeasured. No concurrency/capacity claim is authorized.
+- M003 records local `operations::update` failures; the latest hosted
+  branch CI is green, but reproducible platform classification is not yet
+  documented.
+
+Correctives M008–M012 were created by explicit user direction;
+the predecessor closures remain immutable. This roadmap is **active**
+until required corrective closure evidence exists.
 
 ## 5. Target architecture
 
@@ -178,6 +199,71 @@ qualification, docs, truthful service sizing. Exit: 1,5,10,25,49 named users
 with explicit concurrent load levels; single-user deltas; safe failure modes
 and no unjustified performance/capacity claim. Deferred: SaaS/enterprise.
 
+### M008 — Enforceable output-token and price-bound admission corrective
+
+Class: capability. Ready (M005 published reservation contract exists).
+Corrects M005's estimated-output/unknown-price hard-cap overclaim.
+Deliverable: typed hard-versus-estimated enforcement, conservative
+proof-or-reject across model/wire/selector/retries and explicit local-price
+authority in operator TOML; preservation of existing estimated rules.
+Exit: no unbounded/unpriced hard request reaches upstream; strict request/
+concurrency behavior unchanged. Source:
+`plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md`.
+
+### M009 — Instance-global budget and scope intersection corrective
+
+Class: capability. Hard: M008 closure. Adds one-instance global and
+optional model ceilings intersected with user/model rules, with
+atomic cross-user last-slot holds, no tenant hierarchy or second writer.
+Exit: two separate users cannot over-admit a shared global remaining
+slot; one-admin/no-global-rule compatibility remains. Source:
+`plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md`.
+
+### M010 — Durable crash recovery and schema-54 restore corrective
+
+Class: invariant. Hard: M008 and M009 closures. Independent
+schema-54 backup->migration and modern backup/restore checks,
+restart/finalization/cancellation fault matrix, paired ordinary-host
+SQLite gate observations. Reclassifies M003's local updater-test issue
+against the latest hosted-green baseline without altering updater
+code by default. Exit: every recoverable budget hold converges
+correctly; no silent historical identity/backfill or restore gap. Source:
+`plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md`.
+
+### M011 — Admin/member browser qualification corrective
+
+Class: polish. Ready independently of M008–M010. Frozen Python oracle
+continues verifying *historical dashboard pages*; new admin/member
+pages get separate Rust-owned reference screenshots and interactive
+CSRF/accessibility/role tests. Operational browser/oracle artifacts
+must exist for full closure. Exit: no unreviewed existing-page
+regression; new pages have reproducible desktop/mobile browser
+evidence and no token leakage. Source:
+`plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md`.
+
+### M012 — Physical SBC small-team qualification and final disposition
+
+Class: polish. Hard: M008–M011 closures. Operational: actual Pi/Le Potato
+plus representative ordinary hardware. Measure 1/5/10/25/49 **named**
+user counts separately from simultaneous request levels, login
+hashing, RSS, SQLite/WAL and tail latency against a paired solo baseline.
+Exit: evidence supports precisely stated deployment envelope; no
+50-concurrent-request marketing claim and no unresolved release-
+blocking budget/security/restore defects. Source:
+`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`.
+
+### Corrective dependency graph and promotion
+
+- Hard: M008 -> M009 -> M010 -> M012.
+- Parallel: M011 may run alongside M008–M010, but M012 needs M011 closure.
+- Operational: browser/oracle reference for full M011 closure; provisioned
+  physical SBC and ordinary Linux host for M012. Unavailable evidence
+  must be reported as blocker, never fabricated or replaced by hosted CI.
+- No predecessor conditional closure is retroactively altered; an additive
+  M008–M012 closure record provides the corrective proof. On each
+  milestone closure, audit the blocked registry and promote only
+  genuinely ready successors.
+
 ## 8. Cross-cutting requirements
 
 - Storage: append immutable numbered migrations and checksums; preserve DB
@@ -228,10 +314,13 @@ live keys or provider services.
 
 ## 11. Completion definition
 
-All M001–M007 accepted closure records linked; successful fresh and upgrade
-flows, secure admin and member UX, no modeled bypass, exact budget lifecycle
-and measured target-class performance with truthful documentation. A ready
-plan is not an implemented capability.
+M001–M007 historical closure records remain linked and truthful, with their
+open conditions addressed by accepted M008–M012 corrective closure records.
+The subsystem closes only when hard-limit rules are provable or fail closed,
+instance-global budgets intersect correctly, crash/restore and browser
+qualification pass, and physical SBC small-team evidence supports the
+documented target envelope. Conditional closure is not release closure.
+A ready plan is not an implemented capability.
 
 ## 12. Milestone status
 
@@ -244,3 +333,8 @@ plan is not an implemented capability.
 | M005 | conditionally closed | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | `plans/closure/on-prem-user-access/005-status.md` | Durable user holds and usage API verified; exact output-token and USD caps, global scope, crash/restore tests, and overhead measurements remain named conditions. |
 | M006 | conditionally closed | `plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md` | `plans/closure/on-prem-user-access/006-status.md` | Browser parity captures remain outstanding; M005 estimate conditions and physical qualification carry into M007. |
 | M007 | conditionally closed | `plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md` | `plans/closure/on-prem-user-access/007-status.md` | Physical SBC capacity, exact schema-54 restore, dashboard parity, and inherited M005 conditions remain unqualified; no capacity claim. |
+| M008 | ready | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | — | M005 reservation contract present; hard token/USD assertions need correction. |
+| M009 | blocked | `plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md` | — | Hard: M008 closure. |
+| M010 | blocked | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | — | Hard: M008 and M009 closures. |
+| M011 | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | — | Independent implementation; operational browser/oracle artifacts required for full closure. |
+| M012 | blocked | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | — | Hard: M008–M011 closures; operational physical hardware evidence. |
