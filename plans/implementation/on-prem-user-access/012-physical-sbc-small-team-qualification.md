@@ -1,8 +1,11 @@
 # On-Prem User Access M012 — Physical SBC and small-team qualification closure
 
-Status: active
+Status: blocked
 
 Repository baseline: `10eeee25` on `plans/on-prem-small-team-user-access` (PR #7), schema 62, M001–M007 closure records as of 2026-10-13 plus accepted M008/M009/M010/M011/M013 closures as of 2026-10-14.
+
+Tooling foundation landed (`b1f6d20b`); physical SBC and reference
+Linux host evidence remain missing — see `plans/closure/on-prem-user-access/012-status.md`.
 
 Source roadmap:
 - `plans/subsystems/on-prem-user-access-roadmap.md#m012--physical-sbc-small-team-qualification-and-final-disposition`

@@ -67,7 +67,7 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M012 — physical SBC and small-team qualification (`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`) | Hard M008–M011 closures accepted; blocked solely on operational evidence: provisioned physical SBC and reference ordinary Linux target; no capacity claim until measured. |
+| On-prem user access | M012 — physical SBC and small-team qualification (`plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md`) | Hard M008–M011 closures accepted; tooling boundary contracts landed (`tests/tooling/test_on_prem_sbc_qualification.py`, 9 tests); blocked solely on operational evidence: provisioned physical SBC and reference ordinary Linux target; blocked closure `plans/closure/on-prem-user-access/012-status.md`; no capacity claim until measured. |
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 
@@ -448,3 +448,17 @@ the mode-aware M008 form (the M011 labels predated enforcement modes) while
 keeping M011's `on_prem_page`/`scroll_table` structural fixes; the M011 plan
 file moved `ready` → `implemented` (activation was skipped in the separate
 session — recorded here, not rewritten).
+
+Unblock audit (on-prem user access M012 blocked closure,
+`plans/closure/on-prem-user-access/012-status.md`): searched
+`plans/implementation/on-prem-user-access/`, the roadmap dependency graph, and
+the dependency-ready, active, and blocked registry tables. M012's hard
+dependency (accepted M008–M011 closures) is satisfied; the operational
+requirement (provisioned physical SBC and reference ordinary Linux target)
+is not, so M012 stays blocked and the roadmap stays `active`. The closure
+pass lands only the tooling boundary-contract suite
+(`tests/tooling/test_on_prem_sbc_qualification.py`, 9 tests) with zero
+production diff; no plan is promoted and nothing else declares these
+milestones as a dependency. No capacity, latency, Argon2, RSS, WAL, or
+named-user claim is accepted. When hardware is provisioned, resume at plan
+work packages 2–4 with predeclared gates.
