@@ -1,6 +1,6 @@
 # On-Prem User Access M010 — Budget crash recovery and schema-54 restore
 
-Status: blocked
+Status: ready
 
 Repository baseline: `c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` on `plans/on-prem-small-team-user-access` (PR #7), schema 60, M001–M007 closure records as of 2026-10-13.
 
