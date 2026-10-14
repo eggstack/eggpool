@@ -5,7 +5,7 @@ Status: ready
 Repository baseline: `c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` on `plans/on-prem-small-team-user-access` (PR #7), schema 60, M001–M007 closure records as of 2026-10-13.
 
 Source roadmap:
-- `plans/subsystems/on-prem-user-access-roadmap.md#m011`
+- `plans/subsystems/on-prem-user-access-roadmap.md#m011--adminmember-browser-qualification-corrective`
 
 Long-term references:
 - `plans/000-long-term-specification.md#1-product-definition`
