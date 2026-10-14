@@ -336,5 +336,5 @@ A ready plan is not an implemented capability.
 | M008 | ready | `plans/implementation/on-prem-user-access/008-hard-token-cost-admission-corrective.md` | — | M005 reservation contract present; hard token/USD assertions need correction. |
 | M009 | blocked | `plans/implementation/on-prem-user-access/009-global-budget-intersection-corrective.md` | — | Hard: M008 closure. |
 | M010 | blocked | `plans/implementation/on-prem-user-access/010-budget-crash-recovery-and-schema54-restore.md` | — | Hard: M008 and M009 closures. |
-| M011 | ready | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | — | Independent implementation; operational browser/oracle artifacts required for full closure. |
+| M011 | closed | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | `plans/closure/on-prem-user-access/011-status.md` | Frozen Python oracle rebuilt and run with no new historical parity gaps; on-prem admin/member pages qualified against a Rust-owned approved reference. Browser sign-in and responsive/navigation defects corrected. |
 | M012 | blocked | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | — | Hard: M008–M011 closures; operational physical hardware evidence. |

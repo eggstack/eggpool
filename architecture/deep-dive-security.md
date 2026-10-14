@@ -56,7 +56,11 @@ until that identity is initialized.
 Sessions have a 12-hour idle bound and 7-day absolute expiry. Cookies are
 HttpOnly, SameSite=Lax, root-path scoped, and Secure when the accepted
 connection is HTTPS. Unsafe browser forms require same-origin Origin/Referer
-and a session-bound CSRF token. Remote login requires HTTPS or a trusted proxy
+and a session-bound CSRF token. A same-origin browser form POST presents `Origin`
+and `Referer` together, so `server::auth::same_origin` requires every provenance
+header that is present to agree with the request `Host` rather than exactly one
+of them; duplicated headers and userinfo-bearing authorities still fail closed.
+Remote login requires HTTPS or a trusted proxy
 peer listed as a literal IP in `security.trusted_proxies` that sends one
 `X-Forwarded-Proto: https` value. Other forwarded headers do not establish
 trust. `security.allow_insecure_web_auth` is an explicit development override

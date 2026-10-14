@@ -307,7 +307,7 @@ pub(in crate::server) async fn audit_page(State(state): State<AppState>) -> Resp
         })
         .collect::<String>();
     html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Admin audit</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>Administrative audit</h1><table><thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table><p><a href=\"/users\">Users</a></p></main></html>"
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Admin audit</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>Administrative audit</h1><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Administrative audit\"><table><thead><tr><th>UTC time</th><th>Actor ID</th><th>Action</th><th>Target type</th><th>Target ID</th></tr></thead><tbody>{rows}</tbody></table></div><p><a href=\"/users\">Users</a></p></main></html>"
     ))
 }
 
@@ -333,7 +333,7 @@ pub(in crate::server) async fn my_account_page(
         .map(|_| "<p>New credentials are displayed only once when created. Store them in your client environment as EGGPOOL_API_KEY.</p>")
         .unwrap_or_default();
     html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My account</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><table><thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></section><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></main></html>",
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My account</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My account</h1><p>Signed in as {}</p><p><a href=\"/usage\">My usage</a> · <a href=\"/my-account/models\">My accessible models</a> · <a href=\"/account\">Change password</a></p><section><h2>Personal client credentials</h2>{token_flash}<form method=\"post\" action=\"/account/tokens\"><label>Credential label <input name=\"label\" minlength=\"1\" maxlength=\"80\" required></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create credential</button></form><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Personal client credentials\"><table><thead><tr><th>Label</th><th>Created</th><th>Last used</th><th>Action</th></tr></thead><tbody>{rows}</tbody></table></div></section><form method=\"post\" action=\"/logout\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Log out</button></form></main></html>",
         html_escape(&session.username),
         html_escape(&csrf),
         html_escape(&csrf)
@@ -362,7 +362,7 @@ pub(in crate::server) async fn my_models_page(
         .map(|model| format!("<li><code>{}</code></li>", html_escape(&model)))
         .collect::<String>();
     html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>My models</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My accessible models</h1><p>This list is filtered by your current model policy.</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></main></html>"
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My models</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My accessible models</h1><p>This list is filtered by your current model policy.</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></main></html>"
     ))
 }
 

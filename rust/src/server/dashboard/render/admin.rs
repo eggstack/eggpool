@@ -41,7 +41,7 @@ pub(in crate::server::dashboard) fn render_users_admin(
                 html_escape(csrf), html_escape(&user.id)
             );
             let budget_form = format!(
-                "<details><summary>Set budget</summary><form method=\"post\" action=\"/admin/users/budget\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Max requests <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens (estimated) <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars (estimated) <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"user_id\" value=\"{}\"><button type=\"submit\">Save budget</button></form></details>",
+                "<details><summary>Set budget</summary><form method=\"post\" action=\"/admin/users/budget\"><label>Exact model (blank for all) <input name=\"model_id\" maxlength=\"512\"></label><label>Window <select name=\"window\"><option value=\"day\">UTC day</option><option value=\"month\">UTC month</option></select></label><label>Max requests (hard) <input type=\"number\" min=\"1\" name=\"max_requests\"></label><label>Max tokens (estimated) <input type=\"number\" min=\"1\" name=\"max_tokens\"></label><label>Max microdollars (estimated) <input type=\"number\" min=\"1\" name=\"max_microdollars\"></label><label>Max concurrent (hard) <input type=\"number\" min=\"1\" name=\"max_concurrent\"></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"user_id\" value=\"{}\"><button type=\"submit\">Save budget</button></form></details>",
                 html_escape(csrf), html_escape(&user.id)
             );
             let token_form = format!(
@@ -105,6 +105,27 @@ pub(in crate::server::dashboard) fn render_profiles_admin(
     )
 }
 
+/// Standalone document shell for on-prem pages that are not rendered through
+/// the shared dashboard layout. The usage pages are role-specific reads rather
+/// than dashboard panels, so without a shell they would ship a bare `<section>`
+/// fragment: no stylesheet, no viewport declaration, and tables with no way to
+/// scroll on a narrow screen.
+fn on_prem_page(title: &str, body: &str) -> String {
+    format!(
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main>{}</main></html>",
+        html_escape(title),
+        body
+    )
+}
+
+/// Wrap one table in the shared keyboard-reachable scroll region.
+fn scroll_table(label: &str, table: &str) -> String {
+    format!(
+        "<div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"{}\">{table}</div>",
+        html_escape(label)
+    )
+}
+
 pub(in crate::server::dashboard) fn render_usage_admin(
     rows: &[(String, String, i64, i64, i64)],
     csrf: &str,
@@ -112,9 +133,18 @@ pub(in crate::server::dashboard) fn render_usage_admin(
     let content = rows.iter().map(|(user, model, requests, tokens, cost)| {
         format!("<tr><td>{}</td><td>{}</td><td>{requests}</td><td>{tokens}</td><td>{cost}</td></tr>", html_escape(user), html_escape(model))
     }).collect::<String>();
-    format!(
-        "<section class=\"panel\"><h2>Usage</h2><p>Token and microdollar figures are usage estimates; estimated USD is not an invoice or a hard ceiling for unpriced models.</p><table><thead><tr><th>User</th><th>Model</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{content}</tbody></table><form method=\"get\" action=\"/admin/audit\"><button type=\"submit\">View admin audit</button></form><input type=\"hidden\" value=\"{}\"></section>",
-        html_escape(csrf)
+    let limits = scroll_table(
+        "Usage by user and model",
+        &format!(
+            "<table><thead><tr><th>User</th><th>Model</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{content}</tbody></table>"
+        ),
+    );
+    on_prem_page(
+        "Usage",
+        &format!(
+            "<section class=\"panel\"><h2>Usage</h2><p>Token and microdollar figures are usage estimates; estimated USD is not an invoice or a hard ceiling for unpriced models.</p>{limits}<form method=\"get\" action=\"/admin/audit\"><button type=\"submit\">View admin audit</button></form><input type=\"hidden\" value=\"{}\"></section>",
+            html_escape(csrf)
+        ),
     )
 }
 
@@ -154,8 +184,23 @@ pub(in crate::server::dashboard) fn render_my_usage(
             )
         })
         .collect::<String>();
-    format!(
-        "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Token and microdollar values are estimates; estimated USD is not an invoice or a guaranteed cap for unpriced models. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2><table><thead><tr><th>Model</th><th>Window</th><th>Max requests</th><th>Max tokens (estimated)</th><th>Max microdollars (estimated)</th><th>Max concurrent</th></tr></thead><tbody>{rule_rows}</tbody></table><h2>Settled usage</h2><table><thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table><p><a href=\"/my-account\">My account</a></p></section>",
-        html_escape(user)
+    let limit_rows = scroll_table(
+        "Configured usage limits",
+        &format!(
+            "<table><thead><tr><th>Model</th><th>Window</th><th>Max requests (hard)</th><th>Max tokens (estimated)</th><th>Max microdollars (estimated)</th><th>Max concurrent (hard)</th></tr></thead><tbody>{rule_rows}</tbody></table>"
+        ),
+    );
+    let usage_rows = scroll_table(
+        "Settled usage",
+        &format!(
+            "<table><thead><tr><th>Model</th><th>Window start (UTC)</th><th>Requests</th><th>Tokens</th><th>Estimated microdollars</th></tr></thead><tbody>{usage_rows}</tbody></table>"
+        ),
+    );
+    on_prem_page(
+        "My usage",
+        &format!(
+            "<section class=\"panel\"><h1>My usage</h1><p>Account: {}</p><p>Daily/monthly periods use UTC. Request and concurrency limits are hard admission caps. Token and microdollar values are estimates; estimated USD is not an invoice or a guaranteed cap for unpriced models. Active requests hold budget before dispatch and may reduce admission headroom.</p><h2>Configured limits</h2>{limit_rows}<h2>Settled usage</h2>{usage_rows}<p><a href=\"/my-account\">My account</a></p></section>",
+            html_escape(user)
+        ),
     )
 }
