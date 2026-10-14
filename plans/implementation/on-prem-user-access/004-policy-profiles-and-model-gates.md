@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 004 — Profile-based model authorization
 
-Status: closing
+Status: implemented
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 

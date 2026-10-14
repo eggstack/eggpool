@@ -49,13 +49,14 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closing | M004 implementation committed; closure evidence and M005 unblock audit in progress; physical qualification remains assigned to M007. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M001 conditionally closed; M002 closed; M003 conditionally closed; M004 closed; M005 ready | M004 policy gates closed and M005 promoted; physical qualification remains assigned to M007. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M005 — durable user/model budgets | ready | `plans/implementation/on-prem-user-access/005-durable-user-budgets.md` | Hard: M004 closed; implement independent durable user budget holds, settlement and recovery. |
 
 
 
@@ -63,14 +64,12 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M004 — profile-based model authorization | closing | `plans/implementation/on-prem-user-access/004-policy-profiles-and-model-gates.md` | Implementation `f537df4`; compile/test gates passed; closure record and dependency audit in progress. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M005 — user/model budgets (`plans/implementation/on-prem-user-access/005-durable-user-budgets.md`) | Hard: M004 closure and verified concrete-model policy checks. |
 | On-prem user access | M006 — admin/member web + personal integration (`plans/implementation/on-prem-user-access/006-web-admin-and-personal-integrations.md`) | Hard: M005 closure and durable user budget APIs. |
 | On-prem user access | M007 — target qualification and legacy migration (`plans/implementation/on-prem-user-access/007-small-team-qualification-and-migration.md`) | Hard: M006 closure; operational physical SBC/ordinary host evidence. |
 
@@ -87,6 +86,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M004 — profile-based model authorization | closed — migration 58, exact profile and user policy, concrete-dispatch checks, filtered model discovery and policy ETag; default/no-default compile gates and 957 all-target tests passed; M005 promoted to ready | `plans/closure/on-prem-user-access/004-status.md`, implementation `f537df4`, concurrency fixture `c53bf4d` |
 | On-prem user access M003 — principal propagation and attribution | conditionally closed — typed principal and durable logical request ownership across finite, stream, compact, retries, and selector child; 953 integration tests passed, 1 ignored; two unrelated update unit-test failures and physical measurement carried as explicit conditions; M004 promoted to ready | `plans/closure/on-prem-user-access/003-status.md`, implementation `9af8787a` |
 | On-prem user access M002 — browser sessions and route authorization | closed — opaque sessions, CSRF, role-separated managed routes, trusted-proxy transport checks; 947 Rust tests passed, 1 ignored; M003 promoted to ready; SBC hash qualification remains with M007 | `plans/closure/on-prem-user-access/002-status.md`, implementation `087953a3` |
 | On-prem user access M001 — admin bootstrap and client credentials | conditionally closed — migration 55, local admin and personal-token lifecycle, legacy-key cutover, 939 workspace tests passed; physical SBC Argon2 qualification carried to M007; M002 promoted to ready | `plans/closure/on-prem-user-access/001-status.md`, implementation `ecdc313` |

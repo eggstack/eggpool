@@ -1,6 +1,6 @@
 # On-Prem User Access Milestone 005 — Durable user/model budgets
 
-Status: blocked
+Status: ready
 
 Repository baseline: `main` at `9a0a903c9944b69a6c1ae9fa969bb8603d5c65d9` (accepted new architecture on `plans/on-prem-small-team-user-access`).
 
@@ -26,12 +26,12 @@ dimensions within explicit enforceability limits; handle self-hosted
 unpriced LLMs meaningfully. **Hard dependency:** accepted M004 policy
 authorization closure. No dashboard editor in this milestone.
 
-## 2. Why this milestone is blocked
+## 2. Readiness
 
-Auth/principal/policy contracts are not yet delivered. Reusing
-`QuotaPolicy` provider scoring without an independent user admission
-authority is not an acceptable substitute. Hold implementation until the
-model-policy and request-identity boundaries are verified.
+M004 is closed with durable policy profiles, revision invalidation, and
+concrete-model checks at coordinator admission. M003 established stable
+principal ownership and request attribution. Reusing `QuotaPolicy` provider
+scoring without an independent user admission authority remains out of scope.
 
 ## 3. Baseline evidence
 
