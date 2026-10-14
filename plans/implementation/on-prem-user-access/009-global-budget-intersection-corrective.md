@@ -1,6 +1,6 @@
 # On-Prem User Access M009 — Global-instance budget ceiling and intersection
 
-Status: ready
+Status: active
 
 Repository baseline: `c18dcc2051ae4987a2cb95a7cd046b8aff2095ff` on `plans/on-prem-small-team-user-access` (PR #7), schema 60, M001–M007 closure records as of 2026-10-13.
 
