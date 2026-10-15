@@ -127,10 +127,12 @@ Class: polish. Conditionally closed with repeated physical MMC/tmpfs
 attribution in `plans/closure/on-prem-concurrency-performance/001-status.md`.
 The completed corpus repeats the existing four-way workload on MMC and tmpfs;
 Plan 238's database-only tmpfs comparison and Plans 237/239's phase controls
-independently support the storage attribution. The original broader target
-(controlled host I/O, persistent alternate media, and repeated 1/2/4/8 plus
-named-user/budget cases) remains a condition for any future optimization or
-wider operating claim. Source:
+independently support the storage attribution. One supplemental Pi 5 NVMe run
+adds a 1,000-request four-way, five-principal user/global-budget cell, but it
+is not a repeated paired media comparison and used no controlled competing
+I/O. The original broader target (controlled host I/O, repeated persistent
+media, and repeated 1/2/4/8 plus named-user/budget cases) remains a condition
+for any future optimization or wider operating claim. Source:
 `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md`.
 
 Future optimization milestone: **not registered**. Requires

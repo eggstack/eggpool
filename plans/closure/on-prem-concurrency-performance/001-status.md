@@ -24,7 +24,7 @@ This agrees with the independent Plan 237 direct-provider and finite-phase evide
 
 Plan 238 independently moved only the SQLite database/WAL/SHM to its temporary filesystem: its three MMC diagnostics had 3,331–4,944 ms maxima while all three database-only tmpfs controls had 4 ms maximum, with background-task contamination ruled out. This isolates the database storage path while leaving the qualification root on MMC.
 
-The condition is that M001 did not isolate ambient competing MMC activity or qualify concurrency levels 1/2/8 and 5/49 active managed principals with hard user/global budgets varied. No SSD control was available. Therefore this closure makes no new capacity claim, does not recommend tmpfs for durable data, and does not authorize a SQLite topology, journal, checkpoint, or concurrency-policy change. Existing restricted Pi guidance remains authoritative.
+One supplemental physical NVMe run now covers four-way concurrency, 1,000 requests, five managed principals, and hard user plus global request budgets. It completed with p50/p95/p99/max of 13/30/32/33 ms. This is one exploratory cell, not a repeated paired comparison; no controlled competing-I/O workload was active. M001 still lacks concurrency 1/2/8 repetitions, 49-principal budget cases, and a frozen p99 acceptance threshold. Therefore this evidence makes no new capacity claim, does not recommend tmpfs for durable data, and does not authorize a SQLite topology, journal, checkpoint, or concurrency-policy change. Existing restricted Pi guidance remains authoritative.
 
 ## 2. Requirement-to-evidence matrix
 
@@ -36,16 +36,17 @@ The condition is that M001 did not isolate ambient competing MMC activity or qua
 | Reproduce the MMC tail without relabeling a failure | MMC artifacts and `test_m001_storage_control_reproduces_and_removes_the_g3_tail` | pass — G3 fails | All three four-way MMC runs exceed both G3 thresholds; p95/max are 7,599/7,599 ms, 12,058/12,058 ms, and 8,579/8,579 ms. The reports are qualification `pass` because functional/convergence checks pass; their latency gate outcome remains fail. |
 | Falsify provider as the dominant contributor | `artifacts/qualification/237-sbc-finite-tail-diagnostic.json`; `artifacts/qualification/237-sbc-finite-tail-run-1..3.json` | pass | Direct-provider maximum 1–2 ms; slowest request pre-provider phase 1,778–3,473 ms, provider-service maximum 0–1 ms. |
 | Falsify durable MMC storage as the dominant contributor | Paired MMC/tmpfs corpus; Plan 237, 238, and 239 physical artifacts | pass | New four-way p95 median falls from 8,579 ms to 10 ms; new max median falls from 8,579 ms to 11 ms. Plan 237's sequential diagnostic falls from 1,785–3,473 ms maximum to 4 ms on tmpfs. Plan 238 moved only the SQLite files: MMC max 3,331–4,944 ms vs. tmpfs max 4 ms, with no task contamination. Plan 239's slowest requests correlate with foreground publication commit/checkpoint-sequence changes. |
-| Capture p50/p95/max and bounded resource/convergence facts | Six Q008 v2 reports and matrix guard | pass | p99 is deliberately absent; 30 samples do not support an independent p99 estimate and the runner contract reports p50/p95/max only. All 192 concurrent requests completed and every report converged. |
-| Vary 1/2/4/8 concurrency and 1/5/49 managed principals, budget policy, controlled host I/O, and alternate persistent media | M012 closure/artifacts provide separate one-off 1/2/8 matrix, 49-user provisioning, and 3× 4-way managed runs; M001 did not repeat these dimensions as a paired factorial experiment | partial | M001's new repeated paired corpus holds workload at four clients and one synthetic admin principal with hard user/global budgets disabled. No controlled competing-I/O generator or SSD comparison was run. These remain explicit conditions; M012 evidence is not misrepresented as an M001 paired result. |
+| Capture p50/p95/max and bounded resource/convergence facts | Six Q008 v2 reports and matrix guard | pass | The original 30-sample reports do not support an independent p99 estimate. All 192 concurrent requests completed and every report converged. |
+| Exercise configurable concurrency, principal, budget, p99, and persistent-media reporting | `artifacts/qualification/on-prem-concurrency-performance/ssd-c4-u5-user-global-run-1.json` | partial | One Pi 5 NVMe/ext4 run completed 1,000/1,000 requests at concurrency four with five personal tokens and hard user/global request budgets; p50/p95/p99/max were 13/30/32/33 ms. No repeated paired MMC control or competing-I/O load; the 1,000-sample run establishes a p99 estimate but not a p99 gate. |
+| Vary 1/2/4/8 concurrency and 1/5/49 managed principals, budget policy, controlled host I/O, and alternate persistent media | M012 closure/artifacts plus the supplemental NVMe artifact and matrix manifest | partial | The new SSD evidence is one four-way/five-principal/user-global-budget run. No repeated paired media comparison or competing-I/O workload was run, and concurrency 1/2/8 plus 49-principal budget cases remain unqualified. M012 evidence is not misrepresented as a paired M001 result. |
 | Keep production, schema, and operator policy unchanged absent causal design review | `git diff --name-only -- rust/` empty; no migration/config/API change | pass | Existing single SQLite gate, WAL/NORMAL and the documented restricted envelope remain unchanged. |
-| Machine-check the committed qualification corpus | `tests/tooling/test_on_prem_mmc_tail_attribution.py` | pass | Checks exact six-artifact census, common target/candidate, completion/convergence, threshold outcomes, redaction, and absence of a p99 claim. |
+| Machine-check the committed qualification corpus | `tests/tooling/test_on_prem_mmc_tail_attribution.py` | partial | The existing guard covers the six original Q008 reports. The supplemental SSD report is schema-valid and secret-free but is not yet included in that guard's assertions. |
 
 ## 3. Production implementation evidence
 
 No production Rust, SQLite schema, config, endpoint, auth, or persistence-policy change was justified or made. The production owners remain `rust/src/coordinator/publication.rs`, `rust/src/coordinator/finalization.rs`, and `rust/src/db/connection.rs`; the independent phase evidence attributes the tested tail to the current durable SQLite publication/checkpoint path. Changing WAL mode, transaction topology, checkpoint policy, worker count, or database placement would require a separate reviewed plan and, where ownership/journal semantics change, an accepted ADR.
 
-The only implementation additions are the sanitized physical reports, a self-describing experiment manifest, and a tooling regression guard. The tooling continues to use a loopback provider, isolated temporary roots, managed personal-token bootstrap, and redacted aggregate output.
+Implementation additions include the sanitized physical reports, a self-describing experiment manifest, a tooling regression guard, and benchmark-only controls for concurrency/request count, synthetic managed-principal count, hard budget mode, p99 at 1,000+ concurrent observations, mount-class reporting, and capped same-filesystem competing writes. No production runtime or database-policy change was made.
 
 ## 4. Verification executed
 
@@ -60,6 +61,7 @@ uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool 
 TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-1.json
 TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-2.json
 TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-3.json
+TMPDIR=/mnt/qualification-ssd/eggpool-m001-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/ssd-c4-u5-user-global-run-1.json
 uv run pytest tests/tooling/test_on_prem_mmc_tail_attribution.py -q
 uv run pytest tests/tooling/test_qualification_sbc.py -q
 uv run pytest tests/tooling/ -q --tb=short --maxfail=1
@@ -85,6 +87,7 @@ The attempted debug refresh was `CARGO_BUILD_JOBS=1 cargo build --manifest-path 
 | Locked release build | pass; release binary SHA-256 matches all six physical reports. |
 | Ordinary Q008 run | pass on physical Pi 5; functional fixture only. |
 | Three MMC + three tmpfs Q008 benchmark runs | pass on physical Pi 5; every 32-request batch completed 32/32 and converged. G3 latency thresholds fail on MMC and pass on tmpfs. |
+| Supplemental NVMe benchmark | pass; 1,000/1,000 HTTP 200, p50/p95/p99/max 13/30/32/33 ms, five principals, user/global request budgets, and zero pending requests or active reservations. Competing I/O was disabled. |
 | `uv sync --frozen` | pass; 9 packages checked. |
 | `uv run pytest tests/tooling/test_on_prem_mmc_tail_attribution.py -q` | pass; 4 tests. |
 | `uv run pytest tests/tooling/test_qualification_sbc.py -q` | pass; 41 tests. |
@@ -94,7 +97,7 @@ The attempted debug refresh was `CARGO_BUILD_JOBS=1 cargo build --manifest-path 
 | Full tooling rerun, Pyright, Rust fmt/Clippy/no-default/full serial tests | not run after the saturation stop; no result is claimed. |
 | Hosted CI | not run from this local closure pass. |
 
-The report's runner-origin field says `q005-qualified-aarch64-copy` because the CLI default was not overridden. The release binary was built on this Pi immediately before the corpus and the measured SHA-256 is consistent across the reports; the manifest and this closure retain and disclose the provenance-label mismatch instead of rewriting raw reports. A future repeat must pass `--candidate-origin on-device-release-build` explicitly.
+The six original reports' runner-origin field says `q005-qualified-aarch64-copy` because the CLI default was not overridden. The release binary was built on this Pi immediately before that corpus and the measured SHA-256 is consistent across the reports; the manifest and this closure retain and disclose the provenance-label mismatch instead of rewriting raw reports. The supplemental NVMe run explicitly passed `--candidate-origin on-device-release-build`.
 
 ## 5. Invariant review
 
@@ -106,7 +109,7 @@ The report's runner-origin field says `q005-qualified-aarch64-copy` because the 
 
 ## 6. Failure and recovery review
 
-All six benchmark reports completed the 32-request batch without request failures and converged to zero pending requests and active reservations. Their standard qualification lifecycle checks include isolated backup/recovery, restart reconciliation, and graceful shutdown. The benchmark did not induce OOM, swap pressure, process kills, WAL nonconvergence, or a production-data operation. Ambient host load and the absence of a controlled competing-I/O trial limit causal claims beyond the MMC-versus-tmpfs storage result.
+All six original benchmark reports completed the 32-request batch without request failures and converged to zero pending requests and active reservations. The supplemental NVMe run completed its 1,000-request batch without request failures and converged to zero pending requests and active reservations. The standard qualification lifecycle checks include isolated backup/recovery, restart reconciliation, and graceful shutdown. The benchmark did not induce OOM, swap pressure, process kills, WAL nonconvergence, or a production-data operation. Ambient host load and the absence of a controlled competing-I/O trial limit causal claims beyond the MMC-versus-tmpfs storage result.
 
 ## 7. Migration and compatibility review
 
@@ -118,20 +121,20 @@ Qualification used a loopback-only synthetic provider and the runner's disposabl
 
 ## 9. Documentation and operations
 
-`docs/raspberry-pi.md` was not changed: the evidence does not justify a new durable-storage requirement or a safe operator mitigation. The existing restricted Pi 5 envelope remains accurate. The closure and matrix manifest link all six raw physical reports. No physical-SBC claim is made from a hosted or non-aarch64 environment.
+`docs/raspberry-pi.md` was not changed: the evidence does not justify a new durable-storage requirement or a safe operator mitigation. The existing restricted Pi 5 envelope remains accurate. The closure and matrix manifest link the six original raw physical reports and the supplemental NVMe report. No physical-SBC claim is made from a hosted or non-aarch64 environment.
 
 ## 10. Unresolved findings
 
 | Severity | Finding | Impact | Required action |
 |---|---|---|---|
-| medium | G3 p95/max fail on MMC in every repeated four-way run; tmpfs removes the tail, but controlled ambient-I/O and persistent SSD comparisons were not performed | Existing small-team envelope remains restricted; no new concurrency SLA or safe storage workaround can be claimed | Keep Pi guidance restricted. Before any optimization or wider claim, a new bounded physical plan must compare controlled idle/competing-I/O conditions and persistent media while preserving WAL/NORMAL and one-writer safety. |
-| low | New paired M001 corpus holds four-way concurrency, one managed principal and budgets disabled; it does not factorially repeat 1/2/8, 5/49 principals, or hard-budget modes | No account-count or budget-overhead inference can be drawn from the new pair | Use existing M012 results only for their recorded scope; if these factors affect an implementation decision, include them in a registered follow-up with three paired runs per condition. |
-| low | No independent p99 is available from the Q008 30-sample contract | p99 tail shape is unknown | Keep reporting p50/p95/max; use a separately designed higher-sample diagnostic if p99 becomes decision-critical. |
-| low | Six benchmark reports retain the runner's default `q005-qualified-aarch64-copy` origin label although the same-hash binary was built locally immediately before qualification | Raw candidate-origin metadata is inaccurate; the binary hash, repository revision, and preceding build command remain consistent | Preserve raw evidence and this disclosure; any repeat must pass `--candidate-origin on-device-release-build`. |
+| medium | G3 p95/max fail on MMC in every repeated four-way run; tmpfs removes the tail. One NVMe cell exists, but no repeated paired media comparison or controlled competing-I/O trial exists | Existing small-team envelope remains restricted; no new concurrency SLA or safe storage workaround can be claimed | Keep Pi guidance restricted. Before any optimization or wider claim, a new bounded physical plan must compare controlled idle/competing-I/O conditions and persistent media while preserving WAL/NORMAL and one-writer safety. |
+| low | The supplemental run covers four-way concurrency, five principals, and user/global hard budgets, but not repeated 1/2/8 concurrency or 49-principal cases | No broad account-count or budget-overhead inference can be drawn | Use existing M012 results only for their recorded scope; if these factors affect an implementation decision, include them in a registered follow-up with three paired runs per condition. |
+| low | p99 is available from the supplemental 1,000-sample run only; no p99 acceptance threshold is frozen | One sample's p99 does not define a stable gate or tail guarantee | Keep the reported p99 diagnostic-only; define a repeated sampling and acceptance method before using it for a decision. |
+| low | The six original benchmark reports retain the runner's default `q005-qualified-aarch64-copy` origin label although the same-hash binary was built locally immediately before qualification | Raw candidate-origin metadata is inaccurate; the binary hash, repository revision, and preceding build command remain consistent | Preserve raw evidence and this disclosure; the supplemental run records `on-device-release-build`, and any repeat should pass that option. |
 
 ## 11. Roadmap disposition
 
-M001 is **conditionally closed** with the named external-I/O, persistent-media, and workload-matrix conditions above. Its core attribution is supported by three paired physical runs per storage condition and independent phase evidence. No optimization is authorized: changing SQLite ownership or checkpoint policy would need separate architectural review and its own bounded acceptance gates. The subsystem roadmap remains active because future storage or concurrency performance work is not yet registered.
+M001 is **conditionally closed** with the named external-I/O, paired persistent-media, and workload-matrix conditions above. Its core attribution is supported by three paired physical runs per MMC/tmpfs condition and independent phase evidence; one supplemental NVMe cell does not satisfy the paired-media condition. No optimization is authorized: changing SQLite ownership or checkpoint policy would need separate architectural review and its own bounded acceptance gates. The subsystem roadmap remains active because future storage or concurrency performance work is not yet registered.
 
 ## 12. Registry updates
 

@@ -750,6 +750,39 @@ def _timed_http(
         )
 
 
+def _safe_http_error_class(body: bytes) -> str:
+    """Classify a client-visible error without retaining its text."""
+    lowered = body[:MAX_HTTP_BODY_BYTES].decode("utf-8", errors="ignore").lower()
+    if "not enforceable" in lowered or "cannot be proven" in lowered:
+        return "budget-not-enforceable"
+    if "budget limit reached" in lowered:
+        return "budget-exceeded"
+    if "budget" in lowered or "limit reached" in lowered:
+        return "budget-other"
+    if "admission" in lowered or "backpressure" in lowered or "capacity" in lowered:
+        return "admission"
+    if "model" in lowered and ("forbidden" in lowered or "not allowed" in lowered):
+        return "model-policy"
+    if "authentication" in lowered or "unauthorized" in lowered:
+        return "authentication"
+    return "unclassified"
+
+
+def _qualification_budget_rule_counts(database: Path) -> str:
+    """Return only rule-row counts from the disposable qualification database."""
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=1) as db:
+            users = int(
+                db.execute("SELECT count(*) FROM user_budget_rules").fetchone()[0]
+            )
+            instance = int(
+                db.execute("SELECT count(*) FROM instance_budget_rules").fetchone()[0]
+            )
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return "rules=unavailable"
+    return f"user_rules={users},instance_rules={instance}"
+
+
 def _run(
     command_id: str,
     argv: Sequence[str],
@@ -2506,12 +2539,17 @@ def _concurrent_finite_benchmark(
     elapsed_ms = [result[2] for result in results]
     ttft_ms = [result[3] for result in results if result[3] is not None]
     completed = sum(1 for status, body, _, _ in results if status == 200 and body)
+    status_counts: dict[str, int] = {}
+    for status, _, _, _ in results:
+        key = str(status)
+        status_counts[key] = status_counts.get(key, 0) + 1
     return {
         "status": "measured" if completed == request_count else "fail",
         "request_count": request_count,
         "client_concurrency": client_concurrency,
         "completed_count": completed,
         "failed_count": request_count - completed,
+        "http_status_counts": status_counts,
         "batch_elapsed_ms": round(elapsed_seconds * 1000),
         "requests_per_second": round(request_count / elapsed_seconds, 3),
         "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
@@ -2585,6 +2623,32 @@ def _configure_benchmark_principals(
         raise ValueError("invalid benchmark budget mode")
     tokens = [admin_token]
     if principal_count > 1:
+        try:
+            profile_result = subprocess.run(
+                [
+                    str(binary),
+                    "--config",
+                    str(config),
+                    "users",
+                    "policy",
+                    "create",
+                    "sbc-qualification",
+                    "SBC Qualification",
+                    "allow",
+                    "--actor",
+                    "sbc-admin",
+                ],
+                cwd=ROOT,
+                env=dict(env),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise QualificationError("synthetic model profile setup failed") from error
+        if profile_result.returncode != 0:
+            raise QualificationError("synthetic model profile setup failed")
         jar = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         origin = f"http://127.0.0.1:{port}"
@@ -2629,7 +2693,7 @@ def _configure_benchmark_principals(
                         {
                             "username": username,
                             "password": member_password,
-                            "profile_id": "",
+                            "profile_id": "sbc-qualification",
                             "csrf": csrf.group(1),
                         }
                     ).encode(),
@@ -2649,7 +2713,10 @@ def _configure_benchmark_principals(
             ) from error
 
     if budget_mode in {"user", "user-global"}:
-        max_requests = str(request_count + 1)
+        # Keep the hard ceiling above the measured workload and Q008's bounded
+        # post-batch restart/recovery checks so those checks do not invalidate
+        # an otherwise complete budget-mode run.
+        max_requests = str(request_count + 100)
         for username in ["sbc-admin"] + [
             f"sbc-member-{index:02d}" for index in range(1, principal_count)
         ]:
@@ -2669,6 +2736,8 @@ def _configure_benchmark_principals(
                         max_requests,
                         "--enforcement",
                         "hard",
+                        "--actor",
+                        "sbc-admin",
                     ],
                     cwd=ROOT,
                     env=dict(env),
@@ -2696,9 +2765,11 @@ def _configure_benchmark_principals(
                     "--window",
                     "day",
                     "--max-requests",
-                    str(request_count + 1),
+                    str(request_count + 100),
                     "--enforcement",
                     "hard",
+                    "--actor",
+                    "sbc-admin",
                 ],
                 cwd=ROOT,
                 env=dict(env),
@@ -4286,10 +4357,6 @@ def run_qualification(
                         competing_io_max_mib=competing_io_max_mib,
                         api_tokens=principal_tokens,
                     )
-                    if concurrent["status"] != "measured":
-                        raise QualificationError(
-                            "concurrent benchmark did not complete all requests"
-                        )
                     benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
                     if diagnose_finite_tail is not None:
                         benchmark_sample("before-finite-tail-diagnostic")
@@ -4475,7 +4542,9 @@ def run_qualification(
                     )
                     if status != 200 or not body:
                         raise QualificationError(
-                            f"second workload {surface} failed with HTTP {status}"
+                            f"second workload {surface} failed with HTTP {status} "
+                            f"({_safe_http_error_class(body)}; "
+                            f"{_qualification_budget_rule_counts(database)})"
                         )
                     workload_timings["second_workload_elapsed_ms"].append(elapsed_ms)
                     if ttft_ms is not None:
@@ -4513,6 +4582,17 @@ def run_qualification(
                     )
                 report["durable"] = counts
                 report["status"] = "pass"
+                if benchmark_samples:
+                    benchmark_summary = cast(
+                        "Mapping[str, Any]", report.get("benchmark", {})
+                    )
+                    runs = cast("Mapping[str, Any]", benchmark_summary.get("runs", {}))
+                    concurrent = cast(
+                        "Mapping[str, Any]",
+                        runs.get("concurrent_native_responses_finite", {}),
+                    )
+                    if concurrent.get("status") != "measured":
+                        report["status"] = "fail"
                 report["python_reference"] = {
                     "status": "not-run",
                     "reason": "optional same-board comparison was not supplied",
