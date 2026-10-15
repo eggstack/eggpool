@@ -1785,13 +1785,18 @@ async fn configsetup(
         ),
     };
 
+    let personal_credential = integration_personal_credential(&pre_mutation_config).await?;
+
     let mut context = if target == Target::ClaudeCode {
-        integrations::build_endpoint_context(path)
+        integrations::build_endpoint_context_with_credential(path, personal_credential.as_deref())
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
     } else {
-        integrations::build_integration_context(path)
-            .await
-            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
+        integrations::build_integration_context_with_credential(
+            path,
+            personal_credential.as_deref(),
+        )
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?
     };
     if context.config_mutated {
         eprintln!("Generated new server API key.");
@@ -1832,7 +1837,7 @@ async fn configsetup(
             .any(|message| message == "Copied config to clipboard.");
         if !copied {
             eprintln!(
-                "Could not copy to clipboard. Use `eggpool getkey` and pass --api-key to the Claude Code CLI."
+                "Could not copy to clipboard. Issue a personal token with `eggpool users token USER --show-secret` and pass it to the Claude Code CLI on a secure terminal."
             );
         }
         for message in delivery.messages {
@@ -1882,6 +1887,50 @@ async fn configsetup(
         }
     }
     Ok(())
+}
+
+/// Managed installs require an active personal token for local client setup.
+/// Before identity bootstrap, preserve the legacy shared-key setup contract.
+async fn integration_personal_credential(
+    config: &config::Config,
+) -> Result<Option<String>, BootstrapError> {
+    let database_path = config::Config::runtime_path(&config.database.path);
+    if !database_path.is_file() {
+        return Ok(None);
+    }
+    let database = open_operational_database(config, true).await?;
+    let state = crate::identity::access_state(&database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let state = state?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !matches!(state.as_str(), "admin_initialized" | "managed") {
+        return Ok(None);
+    }
+    let token = env::var("EGGPOOL_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let Some(token) = token else {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "managed client setup requires the member's personal token in EGGPOOL_API_KEY; do not use eggpool getkey or the retired shared server key",
+        ));
+    };
+    let database = open_operational_database(config, true).await?;
+    let valid = crate::identity::verify_api_token(&database, &token)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let valid = valid?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    if !valid {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "EGGPOOL_API_KEY is not an active personal credential for this installation",
+        ));
+    }
+    Ok(Some(token))
 }
 
 async fn run_managed_configsetup(

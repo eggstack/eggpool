@@ -195,9 +195,9 @@ async fn default_delivery_hides_secrets_and_explicit_print_reveals_them() {
         Some("env_key = \"EGGPOOL_API_KEY\"")
     );
     assert!(
-        codex.messages.iter().any(
-            |message| message.contains("EGGPOOL_API_KEY") && message.contains("eggpool getkey")
-        )
+        codex.messages
+            .iter()
+            .any(|message| message.contains("EGGPOOL_API_KEY") && message.contains("personal token"))
     );
 
     let codex_print_secret = deliver(
@@ -614,6 +614,29 @@ async fn configremote_is_read_only_deterministic_and_secret_free() {
     let after = fs::read_to_string(&config_path).expect("after");
     assert_eq!(before, after);
     assert!(!db_path.exists());
+
+    // A managed server has no shared key. The read-only remote profile is
+    // still exportable because its credential is supplied by the member.
+    let keyless_path = directory.path().join("managed-keyless.toml");
+    fs::write(
+        &keyless_path,
+        format!(
+            "[server]\nhost = \"0.0.0.0\"\nport = 11300\n\n[database]\npath = \"{}\"\n\n[integrations]\nadvertise_base_url = \"https://pool.example.internal/v1\"\n",
+            directory.path().join("managed.sqlite3").display()
+        ),
+    )
+    .expect("keyless managed config");
+    let managed_remote = build_remote_context(&keyless_path, None)
+        .await
+        .expect("keyless remote context");
+    assert!(managed_remote.auth_configured);
+    assert!(
+        remote_connection_token(
+            &managed_remote,
+            parse_remote_target("codex").expect("target")
+        )
+        .is_ok()
+    );
 
     // Loopback-only without advertisement fails closed.
     let loopback_path = directory.path().join("loopback.toml");
