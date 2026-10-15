@@ -298,7 +298,7 @@ capacity claim was made. Closure:
 
 ### Post-merge M017–M023 corrective and team-utility milestones
 
-#### M017 — Managed client credential reconciliation
+#### M017 — Managed client credential reconciliation (closed)
 
 Class: capability. Ready independently. Repair `onboard`,
 `getkey/newkey`, `configsetup`, `configremote` and `eggpool-connect`
@@ -340,7 +340,7 @@ Source: `plans/implementation/on-prem-user-access/021-default-member-policy-prov
 
 #### M022 — Hard-budget agent interoperability
 
-Class: polish. Blocked on hard M017 closure. Measure whether client/surface
+Class: polish. Ready after hard M017 closure. Measure whether client/surface
 requests carry sufficient output-token proof; improve diagnostics and
 introduce output-cap insertion only where upstream and wire evidence prove a
 hard bound. Do not regress M008/M015 hard-cost safety.
@@ -356,7 +356,8 @@ Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-cont
 
 ### Post-merge dependency and hardware policy
 
-- Parallel ready: M017, M018 and M019. None depends on a Pi/Le Potato run.
+- M017 is closed. M018, M019 and M022 are ready; none depends on a Pi/Le
+  Potato run. M022 became ready after the M017 closure.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
   any new auth authority stops for ADR review. M022 hard-cost proof contract
@@ -452,10 +453,10 @@ A ready plan is not an implemented capability.
 | M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
 | M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
 | M016 | closed | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | `plans/closure/on-prem-user-access/016-status.md` | Exact candidate checks pass; merge held pending maintainer PR review. PR #7 subsequently merged at `88f58bbf`; historical M016 closure remains unchanged. |
-| M017 | ready | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | — | Independent; full onboarding/desktop client replay needed. |
+| M017 | closed | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | `plans/closure/on-prem-user-access/017-status.md` | Managed credential selection and keyless remote export; serial/default/no-default suites pass. |
 | M018 | ready | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | — | Independent; inspect local control authority/ADR threshold. |
 | M019 | ready | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | — | Independent; insecure remote GET password form. |
 | M020 | blocked | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | — | Hard: M017 and M019 closure. |
 | M021 | blocked | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | — | Hard: M020 closure. |
-| M022 | blocked | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Hard: M017 closure. |
+| M022 | ready | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Hard M017 closure is satisfied; preserve hard budget proof. |
 | M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard: M022 closure; ordinary-server evidence operational. |
