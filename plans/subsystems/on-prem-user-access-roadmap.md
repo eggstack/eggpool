@@ -277,7 +277,7 @@ production change. Source:
 
 ### M015 — Independent authentication and authorization threat review
 
-Class: invariant. Ready; runs in parallel with M014. Explicit
+Class: invariant. Active after M014 closure. Explicit
 route-method-principal matrix, negative cross-user/model/profile,
 privilege, session/CSRF/trusted-proxy, budget/recovery and
 secret-leak tests on PR #7's combined auth code. Exit: no

@@ -58,12 +58,13 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M015 — independent authentication/authorization threat review | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | No hard predecessor. May run parallel with M014; cross-role/cross-model/CSRF/budget/restore security negative suite. |
+| On-prem user access | M015 — independent authentication/authorization threat review | active | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | M014 closed. Adversarial route/principal, policy, budget/recovery, CSRF, proxy, and redaction review in progress. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M015 — independent authentication/authorization threat review | active | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | M014 is closed; M016 remains blocked pending accepted M015 evidence. |
 
 
 ## Blocked work
