@@ -14,8 +14,7 @@ Repository baseline reviewed: `d2c0830acaeff90c45bffa393453cf0500c4fa64`
 
 Implementation commits or pull requests:
 
-- Pending implementation commit — paired physical MMC/tmpfs qualification corpus and artifact guard; no Rust runtime or database-policy changes.
-- Pending closure commit — M001 status, roadmap, and registry reconciliation.
+- `03317052` — paired physical MMC/tmpfs qualification corpus and artifact guard, plus M001 closure/registry reconciliation; no Rust runtime or database-policy changes.
 
 ## 1. Executive finding
 
