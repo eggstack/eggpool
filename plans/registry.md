@@ -69,12 +69,12 @@ No new runtime, schema or performance claim lands with these plans.
 | On-prem user access | M017 — managed client credential reconciliation | ready | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | Independent P1; repair post-bootstrap local/remote client credentials and end-to-end synthetic setup. |
 | On-prem user access | M018 — local operator status corrective | ready | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | Independent P1; preserve privileged HTTP fences, inspect local OS control authority. |
 | On-prem user access | M019 — browser transport and solo LAN corrective | ready | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | Independent P1; remote HTTP GET login form must not solicit credentials. |
-| On-prem concurrency performance | M002 — ordinary-server team baseline | ready | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | Independent evidence work; ordinary Linux + durable SSD/NVMe required for team-capacity claims, no Pi/microSD release gate. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem concurrency performance | M002 — ordinary-server team baseline | active | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | Host qualification and frozen synthetic matrix in progress; no runtime or SQLite-policy change. |
 
 
 ## Blocked work
