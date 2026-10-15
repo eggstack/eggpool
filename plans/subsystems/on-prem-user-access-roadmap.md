@@ -339,26 +339,27 @@ catalog-empty/deny feedback. No budget template is copied; existing budget
 scopes remain independently configured. Never grant unaudited model access.
 Source: `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md`.
 
-#### M022 — Hard-budget agent interoperability (closing)
+#### M022 — Hard-budget agent interoperability (closed)
 
-Class: polish. Active after hard M017 closure. Measure whether client/surface
-requests carry sufficient output-token proof; improve diagnostics and
-introduce output-cap insertion only where upstream and wire evidence prove a
-hard bound. Do not regress M008/M015 hard-cost safety.
+Class: polish. Closed after measuring supported client/surface output-cap
+behavior and adding actionable hard-budget diagnostics. No output cap is
+injected; M008/M015 proof-or-reject guarantees remain in force.
 Source: `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md`.
 
 #### M023 — Short-window team fairness controls
 
-Class: capability. Blocked on hard M022 closure. Optional per-principal
-short-window admission throttle and stable 429/Retry-After, bounded in-memory
-state, no unbounded queues or new SQLite write pressure; qualify on ordinary
-server hardware while preserving solo no-rule behavior.
+Class: capability. Hard M022 dependency is closed. Remains blocked by the
+source plan's stop condition until ordinary-server Linux/SSD-or-NVMe evidence
+is recorded through concurrency M002. Then implement an optional
+per-principal short-window admission throttle and stable 429/Retry-After,
+bounded in-memory state, no unbounded queues or new SQLite write pressure;
+preserve solo no-rule behavior.
 Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md`.
 
 ### Post-merge dependency and hardware policy
 
-- M017–M021 are closed. M022 is ready and does not depend on a Pi/Le Potato
-  run; it became ready after the M017 closure.
+- M017–M022 are closed. M022 did not depend on a Pi/Le Potato run; it became
+  ready after M017 closed.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
   any new auth authority stops for ADR review. M022 hard-cost proof contract
@@ -459,5 +460,5 @@ A ready plan is not an implemented capability.
 | M019 | closed | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | `plans/closure/on-prem-user-access/019-status.md` | Unsafe remote HTTP login GET returns no credential form; M020 unblocked. |
 | M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
-| M022 | closing | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
-| M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard: M022 closure; ordinary-server evidence operational. |
+| M022 | closed | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | `plans/closure/on-prem-user-access/022-status.md` | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
+| M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard M022 is closed; ordinary-server M002 Linux/SSD-or-NVMe operational evidence remains outstanding. |
