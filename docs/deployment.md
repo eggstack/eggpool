@@ -487,7 +487,9 @@ available, use it only for relative sizing; qualify the actual provider mix,
 model payloads, login rate, and policy/budget profile before deployment. No
 universal throughput, concurrency, or latency SLA follows from one host and
 synthetic workload. The Pi microSD envelope remains a separate solo-device
-reference in [`raspberry-pi.md`](raspberry-pi.md).
+reference in [`raspberry-pi.md`](raspberry-pi.md). See the
+[M002 closure record](../plans/closure/on-prem-concurrency-performance/002-status.md)
+for its measured/unmeasured status and required follow-up evidence.
 
 To repeat the frozen corpus from a release binary, run
 `uv run python scripts/qualification_ordinary_server.py --binary <release-binary>`.
