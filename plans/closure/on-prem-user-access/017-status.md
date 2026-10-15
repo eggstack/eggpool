@@ -17,6 +17,7 @@ Implementation commits:
 - `d726bce` — managed local integration setup requires an active personal credential; keyless remote export and obsolete credential guidance reconciled.
 - `218df45` — explicit-credential and keyless-export regression coverage; remote instructions name personal tokens.
 - `c5167aa` — `getkey`/`newkey` reject retired shared-key use after administrator initialization.
+- `0a2a7e7` — align the in-module keyless-export regression with the managed remote-export contract.
 
 ## 1. Executive finding
 
