@@ -1,6 +1,6 @@
 # On-Prem User Access M019 — Login transport and solo LAN operability corrective
 
-Status: active
+Status: closing
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, post-PR #7).
 

@@ -73,7 +73,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M019 — browser transport and solo LAN corrective | active | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | GET login form now shares POST transport validation; solo SSH tunnel and team HTTPS guidance in progress. |
+| On-prem user access | M019 — browser transport and solo LAN corrective | closing | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | Transport matrix, solo SSH tunnel guidance, team HTTPS path, and full serial suites passed; closure audit in progress. |
 
 
 ## Blocked work
