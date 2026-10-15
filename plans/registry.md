@@ -74,7 +74,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M018 — local operator status corrective | active | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | Restore local OS-authorized status readback through bounded private control protocol. |
+| On-prem user access | M018 — local operator status corrective | closing | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | Bounded control protocol and status projection checks passed; closure audit in progress. |
 
 
 ## Blocked work
