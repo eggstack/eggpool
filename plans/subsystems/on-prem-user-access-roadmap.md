@@ -330,12 +330,13 @@ CLI create/disable/enable/show member workflows; preserve audit, CSRF,
 password-stdin, last-admin and atomic creation guarantees.
 Source: `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md`.
 
-#### M021 — Default member policy and provisioning UX
+#### M021 — Default member policy and provisioning UX (closed)
 
-Class: capability. Ready after hard M020 closure. Add explicit reusable
-member default profile (and optional budget template) with safe fallback,
-transactional assignment, admin/CLI consistency and understandable
-catalog-empty/deny feedback. Never grant unaudited model access.
+Class: capability. Closed after hard M020 closure. One audited, instance-local
+default profile applies transactionally to future members only, with explicit
+profile and no-profile choices, admin/CLI consistency, and understandable
+catalog-empty/deny feedback. No budget template is copied; existing budget
+scopes remain independently configured. Never grant unaudited model access.
 Source: `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md`.
 
 #### M022 — Hard-budget agent interoperability
@@ -356,8 +357,8 @@ Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-cont
 
 ### Post-merge dependency and hardware policy
 
-- M017–M020 are closed. M021 and M022 are ready; neither depends on a Pi/Le
-  Potato run. M022 became ready after the M017 closure.
+- M017–M021 are closed. M022 is ready and does not depend on a Pi/Le Potato
+  run; it became ready after the M017 closure.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
   any new auth authority stops for ADR review. M022 hard-cost proof contract
@@ -457,6 +458,6 @@ A ready plan is not an implemented capability.
 | M018 | closed | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | `plans/closure/on-prem-user-access/018-status.md` | Private local control readback restores status after identity cutover; no HTTP privilege change; no successor unblocked. |
 | M019 | closed | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | `plans/closure/on-prem-user-access/019-status.md` | Unsafe remote HTTP login GET returns no credential form; M020 unblocked. |
 | M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
-| M021 | closing | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | — | Implementation landed; closure verification and dependency audit in progress. |
+| M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
 | M022 | ready | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Hard M017 closure is satisfied; preserve hard budget proof. |
 | M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard: M022 closure; ordinary-server evidence operational. |
