@@ -116,6 +116,12 @@ Generated configs reference `EGGPOOL_API_KEY` without embedding the key. Set it 
 
 By default EggPool binds `0.0.0.0:11300` and serves a public read-only dashboard at `http://<lan-ip>:11300/`. To share with desktops on your LAN, set `[integrations].advertise_base_url = "http://<lan-ip>:11300/v1"`, run `eggpool rehash` (advertised URL is live-reloadable profile output; it never changes the listen socket), then export a profile with `eggpool configremote codex`. Lock it down with `[server].host = "127.0.0.1"` (local only) or `eggpool dashboard public --off` (key required on the dashboard too). See [Firewall](docs/firewall.md).
 
+Browser password sign-in is shown only over loopback or trusted HTTPS proxy
+transport. A remote plaintext HTTP visit to `/login` receives an explanation
+without a username or password form. For a solo headless device, use SSH port
+forwarding to loopback; teams should use an operator-managed HTTPS proxy or
+VPN. LAN inference tokens remain a separate API transport choice.
+
 ## CLI Essentials
 
 | Command | Description |

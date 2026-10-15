@@ -454,6 +454,13 @@ Host header and the firewall must prevent direct access around the proxy. The
 optional `[security].allow_insecure_web_auth = true` switch is for isolated
 development only and emits a startup warning.
 
+The `GET /login` handler applies the same transport decision before rendering
+the form. Remote direct HTTP receives a static help page with no username or
+password controls and performs no database access. Solo headless operators can
+forward the browser locally with `ssh -L 11300:127.0.0.1:11300 operator@host`
+and open `http://127.0.0.1:11300/login`; remote teams should use the trusted
+HTTPS proxy path above.
+
 Optional background features that remain explicit: set `[backup].enabled = true`
 for in-process archives or `[update_checker].enabled = true` for the periodic
 PyPI status probe. Set `[model_info].enabled = false` to disable the

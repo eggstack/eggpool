@@ -279,6 +279,13 @@ saturates.
 3. Dashboard: `http://<pi-ip>:11300/`
 4. Point OpenCode at `http://<pi-ip>:11300`
 
+Browser password sign-in is not offered over remote plaintext HTTP. From a
+solo operator workstation, create a loopback tunnel with
+`ssh -L 11300:127.0.0.1:11300 operator@<pi-ip>`, then open
+`http://127.0.0.1:11300/login`. This adds no service to the Pi. Team browser
+administration should use an operator-managed HTTPS proxy or VPN; the LAN
+inference endpoint remains separate from browser password transport.
+
 ## Headless Pi + Desktop Clients
 
 On the Pi, advertise one stable URL once (live-reloadable; never the bind
