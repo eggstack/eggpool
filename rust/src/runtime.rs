@@ -71,7 +71,7 @@ pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
         Some(Command::Connect(args)) => connect(&config_path, args).await?,
         Some(Command::Logout { target }) => logout(&config_path, target.as_deref()).await?,
         Some(Command::Edit) => edit(&config_path)?,
-        Some(Command::Getkey) => getkey(&config_path)?,
+        Some(Command::Getkey) => getkey(&config_path).await?,
         Some(Command::Newkey(args)) => {
             newkey(&config_path, args.show_old, args.show_secrets).await?
         }
@@ -1933,6 +1933,21 @@ async fn integration_personal_credential(
     Ok(Some(token))
 }
 
+async fn identity_is_initialized(config: &config::Config) -> Result<bool, BootstrapError> {
+    let database_path = config::Config::runtime_path(&config.database.path);
+    if !database_path.is_file() {
+        return Ok(false);
+    }
+    let database = open_operational_database(config, true).await?;
+    let state = crate::identity::access_state(&database)
+        .await
+        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()));
+    let close_result = database.close().await;
+    let state = state?;
+    close_result.map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+    Ok(matches!(state.as_str(), "admin_initialized" | "managed"))
+}
+
 async fn run_managed_configsetup(
     path: &Path,
     pre_mutation_config: &config::Config,
@@ -2337,7 +2352,14 @@ fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn getkey(path: &Path) -> Result<(), BootstrapError> {
+async fn getkey(path: &Path) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    if identity_is_initialized(&config).await? {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "the shared server key is retired after administrator initialization; issue a personal credential with `eggpool users token USER`",
+        ));
+    }
     let key = config_mutation::read_server_key(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let Some(key) = key else {
@@ -2354,6 +2376,13 @@ fn getkey(path: &Path) -> Result<(), BootstrapError> {
 }
 
 async fn newkey(path: &Path, show_old: bool, show_secrets: bool) -> Result<(), BootstrapError> {
+    let config = config::Config::from_toml(path)?;
+    if identity_is_initialized(&config).await? {
+        return Err(command_error(
+            EXIT_VALIDATION,
+            "the shared server key is retired after administrator initialization; use `eggpool users token USER` for managed access",
+        ));
+    }
     let old = config_mutation::read_server_key(path)
         .map_err(|error| mutation_error(error, EXIT_VALIDATION))?;
     let key =
