@@ -775,7 +775,7 @@ pub fn render_remote_human(
                 );
                 lines.push(commands);
                 lines.push(String::new());
-                lines.push("Each desktop still needs its own authorized EggPool key".to_owned());
+                lines.push("Each desktop still needs its user's personal EggPool token".to_owned());
                 lines.push(
                     "in the environment that launches the client (EGGPOOL_API_KEY).".to_owned(),
                 );
