@@ -14,11 +14,16 @@ use eggpool::{
     Cli, Command as EggpoolCommand, Config,
     db::{AccountRepository, Database, DatabaseConfig, MigrationRunner, PingRepository},
     health::{AccountHealthSnapshot, BackoffReason, CircuitState, CircuitStats},
-    operations::status as status_service,
+    operations::{
+        control::{ControlResponse, start},
+        status as status_service,
+    },
     runtime_lifecycle::{ProcessRuntime, RuntimeGenerationFactory, RuntimeManager},
     server::{AppState, build_router},
 };
 use http_body_util::BodyExt;
+use tempfile::tempdir;
+use tokio::process::Command as TokioCommand;
 use tower::ServiceExt;
 
 fn account_input(
@@ -74,6 +79,64 @@ fn status_cli_parses_with_and_without_json() {
         json.command,
         Some(EggpoolCommand::Status { json: true })
     ));
+}
+
+#[tokio::test]
+async fn status_cli_uses_private_control_readback_without_a_server_key() {
+    let directory = tempdir().expect("temporary directory");
+    let runtime_dir = directory.path().join("runtime");
+    std::fs::create_dir(&runtime_dir).expect("runtime directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("private runtime directory");
+    }
+    let config_path = directory.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[server]\nhost = \"0.0.0.0\"\nport = 11300\n\n[database]\npath = \":memory:\"\n",
+    )
+    .expect("keyless config");
+    let socket = runtime_dir.join("eggpool.sock");
+    let control = start(&socket, |request| async move {
+        let payload = if request.command == "read_status" {
+            serde_json::json!({
+                "schema_version": 1,
+                "proxy": {"status":"ready", "ready":true, "base_url":"http://127.0.0.1:11300", "version":"test", "model_count":0, "routable_accounts":0, "enabled_accounts":0},
+                "providers": [],
+                "runtime": {"generation":1}
+            })
+        } else {
+            serde_json::json!({"status":"ok", "server":{"pid":1234,"uptime_seconds":1.0}})
+        };
+        ControlResponse::with_payload(request.request_id, payload)
+    })
+    .await
+    .expect("private control listener");
+
+    for (command, expected) in [
+        ("status", "\"status\": \"ready\""),
+        ("runtime-status", "\"status\": \"ok\""),
+    ] {
+        let output = TokioCommand::new(env!("CARGO_BIN_EXE_eggpool"))
+            .args([command, "--json"])
+            .env("EGGPOOL_CONFIG", &config_path)
+            .env("EGGPOOL_RUNTIME_DIR", &runtime_dir)
+            .output()
+            .await
+            .expect("status CLI executes");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(expected), "{stdout}");
+        assert!(!stdout.contains("api_key"), "{stdout}");
+    }
+
+    control.close().await.expect("control socket closes");
 }
 
 #[test]
