@@ -275,13 +275,13 @@ remaining M015 finding. Closure evidence:
 
 ### M016 — Final integration and merge-readiness reconciliation
 
-Class: polish. Closed as a pre-merge reconciliation on exact
-head `3d68c715`. Local, browser, release-doc, Q007 and exact-head
-hosted CI/installer/**cargo-deny** evidence pass. Recommendation:
-**merge held pending maintainer review** because GitHub has no
-submitted PR review. PR #7 remains open; the subsystem roadmap stays
-active until a maintainer decides whether to merge. No automatic merge
-was performed and no 49-concurrent capacity claim is made. Closure:
+Class: polish. Closed as a **historical pre-merge reconciliation**
+on exact head `3d68c715`. Local, browser, release-doc, Q007 and exact-head
+hosted CI/installer/**cargo-deny** evidence passed. The M016 closure
+recommended holding for maintainer review at that point; the PR was
+subsequently merged on 2026-10-15 as `88f58bbf`. This current roadmap
+tracks new M017–M023 post-merge work, not the old merge hold. No 49-concurrent
+capacity claim was made. Closure:
 `plans/closure/on-prem-user-access/016-status.md`. Source:
 `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`.
 
