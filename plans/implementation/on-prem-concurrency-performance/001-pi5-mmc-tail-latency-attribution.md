@@ -32,10 +32,12 @@ the existing restricted concurrency envelope and passing correctness.
 
 Hard: accepted M012 closure and frozen artifacts exist.
 Interface: existing SBC/diagnostic instrumentation runners and
-immutable one SQLite gate contract. Operational: physical
-Pi 5/MMC and optionally alternative storage are needed to
-complete the qualification; local code/tooling instrumentation
-can start now, but no metric may be invented in their absence.
+immutable one SQLite gate contract. Operational: a physical Pi 5
+with its microSD/MMC boot storage is the required target.
+Alternate storage is an optional diagnostic control, not a
+qualification prerequisite. Local code/tooling instrumentation
+can start now, but no metric may be invented without physical
+target evidence.
 
 ## 3. Current evidence and why prior work missed attribution
 
@@ -83,10 +85,11 @@ and persistence Pi artifacts.
 ### In scope
 
 Controlled replay of the M012 fake-provider corpus
-with 1,2,4,8 in-flight requests across configured 1/5/49
-named accounts, comparing (a) idle clean device,
-(b) deliberate bounded competing disk I/O,
-(c) MMC vs alternate storage when available,
+on Pi 5 microSD/MMC with 1,2,4,8 in-flight requests across
+configured 1/5/49 named accounts, comparing (a) idle clean
+device, (b) deliberate bounded competing disk I/O,
+(c) microSD/MMC against tmpfs and, only if useful and available,
+optional alternate storage,
 (d) managed auth with/without hard user/global budgets,
 (e) matched solo pre-multitenancy candidate control.
 Correlate disk service/queue/major faults/scheduler,
@@ -137,8 +140,8 @@ C. Run paired/repeated target trials (prefer >=3 per
    provider/wire corpus and isolated data dirs.
 
 D. Compare distribution shifts and falsify causes
-   (e.g. remove competing MMC activity, move isolated
-   DB to SSD, disable budget rules while keeping model
+   (e.g. remove competing microSD activity, move isolated
+   DB to tmpfs or optional alternate storage, disable budget rules while keeping model
    metadata fixed). Publish cause confidence, operator
    mitigation and exact next-plan/no-code decision.
 

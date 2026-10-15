@@ -109,8 +109,9 @@ claiming a runtime optimization.
 
 - Diagnostic M001: hard — none; input M012 closure accepted.
 - Operational for M001 full closure: physical Pi 5-class
-  target, controlled MMC and optionally SSD/external drive,
-  repeatable host activity and performance counters.
+  target using microSD/MMC boot storage, controlled host
+  activity and performance counters. SSD/external storage is
+  optional exploratory evidence, not a completion dependency.
 - Soft/interface: ongoing Persistence roadmap owns any
   architectural storage-policy experiment; a future M002
   must not be registered until M001 identifies measurable
@@ -123,16 +124,15 @@ claiming a runtime optimization.
 
 ### M001 — Pi 5/MMC concurrent tail attribution
 
-Class: polish. Conditionally closed with repeated physical MMC/tmpfs
+Class: polish. Conditionally closed with repeated physical microSD/MMC/tmpfs
 attribution in `plans/closure/on-prem-concurrency-performance/001-status.md`.
-The completed corpus repeats the existing four-way workload on MMC and tmpfs;
-Plan 238's database-only tmpfs comparison and Plans 237/239's phase controls
-independently support the storage attribution. One supplemental Pi 5 NVMe run
-adds a 1,000-request four-way, five-principal user/global-budget cell, but it
-is not a repeated paired media comparison and used no controlled competing
-I/O. The original broader target (controlled host I/O, repeated persistent
-media, and repeated 1/2/4/8 plus named-user/budget cases) remains a condition
-for any future optimization or wider operating claim. Source:
+The completed corpus repeats the existing four-way workload on the Pi's
+microSD and tmpfs; Plan 238's database-only tmpfs comparison and Plans 237/239's
+phase controls independently support the storage attribution. SSD/NVMe is not
+required for M001; one supplemental NVMe cell is retained as exploratory
+evidence only. Controlled competing I/O and repeated 1/2/4/8 plus named-user/
+budget cases remain conditions for future optimization or broader operating
+claims. Source:
 `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md`.
 
 Future optimization milestone: **not registered**. Requires
@@ -195,4 +195,4 @@ No optimization promise or new 8-way SLA is inferred.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way MMC tail attributed to durable storage; controlled ambient-I/O, persistent SSD, and repeated account/budget matrix remain conditions. No dependency edge to on-prem M016. |
+| M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way microSD/MMC tail attributed to durable storage; controlled competing-I/O and broader account/budget matrix remain conditions. SSD/NVMe is optional and not a closure dependency. No dependency edge to on-prem M016. |

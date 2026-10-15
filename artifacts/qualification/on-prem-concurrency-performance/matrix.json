@@ -100,7 +100,7 @@
         "failed": 0,
         "batch_ms": 4444
       },
-      "interpretation": "Exploratory single SSD cell; not a repeated paired comparison or a controlled competing-I/O result."
+      "interpretation": "Exploratory out-of-scope media run; SSD/NVMe is not required by M001 and this is not a paired media comparison."
     }
   },
   "commands": [
@@ -112,13 +112,25 @@
     "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-1.json",
     "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-2.json",
     "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-3.json",
-    "TMPDIR=/mnt/qualification-ssd/eggpool-m001-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/ssd-c4-u5-user-global-run-1.json"
+    "TMPDIR=/mnt/qualification-ssd/eggpool-m001-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/ssd-c4-u5-user-global-run-1.json",
+    "TMPDIR=/tmp/eggpool-m001-microsd-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-run-1.json"
   ],
   "limitations": [
     "The 1/2/8 concurrency levels and 5/49 named-principal cases were not run; this corpus isolates the already-reproduced four-way tail.",
     "Hard user/global budget policies were disabled in this fixture and were not varied.",
-    "One supplemental persistent NVMe run was recorded, but no three-run paired SSD comparison or controlled competing-I/O trial is available. Ambient host I/O was not controlled and varied during the MMC runs.",
+    "One supplemental persistent NVMe run was recorded as exploratory evidence only; SSD/NVMe is not required by M001. No controlled competing-I/O trial is available. Ambient host I/O was not controlled and varied during the MMC runs.",
     "The original Q008 matrix emits p50/p95/max; the supplemental 1000-request run also emits p99, but no p99 acceptance threshold has been frozen.",
     "tmpfs is a diagnostic control only and is not a durability recommendation."
-  ]
+  ],
+  "root_storage_medium": "microSD (SD card on MMC interface; root /dev/mmcblk0p2, ext4)",
+  "attempted_runs": {
+    "microsd_c4_u5_user_global_aborted": {
+      "command": "TMPDIR=/tmp/eggpool-m001-microsd-2026-10-14 uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --expected-sha256 8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538 --candidate-origin on-device-release-build --benchmark-samples 30 --concurrency-workers 4 --concurrency-requests 1000 --benchmark-principals 5 --benchmark-budget-mode user-global --output artifacts/qualification/on-prem-concurrency-performance/microsd-c4-u5-user-global-run-1.json",
+      "status": "aborted_by_plan_stop_condition",
+      "target_storage": "microSD (SD card via MMC interface)",
+      "observed_io_pressure_percent": {"some_avg10": 76.31, "full_avg10": 72.21, "some_avg60": 59.67, "full_avg60": 56.82},
+      "report_artifact": "not produced",
+      "result_interpretation": "The run was interrupted after sustained system I/O pressure crossed the plan stop condition; no performance result is claimed."
+    }
+  }
 }
