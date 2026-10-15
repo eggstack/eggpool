@@ -74,7 +74,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M017 — managed client credential reconciliation | active | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | Repair post-bootstrap local/remote client credentials and end-to-end synthetic setup. |
+| On-prem user access | M017 — managed client credential reconciliation | closing | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | Focused integration/auth/docs evidence gathered; closure record and dependency audit in progress. |
 
 
 ## Blocked work
