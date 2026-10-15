@@ -1,6 +1,6 @@
 # On-Prem User Access M022 — Hard-budget interoperability with coding agents
 
-Status: ready
+Status: active
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, post-PR #7).
 
