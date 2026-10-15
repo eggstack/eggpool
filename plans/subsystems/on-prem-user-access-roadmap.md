@@ -356,7 +356,7 @@ Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-cont
 
 ### Post-merge dependency and hardware policy
 
-- M017 is closed. M018, M019 and M022 are ready; none depends on a Pi/Le
+- M017 and M018 are closed. M019 and M022 are ready; neither depends on a Pi/Le
   Potato run. M022 became ready after the M017 closure.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
@@ -454,7 +454,7 @@ A ready plan is not an implemented capability.
 | M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
 | M016 | closed | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | `plans/closure/on-prem-user-access/016-status.md` | Exact candidate checks pass; merge held pending maintainer PR review. PR #7 subsequently merged at `88f58bbf`; historical M016 closure remains unchanged. |
 | M017 | closed | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | `plans/closure/on-prem-user-access/017-status.md` | Managed credential selection and keyless remote export; serial/default/no-default suites pass. |
-| M018 | ready | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | — | Independent; inspect local control authority/ADR threshold. |
+| M018 | closed | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | `plans/closure/on-prem-user-access/018-status.md` | Private local control readback restores status after identity cutover; no HTTP privilege change; no successor unblocked. |
 | M019 | ready | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | — | Independent; insecure remote GET password form. |
 | M020 | blocked | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | — | Hard: M017 and M019 closure. |
 | M021 | blocked | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | — | Hard: M020 closure. |
