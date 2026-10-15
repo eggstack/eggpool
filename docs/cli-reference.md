@@ -55,7 +55,10 @@ Command list verified against `eggpool help` (0.8.2).
 | `eggpool getkey` | Print the server API key |
 | `eggpool newkey` | Generate and write a new server API key (`--show-old`, `--show-secrets`) |
 | `eggpool users bootstrap` | Create the initial local administrator (`--password-stdin` for unattended input) |
-| `eggpool users add USER` | Create a member with a TTY-hidden or `--password-stdin` temporary password; optional `--profile-id PROFILE`; `--actor ADMIN` records the active administrator |
+| `eggpool users add USER` | Create a member with a TTY-hidden or `--password-stdin` temporary password; optional `--profile-id PROFILE` or `--no-profile`; otherwise uses the configured new-member default; `--actor ADMIN` records the active administrator |
+| `eggpool users defaults show` | Show the default member profile and budget-template behavior |
+| `eggpool users defaults set PROFILE` | Select the profile for future members created without an explicit profile |
+| `eggpool users defaults clear` | Remove the default; future unassigned members remain deny-by-default |
 | `eggpool users show USER` | Show one user's role, state and forced-password-change status without secrets |
 | `eggpool users list` | List local usernames, role and status |
 | `eggpool users disable USER` | Disable a user and revoke their sessions and personal tokens |
@@ -84,8 +87,10 @@ default and add explicit allowed models.
 Local member lifecycle commands run from the machine that owns the EggPool
 data directory. The first successful `users add` moves
 `admin_initialized` to `managed` in the same SQLite transaction as the user,
-optional initial profile, and audit records. A failed profile assignment does
-not leave a user or change the access state. Disabling revokes active sessions
+optional or default initial profile, and audit records. A failed profile assignment does
+not leave a user or change the access state. The default applies to future
+members only; setting or clearing it never reassigns existing users. There is
+no default budget template. Disabling revokes active sessions
 and personal tokens; re-enabling does not restore those tokens, so issue a new
 one with `users token USER`. The last active administrator cannot be disabled.
 

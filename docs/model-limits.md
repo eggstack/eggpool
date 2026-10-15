@@ -173,3 +173,7 @@ the per-user contract above. Global counters never depend on a user row, so
 disabling or deleting a user preserves history and remaining headroom. Members
 see only their own rules and usage; instance ceilings and aggregate usage are
 admin-visible only.
+
+Default member profiles do not create or copy budget rules. Configure user and
+instance ceilings separately; changing the default model profile leaves all
+existing budget rules and usage unchanged.

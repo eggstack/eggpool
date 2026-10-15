@@ -71,14 +71,18 @@ trust.
 emits a startup warning.
 
 The local operator CLI uses the data-directory owner's filesystem authority.
-`users add` commits a member, optional initial profile, the transition from
+`users add` commits a member, an explicit or configured default initial profile,
+the transition from
 `admin_initialized` to `managed`, and audit entries in one transaction; a
 failed profile assignment leaves the original state intact. The explicit
 `users enable-managed` path uses the same transition helper and records its
 own audit event. A remaining configured shared key is rejected after
 identity initialization, and `dashboard.public` cannot expose managed routes;
 removing those stale config values is cleanup, not a precondition for the
-atomic cutover. Disabling a user revokes sessions and tokens and advances the
+atomic cutover. Default member profile selection is audited and revisioned,
+affects only future member creation, and does not alter existing assignments.
+Clearing restores deny-by-default for future unassigned members. No budget
+template is copied; budget scopes remain independently configured. Disabling a user revokes sessions and tokens and advances the
 auth epoch. Re-enabling does not un-revoke credentials, and the last active
 administrator remains protected.
 Session-authenticated responses carry `Cache-Control: no-store, max-age=0` so

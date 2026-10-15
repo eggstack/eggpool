@@ -71,6 +71,12 @@ pub(in crate::server) struct ProfileDeleteForm {
 }
 
 #[derive(Deserialize)]
+pub(in crate::server) struct DefaultMemberProfileForm {
+    profile_id: Option<String>,
+    csrf: String,
+}
+
+#[derive(Deserialize)]
 pub(in crate::server) struct ProfileRuleDeleteForm {
     profile_id: String,
     model_id: String,
@@ -379,13 +385,24 @@ pub(in crate::server) async fn my_models_page(
         Ok(snapshot) => snapshot,
         Err(_) => return degraded("model list unavailable"),
     };
-    let models = inference
-        .authorized_discovery_model_ids(&snapshot)
+    let available_models = inference.authorized_discovery_model_ids(&snapshot);
+    let explanation = if available_models.is_empty() {
+        if inference.discovery_model_ids().is_empty() {
+            "No models are currently available on this instance; contact the admin about provider setup."
+        } else if !snapshot.has_profile() {
+            "You have no member model profile; ask an admin to assign a profile."
+        } else {
+            "Your profile currently permits no available models; ask an admin to review the profile."
+        }
+    } else {
+        "This list is filtered by your current model policy."
+    };
+    let models = available_models
         .into_iter()
         .map(|model| format!("<li><code>{}</code></li>", html_escape(&model)))
         .collect::<String>();
     html_response(format!(
-        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My models</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My accessible models</h1><p>This list is filtered by your current model policy.</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></main></html>"
+        "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>My models</title><link rel=\"stylesheet\" href=\"/static/dashboard.css\"><main><h1>My accessible models</h1><p>{explanation}</p><ul>{models}</ul><p><a href=\"/my-account\">My account</a></p></main></html>"
     ))
 }
 
@@ -402,7 +419,15 @@ pub(in crate::server) async fn create_user(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     let profile_id = form.profile_id.as_deref().filter(|id| !id.is_empty());
-    let created = if let Some(profile_id) = profile_id {
+    let created = if form.profile_id.as_deref() == Some("__none") {
+        crate::identity::create_member_without_profile_from_browser(
+            &state.database,
+            &session,
+            &form.username,
+            &form.password,
+        )
+        .await
+    } else if let Some(profile_id) = profile_id {
         crate::identity::create_member_with_profile_from_browser(
             &state.database,
             &session,
@@ -425,6 +450,31 @@ pub(in crate::server) async fn create_user(
         Err(error) => return mutation_error(error, "Could not create user."),
     };
     mutation_redirect("/users")
+}
+
+pub(in crate::server) async fn set_default_member_profile(
+    State(state): State<AppState>,
+    Extension(session): Extension<crate::web_session::Principal>,
+    headers: HeaderMap,
+    Form(form): Form<DefaultMemberProfileForm>,
+) -> Response {
+    if !csrf_valid(&session, &headers, &form.csrf) {
+        return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
+    }
+    if !admin_only(&session) {
+        return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
+    }
+    let result = crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
+        .set_default_member_profile(
+            form.profile_id.as_deref().filter(|id| !id.is_empty()),
+            &session.user_id,
+        )
+        .await;
+    if let Err(error) = result {
+        return mutation_error(error, "Could not update the default member profile.");
+    }
+    mutation_redirect("/profiles")
 }
 
 pub(in crate::server) async fn set_user_state(

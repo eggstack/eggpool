@@ -719,14 +719,24 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
             let actor = policy_actor_id(&database, &args.actor).await?;
             let password =
                 read_user_password(args.password_stdin, false, "Temporary member password")?;
-            let user = crate::identity::create_member_with_profile(
-                &database,
-                &actor,
-                &args.username,
-                &password,
-                args.profile_id.as_deref(),
-            )
-            .await
+            let user = if args.no_profile {
+                crate::identity::create_member_without_profile(
+                    &database,
+                    &actor,
+                    &args.username,
+                    &password,
+                )
+                .await
+            } else {
+                crate::identity::create_member_with_profile(
+                    &database,
+                    &actor,
+                    &args.username,
+                    &password,
+                    args.profile_id.as_deref(),
+                )
+                .await
+            }
             .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
             println!(
                 "Member {} created; the user must change the temporary password at first login.",
@@ -841,6 +851,67 @@ async fn users(path: &Path, command: crate::cli::UsersCommand) -> Result<(), Boo
                         .await
                         .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
                     println!("Preferred model updated for {}.", args.profile_id);
+                }
+            }
+        }
+        crate::cli::UsersCommand::Defaults(command) => {
+            use crate::cli::UsersDefaultsCommand as Defaults;
+            let service = crate::model_policy::ModelPolicyService::new(database.clone());
+            match command {
+                Defaults::Show => {
+                    let default_id = service
+                        .default_member_profile()
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    if let Some(default_id) = default_id {
+                        let profiles = service
+                            .list_profiles()
+                            .await
+                            .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                        if let Some(profile) =
+                            profiles.iter().find(|profile| profile.id == default_id)
+                        {
+                            println!("default_member_profile: {} ({})", profile.id, profile.name);
+                            println!("new members only: true");
+                            println!("existing assignments changed: false");
+                        } else {
+                            return Err(command_error(
+                                EXIT_VALIDATION,
+                                "default member profile is missing",
+                            ));
+                        }
+                    } else {
+                        println!("default_member_profile: none");
+                        println!(
+                            "new members remain deny-by-default unless a profile is selected explicitly."
+                        );
+                    }
+                    println!(
+                        "default budget template: none; user and instance budget rules are unchanged."
+                    );
+                }
+                Defaults::Set(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_default_member_profile(Some(&args.profile_id), &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Default member profile set to {}; it applies to new members only.",
+                        args.profile_id
+                    );
+                    println!("Existing assignments and all budget rules are unchanged.");
+                }
+                Defaults::Clear(args) => {
+                    let actor = policy_actor_id(&database, &args.actor).await?;
+                    service
+                        .set_default_member_profile(None, &actor)
+                        .await
+                        .map_err(|error| command_error(EXIT_VALIDATION, error.to_string()))?;
+                    println!(
+                        "Default member profile cleared; future members without an explicit profile remain deny-by-default."
+                    );
+                    println!("Existing assignments and all budget rules are unchanged.");
                 }
             }
         }

@@ -6,6 +6,18 @@ pub(in crate::server::dashboard) fn render_users_admin(
     instance_rules: &[crate::instance_budget::InstanceBudgetRule],
     csrf: &str,
 ) -> String {
+    let default_profile = profiles
+        .iter()
+        .find(|profile| profile.is_default_member_profile);
+    let initial_profile = default_profile.map_or_else(
+        || "<option value=\"\">No instance default (deny all)</option>".to_owned(),
+        |profile| {
+            format!(
+                "<option value=\"\">Use instance default: {}</option>",
+                html_escape(&profile.name)
+            )
+        },
+    );
     let options = profiles
         .iter()
         .map(|profile| {
@@ -89,7 +101,7 @@ pub(in crate::server::dashboard) fn render_users_admin(
         html_escape(csrf)
     );
     format!(
-        "{instance_section}<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\"><option value=\"\">No profile</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\"><table><thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
+        "{instance_section}<section class=\"panel\"><h2>Users</h2><p>Create local member accounts and assign policy profiles. The instance default applies only to new members; existing assignments are unchanged. There is no default budget template: user and instance budget rules stay independent. Temporary passwords are shown only to the administrator who enters them; users must change them at first login.</p><form method=\"post\" action=\"/admin/users/create\"><label>Username <input name=\"username\" minlength=\"1\" maxlength=\"64\" required autocomplete=\"off\"></label><label>Temporary password <input type=\"password\" name=\"password\" minlength=\"12\" maxlength=\"1024\" required autocomplete=\"new-password\"></label><label>Initial profile <select name=\"profile_id\">{initial_profile}<option value=\"__none\">No profile (deny all)</option>{options}</select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Add member</button></form></section><section class=\"panel\"><h2>Local accounts</h2><div class=\"table-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Local users\"><table><thead><tr><th>Username</th><th>Role</th><th>State</th><th>Password</th><th>Actions</th></tr></thead><tbody>{rows}</tbody></table></div></section>",
         html_escape(csrf)
     )
 }
@@ -113,8 +125,13 @@ pub(in crate::server::dashboard) fn render_profiles_admin(
                     )
                 })
                 .collect::<String>();
+            let default_control = if profile.is_default_member_profile {
+                format!("<p>Default for newly created members</p><form method=\"post\" action=\"/admin/profiles/default\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"\"><button type=\"submit\">Clear default for future members</button></form>", html_escape(csrf))
+            } else {
+                format!("<form method=\"post\" action=\"/admin/profiles/default\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><button type=\"submit\">Set as default for new members</button></form>", html_escape(csrf), html_escape(&profile.id))
+            };
             format!(
-                "<section class=\"panel\"><h3>{}</h3><p>ID: <code>{}</code> · default: {} · version: {} · assigned users: {} · exact model rules: {}</p><form method=\"post\" action=\"/admin/profiles/update\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><input type=\"hidden\" name=\"version\" value=\"{}\"><label>Name <input name=\"name\" value=\"{}\" maxlength=\"64\" required></label><label>Default <select name=\"default_effect\"><option value=\"allow\"{}>Allow</option><option value=\"deny\"{}>Deny</option></select></label><button type=\"submit\">Save profile</button></form><form method=\"post\" action=\"/admin/profiles/rule\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><label>Exact model ID <input name=\"model_id\" maxlength=\"512\" required></label><label>Effect <select name=\"effect\"><option>allow</option><option>deny</option></select></label><button type=\"submit\">Add or update rule</button></form><ul>{profile_rules}</ul><form method=\"post\" action=\"/admin/profiles/prefer\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><label>Preferred model ID <input name=\"model_id\" maxlength=\"512\" value=\"{}\"></label><button type=\"submit\">Save recommendation</button></form><form method=\"post\" action=\"/admin/profiles/delete\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><input type=\"hidden\" name=\"version\" value=\"{}\"><button type=\"submit\">Delete unassigned profile</button></form></section>",
+                "<section class=\"panel\"><h3>{}</h3><p>ID: <code>{}</code> · default: {} · version: {} · assigned users: {} · exact model rules: {}</p>{default_control}<form method=\"post\" action=\"/admin/profiles/update\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><input type=\"hidden\" name=\"version\" value=\"{}\"><label>Name <input name=\"name\" value=\"{}\" maxlength=\"64\" required></label><label>Default <select name=\"default_effect\"><option value=\"allow\"{}>Allow</option><option value=\"deny\"{}>Deny</option></select></label><button type=\"submit\">Save profile</button></form><form method=\"post\" action=\"/admin/profiles/rule\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><label>Exact model ID <input name=\"model_id\" maxlength=\"512\" required></label><label>Effect <select name=\"effect\"><option>allow</option><option>deny</option></select></label><button type=\"submit\">Add or update rule</button></form><ul>{profile_rules}</ul><form method=\"post\" action=\"/admin/profiles/prefer\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><label>Preferred model ID <input name=\"model_id\" maxlength=\"512\" value=\"{}\"></label><button type=\"submit\">Save recommendation</button></form><form method=\"post\" action=\"/admin/profiles/delete\"><input type=\"hidden\" name=\"csrf\" value=\"{}\"><input type=\"hidden\" name=\"profile_id\" value=\"{}\"><input type=\"hidden\" name=\"version\" value=\"{}\"><button type=\"submit\">Delete unassigned profile</button></form></section>",
                 html_escape(&profile.name), html_escape(&profile.id), html_escape(&profile.default_effect),
                 profile.version, profile.assigned_users, profile.model_rules,
                 html_escape(csrf), html_escape(&profile.id), profile.version, html_escape(&profile.name),
@@ -127,7 +144,7 @@ pub(in crate::server::dashboard) fn render_profiles_admin(
         })
         .collect::<String>();
     format!(
-        "<section class=\"panel\"><h2>Profiles</h2><p>Profiles control model access and client recommendations. Provider topology and upstream secrets remain in operator-owned configuration.</p><form method=\"post\" action=\"/admin/profiles/create\"><label>Profile ID <input name=\"profile_id\" maxlength=\"64\" required></label><label>Name <input name=\"name\" maxlength=\"64\" required></label><label>Default <select name=\"default_effect\"><option value=\"deny\">Deny unless allowed</option><option value=\"allow\">Allow unless denied</option></select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create profile</button></form></section>{rows}",
+        "<section class=\"panel\"><h2>Profiles</h2><p>Profiles control model access and client recommendations. The default member profile affects future members only. Budget rules remain separately configured per user and instance; no budget template is copied. Provider topology and upstream secrets remain in operator-owned configuration.</p><form method=\"post\" action=\"/admin/profiles/create\"><label>Profile ID <input name=\"profile_id\" maxlength=\"64\" required></label><label>Name <input name=\"name\" maxlength=\"64\" required></label><label>Default <select name=\"default_effect\"><option value=\"deny\">Deny unless allowed</option><option value=\"allow\">Allow unless denied</option></select></label><input type=\"hidden\" name=\"csrf\" value=\"{}\"><button type=\"submit\">Create profile</button></form></section>{rows}",
         html_escape(csrf)
     )
 }

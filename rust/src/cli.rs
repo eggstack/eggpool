@@ -173,6 +173,26 @@ pub enum UsersCommand {
     /// per-user rule. Requires an active administrator.
     #[command(subcommand)]
     GlobalBudget(UsersGlobalBudgetCommand),
+    /// Show, select, or clear the default profile for newly created members.
+    #[command(subcommand)]
+    Defaults(UsersDefaultsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UsersDefaultsCommand {
+    /// Show the default member profile, if one is selected.
+    Show,
+    /// Apply a profile to members created from now on.
+    Set(UserDefaultProfileSetArgs),
+    /// Leave future members without a profile (deny by default).
+    Clear(UserActorArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub struct UserDefaultProfileSetArgs {
+    pub profile_id: String,
+    #[arg(long, default_value = "admin")]
+    pub actor: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,6 +345,9 @@ pub struct UserAddArgs {
     /// Assign an existing model-policy profile in the same transaction.
     #[arg(long)]
     pub profile_id: Option<String>,
+    /// Create with no profile even when an instance default exists.
+    #[arg(long, conflicts_with = "profile_id")]
+    pub no_profile: bool,
     #[arg(long, default_value = "admin")]
     pub actor: String,
 }

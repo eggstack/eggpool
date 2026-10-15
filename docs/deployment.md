@@ -61,7 +61,12 @@ Manage local identities from the machine that owns the data directory with
 `eggpool users token USER`, `eggpool users revoke USER`, and
 `eggpool users reset-password USER`. Member passwords are read from a hidden TTY prompt or stdin; passwords
 are never accepted in argv. Add `--profile-id PROFILE` to assign the initial
-model policy in the same transaction. Personal tokens are for inference,
+model policy in the same transaction. `eggpool users defaults show|set PROFILE|clear`
+manages the instance default used only when future members are created without
+an explicit profile; `users add USER --no-profile` explicitly keeps a new
+member unassigned. Existing assignments are never changed by setting or
+clearing the default. No budget template is copied: user and instance budget
+rules remain independently configured. Personal tokens are for inference,
 model discovery, and the integration profile; they do not authorize dashboard
 or admin pages. The configured server API key remains a legacy shared
 inference credential only while the database is `legacy_unmigrated`. Do not
@@ -71,7 +76,9 @@ With `[dashboard].enabled = true`, an administrator can manage users, profiles,
 budgets, tokens, and audit history in the embedded dashboard. New members
 receive a temporary password and must change it at first login. Members can
 manage their personal tokens and view only their own usage and accessible
-models. A browser-issued token is shown once in a no-store response; set it as
+models. The users page can use the instance default, select a specific profile,
+or explicitly leave a member without a profile. A browser-issued token is shown
+once in a no-store response; set it as
 `EGGPOOL_API_KEY` in the environment that launches the desktop client.
 Remote browser login must use the operator's TLS proxy and trusted-proxy setup
 below: LAN reachability alone does not encrypt passwords or cookies.

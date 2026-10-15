@@ -30,7 +30,7 @@ Default deny remains the internal safe fallback; instance-deny always overrides 
 
 ## 5. Scope
 
-In: optional operator-configured default profile/budget template, explicit create-time profile confirmation, policy visibility/reason codes, admin+CLI consistent defaults. Out: arbitrary role hierarchy, orgs, broad wildcard rules, billing/invoices, prompt/content retention, model policy language redesign.
+In: optional operator-configured default profile, explicit create-time profile choice, policy visibility/reason codes, admin+CLI consistent defaults. This pass does not add a default budget template: user and instance rules remain independently configured, and member creation copies no budget state. Out: arbitrary role hierarchy, orgs, broad wildcard rules, billing/invoices, prompt/content retention, model policy language redesign.
 
 ## 6. Production changes
 

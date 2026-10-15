@@ -144,9 +144,9 @@ pub(super) use admin::{
     assign_user_profile, audit_page, create_personal_token, create_profile, create_user,
     delete_profile, issue_admin_token, my_account_page, my_models_page, profiles_page,
     remove_instance_budget, remove_profile_rule, remove_user_override, reset_user_password,
-    revoke_personal_token, revoke_user_tokens, set_instance_budget, set_profile_preference,
-    set_profile_rule, set_user_budget, set_user_override, set_user_state, update_profile,
-    usage_page, users_page,
+    revoke_personal_token, revoke_user_tokens, set_default_member_profile, set_instance_budget,
+    set_profile_preference, set_profile_rule, set_user_budget, set_user_override, set_user_state,
+    update_profile, usage_page, users_page,
 };
 pub(super) use api::{
     grouped_timeseries_api, stats_cache_observability, stats_cache_stability,

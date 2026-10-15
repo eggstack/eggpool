@@ -348,6 +348,33 @@ fn headless_member_lifecycle_commands_parse_with_secret_safe_inputs() {
             "eggpool",
             "users",
             "add",
+            "member-b",
+            "--password-stdin",
+            "--no-profile"
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "add",
+            "member-b",
+            "--password-stdin",
+            "--no-profile",
+            "--profile-id",
+            "restricted"
+        ])
+        .is_err()
+    );
+    assert!(Cli::try_parse_from(["eggpool", "users", "defaults", "show"]).is_ok());
+    assert!(Cli::try_parse_from(["eggpool", "users", "defaults", "set", "restricted"]).is_ok());
+    assert!(Cli::try_parse_from(["eggpool", "users", "defaults", "clear"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "eggpool",
+            "users",
+            "add",
             "member-a",
             "--password",
             "plaintext-in-argv",

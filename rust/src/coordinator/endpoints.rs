@@ -693,6 +693,7 @@ async fn resolve_concrete(
                     }
                     crate::model_policy::ModelPolicyError::InvalidPolicyInput
                     | crate::model_policy::ModelPolicyError::PreferredModelDenied
+                    | crate::model_policy::ModelPolicyError::DefaultProfileNotFound
                     | crate::model_policy::ModelPolicyError::Database(_) => EndpointError::Internal,
                 })?,
         ),

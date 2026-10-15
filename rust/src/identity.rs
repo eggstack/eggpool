@@ -368,7 +368,16 @@ pub async fn create_member(
     username: &str,
     temporary_password: &str,
 ) -> Result<UserSummary, IdentityError> {
-    create_member_with_fence(database, actor_id, username, temporary_password, None, None).await
+    create_member_with_fence(
+        database,
+        actor_id,
+        username,
+        temporary_password,
+        None,
+        None,
+        true,
+    )
+    .await
 }
 
 pub async fn create_member_with_profile(
@@ -385,6 +394,25 @@ pub async fn create_member_with_profile(
         temporary_password,
         None,
         profile_id,
+        true,
+    )
+    .await
+}
+
+pub async fn create_member_without_profile(
+    database: &Database,
+    actor_id: &str,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        actor_id,
+        username,
+        temporary_password,
+        None,
+        None,
+        false,
     )
     .await
 }
@@ -402,6 +430,25 @@ pub async fn create_member_from_browser(
         temporary_password,
         Some(crate::web_session::SessionFence::from_principal(principal)),
         None,
+        true,
+    )
+    .await
+}
+
+pub async fn create_member_without_profile_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        &principal.user_id,
+        username,
+        temporary_password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+        None,
+        false,
     )
     .await
 }
@@ -420,6 +467,7 @@ pub async fn create_member_with_profile_from_browser(
         temporary_password,
         Some(crate::web_session::SessionFence::from_principal(principal)),
         Some(profile_id),
+        true,
     )
     .await
 }
@@ -431,6 +479,7 @@ async fn create_member_with_fence(
     temporary_password: &str,
     session_fence: Option<crate::web_session::SessionFence>,
     profile_id: Option<&str>,
+    use_default_profile: bool,
 ) -> Result<UserSummary, IdentityError> {
     let username = validate_username(username)?;
     let password_hash = hash_password(temporary_password).await?;
@@ -472,6 +521,17 @@ async fn create_member_with_fence(
                     [&actor_id],
                 )?;
             }
+            let selected_profile_id = if profile_id.is_some() {
+                profile_id.clone()
+            } else if use_default_profile {
+                connection.query_row(
+                    "SELECT default_member_profile_id FROM policy_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )?
+            } else {
+                None
+            };
             connection.execute(
                 "INSERT INTO users(id, username, normalized_username, role, password_hash, must_change_password) \
                  VALUES (?1, ?2, ?3, 'member', ?4, 1)",
@@ -482,7 +542,7 @@ async fn create_member_with_fence(
                  VALUES (?1, 'create_user', 'user', ?2)",
                 (&actor_id, &id),
             )?;
-            if let Some(profile_id) = profile_id.as_ref() {
+            if let Some(profile_id) = selected_profile_id.as_ref() {
                 connection.execute(
                     "INSERT INTO user_profile_assignments(user_id, profile_id, assigned_by) \
                      VALUES (?1, ?2, ?3)",
