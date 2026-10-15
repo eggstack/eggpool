@@ -67,7 +67,6 @@ No new runtime, schema or performance claim lands with these plans.
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
 | On-prem user access | M022 — hard-budget agent interoperability | ready | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | Hard M017 is closed; preserve M008/M015 proof-or-reject guarantees. |
-| On-prem user access | M018 — local operator status corrective | ready | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | Independent P1; preserve privileged HTTP fences, inspect local OS control authority. |
 | On-prem user access | M019 — browser transport and solo LAN corrective | ready | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | Independent P1; remote HTTP GET login form must not solicit credentials. |
 | On-prem concurrency performance | M002 — ordinary-server team baseline | ready | `plans/implementation/on-prem-concurrency-performance/002-ordinary-server-team-baseline.md` | Independent evidence work; ordinary Linux + durable SSD/NVMe required for team-capacity claims, no Pi/microSD release gate. |
 
@@ -75,6 +74,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M018 — local operator status corrective | active | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | Restore local OS-authorized status readback through bounded private control protocol. |
 
 
 ## Blocked work
