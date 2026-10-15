@@ -1,6 +1,6 @@
 # On-Prem User Access M016 — Final on-prem integration and PR #7 merge-readiness reconciliation
 
-Status: blocked
+Status: ready
 
 Repository baseline: `3c7def1e35871209e68563b2ee88f36033aff76e` on `plans/on-prem-small-team-user-access` (PR #7, open; 134-file implementation, schema 62).
 
@@ -27,18 +27,18 @@ Pi 5 concurrency envelope. Do **not** merge automatically. This
 is an integration/closure gate, not a duplicate Rust implementation
 milestone or a new performance promise.
 
-## 2. Why this milestone is blocked
+## 2. Readiness and remaining operational gates
 
-**Hard:** M014 (Rustls advisories resolved + hosted audit green)
-and M015 (independent authz/threat review accepted) must both
-close. All older on-prem M001–M013 work is implemented and
-has historical closure records; this plan cannot inherit a
-stale green CI badge from a prior SHA. **Operational:** hosted
+The hard dependencies M014 (Rustls advisories resolved + hosted
+audit green) and M015 (independent authz/threat review accepted)
+are closed. All older on-prem M001–M013 work remains supported by
+its historical closure records. This plan must use the exact PR
+candidate's checks rather than inherit a stale green badge from a
+prior SHA. **Operational:** final-candidate hosted
 CI/installer/dependency audit, browser parity fixtures and release
-artifact qualification must be available for final closure.
-The separate optional Pi MMC tail-latency investigation does
-**not** block this plan, provided docs retain its measured
-restrictive operating envelope.
+artifact qualification remain part of M016 closure. The separate
+optional Pi MMC tail-latency investigation does **not** block this
+plan; docs must retain its measured restricted operating envelope.
 
 ## 3. Current implementation evidence and why extra gate is needed
 

@@ -277,18 +277,18 @@ production change. Source:
 
 ### M015 — Independent authentication and authorization threat review
 
-Class: invariant. Active after M014 closure. Explicit
-route-method-principal matrix, negative cross-user/model/profile,
-privilege, session/CSRF/trusted-proxy, budget/recovery and
-secret-leak tests on PR #7's combined auth code. Exit: no
-unaccepted high/medium authorization correctness findings,
-all counterexamples addressed with scoped tests and no
-auth boundary regression. Source:
+Class: invariant. Closed on PR #7 candidate `d8fd9c2a`. Independent
+review found and corrected hard-cost proof under-reservation and two
+browser-session middleware rejection paths. Regression tests and full
+default/no-default local suites pass; exact-SHA hosted CI, installer and
+dependency audit pass. The security scan and independent reviewer found no
+remaining M015 finding. Closure evidence:
+`plans/closure/on-prem-user-access/015-status.md`. Source:
 `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md`.
 
 ### M016 — Final integration and merge-readiness reconciliation
 
-Class: polish. Blocked on accepted M014 + M015 closure. Check
+Class: polish. Ready: M014 and M015 are closed. Check
 final head SHA's hosted CI/installer/**cargo-deny**,
 release/rollback/supported-wire/browser/Q007 qualification,
 current plan/closure sources, and PR description; emit merge
@@ -300,7 +300,7 @@ Source:
 
 ### Post-M012 security/merge dependency graph
 
-- Hard: M014 closure + M015 closure -> M016, both can begin now.
+- Hard: M014 closure + M015 closure -> M016; both are accepted.
 - Operational for M016 closure: hosted CI, installer shells and
   security audit must pass on the exact final candidate commit.
 - Separate nonblocking performance roadmap:
@@ -388,5 +388,5 @@ A ready plan is not an implemented capability.
 | M012 | closed | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | `plans/closure/on-prem-user-access/012-status.md` (closed) | Pi 5 managed envelope measured (functional + 3× benchmark, Argon2, 49 named users, 1/2/4/8 concurrency); 8-way saturates, Le Potato/reference-host/16-way recorded as low-severity uncovered dimensions. |
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
 | M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
-| M015 | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | — | Independent review of complete M001–M013 auth/model/budget/browser boundary; no hard predecessor. |
-| M016 | blocked | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | Hard: accepted M015 closure remains outstanding; final-SHA integration evidence is still required. |
+| M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
+| M016 | ready | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | M014 and M015 accepted. Final PR #7 candidate reconciliation and merge recommendation remain; do not merge automatically. |
