@@ -339,7 +339,7 @@ catalog-empty/deny feedback. No budget template is copied; existing budget
 scopes remain independently configured. Never grant unaudited model access.
 Source: `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md`.
 
-#### M022 — Hard-budget agent interoperability (active)
+#### M022 — Hard-budget agent interoperability (closing)
 
 Class: polish. Active after hard M017 closure. Measure whether client/surface
 requests carry sufficient output-token proof; improve diagnostics and
@@ -459,5 +459,5 @@ A ready plan is not an implemented capability.
 | M019 | closed | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | `plans/closure/on-prem-user-access/019-status.md` | Unsafe remote HTTP login GET returns no credential form; M020 unblocked. |
 | M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
 | M021 | closed | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | `plans/closure/on-prem-user-access/021-status.md` | Transactional future-only profile default; CLI/browser and no-profile journeys, migration, policy and budget boundaries verified. |
-| M022 | active | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Measuring client output-cap evidence while preserving hard proof-or-reject semantics. |
+| M022 | closing | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Captured Codex/OpenCode output-cap behavior; preserved hard proof-or-reject semantics and added actionable error codes. |
 | M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard: M022 closure; ordinary-server evidence operational. |
