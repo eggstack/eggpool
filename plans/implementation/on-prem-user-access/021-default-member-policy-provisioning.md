@@ -1,6 +1,6 @@
 # On-Prem User Access M021 — Default member policy and provisioning UX
 
-Status: blocked
+Status: ready
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, post-PR #7).
 

@@ -322,9 +322,9 @@ and document a clear SSH/loopback solo SBC browser path plus ordinary-server
 TLS-proxy team path. No native TLS server or insecure LAN default.
 Source: `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md`.
 
-#### M020 — Managed transition and headless administration
+#### M020 — Managed transition and headless administration (closed)
 
-Class: capability. Ready after hard M017/M019 closure. Unify
+Class: capability. Closed after hard M017/M019 closure. Unify
 `enable-managed` with member-create transition requirements and add local
 CLI create/disable/enable/show member workflows; preserve audit, CSRF,
 password-stdin, last-admin and atomic creation guarantees.
@@ -332,7 +332,7 @@ Source: `plans/implementation/on-prem-user-access/020-managed-transition-headles
 
 #### M021 — Default member policy and provisioning UX
 
-Class: capability. Blocked on hard M020 closure. Add explicit reusable
+Class: capability. Ready after hard M020 closure. Add explicit reusable
 member default profile (and optional budget template) with safe fallback,
 transactional assignment, admin/CLI consistency and understandable
 catalog-empty/deny feedback. Never grant unaudited model access.
@@ -356,7 +356,7 @@ Source: `plans/implementation/on-prem-user-access/023-short-window-fairness-cont
 
 ### Post-merge dependency and hardware policy
 
-- M017–M019 are closed. M020 and M022 are ready; neither depends on a Pi/Le
+- M017–M020 are closed. M021 and M022 are ready; neither depends on a Pi/Le
   Potato run. M022 became ready after the M017 closure.
 - Hard: M017 + M019 -> M020 -> M021; M017 -> M022 -> M023.
 - Interface: M018's privileged local transport must not broaden HTTP rights;
@@ -456,7 +456,7 @@ A ready plan is not an implemented capability.
 | M017 | closed | `plans/implementation/on-prem-user-access/017-managed-client-credential-reconciliation.md` | `plans/closure/on-prem-user-access/017-status.md` | Managed credential selection and keyless remote export; serial/default/no-default suites pass. |
 | M018 | closed | `plans/implementation/on-prem-user-access/018-local-operator-status-corrective.md` | `plans/closure/on-prem-user-access/018-status.md` | Private local control readback restores status after identity cutover; no HTTP privilege change; no successor unblocked. |
 | M019 | closed | `plans/implementation/on-prem-user-access/019-login-transport-solo-lan-corrective.md` | `plans/closure/on-prem-user-access/019-status.md` | Unsafe remote HTTP login GET returns no credential form; M020 unblocked. |
-| M020 | ready | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | — | Hard dependencies M017 and M019 are closed. |
-| M021 | blocked | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | — | Hard: M020 closure. |
+| M020 | closed | `plans/implementation/on-prem-user-access/020-managed-transition-headless-admin.md` | `plans/closure/on-prem-user-access/020-status.md` | Headless member lifecycle and first-member transition are atomic and audited; M021 unblocked. |
+| M021 | ready | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | — | Hard dependency M020 is closed. |
 | M022 | ready | `plans/implementation/on-prem-user-access/022-hard-budget-agent-compatibility.md` | — | Hard M017 closure is satisfied; preserve hard budget proof. |
 | M023 | blocked | `plans/implementation/on-prem-user-access/023-short-window-fairness-controls.md` | — | Hard: M022 closure; ordinary-server evidence operational. |
