@@ -266,13 +266,13 @@ blocking budget/security/restore defects. Source:
 
 ### M014 — Rustls dependency security-advisory corrective
 
-Class: invariant. Ready. Current `Cargo.lock` resolves `rustls 0.23.45`
-on both `main` and PR #7; latest hosted cargo-deny fails four
-RUSTSEC-2026-0346/0347/0348/0349 advisories, with minimum fixed
-version >=0.23.46. Bounded patch/requalification, no upstream
-provider family upgrade, no audit ignores. Exit: same-final-SHA hosted
-dependency audit **green**, with default/no-default and provider
-TLS/installer/Q007 regression evidence. Source:
+Class: invariant. Closed. PR #7 updates the shared resolved Rustls
+family from 0.23.45 to 0.23.46 with no provider-family or feature
+changes. The exact implementation SHA passed hosted cargo-deny, CI,
+Linux/macOS installer qualification, and local default/no-default,
+transport, budget, and tooling checks. `main` retains 0.23.45 until
+the PR is merged; this remains a merge prerequisite, not a separate
+production change. Source:
 `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md`.
 
 ### M015 — Independent authentication and authorization threat review
@@ -387,6 +387,6 @@ A ready plan is not an implemented capability.
 | M011 | closed | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | `plans/closure/on-prem-user-access/011-status.md` | Frozen Python oracle rebuilt and run with no new historical parity gaps; on-prem admin/member pages qualified against a Rust-owned approved reference. Browser sign-in and responsive/navigation defects corrected. |
 | M012 | closed | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | `plans/closure/on-prem-user-access/012-status.md` (closed) | Pi 5 managed envelope measured (functional + 3× benchmark, Argon2, 49 named users, 1/2/4/8 concurrency); 8-way saturates, Le Potato/reference-host/16-way recorded as low-severity uncovered dimensions. |
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
-| M014 | ready | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | — | Direct and transitive rustls 0.23.45 on both branches; GitHub audit fails four RustSec advisories. |
+| M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
 | M015 | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | — | Independent review of complete M001–M013 auth/model/budget/browser boundary; no hard predecessor. |
-| M016 | blocked | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | Hard: accepted M014 and M015 closures; operational final-SHA hosted audit/CI/installer/browser evidence. |
+| M016 | blocked | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | Hard: accepted M015 closure remains outstanding; final-SHA integration evidence is still required. |

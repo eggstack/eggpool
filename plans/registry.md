@@ -58,30 +58,28 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M014 — Rustls four-advisory dependency remediation | active | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | No hard predecessor. Patch 0.23.45 to compatible >=0.23.46; hosted cargo-deny and TLS/transport/feature qualification mandatory; also affects main. |
 | On-prem user access | M015 — independent authentication/authorization threat review | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | No hard predecessor. May run parallel with M014; cross-role/cross-model/CSRF/budget/restore security negative suite. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M014 — Rustls four-advisory dependency remediation | active | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | M014 implementation and local qualification in progress; M016 remains blocked. |
 
 
 ## Blocked work
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| On-prem user access | M016 — final PR #7 integration and merge-readiness (`plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`) | Hard: accepted M014 and M015 closure; hosted CI, Linux/macOS installer and cargo-deny all green on candidate SHA, plus scoped browser/security/legacy evidence. |
+| On-prem user access | M016 — final PR #7 integration and merge-readiness (`plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`) | Hard: accepted M015 closure remains outstanding; final-SHA hosted CI, Linux/macOS installer, cargo-deny, browser, and legacy evidence required. |
 
 
 Unblock audit (on-prem user access reopening after M012 closure, baseline
 `3c7def1e`): M001–M013 closure records remain immutable; no
-historical milestone was reopened. M014 and M015 are independent
-dependency-ready security/verification correctives prompted by
-new `rustls` RustSec failures and review of PR #7's large
-authentication change. M016 cannot be promoted until **both**
-are accepted and final-SHA hosted checks exist. Independent
+historical milestone was reopened. M014 is closed after Rustls
+0.23.46 passed exact-SHA hosted cargo-deny, CI, and installer jobs.
+M015 remains ready for the independent authorization review. M016
+cannot be promoted until M015 is accepted and final-SHA hosted
+checks exist. Independent
 on-prem concurrency performance M001 is ready as nonblocking
 diagnostic research: the Pi 5/MMC G3 tail-latency failure is
 documented, not waived or treated as a release-blocking
@@ -101,6 +99,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M014 — Rustls dependency security-advisory corrective | closed — lockfile-only Rustls 0.23.46 patch, unchanged transport feature graph; local default/no-default and 1,009/1,010-test workspace suites, provider TLS (trusted root, wrong-root and hostname rejection), budget/coordinator suites, release build and tooling pass; hosted cargo-deny, CI and both installers pass on `7462263ec482c5fda4bd1a70a9a55b0efc313cd3`; main remains pending PR merge | `plans/closure/on-prem-user-access/014-status.md`, implementation `7462263e`, audit `38671345587`, CI `38671345679`, installers `38671345597` |
 | On-prem concurrency performance M001 — Pi 5/MMC concurrent tail attribution | conditionally closed — three paired physical MMC/tmpfs runs identify durable publication/SQLite/storage as the dominant tested four-way tail contributor; no production change or capacity claim | `plans/closure/on-prem-concurrency-performance/001-status.md`, six Q008 reports + manifest under `artifacts/qualification/on-prem-concurrency-performance/`, artifact guard `tests/tooling/test_on_prem_mmc_tail_attribution.py` |
 | On-prem user access M012 — physical SBC small-team qualification and final disposition | closed — Pi 5 managed envelope measured (functional 25 cells + 3×30 benchmark batches all pass, 145/145 each, 0 pending/active; Argon2id 51 ms 1-way / 71–73 ms 2-way; 49 named users at 51 ms p50 with spot logins passing; concurrency 1/2/4/8 completes with 8-way saturating at p50 4.1 s); runner managed-auth corrective + 2 contract tests; solo practical, 49 users inexpensive metadata, no 50-concurrent claim; one medium (MMC tails exceed Sep-21 gates, envelope restricted) + six low findings, no high | `plans/closure/on-prem-user-access/012-status.md`, artifacts `artifacts/qualification/on-prem-m012-pi5-functional.json` + `on-prem-m012-pi5-benchmark-run-{1,2,3}.json`, docs `docs/raspberry-pi.md` envelope |
 | On-prem user access M011 — admin/member dashboard browser qualification | closed — frozen Python oracle rebuilt and run against head with 54 parity gaps, identical to the pre-M011 baseline (0 new, 0 resolved); on-prem admin/member pages qualified against a Rust-owned approved reference (70 observations, 22 captures) covering both roles, the negative matrix, no-JS sign-in, HiDPI/mobile/themed viewports, and a DOM credential-leak guard; browser sign-in, top-nav overflow at 1280px, unstyled usage pages, missing viewport declarations, unbounded tables, and budget labelling all corrected; 967 serial Rust tests and 175 tooling tests pass at the M011 baseline (re-verified post-integration — see integration note) | `plans/closure/on-prem-user-access/011-status.md` |
