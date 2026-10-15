@@ -19,7 +19,7 @@ pub(super) async fn authenticate(
         if requires_browser_session(&path) {
             return unauthorized("Browser session required");
         }
-        if !requires_auth(&path, &state.server)
+        if !requires_auth(&path, request.method(), &state.server)
             || state.server.api_key.is_none()
             || state
                 .server
@@ -40,13 +40,21 @@ pub(super) async fn authenticate(
     if personal_credential_allowed(&path)
         && let Some(token) = provided_api_key(request.headers())
     {
+        let connection = request
+            .extensions()
+            .get::<eggserve_server::interop::ConnectionInfoExt>()
+            .map(|extension| &extension.0);
+        let peer_ip = super::auth::throttle_peer_ip(connection, request.headers(), &state.server);
+        if !crate::web_session::personal_token_attempt_allowed(peer_ip) {
+            return unauthorized("Invalid or missing personal API credential");
+        }
         match crate::identity::verify_api_token_principal(&state.database, token).await {
             Ok(Some(principal)) => {
                 let mut request = request;
                 request.extensions_mut().insert(principal);
                 return next.run(request).await;
             }
-            Ok(None) => {}
+            Ok(None) => crate::web_session::record_personal_token_failure(peer_ip),
             Err(_) => return auth_unavailable(),
         }
     }
@@ -172,7 +180,7 @@ fn auth_unavailable() -> Response {
         .into_response()
 }
 
-pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
+pub(super) fn requires_auth(path: &str, method: &http::Method, server: &ServerState) -> bool {
     if is_unconditionally_public(path) {
         return false;
     }
@@ -208,6 +216,12 @@ pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
     if path == "/api/user-budget" {
         return true;
     }
+    if path.starts_with("/api/") || encoded_api_path(path) {
+        return !(server.dashboard_enabled
+            && server.dashboard_public
+            && *method == http::Method::GET
+            && public_dashboard_api_path(path));
+    }
     if path.starts_with("/v1/") {
         return true;
     }
@@ -230,7 +244,53 @@ pub(super) fn requires_auth(path: &str, server: &ServerState) -> bool {
         || path.starts_with("/models/");
     server.dashboard_enabled
         && !server.dashboard_public
-        && (dashboard_page || path.starts_with("/api/"))
+        && *method == http::Method::GET
+        && dashboard_page
+}
+
+fn public_dashboard_api_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/stats/summary"
+            | "/api/stats/transcoding"
+            | "/api/stats/cache-observability"
+            | "/api/stats/canonical-request-segmentation"
+            | "/api/stats/cache-stability"
+            | "/api/stats/request-shaping"
+            | "/api/timeseries"
+            | "/api/timeseries/grouped"
+    )
+}
+
+fn encoded_api_path(path: &str) -> bool {
+    let Some(first_segment) = path.strip_prefix('/') else {
+        return false;
+    };
+    let first_segment = first_segment.split('/').next().unwrap_or_default();
+    let bytes = first_segment.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let Some(pair) = bytes.get(index + 1..index + 3) else {
+                return false;
+            };
+            let high = (pair[0] as char).to_digit(16);
+            let low = (pair[1] as char).to_digit(16);
+            let (Some(high), Some(low)) = (high, low) else {
+                return false;
+            };
+            decoded.push(((high << 4) | low) as u8);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let Ok(decoded) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    decoded == "api" || decoded.starts_with("api/")
 }
 
 /// Acquire the active generation before collecting an inference body. Axum's
@@ -471,7 +531,9 @@ pub(super) fn is_loopback_host(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{legacy_server_key_allowed, personal_credential_allowed};
+    use super::{legacy_server_key_allowed, personal_credential_allowed, requires_auth};
+    use crate::server::ServerState;
+    use std::time::Instant;
 
     #[test]
     fn global_server_key_is_valid_only_before_identity_cutover() {
@@ -497,5 +559,57 @@ mod tests {
         for path in ["/", "/api/status", "/api/stats/runtime", "/api/users"] {
             assert!(!personal_credential_allowed(path), "{path}");
         }
+        for path in [
+            "/api/%73tats/summary",
+            "/api//stats/summary",
+            "/api/../admin/users",
+            "/api/stats/accounts",
+        ] {
+            assert!(!personal_credential_allowed(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn unknown_and_encoded_api_paths_never_inherit_public_dashboard_access() {
+        let public = ServerState {
+            api_key: Some("test-server-key-12345678".to_owned()),
+            dashboard_enabled: true,
+            dashboard_public: true,
+            dashboard_theme: "default".to_owned(),
+            dashboard_refresh_interval_s: 60,
+            configured_server_threads: 1,
+            database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: Vec::new(),
+            allow_insecure_web_auth: false,
+            started_at: Instant::now(),
+        };
+        for path in [
+            "/api/unknown",
+            "/api/stats/accounts",
+            "/api/%73tats/summary",
+            "/api//stats/summary",
+            "/api/../admin/users",
+            "/%61pi/stats/summary",
+        ] {
+            assert!(
+                requires_auth(path, &http::Method::GET, &public),
+                "{path} must fail closed"
+            );
+        }
+        for path in [
+            "/api/stats/summary",
+            "/api/stats/transcoding",
+            "/api/timeseries",
+        ] {
+            assert!(
+                !requires_auth(path, &http::Method::GET, &public),
+                "{path} is an explicit public API"
+            );
+        }
+        assert!(requires_auth(
+            "/api/stats/summary",
+            &http::Method::POST,
+            &public
+        ));
     }
 }

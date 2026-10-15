@@ -17,6 +17,7 @@ const SESSION_PREFIX: &str = "eps1_";
 const LOGIN_WINDOW: Duration = Duration::from_secs(15 * 60);
 const LOGIN_USERNAME_LIMIT: u8 = 10;
 const LOGIN_IP_LIMIT: u8 = 30;
+const PERSONAL_TOKEN_IP_LIMIT: u8 = 30;
 const LOGIN_BUCKET_LIMIT: usize = 2048;
 
 static LOGIN_FAILURES: OnceLock<std::sync::Mutex<HashMap<String, LoginBucket>>> = OnceLock::new();
@@ -285,11 +286,62 @@ pub fn record_login_failure(username: &str, peer: Option<IpAddr>) {
     }
 }
 
+pub fn personal_token_attempt_allowed(peer: Option<IpAddr>) -> bool {
+    let key = throttle_key(
+        "personal-token-ip",
+        &peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string()),
+    );
+    let now = Instant::now();
+    let mut failures = LOGIN_FAILURES
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    failures.retain(|_, bucket| now.duration_since(bucket.started) < LOGIN_WINDOW);
+    failures
+        .get(&key)
+        .is_none_or(|bucket| bucket.failures < PERSONAL_TOKEN_IP_LIMIT)
+}
+
+pub fn record_personal_token_failure(peer: Option<IpAddr>) {
+    let key = throttle_key(
+        "personal-token-ip",
+        &peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string()),
+    );
+    let now = Instant::now();
+    let mut failures = LOGIN_FAILURES
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    failures.retain(|_, bucket| now.duration_since(bucket.started) < LOGIN_WINDOW);
+    if let Some(bucket) = failures.get_mut(&key) {
+        bucket.failures = bucket
+            .failures
+            .saturating_add(1)
+            .min(PERSONAL_TOKEN_IP_LIMIT);
+        return;
+    }
+    if failures.len() >= LOGIN_BUCKET_LIMIT
+        && let Some(oldest) = failures
+            .iter()
+            .min_by_key(|(_, bucket)| bucket.started)
+            .map(|(key, _)| key.clone())
+    {
+        failures.remove(&oldest);
+    }
+    failures.insert(
+        key,
+        LoginBucket {
+            failures: 1,
+            started: now,
+        },
+    );
+}
+
 fn username_throttle_key(username: &str, peer: Option<IpAddr>) -> String {
     let peer = peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
     throttle_key(
         "username",
-        &format!("{}:{peer}", username.to_ascii_lowercase()),
+        &format!("{}:{peer}", username.trim().to_ascii_lowercase()),
     )
 }
 

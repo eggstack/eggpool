@@ -75,10 +75,10 @@ key and requires personal API tokens for inference and browser sessions for
 dashboard administration. Remote browser password login must reach EggPool
 through operator-managed HTTPS termination. Add the proxy's exact peer IP to
 `[security].trusted_proxies`; only that peer's single
-`X-Forwarded-Proto: https` header is trusted. For login throttling, EggPool
-uses a single literal `X-Forwarded-For` client IP only from that trusted peer;
-the proxy must replace the incoming header with the client's IP. Missing,
-duplicated, or chained values fall back to the proxy peer. The proxy should
+`X-Forwarded-Proto: https` header is trusted. Browser sign-in and failed
+personal-token throttling use one literal `X-Forwarded-For` client IP only
+from that trusted peer; the proxy must replace the incoming header with the
+client's IP. Missing, duplicated, or chained values fall back to the proxy peer. The proxy should
 preserve the public `Host` header, and the firewall should allow port 11300
 only from that proxy. Do not expose the backend port directly to clients when
 trusting a proxy.

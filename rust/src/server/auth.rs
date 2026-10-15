@@ -53,6 +53,14 @@ pub(super) async fn login_submit(
         )
             .into_response();
     }
+    let peer_ip = throttle_peer_ip(connection, &headers, &state.server);
+    if !crate::web_session::login_allowed(&form.username, peer_ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Html(login_html(Some("Sign-in failed. Try again later."))),
+        )
+            .into_response();
+    }
     let access_state = match crate::identity::access_state(&state.database).await {
         Ok(access_state) => access_state,
         Err(_) => return unavailable(),
@@ -61,14 +69,6 @@ pub(super) async fn login_submit(
         return (StatusCode::NOT_FOUND, "Browser sign-in is not enabled.").into_response();
     }
 
-    let peer_ip = login_throttle_peer(connection, &headers, &state.server);
-    if !crate::web_session::login_allowed(&form.username, peer_ip) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Html(login_html(Some("Sign-in failed. Try again later."))),
-        )
-            .into_response();
-    }
     let user = crate::identity::verify_password(&state.database, &form.username, &form.password)
         .await
         .ok()
@@ -248,7 +248,7 @@ fn forwarded_https(
     values.next().is_none() && value.trim().eq_ignore_ascii_case("https")
 }
 
-fn login_throttle_peer(
+pub(super) fn throttle_peer_ip(
     connection: Option<&eggserve_primitives::connection_info::ConnectionInfo>,
     headers: &HeaderMap,
     server: &ServerState,
@@ -573,13 +573,13 @@ mod tests {
 
         let trusted_peer = connection("192.0.2.10:443".parse().unwrap());
         assert_eq!(
-            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            throttle_peer_ip(Some(&trusted_peer), &headers, &server),
             Some("198.51.100.24".parse().unwrap())
         );
 
         let untrusted_peer = connection("198.51.100.30:443".parse().unwrap());
         assert_eq!(
-            login_throttle_peer(Some(&untrusted_peer), &headers, &server),
+            throttle_peer_ip(Some(&untrusted_peer), &headers, &server),
             Some("198.51.100.30".parse().unwrap())
         );
     }
@@ -608,7 +608,7 @@ mod tests {
         headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.24"));
         headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.25"));
         assert_eq!(
-            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            throttle_peer_ip(Some(&trusted_peer), &headers, &server),
             Some("192.0.2.10".parse().unwrap())
         );
 
@@ -618,7 +618,7 @@ mod tests {
             HeaderValue::from_static("198.51.100.24, 198.51.100.25"),
         );
         assert_eq!(
-            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            throttle_peer_ip(Some(&trusted_peer), &headers, &server),
             Some("192.0.2.10".parse().unwrap())
         );
     }

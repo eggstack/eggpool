@@ -631,8 +631,15 @@ impl Database {
     {
         let permit = self.acquire_permit().await?;
         self.inner.calls.fetch_add(1, Ordering::Relaxed);
-        let result = self.inner.connection.call(operation).await;
-        drop(permit);
+        let result = self
+            .inner
+            .connection
+            .call(move |connection| {
+                let result = operation(connection);
+                drop(permit);
+                result
+            })
+            .await;
         result.map_err(|error| match error {
             AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
             AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
@@ -697,6 +704,11 @@ impl Database {
             .inner
             .connection
             .call(move |connection| {
+                // tokio-rusqlite queues this closure independently of the
+                // caller's future. Keep the serialization gate with the
+                // queued work so canceling the caller cannot release the gate
+                // while its SQLite operation is still waiting to execute.
+                let _permit = permit;
                 #[cfg(feature = "qualification-persist-journal")]
                 let worker_write_bytes_before = if worker_io_attribution {
                     match read_worker_write_bytes() {
@@ -821,7 +833,6 @@ impl Database {
                 }
             })
             .await;
-        drop(permit);
         #[cfg(feature = "qualification-dedicated-checkpointer")]
         if matches!(
             &result,
@@ -2495,6 +2506,77 @@ mod qualification_tests {
 mod maintenance_tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
+
+    async fn assert_cancelled_call_keeps_gate_until_worker_finishes(
+        database: &Database,
+        transactional: bool,
+    ) {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let task_database = database.clone();
+        let task = tokio::spawn(async move {
+            let operation = move |connection: &mut SqliteConnection| {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv()
+                    .expect("test releases the queued SQLite operation");
+                let result = connection.execute_batch("SELECT 1");
+                let _ = finished_tx.send(());
+                result
+            };
+            if transactional {
+                task_database.with_transaction(operation).await
+            } else {
+                task_database.call(operation).await
+            }
+        });
+        started_rx
+            .await
+            .expect("SQLite worker reaches test barrier");
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("caller task is canceled")
+                .is_cancelled()
+        );
+        assert_eq!(
+            database.inner.gate.available_permits(),
+            0,
+            "the SQLite gate stays with queued work after caller cancellation"
+        );
+        release_tx.send(()).expect("SQLite worker is waiting");
+        tokio::time::timeout(Duration::from_secs(2), finished_rx)
+            .await
+            .expect("queued SQLite work completes within a bounded interval")
+            .expect("worker completion is observed");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            database.call(|connection| connection.execute_batch("SELECT 1")),
+        )
+        .await
+        .expect("the gate is released after queued work completes")
+        .expect("follow-up SQLite call succeeds");
+        assert_eq!(database.inner.gate.available_permits(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canceled_call_retains_gate_until_queued_operation_finishes() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        assert_cancelled_call_keeps_gate_until_worker_finishes(&database, false).await;
+        database.close().await.expect("database closes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canceled_transaction_retains_gate_until_queued_operation_finishes() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        assert_cancelled_call_keeps_gate_until_worker_finishes(&database, true).await;
+        database.close().await.expect("database closes");
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn idle_tick_reports_not_due_without_sqlite_work() {

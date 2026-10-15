@@ -446,10 +446,10 @@ personal token or browser session.
 Browser password login is allowed over loopback HTTP. For remote browser use,
 terminate TLS at an operator-managed proxy and add the proxy's literal peer IP
 to `[security].trusted_proxies`; EggPool accepts only a single
-`X-Forwarded-Proto: https` from that peer. For sign-in throttling, EggPool
-accepts one literal client IP in `X-Forwarded-For` from the trusted peer; the
-proxy must replace this header, and missing, duplicate, or chained values use
-the proxy peer as the throttle identity. The proxy must preserve the public
+`X-Forwarded-Proto: https` from that peer. Browser sign-in and failed personal-
+token throttling use one literal client IP in `X-Forwarded-For` from the
+trusted peer; the proxy must replace this header, and missing, duplicate, or
+chained values use the proxy peer as the throttle identity. The proxy must preserve the public
 Host header and the firewall must prevent direct access around the proxy. The
 optional `[security].allow_insecure_web_auth = true` switch is for isolated
 development only and emits a startup warning.

@@ -4,7 +4,7 @@
 
 use std::{
     collections::VecDeque,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -23,7 +23,7 @@ const MAX_PASSWORD_BYTES: usize = 1024;
 const MIN_PASSWORD_BYTES: usize = 12;
 const HASH_CONCURRENCY: usize = 2;
 
-static HASH_SLOTS: OnceLock<Semaphore> = OnceLock::new();
+static HASH_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 static FAILED_TOKEN_DIGESTS: OnceLock<Mutex<VecDeque<(String, Instant)>>> = OnceLock::new();
 static DUMMY_PASSWORD_HASH: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 const DUMMY_PASSWORD: &str = "eggpool-invalid-login-dummy-password";
@@ -947,13 +947,11 @@ pub async fn verify_password(
     let (password_hash, user) = account
         .map(|(password_hash, user)| (password_hash, Some(user)))
         .unwrap_or((dummy_hash, None));
-    let permit = HASH_SLOTS
-        .get_or_init(|| Semaphore::new(HASH_CONCURRENCY))
-        .acquire()
-        .await
-        .map_err(|_| IdentityError::HashWorker)?;
+    let slots = HASH_SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(HASH_CONCURRENCY)))
+        .clone();
     let password = password.to_owned();
-    let verified = tokio::task::spawn_blocking(move || {
+    let verified = run_hash_worker(slots, move || {
         let parsed = PasswordHash::new(&password_hash).map_err(|_| IdentityError::InvalidHash)?;
         if parsed.algorithm.as_str() != "argon2id"
             || parsed.version != Some(19)
@@ -967,9 +965,7 @@ pub async fn verify_password(
             .verify_password(password.as_bytes(), &parsed)
             .is_ok())
     })
-    .await
-    .map_err(|_| IdentityError::HashWorker)??;
-    drop(permit);
+    .await??;
     Ok(verified
         .then_some(user)
         .flatten()
@@ -1079,13 +1075,11 @@ async fn hash_password(password: &str) -> Result<String, IdentityError> {
     if !(MIN_PASSWORD_BYTES..=MAX_PASSWORD_BYTES).contains(&password.len()) {
         return Err(IdentityError::InvalidPassword);
     }
-    let permit = HASH_SLOTS
-        .get_or_init(|| Semaphore::new(HASH_CONCURRENCY))
-        .acquire()
-        .await
-        .map_err(|_| IdentityError::HashWorker)?;
+    let slots = HASH_SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(HASH_CONCURRENCY)))
+        .clone();
     let password = password.to_owned();
-    let result = tokio::task::spawn_blocking(move || {
+    run_hash_worker(slots, move || {
         let mut salt = [0_u8; 16];
         getrandom::fill(&mut salt).map_err(|_| IdentityError::Entropy)?;
         let salt = SaltString::encode_b64(&salt).map_err(|_| IdentityError::Entropy)?;
@@ -1098,10 +1092,26 @@ async fn hash_password(password: &str) -> Result<String, IdentityError> {
         .map(|hash| hash.to_string())
         .map_err(|_| IdentityError::InvalidHash)
     })
+    .await?
+}
+
+async fn run_hash_worker<T, F>(slots: Arc<Semaphore>, operation: F) -> Result<T, IdentityError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = slots
+        .acquire_owned()
+        .await
+        .map_err(|_| IdentityError::HashWorker)?;
+    tokio::task::spawn_blocking(move || {
+        // The blocking worker can outlive its async caller. Keep its bounded
+        // Argon2 slot until the actual CPU work exits, even on cancellation.
+        let _permit = permit;
+        operation()
+    })
     .await
-    .map_err(|_| IdentityError::HashWorker)?;
-    drop(permit);
-    result
+    .map_err(|_| IdentityError::HashWorker)
 }
 
 fn random_hex(length: usize) -> Result<String, IdentityError> {
@@ -1124,4 +1134,46 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
             left.get(index).copied().unwrap_or(0) ^ right.get(index).copied().unwrap_or(0);
     }
     difference == 0
+}
+
+#[cfg(test)]
+mod hash_worker_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canceled_hash_caller_keeps_worker_slot_until_hash_exits() {
+        let slots = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let worker_slots = Arc::clone(&slots);
+        let caller = tokio::spawn(async move {
+            run_hash_worker(worker_slots, move || {
+                let _ = started_tx.send(());
+                release_rx
+                    .recv()
+                    .expect("test releases the bounded hash worker");
+                let _ = finished_tx.send(());
+            })
+            .await
+        });
+        started_rx.await.expect("hash worker reaches test barrier");
+        caller.abort();
+        assert!(caller.await.expect_err("caller is canceled").is_cancelled());
+        assert_eq!(slots.available_permits(), 0);
+
+        release_tx.send(()).expect("hash worker is waiting");
+        tokio::time::timeout(Duration::from_secs(2), finished_rx)
+            .await
+            .expect("blocking hash work finishes within a bounded interval")
+            .expect("hash worker completion is observed");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            run_hash_worker(Arc::clone(&slots), || 1_u8),
+        )
+        .await
+        .expect("released hash slot admits bounded follow-up work")
+        .expect("follow-up hash worker succeeds");
+        assert_eq!(slots.available_permits(), 1);
+    }
 }

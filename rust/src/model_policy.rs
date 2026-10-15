@@ -135,6 +135,42 @@ fn exact_effect<'a>(
 pub struct ModelPolicyService {
     database: Database,
     cache: Arc<Mutex<HashMap<String, Arc<ModelPolicySnapshot>>>>,
+    mutation_fence: Option<AdminSessionFence>,
+}
+
+#[derive(Debug, Clone)]
+struct AdminSessionFence {
+    actor_id: String,
+    session_id: String,
+    auth_epoch: i64,
+}
+
+fn validate_mutation_actor(
+    connection: &mut tokio_rusqlite::rusqlite::Connection,
+    actor_id: &str,
+    fence: Option<&AdminSessionFence>,
+) -> Result<(), tokio_rusqlite::rusqlite::Error> {
+    let Some(fence) = fence else {
+        return Ok(());
+    };
+    if actor_id != fence.actor_id {
+        return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
+    }
+    let active: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM web_sessions s \
+         JOIN users u ON u.id = s.user_id \
+         WHERE s.id = ?1 AND s.user_id = ?2 AND s.revoked_at IS NULL \
+         AND s.expires_at > CURRENT_TIMESTAMP \
+         AND s.last_used_at > datetime('now', '-12 hours') \
+         AND u.state = 'active' AND u.role = 'admin' \
+         AND u.must_change_password = 0 AND u.auth_epoch = ?3)",
+        (&fence.session_id, &fence.actor_id, fence.auth_epoch),
+        |row| row.get(0),
+    )?;
+    if !active {
+        return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
 }
 
 impl std::fmt::Debug for ModelPolicyService {
@@ -154,7 +190,19 @@ impl ModelPolicyService {
         Self {
             database,
             cache: Arc::new(Mutex::new(HashMap::new())),
+            mutation_fence: None,
         }
+    }
+
+    /// Fence browser-admin mutations against session revocation or user
+    /// changes that occur after middleware admits the request.
+    pub fn with_browser_admin_session(mut self, principal: &crate::web_session::Principal) -> Self {
+        self.mutation_fence = Some(AdminSessionFence {
+            actor_id: principal.user_id.clone(),
+            session_id: principal.session_id.clone(),
+            auth_epoch: principal.auth_epoch,
+        });
+        self
     }
 
     pub async fn create_profile(
@@ -172,8 +220,10 @@ impl ModelPolicyService {
         let id = id.to_owned();
         let default_effect = validate_effect(default_effect)?;
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 connection.execute(
                     "INSERT INTO policy_profiles(id, name, default_effect, created_by, updated_by) \
                      VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -249,8 +299,10 @@ impl ModelPolicyService {
         let model_id = validate_model_id(model_id)?.to_owned();
         let profile_id = profile_id.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 let removed = connection.execute(
                     "DELETE FROM profile_model_rules WHERE profile_id = ?1 AND model_id = ?2",
                     (&profile_id, &model_id),
@@ -290,8 +342,10 @@ impl ModelPolicyService {
         let effect = validate_effect(default_effect)?;
         let id = id.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 let changed = connection.execute(
                     "UPDATE policy_profiles SET name = ?1, default_effect = ?2, \
                      version = version + 1, updated_by = ?3, updated_at = CURRENT_TIMESTAMP \
@@ -322,8 +376,10 @@ impl ModelPolicyService {
         }
         let id = id.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 let assigned: bool = connection.query_row(
                     "SELECT EXISTS(SELECT 1 FROM user_profile_assignments WHERE profile_id = ?1)",
                     [&id],
@@ -360,8 +416,10 @@ impl ModelPolicyService {
         let effect = validate_effect(effect)?;
         let profile_id = profile_id.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 connection.execute(
                     "INSERT INTO profile_model_rules(profile_id, model_id, effect, created_by, updated_by) \
                      VALUES (?1, ?2, ?3, ?4, ?4) \
@@ -398,8 +456,10 @@ impl ModelPolicyService {
             .transpose()?
             .map(str::to_owned);
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 let default_effect = connection.query_row(
                     "SELECT default_effect FROM policy_profiles WHERE id = ?1",
                     [&profile_id],
@@ -470,8 +530,10 @@ impl ModelPolicyService {
         let user_id = user_id.to_owned();
         let profile_id = profile_id.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 connection.execute(
                     "INSERT INTO user_profile_assignments(user_id, profile_id, assigned_by) \
                      VALUES (?1, ?2, ?3) \
@@ -503,8 +565,10 @@ impl ModelPolicyService {
         let model_id = validate_model_id(model_id)?.to_owned();
         let effect = validate_effect(effect)?;
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 connection.execute(
                     "INSERT INTO user_policy_overrides(user_id, model_id, effect, updated_by) \
                      VALUES (?1, ?2, ?3, ?4) \
@@ -533,8 +597,10 @@ impl ModelPolicyService {
         let user_id = user_id.to_owned();
         let model_id = validate_model_id(model_id)?.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 let removed = connection.execute(
                     "DELETE FROM user_policy_overrides WHERE user_id = ?1 AND model_id = ?2",
                     (&user_id, &model_id),
@@ -560,8 +626,10 @@ impl ModelPolicyService {
     ) -> Result<(), ModelPolicyError> {
         let model_id = validate_model_id(model_id)?.to_owned();
         let actor_id = actor_id.to_owned();
+        let mutation_fence = self.mutation_fence.clone();
         self.database
             .with_transaction(move |connection| {
+                validate_mutation_actor(connection, &actor_id, mutation_fence.as_ref())?;
                 if denied {
                     connection.execute(
                         "INSERT INTO instance_model_denials(model_id, created_by) \

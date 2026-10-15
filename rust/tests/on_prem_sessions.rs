@@ -146,7 +146,20 @@ fn login_throttle_is_bounded_by_username_and_peer() {
         web_session::record_login_failure(&username, peer);
     }
     assert!(!web_session::login_allowed(&username, peer));
+    assert!(!web_session::login_allowed(&format!(" {username} "), peer));
     assert!(web_session::login_allowed(&username, other_peer));
+}
+
+#[test]
+fn personal_token_failures_are_bounded_per_peer_before_database_lookup() {
+    let peer = Some("203.0.113.71".parse().unwrap());
+    let other_peer = Some("203.0.113.72".parse().unwrap());
+    for _ in 0..30 {
+        assert!(web_session::personal_token_attempt_allowed(peer));
+        web_session::record_personal_token_failure(peer);
+    }
+    assert!(!web_session::personal_token_attempt_allowed(peer));
+    assert!(web_session::personal_token_attempt_allowed(other_peer));
 }
 
 async fn http_request(address: std::net::SocketAddr, raw: &str) -> String {

@@ -414,6 +414,7 @@ pub(in crate::server) async fn create_user(
     };
     if let Some(profile_id) = form.profile_id.as_deref().filter(|id| !id.is_empty())
         && let Err(error) = crate::model_policy::ModelPolicyService::new(state.database.clone())
+            .with_browser_admin_session(&session)
             .assign_profile(&user.id, profile_id, &session.user_id)
             .await
     {
@@ -488,6 +489,7 @@ pub(in crate::server) async fn assign_user_profile(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .assign_profile(&form.user_id, &form.profile_id, &session.user_id)
         .await
     {
@@ -509,6 +511,7 @@ pub(in crate::server) async fn create_profile(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .create_profile(
             &form.profile_id,
             &form.name,
@@ -535,6 +538,7 @@ pub(in crate::server) async fn update_profile(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .update_profile(
             &form.profile_id,
             &form.name,
@@ -567,6 +571,7 @@ pub(in crate::server) async fn delete_profile(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .delete_profile(&form.profile_id, form.version, &session.user_id)
         .await
     {
@@ -593,6 +598,7 @@ pub(in crate::server) async fn set_profile_rule(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .set_profile_rule(
             &form.profile_id,
             &form.model_id,
@@ -619,6 +625,7 @@ pub(in crate::server) async fn remove_profile_rule(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .remove_profile_rule(&form.profile_id, &form.model_id, &session.user_id)
         .await
     {
@@ -641,6 +648,7 @@ pub(in crate::server) async fn set_profile_preference(
     }
     let model = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .set_profile_preference(&form.profile_id, model, &session.user_id)
         .await
     {
@@ -662,6 +670,7 @@ pub(in crate::server) async fn set_user_override(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .set_user_override(
             &form.user_id,
             &form.model_id,
@@ -688,6 +697,7 @@ pub(in crate::server) async fn remove_user_override(
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
     match crate::model_policy::ModelPolicyService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .remove_user_override(&form.user_id, &form.model_id, &session.user_id)
         .await
     {

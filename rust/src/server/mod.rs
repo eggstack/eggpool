@@ -1271,12 +1271,15 @@ mod tests {
             "/latency",
             "/runtime",
             "/api/stats/summary",
-            "/api/stats/accounts",
+            "/api/stats/transcoding",
             "/static/dashboard.css",
             "/v1/healthz",
             "/v1/readyz",
         ] {
-            assert!(!requires_auth(path, &public), "{path} is public");
+            assert!(
+                !requires_auth(path, &http::Method::GET, &public),
+                "{path} is public"
+            );
         }
         for path in [
             "/v1/models",
@@ -1290,7 +1293,10 @@ mod tests {
             "/api/stats/update",
             "/api/status",
         ] {
-            assert!(requires_auth(path, &public), "{path} stays authenticated");
+            assert!(
+                requires_auth(path, &http::Method::GET, &public),
+                "{path} stays authenticated"
+            );
         }
     }
 
@@ -1302,12 +1308,18 @@ mod tests {
             "/accounts",
             "/models",
             "/api/stats/summary",
-            "/api/stats/accounts",
+            "/api/stats/transcoding",
         ] {
-            assert!(requires_auth(path, &private), "{path} requires a key");
+            assert!(
+                requires_auth(path, &http::Method::GET, &private),
+                "{path} requires a key"
+            );
         }
         for path in ["/static/dashboard.css", "/v1/healthz", "/v1/readyz"] {
-            assert!(!requires_auth(path, &private), "{path} stays exempt");
+            assert!(
+                !requires_auth(path, &http::Method::GET, &private),
+                "{path} stays exempt"
+            );
         }
         for path in [
             "/v1/models",
@@ -1317,7 +1329,10 @@ mod tests {
             "/api/stats/update",
             "/api/status",
         ] {
-            assert!(requires_auth(path, &private), "{path} stays authenticated");
+            assert!(
+                requires_auth(path, &http::Method::GET, &private),
+                "{path} stays authenticated"
+            );
         }
     }
 

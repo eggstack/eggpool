@@ -1,6 +1,8 @@
 use eggpool::{
     db::{Database, DatabaseConfig, MigrationRunner},
+    identity,
     model_policy::{ModelPolicyError, ModelPolicyService},
+    web_session,
 };
 
 async fn database() -> Database {
@@ -167,6 +169,57 @@ async fn concurrent_policy_edit_keeps_each_snapshot_consistent_and_refreshes_new
     assert!(
         !before.allows("model-a", None),
         "in-flight policy is immutable"
+    );
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn revoked_admin_session_cannot_commit_a_policy_mutation() {
+    let database = database().await;
+    identity::mark_fresh_uninitialized(&database).await.unwrap();
+    let (admin, _) = identity::bootstrap_admin(
+        &database,
+        "policy-admin",
+        "M015 admin password before reset",
+    )
+    .await
+    .unwrap();
+    let issued = web_session::issue(&database, &admin.id).await.unwrap();
+    let stale_principal = web_session::authenticate(&database, &issued.session_token)
+        .await
+        .unwrap()
+        .expect("browser session is initially active");
+
+    identity::reset_password(
+        &database,
+        &admin.username,
+        "M015 admin password after reset",
+    )
+    .await
+    .unwrap();
+    let result = ModelPolicyService::new(database.clone())
+        .with_browser_admin_session(&stale_principal)
+        .create_profile(
+            "stale-session-profile",
+            "Stale session profile",
+            "deny",
+            &admin.id,
+        )
+        .await;
+    assert!(matches!(result, Err(ModelPolicyError::Database(_))));
+    let profile_exists = database
+        .call(|connection| {
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM policy_profiles WHERE id = 'stale-session-profile')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(
+        !profile_exists,
+        "revoked session must not commit policy state"
     );
     database.close().await.unwrap();
 }
