@@ -3345,12 +3345,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_context_is_read_only_and_never_creates_keys() {
+    async fn remote_context_is_read_only_for_keyless_managed_config() {
         let directory = tempfile::tempdir().expect("tempdir");
         let config_path = directory.path().join("config.toml");
         let db_path = directory.path().join("usage.sqlite3");
-        // No [server].api_key and no env: read-only export must fail rather
-        // than manufacturing a key file mutation.
+        // No [server].api_key and no env: managed export remains useful and
+        // must not manufacture a shared key file mutation.
         std::fs::write(
             &config_path,
             format!(
@@ -3361,7 +3361,7 @@ mod tests {
         .expect("config");
         let before = std::fs::read_to_string(&config_path).expect("before");
         let result = build_remote_context(&config_path, None).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
         let after = std::fs::read_to_string(&config_path).expect("after");
         assert_eq!(before, after);
         assert!(!after.contains("api_key"));
