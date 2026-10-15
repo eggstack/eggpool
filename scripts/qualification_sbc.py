@@ -10,6 +10,31 @@ Usage::
         --binary rust/target/release/eggpool \
         --output artifacts/qualification/008-run.json
 
+Extended attribution examples (each invocation is one independent matrix cell)::
+
+    TMPDIR=/mnt/qualification-ssd uv run python scripts/qualification_sbc.py \
+        --binary rust/target/release/eggpool \
+        --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
+        --benchmark-samples 30 --concurrency-workers 4 \
+        --concurrency-requests 1000 --benchmark-principals 5 \
+        --benchmark-budget-mode user-global \
+        --output artifacts/qualification/m001-ssd-c4-u5-user-global-1.json
+
+    uv run python scripts/qualification_sbc.py \
+        --binary rust/target/release/eggpool \
+        --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml \
+        --benchmark-samples 30 --concurrency-workers 4 \
+        --concurrency-requests 1000 --benchmark-principals 5 \
+        --benchmark-budget-mode user-global \
+        --competing-io-mib-per-second 1 --competing-io-max-mib 128 \
+        --output artifacts/qualification/m001-mmc-competing-c4-u5-user-global-1.json
+
+The synthetic user count is a configured account count; requests are round-robin
+authenticated across those personal tokens. The runner records only aggregate
+counts and sanitized mount classes. p99 is emitted only with at least 1000
+concurrent request observations. Competing writes have explicit rate and total
+volume caps and run only during the concurrent batch.
+
 The command is intentionally refused unless Linux/aarch64 and a device-tree
 board model are visible. This prevents a hosted ARM VM from being reported as
 the mandatory physical SBC evidence.
@@ -20,6 +45,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import http.cookiejar
 import json
 import os
 import platform
@@ -32,6 +58,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -60,6 +87,12 @@ BENCHMARK_MAX_SAMPLES = 100
 BENCHMARK_WARMUPS = 5
 CONCURRENCY_BATCH_SIZE = 32
 CONCURRENCY_WORKERS = 4
+CONCURRENCY_WORKERS_MAX = 8
+CONCURRENCY_REQUESTS_MAX = 4000
+P99_MIN_SAMPLES = 1000
+COMPETING_IO_MAX_MIB_PER_SECOND = 4
+COMPETING_IO_MAX_MIB = 128
+SYNTHETIC_ADMIN_PASSWORD = "SBC synthetic bootstrap password 123"
 STABILIZATION_SECONDS = 3.0
 DIAGNOSTIC_MIN_SAMPLES = 10
 DIAGNOSTIC_MAX_SAMPLES = 200
@@ -300,6 +333,50 @@ def _storage_device_class(device: str | None) -> str | None:
     if device.startswith("sd"):
         return "scsi-disk"
     return "block-device"
+
+
+def _path_storage_metadata(path: Path) -> dict[str, str | None]:
+    """Describe the mount holding a qualification path without exposing it."""
+    resolved = path.resolve()
+    matches: list[tuple[int, str, str]] = []
+    mounts = _read_text(Path("/proc/mounts")) or ""
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) < 3:
+            continue
+        mountpoint = Path(fields[1].replace("\\040", " "))
+        try:
+            resolved.relative_to(mountpoint)
+        except ValueError:
+            continue
+        matches.append((len(str(mountpoint)), fields[0], fields[2]))
+    if not matches:
+        return {
+            "filesystem": None,
+            "storage_medium_class": None,
+            "device_class": None,
+        }
+    _, source, filesystem = max(matches, key=lambda item: item[0])
+    device = _root_block_device(source)
+    rotational = (
+        _read_text(Path(f"/sys/class/block/{device}/queue/rotational"))
+        if device
+        else None
+    )
+    medium = (
+        "rotational"
+        if rotational == "1"
+        else "non-rotational"
+        if rotational == "0"
+        else "virtual"
+        if filesystem in {"tmpfs", "ramfs"}
+        else "unavailable"
+    )
+    return {
+        "filesystem": filesystem[:64],
+        "storage_medium_class": medium,
+        "device_class": _storage_device_class(device),
+    }
 
 
 def board_metadata() -> tuple[dict[str, Any] | None, str | None]:
@@ -1175,7 +1252,7 @@ def _percentile(values: Sequence[int], percentile: int) -> int | None:
 
 
 def _timing_summary(
-    elapsed_ms: Sequence[int], ttft_ms: Sequence[int]
+    elapsed_ms: Sequence[int], ttft_ms: Sequence[int], *, include_p99: bool = False
 ) -> dict[str, Any]:
     """Return aggregate timing scalars and discard per-request observations."""
     summary: dict[str, Any] = {
@@ -1192,6 +1269,10 @@ def _timing_summary(
                 "p95_ttft_ms": _percentile(ttft_ms, 95),
             }
         )
+    if include_p99 and len(elapsed_ms) >= P99_MIN_SAMPLES:
+        summary["p99_elapsed_ms"] = _percentile(elapsed_ms, 99)
+    if include_p99 and len(ttft_ms) >= P99_MIN_SAMPLES:
+        summary["p99_ttft_ms"] = _percentile(ttft_ms, 99)
     return summary
 
 
@@ -2264,8 +2345,8 @@ def _sequential_benchmark(
                 },
                 False,
             )
-    first_cpu = _proc_cpu(process.pid)
     started = time.monotonic()
+    first_cpu: tuple[int, int] | None = None
     elapsed_ms: list[int] = []
     ttft_ms: list[int] = []
     for _ in range(samples):
@@ -2323,33 +2404,314 @@ def _sequential_benchmark(
 
 
 def _concurrent_finite_benchmark(
-    process: subprocess.Popen[str], port: int, api_token: str = "q008-server-key"
+    process: subprocess.Popen[str],
+    port: int,
+    api_token: str = "q008-server-key",
+    *,
+    client_concurrency: int = CONCURRENCY_WORKERS,
+    request_count: int = CONCURRENCY_BATCH_SIZE,
+    competing_io_dir: Path | None = None,
+    competing_io_mib_per_second: int = 0,
+    competing_io_max_mib: int = 0,
+    api_tokens: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Run the fixed contention observation at client concurrency four."""
+    """Run a bounded finite batch with optional same-filesystem I/O load."""
+    if not 1 <= client_concurrency <= CONCURRENCY_WORKERS_MAX:
+        raise ValueError("concurrent benchmark workers must be between 1 and 8")
+    if not client_concurrency <= request_count <= CONCURRENCY_REQUESTS_MAX:
+        raise ValueError(
+            "concurrent benchmark requests must be between worker count and 4000"
+        )
+    if (competing_io_mib_per_second == 0) != (competing_io_max_mib == 0):
+        raise ValueError("competing I/O rate and volume must both be zero or nonzero")
+    if not 0 <= competing_io_mib_per_second <= COMPETING_IO_MAX_MIB_PER_SECOND:
+        raise ValueError("competing I/O rate must be between 0 and 4 MiB/s")
+    if not 0 <= competing_io_max_mib <= COMPETING_IO_MAX_MIB:
+        raise ValueError("competing I/O volume must be between 0 and 128 MiB")
+    if competing_io_max_mib and competing_io_dir is None:
+        raise ValueError("competing I/O requires a qualification temporary root")
+
+    io_stop = threading.Event()
+    io_ready = threading.Event()
+    io_result: dict[str, Any] = {"bytes_written": 0, "elapsed_ms": 0}
+    io_thread: threading.Thread | None = None
+    if competing_io_max_mib:
+        assert competing_io_dir is not None
+        io_path = competing_io_dir / "qualification-competing-io.tmp"
+
+        def write_competing_io() -> None:
+            io_started = time.monotonic()
+            written = 0
+            try:
+                with io_path.open("wb") as output:
+                    io_ready.set()
+                    limit = competing_io_max_mib * 1024 * 1024
+                    while not io_stop.is_set() and written < limit:
+                        chunk_size = min(64 * 1024, limit - written)
+                        output.write(b"\0" * chunk_size)
+                        written += chunk_size
+                        if written % (1024 * 1024) == 0:
+                            output.flush()
+                            os.fsync(output.fileno())
+                        target_elapsed = written / (
+                            competing_io_mib_per_second * 1024 * 1024
+                        )
+                        remaining = target_elapsed - (time.monotonic() - io_started)
+                        if remaining > 0:
+                            io_stop.wait(remaining)
+                    output.flush()
+                    os.fsync(output.fileno())
+            except OSError as error:
+                io_result["error"] = type(error).__name__
+            finally:
+                io_result["bytes_written"] = written
+                io_result["elapsed_ms"] = round((time.monotonic() - io_started) * 1000)
+
+        io_thread = threading.Thread(
+            target=write_competing_io, name="qualification-competing-io", daemon=True
+        )
+        io_thread.start()
+        if not io_ready.wait(timeout=5):
+            io_stop.set()
+            io_thread.join(timeout=5)
+            raise QualificationError("competing I/O worker did not become ready")
+
     first_cpu = _proc_cpu(process.pid)
     started = time.monotonic()
 
-    def request_once(_item: int) -> tuple[int, bytes, int, int | None]:
-        return _benchmark_request(port, MODELS["responses"], False, api_token=api_token)
+    active_tokens = tuple(api_tokens) or (api_token,)
 
-    with ThreadPoolExecutor(max_workers=CONCURRENCY_WORKERS) as executor:
-        results = list(executor.map(request_once, range(CONCURRENCY_BATCH_SIZE)))
+    def request_once(item: int) -> tuple[int, bytes, int, int | None]:
+        return _benchmark_request(
+            port,
+            MODELS["responses"],
+            False,
+            api_token=active_tokens[item % len(active_tokens)],
+        )
+
+    try:
+        first_cpu = _proc_cpu(process.pid)
+        with ThreadPoolExecutor(max_workers=client_concurrency) as executor:
+            results = list(executor.map(request_once, range(request_count)))
+    finally:
+        io_stop.set()
+        if io_thread is not None:
+            io_thread.join(timeout=120)
+            if io_thread.is_alive():
+                raise QualificationError("competing I/O worker did not stop")
+    if "error" in io_result:
+        raise QualificationError("competing I/O worker failed")
     elapsed_seconds = max(time.monotonic() - started, 0.001)
     second_cpu = _proc_cpu(process.pid)
     elapsed_ms = [result[2] for result in results]
     ttft_ms = [result[3] for result in results if result[3] is not None]
     completed = sum(1 for status, body, _, _ in results if status == 200 and body)
     return {
-        "status": "measured" if completed == CONCURRENCY_BATCH_SIZE else "fail",
-        "request_count": CONCURRENCY_BATCH_SIZE,
-        "client_concurrency": CONCURRENCY_WORKERS,
+        "status": "measured" if completed == request_count else "fail",
+        "request_count": request_count,
+        "client_concurrency": client_concurrency,
         "completed_count": completed,
-        "failed_count": CONCURRENCY_BATCH_SIZE - completed,
+        "failed_count": request_count - completed,
         "batch_elapsed_ms": round(elapsed_seconds * 1000),
-        "requests_per_second": round(CONCURRENCY_BATCH_SIZE / elapsed_seconds, 3),
+        "requests_per_second": round(request_count / elapsed_seconds, 3),
         "cpu": _cpu_batch_summary(first_cpu, second_cpu, elapsed_seconds),
-        "timings": _timing_summary(elapsed_ms, ttft_ms),
+        "timings": _timing_summary(elapsed_ms, ttft_ms, include_p99=True),
+        "competing_io": {
+            "enabled": bool(competing_io_max_mib),
+            "configured_mib_per_second": competing_io_mib_per_second,
+            "maximum_mib": competing_io_max_mib,
+            "bytes_written": io_result["bytes_written"],
+            "elapsed_ms": io_result["elapsed_ms"],
+            "storage": (
+                _path_storage_metadata(competing_io_dir)
+                if competing_io_dir is not None
+                else None
+            ),
+        },
     }
+
+
+def _command_token(
+    binary: Path, config: Path, env: Mapping[str, str], username: str, timeout: float
+) -> str:
+    """Issue one synthetic personal token without retaining it in reports."""
+    try:
+        result = subprocess.run(
+            [
+                str(binary),
+                "--config",
+                str(config),
+                "users",
+                "token",
+                username,
+                "--label",
+                "SBC qualification",
+                "--show-secret",
+            ],
+            cwd=ROOT,
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise QualificationError(
+            "synthetic personal token could not be issued"
+        ) from error
+    match = re.search(r"epk1_[A-Za-z0-9_-]+", result.stdout)
+    if result.returncode != 0 or match is None:
+        raise QualificationError("synthetic personal token issuance failed")
+    return match.group(0)
+
+
+def _configure_benchmark_principals(
+    *,
+    binary: Path,
+    config: Path,
+    env: Mapping[str, str],
+    port: int,
+    admin_password: str,
+    admin_token: str,
+    principal_count: int,
+    budget_mode: str,
+    request_count: int,
+    timeout: float,
+) -> list[str]:
+    """Create disposable managed principals and optional hard request budgets."""
+    if not 1 <= principal_count <= 49:
+        raise ValueError("benchmark principal count must be between 1 and 49")
+    if budget_mode not in {"none", "user", "global", "user-global"}:
+        raise ValueError("invalid benchmark budget mode")
+    tokens = [admin_token]
+    if principal_count > 1:
+        jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        origin = f"http://127.0.0.1:{port}"
+        try:
+            opener.open(f"{origin}/login", timeout=timeout).read()
+            login = urllib.request.Request(
+                f"{origin}/login",
+                data=urllib.parse.urlencode(
+                    {"username": "sbc-admin", "password": admin_password}
+                ).encode(),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Origin": origin,
+                    "Referer": f"{origin}/login",
+                },
+                method="POST",
+            )
+            response = opener.open(login, timeout=timeout)
+            response.read()
+            if not any(cookie.name == "eggpool_session" for cookie in jar):
+                raise QualificationError("synthetic admin session was not issued")
+            for index in range(1, principal_count):
+                users_page = opener.open(f"{origin}/users", timeout=timeout).read()
+                html = users_page.decode("utf-8", errors="replace")
+                form = re.search(
+                    r'<form[^>]+action="/admin/users/create"[^>]*>(.*?)</form>',
+                    html,
+                    re.DOTALL,
+                )
+                csrf = (
+                    re.search(r'name="csrf" value="([^"]+)"', form.group(1))
+                    if form is not None
+                    else None
+                )
+                if csrf is None:
+                    raise QualificationError("synthetic user form was unavailable")
+                username = f"sbc-member-{index:02d}"
+                member_password = f"SBC qualification member passphrase {index:02d}"
+                create = urllib.request.Request(
+                    f"{origin}/admin/users/create",
+                    data=urllib.parse.urlencode(
+                        {
+                            "username": username,
+                            "password": member_password,
+                            "profile_id": "",
+                            "csrf": csrf.group(1),
+                        }
+                    ).encode(),
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": origin,
+                        "Referer": f"{origin}/users",
+                    },
+                    method="POST",
+                )
+                created = opener.open(create, timeout=timeout)
+                created.read()
+                tokens.append(_command_token(binary, config, env, username, timeout))
+        except (OSError, urllib.error.URLError) as error:
+            raise QualificationError(
+                "synthetic managed principals could not be set up"
+            ) from error
+
+    if budget_mode in {"user", "user-global"}:
+        max_requests = str(request_count + 1)
+        for username in ["sbc-admin"] + [
+            f"sbc-member-{index:02d}" for index in range(1, principal_count)
+        ]:
+            try:
+                result = subprocess.run(
+                    [
+                        str(binary),
+                        "--config",
+                        str(config),
+                        "users",
+                        "budget",
+                        "set",
+                        username,
+                        "--window",
+                        "day",
+                        "--max-requests",
+                        max_requests,
+                        "--enforcement",
+                        "hard",
+                    ],
+                    cwd=ROOT,
+                    env=dict(env),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise QualificationError(
+                    "synthetic user budget setup failed"
+                ) from error
+            if result.returncode != 0:
+                raise QualificationError("synthetic user budget setup failed")
+    if budget_mode in {"global", "user-global"}:
+        try:
+            result = subprocess.run(
+                [
+                    str(binary),
+                    "--config",
+                    str(config),
+                    "users",
+                    "global-budget",
+                    "set",
+                    "--window",
+                    "day",
+                    "--max-requests",
+                    str(request_count + 1),
+                    "--enforcement",
+                    "hard",
+                ],
+                cwd=ROOT,
+                env=dict(env),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise QualificationError("synthetic global budget setup failed") from error
+        if result.returncode != 0:
+            raise QualificationError("synthetic global budget setup failed")
+    return tokens
 
 
 def _benchmark_sample_count(value: str) -> int:
@@ -2551,12 +2913,40 @@ def run_qualification(
     diagnose_persist_journal_steady_state: bool = False,
     diagnose_worker_io_attribution: bool = False,
     diagnostic_database_dir: Path | None = None,
+    concurrency_workers: int = CONCURRENCY_WORKERS,
+    concurrency_requests: int = CONCURRENCY_BATCH_SIZE,
+    competing_io_mib_per_second: int = 0,
+    competing_io_max_mib: int = 0,
+    benchmark_principals: int = 1,
+    benchmark_budget_mode: str = "none",
 ) -> dict[str, Any]:
     """Run SBC qualification and return a bounded machine-readable report."""
     if benchmark_samples < 0 or benchmark_samples > BENCHMARK_MAX_SAMPLES:
         raise ValueError(
             f"benchmark sample count must be 0 or 1..{BENCHMARK_MAX_SAMPLES}"
         )
+    if not 1 <= concurrency_workers <= CONCURRENCY_WORKERS_MAX:
+        raise ValueError("concurrency workers must be between 1 and 8")
+    if not concurrency_workers <= concurrency_requests <= CONCURRENCY_REQUESTS_MAX:
+        raise ValueError("concurrency requests must be between workers and 4000")
+    if (competing_io_mib_per_second == 0) != (competing_io_max_mib == 0):
+        raise ValueError("competing I/O rate and volume must both be zero or nonzero")
+    if not 0 <= competing_io_mib_per_second <= COMPETING_IO_MAX_MIB_PER_SECOND:
+        raise ValueError("competing I/O rate must be between 0 and 4 MiB/s")
+    if not 0 <= competing_io_max_mib <= COMPETING_IO_MAX_MIB:
+        raise ValueError("competing I/O volume must be between 0 and 128 MiB")
+    if not 1 <= benchmark_principals <= 49:
+        raise ValueError("benchmark principals must be between 1 and 49")
+    if benchmark_budget_mode not in {"none", "user", "global", "user-global"}:
+        raise ValueError("invalid benchmark budget mode")
+    if benchmark_samples == 0 and (
+        concurrency_workers != CONCURRENCY_WORKERS
+        or concurrency_requests != CONCURRENCY_BATCH_SIZE
+        or competing_io_max_mib
+        or benchmark_principals != 1
+        or benchmark_budget_mode != "none"
+    ):
+        raise ValueError("extended concurrency options require benchmark mode")
     if diagnose_finite_tail is not None and not (
         DIAGNOSTIC_MIN_SAMPLES <= diagnose_finite_tail <= DIAGNOSTIC_MAX_SAMPLES
     ):
@@ -2839,7 +3229,7 @@ def run_qualification(
                     ],
                     cwd=ROOT,
                     env=dict(env),
-                    input="SBC synthetic bootstrap password 123\n",
+                    input=f"{SYNTHETIC_ADMIN_PASSWORD}\n",
                     capture_output=True,
                     text=True,
                     timeout=timeout,
@@ -3805,8 +4195,9 @@ def run_qualification(
                     benchmark_process = process
                     benchmark: dict[str, Any] = {
                         "sample_count": benchmark_samples,
-                        "concurrency_batch_size": CONCURRENCY_BATCH_SIZE,
-                        "client_concurrency": CONCURRENCY_WORKERS,
+                        "concurrency_batch_size": concurrency_requests,
+                        "client_concurrency": concurrency_workers,
+                        "database_storage": _path_storage_metadata(database),
                         "config_fixture": Path(config_fixture).name,
                         "cadence": benchmark_cadence_facts(content),
                         "runs": {},
@@ -3870,12 +4261,34 @@ def run_qualification(
                     )
                     if translated_measured:
                         benchmark_sample("after-translated-streaming")
+                    principal_tokens = _configure_benchmark_principals(
+                        binary=binary,
+                        config=config,
+                        env=env,
+                        port=port,
+                        admin_password=SYNTHETIC_ADMIN_PASSWORD,
+                        admin_token=agent_token,
+                        principal_count=benchmark_principals,
+                        budget_mode=benchmark_budget_mode,
+                        request_count=concurrency_requests,
+                        timeout=timeout,
+                    )
+                    benchmark["principal_count"] = benchmark_principals
+                    benchmark["budget_mode"] = benchmark_budget_mode
                     concurrent = _concurrent_finite_benchmark(
-                        benchmark_process, port, agent_token
+                        benchmark_process,
+                        port,
+                        agent_token,
+                        client_concurrency=concurrency_workers,
+                        request_count=concurrency_requests,
+                        competing_io_dir=root,
+                        competing_io_mib_per_second=competing_io_mib_per_second,
+                        competing_io_max_mib=competing_io_max_mib,
+                        api_tokens=principal_tokens,
                     )
                     if concurrent["status"] != "measured":
                         raise QualificationError(
-                            "concurrency-4 benchmark did not complete all requests"
+                            "concurrent benchmark did not complete all requests"
                         )
                     benchmark["runs"]["concurrent_native_responses_finite"] = concurrent
                     if diagnose_finite_tail is not None:
@@ -4228,6 +4641,50 @@ def _parser() -> argparse.ArgumentParser:
         help="Run the optional physical-SBC benchmark with 1..100 samples.",
     )
     parser.add_argument(
+        "--concurrency-workers",
+        type=int,
+        default=CONCURRENCY_WORKERS,
+        metavar="N",
+        help="Concurrent finite-request workers, 1..8 (benchmark mode only).",
+    )
+    parser.add_argument(
+        "--concurrency-requests",
+        type=int,
+        default=CONCURRENCY_BATCH_SIZE,
+        metavar="N",
+        help=(
+            "Concurrent finite requests, workers..4000 (benchmark mode only). "
+            "p99 is reported only at 1000 or more completed observations."
+        ),
+    )
+    parser.add_argument(
+        "--competing-io-mib-per-second",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Rate cap for same-filesystem competing writes, 1..4 MiB/s.",
+    )
+    parser.add_argument(
+        "--competing-io-max-mib",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Total competing-write cap, 1..128 MiB; requires a nonzero rate.",
+    )
+    parser.add_argument(
+        "--benchmark-principals",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Synthetic managed accounts used by the concurrent batch, 1..49.",
+    )
+    parser.add_argument(
+        "--benchmark-budget-mode",
+        choices=("none", "user", "global", "user-global"),
+        default="none",
+        help="Apply no budget, hard per-user, hard global, or both request budgets.",
+    )
+    parser.add_argument(
         "--diagnose-finite-tail",
         type=_diagnose_sample_count,
         default=None,
@@ -4377,6 +4834,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             diagnose_persist_journal_steady_state=args.diagnose_persist_journal_steady_state,
             diagnose_worker_io_attribution=args.diagnose_worker_io_attribution,
             diagnostic_database_dir=args.diagnostic_database_dir,
+            concurrency_workers=args.concurrency_workers,
+            concurrency_requests=args.concurrency_requests,
+            competing_io_mib_per_second=args.competing_io_mib_per_second,
+            competing_io_max_mib=args.competing_io_max_mib,
+            benchmark_principals=args.benchmark_principals,
+            benchmark_budget_mode=args.benchmark_budget_mode,
         )
     except (OSError, QualificationError, ValueError, sqlite3.Error) as error:
         requested_benchmark = (
