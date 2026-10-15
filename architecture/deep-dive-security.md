@@ -69,6 +69,13 @@ values fall back to the proxy peer. No other forwarded header establishes
 trust.
 `security.allow_insecure_web_auth` is an explicit development override and
 emits a startup warning.
+Session-authenticated responses carry `Cache-Control: no-store, max-age=0` so
+account and administration HTML containing identity, budget, or CSRF data is
+not retained by shared or browser caches. Privileged browser mutations also
+revalidate the exact session, user role, auth epoch, and forced-password state
+inside the SQLite transaction that commits the write; creating a user and
+assigning its initial profile is one transaction. This closes the interval
+between HTTP middleware authentication and database commit.
 Failed personal-token lookups use a 256-entry, one-second negative cache keyed
 by token digest. Successful token lookups are not cached, so revocation takes
 effect on the next request.

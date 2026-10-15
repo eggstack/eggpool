@@ -985,6 +985,16 @@ impl Database {
     /// uncommitted.  Ordinary repository writes should continue to use
     /// `with_transaction`.
     pub async fn begin_transaction(&self) -> Result<DatabaseTransaction, DatabaseError> {
+        self.begin_transaction_after_begin(|| {}).await
+    }
+
+    async fn begin_transaction_after_begin<F>(
+        &self,
+        after_begin: F,
+    ) -> Result<DatabaseTransaction, DatabaseError>
+    where
+        F: FnOnce() + Send + 'static,
+    {
         if self.inner.config.read_only {
             return Err(DatabaseError::ReadOnly);
         }
@@ -992,27 +1002,33 @@ impl Database {
         self.inner.calls.fetch_add(1, Ordering::Relaxed);
         self.inner.transactions.fetch_add(1, Ordering::Relaxed);
         let timeout = self.inner.config.busy_timeout_ms;
-        if let Err(error) = self
+        let database = self.clone();
+        let runtime = tokio::runtime::Handle::current();
+        match self
             .inner
             .connection
             .clone()
-            .call(|connection| connection.execute_batch("BEGIN IMMEDIATE"))
+            .call(move |connection| {
+                connection.execute_batch("BEGIN IMMEDIATE")?;
+                after_begin();
+                Ok(DatabaseTransaction {
+                    database,
+                    permit: Some(permit),
+                    runtime,
+                    finished: false,
+                })
+            })
             .await
         {
-            drop(permit);
-            return Err(match error {
+            Ok(transaction) => Ok(transaction),
+            Err(error) => Err(match error {
                 AsyncSqliteError::ConnectionClosed => DatabaseError::Closed,
                 AsyncSqliteError::Close((_, source)) | AsyncSqliteError::Error(source) => {
                     map_sqlite("begin transaction", timeout, source)
                 }
                 _ => DatabaseError::WorkerClosed,
-            });
+            }),
         }
-        Ok(DatabaseTransaction {
-            database: self.clone(),
-            permit: Some(permit),
-            finished: false,
-        })
     }
 
     pub async fn quick_check(&self) -> Result<(), DatabaseError> {
@@ -2007,13 +2023,13 @@ fn delete_old(
 ///
 /// Dropping an unfinished holder bricks later writes (the next `BEGIN
 /// IMMEDIATE` fails), so every holder must be committed or rolled back.
-/// `Drop` issues a best-effort async `ROLLBACK`; when no Tokio runtime is
-/// present the rollback cannot be issued and the brick-risk stands — callers
-/// must not drop an unfinished transaction outside a runtime.
+/// `Drop` issues a best-effort async `ROLLBACK` through the runtime handle
+/// captured when the transaction began.
 #[must_use = "an unfinished DatabaseTransaction bricks later writes on drop; commit or roll it back"]
 pub struct DatabaseTransaction {
     database: Database,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    runtime: tokio::runtime::Handle,
     finished: bool,
 }
 
@@ -2149,27 +2165,12 @@ impl Drop for DatabaseTransaction {
         // is still pending, which SQLite rejects and which could otherwise
         // leave the new transaction rolled back underneath it.
         let permit = self.permit.take();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = connection
-                    .call(|connection| connection.execute_batch("ROLLBACK"))
-                    .await;
-                drop(permit);
-            });
-        } else {
-            // No runtime: the ROLLBACK cannot be issued. The permit releases
-            // here, but the SQLite transaction may still be open, so the next
-            // BEGIN IMMEDIATE can fail. This path is a programming error —
-            // surface it loudly and catch it in debug builds.
-            tracing::error!(
-                "database transaction dropped outside a Tokio runtime; ROLLBACK skipped"
-            );
-            debug_assert!(
-                false,
-                "DatabaseTransaction dropped without commit/rollback outside a runtime"
-            );
+        self.runtime.spawn(async move {
+            let _ = connection
+                .call(|connection| connection.execute_batch("ROLLBACK"))
+                .await;
             drop(permit);
-        }
+        });
     }
 }
 
@@ -2575,6 +2576,43 @@ mod maintenance_tests {
             .await
             .expect("database opens");
         assert_cancelled_call_keeps_gate_until_worker_finishes(&database, true).await;
+        database.close().await.expect("database closes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn canceled_begin_transaction_rolls_back_before_releasing_gate() {
+        let database = Database::open(DatabaseConfig::default())
+            .await
+            .expect("database opens");
+        let (begun_tx, begun_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task_database = database.clone();
+        let task = tokio::spawn(async move {
+            task_database
+                .begin_transaction_after_begin(move || {
+                    let _ = begun_tx.send(());
+                    release_rx
+                        .recv()
+                        .expect("test releases the begun transaction");
+                })
+                .await
+        });
+        begun_rx
+            .await
+            .expect("BEGIN IMMEDIATE reached the synchronized boundary");
+        task.abort();
+        assert!(task.await.expect_err("caller is canceled").is_cancelled());
+        assert_eq!(database.inner.gate.available_permits(), 0);
+
+        release_tx.send(()).expect("test releases the worker");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            database.call(|connection| connection.execute_batch("SELECT 1")),
+        )
+        .await
+        .expect("gate is released after the orphaned begin is rolled back")
+        .expect("follow-up SQLite work succeeds");
+        assert_eq!(database.inner.gate.available_permits(), 1);
         database.close().await.expect("database closes");
     }
 

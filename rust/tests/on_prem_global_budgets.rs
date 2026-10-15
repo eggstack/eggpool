@@ -885,7 +885,7 @@ async fn global_hard_token_and_usd_deny_unprovable_without_upstream_io() {
     let admitted = service
         .publish_attributed(
             claim_for(&fixture, "model-b").await,
-            hard_input("global-hard-ok", 1, Some(50), Some(3_000_000)),
+            hard_input("global-hard-ok", 1, Some(50), Some(1)),
             Some(attribution_for("budget-member")),
         )
         .await
@@ -916,12 +916,13 @@ async fn global_hard_token_and_usd_deny_unprovable_without_upstream_io() {
         .await
         .unwrap();
     // Token-hard global rule is model-agnostic (matches model-b): 300-token
-    // hold. Cost-hard model-b rule converts at $3/MTok: 900 microdollars.
+    // hold. Cost-hard model-b rule rounds the tiny positive conversion up to
+    // one microdollar instead of admitting with a zero hold.
     assert_eq!(
         held,
         (
             300,
-            900,
+            1,
             "hard".to_owned(),
             Some("operator_tariff".to_owned())
         )

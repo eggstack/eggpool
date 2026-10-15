@@ -150,8 +150,12 @@ pub(super) async fn password_change(
         )
             .into_response();
     }
-    match crate::identity::reset_password(&state.database, &principal.username, &form.new_password)
-        .await
+    match crate::identity::reset_password_from_browser(
+        &state.database,
+        &principal,
+        &form.new_password,
+    )
+    .await
     {
         Ok(()) => {
             let mut response = Redirect::to("/login").into_response();

@@ -340,18 +340,70 @@ pub async fn create_member(
     username: &str,
     temporary_password: &str,
 ) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(database, actor_id, username, temporary_password, None, None).await
+}
+
+pub async fn create_member_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    username: &str,
+    temporary_password: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        &principal.user_id,
+        username,
+        temporary_password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+        None,
+    )
+    .await
+}
+
+pub async fn create_member_with_profile_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    username: &str,
+    temporary_password: &str,
+    profile_id: &str,
+) -> Result<UserSummary, IdentityError> {
+    create_member_with_fence(
+        database,
+        &principal.user_id,
+        username,
+        temporary_password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+        Some(profile_id),
+    )
+    .await
+}
+
+async fn create_member_with_fence(
+    database: &Database,
+    actor_id: &str,
+    username: &str,
+    temporary_password: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
+    profile_id: Option<&str>,
+) -> Result<UserSummary, IdentityError> {
     let username = validate_username(username)?;
     let password_hash = hash_password(temporary_password).await?;
     let id = random_hex(16)?;
     let actor_id = actor_id.to_owned();
     let normalized = username.to_ascii_lowercase();
+    let session_fence = session_fence.clone();
+    let profile_id = profile_id.map(str::to_owned);
     let outcome = database
         .with_transaction(move |connection| {
-            let actor_is_admin: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                [&actor_id],
-                |row| row.get(0),
-            )?;
+            let actor_is_admin = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, true)?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                    [&actor_id],
+                    |row| row.get(0),
+                )?
+            };
             if !actor_is_admin {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -378,6 +430,18 @@ pub async fn create_member(
                  VALUES (?1, 'create_user', 'user', ?2)",
                 (&actor_id, &id),
             )?;
+            if let Some(profile_id) = profile_id.as_ref() {
+                connection.execute(
+                    "INSERT INTO user_profile_assignments(user_id, profile_id, assigned_by) \
+                     VALUES (?1, ?2, ?3)",
+                    (&id, profile_id, &actor_id),
+                )?;
+                connection.execute(
+                    "INSERT INTO user_admin_audit(actor_id, action, target_kind, target_id) \
+                     VALUES (?1, 'assign_profile', 'user', ?2)",
+                    (&actor_id, &id),
+                )?;
+            }
             Ok(AdminMutation::User(UserSummary {
                 id,
                 username,
@@ -403,15 +467,46 @@ pub async fn set_user_enabled(
     target_id: &str,
     enabled: bool,
 ) -> Result<(), IdentityError> {
+    set_user_enabled_with_fence(database, actor_id, target_id, enabled, None).await
+}
+
+pub async fn set_user_enabled_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    target_id: &str,
+    enabled: bool,
+) -> Result<(), IdentityError> {
+    set_user_enabled_with_fence(
+        database,
+        &principal.user_id,
+        target_id,
+        enabled,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
+}
+
+async fn set_user_enabled_with_fence(
+    database: &Database,
+    actor_id: &str,
+    target_id: &str,
+    enabled: bool,
+    session_fence: Option<crate::web_session::SessionFence>,
+) -> Result<(), IdentityError> {
     let actor_id = actor_id.to_owned();
     let target_id = target_id.to_owned();
+    let session_fence = session_fence.clone();
     let outcome = database
         .with_transaction(move |connection| {
-            let actor_is_admin: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                [&actor_id],
-                |row| row.get(0),
-            )?;
+            let actor_is_admin = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, true)?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                    [&actor_id],
+                    |row| row.get(0),
+                )?
+            };
             if !actor_is_admin {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -477,16 +572,47 @@ pub async fn admin_reset_password(
     target_id: &str,
     temporary_password: &str,
 ) -> Result<(), IdentityError> {
+    admin_reset_password_with_fence(database, actor_id, target_id, temporary_password, None).await
+}
+
+pub async fn admin_reset_password_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    target_id: &str,
+    temporary_password: &str,
+) -> Result<(), IdentityError> {
+    admin_reset_password_with_fence(
+        database,
+        &principal.user_id,
+        target_id,
+        temporary_password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
+}
+
+async fn admin_reset_password_with_fence(
+    database: &Database,
+    actor_id: &str,
+    target_id: &str,
+    temporary_password: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
+) -> Result<(), IdentityError> {
     let password_hash = hash_password(temporary_password).await?;
     let actor_id = actor_id.to_owned();
     let target_id = target_id.to_owned();
+    let session_fence = session_fence.clone();
     let outcome = database
         .with_transaction(move |connection| {
-            let actor_is_admin: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                [&actor_id],
-                |row| row.get(0),
-            )?;
+            let actor_is_admin = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, true)?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                    [&actor_id],
+                    |row| row.get(0),
+                )?
+            };
             if !actor_is_admin {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -553,18 +679,54 @@ pub async fn revoke_user_credential(
     user_id: &str,
     credential_id: &str,
 ) -> Result<(), IdentityError> {
+    revoke_user_credential_with_fence(database, actor_id, user_id, credential_id, None).await
+}
+
+pub async fn revoke_user_credential_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    user_id: &str,
+    credential_id: &str,
+) -> Result<(), IdentityError> {
+    revoke_user_credential_with_fence(
+        database,
+        &principal.user_id,
+        user_id,
+        credential_id,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
+}
+
+async fn revoke_user_credential_with_fence(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+    credential_id: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
+) -> Result<(), IdentityError> {
     let actor_id = actor_id.to_owned();
     let user_id = user_id.to_owned();
     let credential_id = credential_id.to_owned();
+    let session_fence = session_fence.clone();
     let outcome = database
         .with_transaction(move |connection| {
-            let authorized: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
-                 ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
-                 WHERE actor.role = 'admin' OR actor.id = target.id)",
-                (&actor_id, &user_id),
-                |row| row.get(0),
-            )?;
+            let authorized = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, actor_id != user_id)?
+                    && connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND state = 'active')",
+                        [&user_id],
+                        |row| row.get(0),
+                    )?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                     ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
+                     WHERE actor.role = 'admin' OR actor.id = target.id)",
+                    (&actor_id, &user_id),
+                    |row| row.get(0),
+                )?
+            };
             if !authorized {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -640,6 +802,7 @@ async fn issue_api_token_as(
     actor_id: &str,
     user_id: &str,
     label: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
 ) -> Result<IssuedCredential, IdentityError> {
     let label = label.trim().to_owned();
     if label.is_empty() || label.len() > 80 {
@@ -653,15 +816,25 @@ async fn issue_api_token_as(
     let actor_id = actor_id.to_owned();
     let user_id = user_id.to_owned();
     let returned_user_id = user_id.clone();
+    let session_fence = session_fence.clone();
     let outcome = database
         .with_transaction(move |connection| {
-            let authorized: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
-                 ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
-                 WHERE actor.role = 'admin' OR actor.id = target.id)",
-                (&actor_id, &user_id),
-                |row| row.get(0),
-            )?;
+            let authorized = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, actor_id != user_id)?
+                    && connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND state = 'active')",
+                        [&user_id],
+                        |row| row.get(0),
+                    )?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                     ON actor.id = ?1 AND actor.state = 'active' AND target.id = ?2 AND target.state = 'active' \
+                     WHERE actor.role = 'admin' OR actor.id = target.id)",
+                    (&actor_id, &user_id),
+                    |row| row.get(0),
+                )?
+            };
             if !authorized {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -693,7 +866,23 @@ pub async fn issue_personal_api_token(
     user_id: &str,
     label: &str,
 ) -> Result<IssuedCredential, IdentityError> {
-    issue_api_token_as(database, actor_id, user_id, label).await
+    issue_api_token_as(database, actor_id, user_id, label, None).await
+}
+
+pub async fn issue_personal_api_token_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    user_id: &str,
+    label: &str,
+) -> Result<IssuedCredential, IdentityError> {
+    issue_api_token_as(
+        database,
+        &principal.user_id,
+        user_id,
+        label,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
 }
 
 pub async fn revoke_user_api_tokens(
@@ -701,17 +890,50 @@ pub async fn revoke_user_api_tokens(
     actor_id: &str,
     user_id: &str,
 ) -> Result<u64, IdentityError> {
+    revoke_user_api_tokens_with_fence(database, actor_id, user_id, None).await
+}
+
+pub async fn revoke_user_api_tokens_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    user_id: &str,
+) -> Result<u64, IdentityError> {
+    revoke_user_api_tokens_with_fence(
+        database,
+        &principal.user_id,
+        user_id,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
+}
+
+async fn revoke_user_api_tokens_with_fence(
+    database: &Database,
+    actor_id: &str,
+    user_id: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
+) -> Result<u64, IdentityError> {
     let actor_id = actor_id.to_owned();
     let user_id = user_id.to_owned();
+    let session_fence = session_fence.clone();
     let outcome = database
         .with_transaction(move |connection| {
-            let authorized: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
-                 ON actor.id = ?1 AND actor.role = 'admin' AND actor.state = 'active' \
-                    AND target.id = ?2 AND target.state = 'active')",
-                (&actor_id, &user_id),
-                |row| row.get(0),
-            )?;
+            let authorized = if let Some(fence) = session_fence.as_ref() {
+                fence.validates_actor(connection, &actor_id, true)?
+                    && connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND state = 'active')",
+                        [&user_id],
+                        |row| row.get(0),
+                    )?
+            } else {
+                connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users actor JOIN users target \
+                     ON actor.id = ?1 AND actor.role = 'admin' AND actor.state = 'active' \
+                        AND target.id = ?2 AND target.state = 'active')",
+                    (&actor_id, &user_id),
+                    |row| row.get(0),
+                )?
+            };
             if !authorized {
                 return Ok(AdminMutation::Forbidden);
             }
@@ -787,15 +1009,49 @@ pub async fn reset_password(
     username: &str,
     password: &str,
 ) -> Result<(), IdentityError> {
+    reset_password_with_fence(database, username, password, None).await
+}
+
+pub async fn reset_password_from_browser(
+    database: &Database,
+    principal: &crate::web_session::Principal,
+    password: &str,
+) -> Result<(), IdentityError> {
+    reset_password_with_fence(
+        database,
+        &principal.username,
+        password,
+        Some(crate::web_session::SessionFence::from_principal(principal)),
+    )
+    .await
+}
+
+async fn reset_password_with_fence(
+    database: &Database,
+    username: &str,
+    password: &str,
+    session_fence: Option<crate::web_session::SessionFence>,
+) -> Result<(), IdentityError> {
     let normalized = validate_username(username)?.to_ascii_lowercase();
     let password_hash = hash_password(password).await?;
     let normalized_for_error = normalized.clone();
+    let session_fence = session_fence.clone();
     let result = database
         .with_transaction(move |connection| {
-            let changed = connection.execute(
-                "UPDATE users SET password_hash = ?1, must_change_password = 0, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE normalized_username = ?2 AND state = 'active'",
-                (&password_hash, &normalized),
-            )?;
+            let changed = if let Some(fence) = session_fence.as_ref() {
+                if !fence.validates_current_session(connection, fence.user_id())? {
+                    return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
+                }
+                connection.execute(
+                    "UPDATE users SET password_hash = ?1, must_change_password = 0, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND normalized_username = ?3 AND state = 'active'",
+                    (&password_hash, fence.user_id(), &normalized),
+                )?
+            } else {
+                connection.execute(
+                    "UPDATE users SET password_hash = ?1, must_change_password = 0, auth_epoch = auth_epoch + 1, updated_at = CURRENT_TIMESTAMP WHERE normalized_username = ?2 AND state = 'active'",
+                    (&password_hash, &normalized),
+                )?
+            };
             if changed == 0 {
                 return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
             }

@@ -73,11 +73,21 @@ enum MutationResult {
 #[derive(Debug, Clone)]
 pub struct InstanceBudgetService {
     database: Database,
+    browser_admin_session: Option<crate::web_session::SessionFence>,
 }
 
 impl InstanceBudgetService {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            browser_admin_session: None,
+        }
+    }
+
+    pub fn with_browser_admin_session(mut self, principal: &crate::web_session::Principal) -> Self {
+        self.browser_admin_session =
+            Some(crate::web_session::SessionFence::from_principal(principal));
+        self
     }
 
     /// Create or replace the instance rule for one model scope and window.
@@ -114,14 +124,19 @@ impl InstanceBudgetService {
         let model_id = model_id.map(str::to_owned);
         let window = window.as_str().to_owned();
         let enforcement = limits.enforcement.as_str().to_owned();
+        let browser_admin_session = self.browser_admin_session.clone();
         let outcome = self
             .database
             .with_transaction(move |connection| {
-                let actor: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                    [&actor_id],
-                    |row| row.get(0),
-                )?;
+                let actor = if let Some(fence) = browser_admin_session.as_ref() {
+                    fence.validates_actor(connection, &actor_id, true)?
+                } else {
+                    connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                        [&actor_id],
+                        |row| row.get(0),
+                    )?
+                };
                 if !actor {
                     return Ok(MutationResult::ActorNotAdmin);
                 }
@@ -179,14 +194,19 @@ impl InstanceBudgetService {
         let actor_id = actor_id.to_owned();
         let model_id = model_id.map(str::to_owned);
         let window = window.as_str().to_owned();
+        let browser_admin_session = self.browser_admin_session.clone();
         let outcome = self
             .database
             .with_transaction(move |connection| {
-                let actor: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                    [&actor_id],
-                    |row| row.get(0),
-                )?;
+                let actor = if let Some(fence) = browser_admin_session.as_ref() {
+                    fence.validates_actor(connection, &actor_id, true)?
+                } else {
+                    connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                        [&actor_id],
+                        |row| row.get(0),
+                    )?
+                };
                 if !actor {
                     return Ok(MutationResult::ActorNotAdmin);
                 }

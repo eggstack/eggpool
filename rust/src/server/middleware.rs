@@ -11,6 +11,34 @@ pub(super) async fn authenticate(
     if is_unconditionally_public(&path) {
         return next.run(request).await;
     }
+    let supplied_key = provided_api_key(request.headers());
+    let token_candidate = supplied_key
+        .filter(|_| personal_credential_allowed(&path))
+        .filter(|_| {
+            !state
+                .server
+                .api_key
+                .as_deref()
+                .is_some_and(|server_key| verify_api_key(request.headers(), server_key))
+        });
+    let connection = request
+        .extensions()
+        .get::<eggserve_server::interop::ConnectionInfoExt>()
+        .map(|extension| &extension.0);
+    let token_peer = super::auth::throttle_peer_ip(connection, request.headers(), &state.server);
+    if personal_credential_allowed(&path)
+        && state.server.api_key.is_some()
+        && supplied_key.is_none()
+    {
+        // With the configured shared key present, an absent key cannot be
+        // valid in either legacy-key or managed mode. Reject before the
+        // access-state SQLite lookup.
+        return unauthorized("Invalid or missing API key");
+    }
+    if token_candidate.is_some() && !crate::web_session::personal_token_attempt_allowed(token_peer)
+    {
+        return unauthorized("Invalid or missing personal API credential");
+    }
     let access_state = match crate::identity::access_state(&state.database).await {
         Ok(access_state) => access_state,
         Err(_) => return auth_unavailable(),
@@ -38,23 +66,15 @@ pub(super) async fn authenticate(
         return unauthorized("Invalid or missing API key");
     }
     if personal_credential_allowed(&path)
-        && let Some(token) = provided_api_key(request.headers())
+        && let Some(token) = token_candidate
     {
-        let connection = request
-            .extensions()
-            .get::<eggserve_server::interop::ConnectionInfoExt>()
-            .map(|extension| &extension.0);
-        let peer_ip = super::auth::throttle_peer_ip(connection, request.headers(), &state.server);
-        if !crate::web_session::personal_token_attempt_allowed(peer_ip) {
-            return unauthorized("Invalid or missing personal API credential");
-        }
         match crate::identity::verify_api_token_principal(&state.database, token).await {
             Ok(Some(principal)) => {
                 let mut request = request;
                 request.extensions_mut().insert(principal);
                 return next.run(request).await;
             }
-            Ok(None) => crate::web_session::record_personal_token_failure(peer_ip),
+            Ok(None) => crate::web_session::record_personal_token_failure(token_peer),
             Err(_) => return auth_unavailable(),
         }
     }
@@ -122,7 +142,12 @@ pub(super) async fn authenticate(
             kind: crate::identity::PrincipalKind::BrowserSession,
         });
     request.extensions_mut().insert(principal);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
 }
 
 fn legacy_server_key_allowed(access_state: Option<&str>) -> bool {

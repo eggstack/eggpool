@@ -45,6 +45,77 @@ pub struct Principal {
     csrf_digest: String,
 }
 
+/// Transaction-time fence for browser-originated mutations. It binds a
+/// mutation to the exact session and privilege snapshot admitted by
+/// middleware, so revocation, password reset, role change, or disablement
+/// before commit makes the write fail closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionFence {
+    session_id: String,
+    user_id: String,
+    role: String,
+    auth_epoch: i64,
+    must_change_password: bool,
+}
+
+impl SessionFence {
+    pub(crate) fn from_principal(principal: &Principal) -> Self {
+        Self {
+            session_id: principal.session_id.clone(),
+            user_id: principal.user_id.clone(),
+            role: principal.role.clone(),
+            auth_epoch: principal.auth_epoch,
+            must_change_password: principal.must_change_password,
+        }
+    }
+
+    pub(crate) fn validates_actor(
+        &self,
+        connection: &tokio_rusqlite::rusqlite::Connection,
+        actor_id: &str,
+        require_admin: bool,
+    ) -> Result<bool, tokio_rusqlite::rusqlite::Error> {
+        if self.must_change_password
+            || actor_id != self.user_id
+            || (require_admin && self.role != "admin")
+        {
+            return Ok(false);
+        }
+        self.validates_current_session(connection, actor_id)
+    }
+
+    pub(crate) fn validates_current_session(
+        &self,
+        connection: &tokio_rusqlite::rusqlite::Connection,
+        actor_id: &str,
+    ) -> Result<bool, tokio_rusqlite::rusqlite::Error> {
+        if actor_id != self.user_id {
+            return Ok(false);
+        }
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM web_sessions s \
+             JOIN users u ON u.id = s.user_id \
+             WHERE s.id = ?1 AND s.user_id = ?2 AND s.revoked_at IS NULL \
+             AND s.expires_at > CURRENT_TIMESTAMP \
+             AND s.last_used_at > datetime('now', '-12 hours') \
+             AND u.state = 'active' AND u.role = ?3 \
+             AND u.must_change_password = ?4 AND u.auth_epoch = ?5)",
+            (
+                &self.session_id,
+                &self.user_id,
+                &self.role,
+                i64::from(self.must_change_password),
+                self.auth_epoch,
+            ),
+            |row| row.get(0),
+        )
+    }
+
+    pub(crate) fn user_id(&self) -> &str {
+        &self.user_id
+    }
+}
+
 pub struct IssuedSession {
     pub session_token: String,
     pub csrf_token: String,

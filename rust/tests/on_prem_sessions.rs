@@ -95,6 +95,165 @@ async fn password_reset_revokes_browser_sessions() {
 }
 
 #[tokio::test]
+async fn revoked_admin_session_cannot_commit_privileged_identity_or_budget_writes() {
+    let (_directory, database) = database().await;
+    let (admin_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database).await.unwrap();
+    let issued = web_session::issue(&database, &admin_id).await.unwrap();
+    let principal = web_session::authenticate(&database, &issued.session_token)
+        .await
+        .unwrap()
+        .expect("admin session is initially active");
+    let member = identity::create_member(
+        &database,
+        &admin_id,
+        "fenced-member",
+        "M015 fenced member temporary password",
+    )
+    .await
+    .unwrap();
+    let credential =
+        identity::issue_personal_api_token(&database, &admin_id, &member.id, "fenced member token")
+            .await
+            .unwrap();
+    web_session::revoke(&database, &issued.session_token)
+        .await
+        .unwrap();
+
+    assert!(
+        identity::create_member_from_browser(
+            &database,
+            &principal,
+            "must-not-exist",
+            "M015 stale session temporary password",
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        identity::create_member_with_profile_from_browser(
+            &database,
+            &principal,
+            "must-not-exist-with-profile",
+            "M015 stale session temporary password",
+            "default",
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        identity::set_user_enabled_from_browser(&database, &principal, &member.id, false,)
+            .await
+            .is_err()
+    );
+    assert!(
+        identity::admin_reset_password_from_browser(
+            &database,
+            &principal,
+            &member.id,
+            "M015 stale session replacement password",
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        identity::issue_personal_api_token_from_browser(
+            &database,
+            &principal,
+            &member.id,
+            "must-not-be-issued",
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        identity::revoke_user_api_tokens_from_browser(&database, &principal, &member.id,)
+            .await
+            .is_err()
+    );
+    assert!(
+        identity::revoke_user_credential_from_browser(
+            &database,
+            &principal,
+            &member.id,
+            "missing-credential",
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        identity::reset_password_from_browser(
+            &database,
+            &principal,
+            "M015 stale session password replacement",
+        )
+        .await
+        .is_err()
+    );
+
+    let limits = eggpool::user_budget::BudgetLimits {
+        requests: Some(1),
+        tokens: None,
+        microdollars: None,
+        concurrent: None,
+        enforcement: eggpool::user_budget::BudgetEnforcement::Estimated,
+    };
+    let user_budgets = eggpool::user_budget::UserBudgetService::new(database.clone())
+        .with_browser_admin_session(&principal);
+    assert!(
+        user_budgets
+            .set_rule(
+                &admin_id,
+                &member.id,
+                None,
+                eggpool::user_budget::BudgetWindow::Day,
+                limits,
+            )
+            .await
+            .is_err()
+    );
+    let instance_budgets = eggpool::instance_budget::InstanceBudgetService::new(database.clone())
+        .with_browser_admin_session(&principal);
+    assert!(
+        instance_budgets
+            .set_rule(
+                &admin_id,
+                None,
+                eggpool::user_budget::BudgetWindow::Day,
+                limits,
+            )
+            .await
+            .is_err()
+    );
+
+    let users = identity::list_users(&database).await.unwrap();
+    assert!(!users.iter().any(|user| {
+        matches!(
+            user.username.as_str(),
+            "must-not-exist" | "must-not-exist-with-profile"
+        )
+    }));
+    assert_eq!(
+        users
+            .iter()
+            .find(|user| user.id == member.id)
+            .expect("member remains present")
+            .state,
+        "active"
+    );
+    assert!(
+        identity::verify_api_token_principal(&database, &credential.token)
+            .await
+            .unwrap()
+            .is_some(),
+        "stale admin requests do not revoke member credentials"
+    );
+    assert!(user_budgets.rules(&member.id).await.unwrap().is_empty());
+    assert!(instance_budgets.rules().await.unwrap().is_empty());
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn expired_sessions_and_disabled_users_are_rejected() {
     let (_directory, database) = database().await;
     let (user_id, _) = create_admin(&database).await;
@@ -273,6 +432,12 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
 
     let account = http_request(address, &format!("GET /account HTTP/1.1\r\nHost: {address}\r\nCookie: {cookie_header}\r\nConnection: close\r\n\r\n")).await;
     assert!(account.starts_with("HTTP/1.1 200"), "{account}");
+    assert!(
+        account
+            .to_ascii_lowercase()
+            .contains("cache-control: no-store"),
+        "authenticated account pages are not cacheable: {account}"
+    );
     assert!(account.contains("Change password"), "{account}");
 
     // A forced first-login password change is available without JavaScript
@@ -335,6 +500,114 @@ async fn managed_browser_login_account_csrf_and_logout_work_over_loopback() {
 
     let stale = http_request(address, &format!("GET /account HTTP/1.1\r\nHost: {address}\r\nCookie: {cookie_header}\r\nConnection: close\r\n\r\n")).await;
     assert!(stale.starts_with("HTTP/1.1 401"), "{stale}");
+    handle.request_shutdown(ShutdownReason::Requested);
+    task.await.unwrap().unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn trusted_reverse_proxy_can_complete_secure_browser_login() {
+    let (_directory, database) = database().await;
+    let (_user_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database).await.unwrap();
+
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = None;
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    config.security.trusted_proxies = vec!["127.0.0.1".to_owned()];
+    let candidate = RuntimeGenerationFactory::prepare(
+        &process,
+        config.clone(),
+        "proxy-session-test".to_owned(),
+        1,
+    )
+    .await
+    .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+    let origin = format!("https://{address}");
+    let form = "username=admin&password=M002+strong+test+passphrase";
+    let login = http_request(address, &format!(
+        "POST /login HTTP/1.1\r\nHost: {address}\r\nOrigin: {origin}\r\nX-Forwarded-Proto: https\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{form}", form.len()
+    )).await;
+
+    assert!(login.starts_with("HTTP/1.1 303"), "{login}");
+    assert!(
+        login.to_ascii_lowercase().contains("eggpool_session=")
+            && login.to_ascii_lowercase().contains("; secure"),
+        "trusted proxy login must issue a Secure session cookie: {login}"
+    );
+    handle.request_shutdown(ShutdownReason::Requested);
+    task.await.unwrap().unwrap();
+    database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn token_guess_throttle_runs_before_access_state_and_database_lookup() {
+    let (_directory, database) = database().await;
+    let (_admin_id, _) = create_admin(&database).await;
+    identity::enable_managed(&database).await.unwrap();
+
+    let process = ProcessRuntime::new(database.clone()).expect("process runtime");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_owned();
+    config.server.api_key = Some("legacy-shared-key-for-test-only".to_owned());
+    config.dashboard.enabled = true;
+    config.dashboard.public = true;
+    let candidate =
+        RuntimeGenerationFactory::prepare(&process, config.clone(), "token-test".to_owned(), 1)
+            .await
+            .expect("initial generation");
+    let manager = Arc::new(RuntimeManager::new(
+        candidate.transfer().expect("generation transfer"),
+    ));
+    let runtime = ServerRuntime::new(process, manager, config);
+    let handle = runtime.handle();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("listener");
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { runtime.serve_listener(listener).await });
+
+    let before_missing = database.stats().calls;
+    let missing = http_request(
+        address,
+        &format!("GET /v1/models HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 401"), "{missing}");
+    assert_eq!(
+        database.stats().calls,
+        before_missing,
+        "missing credentials are rejected before the access-state read when the shared key is configured"
+    );
+
+    for index in 0..30_u64 {
+        let token = format!("epk1_{index:016x}_{:064x}", index + 1);
+        let response = http_request(address, &format!(
+            "GET /v1/models HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+        )).await;
+        assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+    }
+    let before_blocked = database.stats().calls;
+    let blocked_token = format!("epk1_{:016x}_{:064x}", 31_u64, 32_u64);
+    let blocked = http_request(address, &format!(
+        "GET /v1/models HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {blocked_token}\r\nConnection: close\r\n\r\n"
+    )).await;
+    assert!(blocked.starts_with("HTTP/1.1 401"), "{blocked}");
+    assert_eq!(
+        database.stats().calls,
+        before_blocked,
+        "the exhausted peer bucket rejects before any SQLite operation"
+    );
+
     handle.request_shutdown(ShutdownReason::Requested);
     task.await.unwrap().unwrap();
     database.close().await.unwrap();

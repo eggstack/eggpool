@@ -681,11 +681,11 @@ async fn hard_usd_rule_admits_with_operator_tariff_hold() {
     let fixture = fixture().await;
     let budgets = UserBudgetService::new(fixture.database.clone());
     hard_rule(&budgets, None, hard_limits(None, Some(1_000_000))).await;
-    // Cost-hard-only: 42 estimate tokens times two equivalents at $3/MTok.
+    // This positive bound rounds up instead of becoming zero at a tiny tariff.
     let outcome = PublicationService::new(fixture.database.clone())
         .publish_attributed(
             claim(&fixture).await,
-            hard_input("budget-hard-tariff", 1, 100, Some(50), Some(3_000_000)),
+            hard_input("budget-hard-tariff", 1, 100, Some(50), Some(1)),
             Some(attribution()),
         )
         .await
@@ -697,10 +697,10 @@ async fn hard_usd_rule_admits_with_operator_tariff_hold() {
         reservation_hold(&fixture.database, published.identity.db_request_id).await,
         (
             42,
-            252,
+            1,
             "hard".to_owned(),
             0,
-            252,
+            1,
             Some("operator_tariff".to_owned())
         )
     );

@@ -106,11 +106,21 @@ enum MutationResult {
 #[derive(Debug, Clone)]
 pub struct UserBudgetService {
     database: Database,
+    browser_admin_session: Option<crate::web_session::SessionFence>,
 }
 
 impl UserBudgetService {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            browser_admin_session: None,
+        }
+    }
+
+    pub fn with_browser_admin_session(mut self, principal: &crate::web_session::Principal) -> Self {
+        self.browser_admin_session =
+            Some(crate::web_session::SessionFence::from_principal(principal));
+        self
     }
 
     pub async fn set_rule(
@@ -147,13 +157,18 @@ impl UserBudgetService {
         let model_id = model_id.map(str::to_owned);
         let window = window.as_str().to_owned();
         let enforcement = limits.enforcement.as_str().to_owned();
+        let browser_admin_session = self.browser_admin_session.clone();
         let outcome = self.database
             .with_transaction(move |connection| {
-                let actor: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                    [&actor_id],
-                    |row| row.get(0),
-                )?;
+                let actor = if let Some(fence) = browser_admin_session.as_ref() {
+                    fence.validates_actor(connection, &actor_id, true)?
+                } else {
+                    connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                        [&actor_id],
+                        |row| row.get(0),
+                    )?
+                };
                 if !actor {
                     return Ok(MutationResult::ActorNotAdmin);
                 }
@@ -223,13 +238,18 @@ impl UserBudgetService {
         let user_id = user_id.to_owned();
         let model_id = model_id.map(str::to_owned);
         let window = window.as_str().to_owned();
+        let browser_admin_session = self.browser_admin_session.clone();
         let outcome = self.database
             .with_transaction(move |connection| {
-                let actor: bool = connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
-                    [&actor_id],
-                    |row| row.get(0),
-                )?;
+                let actor = if let Some(fence) = browser_admin_session.as_ref() {
+                    fence.validates_actor(connection, &actor_id, true)?
+                } else {
+                    connection.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' AND state = 'active')",
+                        [&actor_id],
+                        |row| row.get(0),
+                    )?
+                };
                 if !actor {
                     return Ok(MutationResult::ActorNotAdmin);
                 }
@@ -456,7 +476,9 @@ pub(crate) fn tariff_cost_microdollars(
     if tokens < 0 {
         return None;
     }
-    let cost = i128::from(tokens) * i128::from(tariff) / MICRODOLLARS_PER_MILLION_TOKENS;
+    let numerator = i128::from(tokens) * i128::from(tariff);
+    let cost = numerator / MICRODOLLARS_PER_MILLION_TOKENS
+        + i128::from(numerator % MICRODOLLARS_PER_MILLION_TOKENS != 0);
     if cost > i128::from(i64::MAX) {
         return None;
     }
@@ -1143,5 +1165,36 @@ fn parse_window(value: &str) -> BudgetWindow {
         BudgetWindow::Month
     } else {
         BudgetWindow::Day
+    }
+}
+
+#[cfg(test)]
+mod hard_cost_tests {
+    use super::*;
+
+    #[test]
+    fn hard_cost_holds_round_up_for_initial_and_retry_attempts() {
+        let proof = BudgetProof {
+            input_worst_case_tokens: 0,
+            requested_output_tokens: Some(1),
+            tariff_microdollars_per_million_tokens: Some(1),
+        };
+
+        assert_eq!(tariff_cost_microdollars(1, Some(1)), Some(1));
+        assert_eq!(tariff_cost_microdollars(0, Some(1)), Some(0));
+        let initial = hold_for_admission(1, 0, Some(&proof), false, true)
+            .expect("known hard tariff is provable");
+        assert_eq!(initial.microdollars, 1);
+        assert_eq!(initial.bound_microdollars, 1);
+
+        let retry = hold_for_retry(1, 0, Some(&proof), false, true)
+            .expect("known retry tariff is provable");
+        assert_eq!(retry.microdollars, 1);
+        assert_eq!(retry.bound_microdollars, 1);
+
+        let combined = hold_for_admission(1, 0, Some(&proof), true, true)
+            .expect("hard token and cost bounds are provable");
+        assert_eq!(combined.tokens, 2);
+        assert_eq!(combined.microdollars, 1);
     }
 }

@@ -401,28 +401,29 @@ pub(in crate::server) async fn create_user(
     if !admin_only(&session) {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
-    let user = match crate::identity::create_member(
-        &state.database,
-        &session.user_id,
-        &form.username,
-        &form.password,
-    )
-    .await
-    {
+    let profile_id = form.profile_id.as_deref().filter(|id| !id.is_empty());
+    let created = if let Some(profile_id) = profile_id {
+        crate::identity::create_member_with_profile_from_browser(
+            &state.database,
+            &session,
+            &form.username,
+            &form.password,
+            profile_id,
+        )
+        .await
+    } else {
+        crate::identity::create_member_from_browser(
+            &state.database,
+            &session,
+            &form.username,
+            &form.password,
+        )
+        .await
+    };
+    let _user = match created {
         Ok(user) => user,
         Err(error) => return mutation_error(error, "Could not create user."),
     };
-    if let Some(profile_id) = form.profile_id.as_deref().filter(|id| !id.is_empty())
-        && let Err(error) = crate::model_policy::ModelPolicyService::new(state.database.clone())
-            .with_browser_admin_session(&session)
-            .assign_profile(&user.id, profile_id, &session.user_id)
-            .await
-    {
-        return mutation_error(
-            error,
-            "User was created with the default-deny policy; profile assignment failed.",
-        );
-    }
     mutation_redirect("/users")
 }
 
@@ -438,9 +439,9 @@ pub(in crate::server) async fn set_user_state(
     if !admin_only(&session) {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
-    match crate::identity::set_user_enabled(
+    match crate::identity::set_user_enabled_from_browser(
         &state.database,
-        &session.user_id,
+        &session,
         &form.user_id,
         form.enabled,
     )
@@ -463,9 +464,9 @@ pub(in crate::server) async fn reset_user_password(
     if !admin_only(&session) {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
-    match crate::identity::admin_reset_password(
+    match crate::identity::admin_reset_password_from_browser(
         &state.database,
-        &session.user_id,
+        &session,
         &form.user_id,
         &form.password,
     )
@@ -759,6 +760,7 @@ pub(in crate::server) async fn set_user_budget(
     };
     let model_id = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
     match crate::user_budget::UserBudgetService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .set_rule(&session.user_id, &form.user_id, model_id, window, limits)
         .await
     {
@@ -828,6 +830,7 @@ pub(in crate::server) async fn set_instance_budget(
     };
     let model_id = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
     match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .set_rule(&session.user_id, model_id, window, limits)
         .await
     {
@@ -854,6 +857,7 @@ pub(in crate::server) async fn remove_instance_budget(
     };
     let model_id = (!form.model_id.trim().is_empty()).then_some(form.model_id.as_str());
     match crate::instance_budget::InstanceBudgetService::new(state.database.clone())
+        .with_browser_admin_session(&session)
         .remove_rule(&session.user_id, model_id, window)
         .await
     {
@@ -871,9 +875,9 @@ pub(in crate::server) async fn create_personal_token(
     if !csrf_valid(&session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
-    match crate::identity::issue_personal_api_token(
+    match crate::identity::issue_personal_api_token_from_browser(
         &state.database,
-        &session.user_id,
+        &session,
         &session.user_id,
         &form.label,
     )
@@ -897,9 +901,9 @@ pub(in crate::server) async fn revoke_personal_token(
     if !csrf_valid(&session, &headers, &form.csrf) {
         return (StatusCode::FORBIDDEN, "Invalid request token.").into_response();
     }
-    match crate::identity::revoke_user_credential(
+    match crate::identity::revoke_user_credential_from_browser(
         &state.database,
-        &session.user_id,
+        &session,
         &session.user_id,
         &form.credential_id,
     )
@@ -922,9 +926,9 @@ pub(in crate::server) async fn issue_admin_token(
     if !admin_only(&session) {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
-    match crate::identity::issue_personal_api_token(
+    match crate::identity::issue_personal_api_token_from_browser(
         &state.database,
-        &session.user_id,
+        &session,
         &form.user_id,
         &form.label,
     )
@@ -951,8 +955,12 @@ pub(in crate::server) async fn revoke_user_tokens(
     if !admin_only(&session) {
         return (StatusCode::FORBIDDEN, "Administrator access required.").into_response();
     }
-    match crate::identity::revoke_user_api_tokens(&state.database, &session.user_id, &form.user_id)
-        .await
+    match crate::identity::revoke_user_api_tokens_from_browser(
+        &state.database,
+        &session,
+        &form.user_id,
+    )
+    .await
     {
         Ok(_) => mutation_redirect("/users"),
         Err(error) => mutation_error(error, "Could not revoke credentials."),

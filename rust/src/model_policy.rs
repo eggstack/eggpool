@@ -138,12 +138,7 @@ pub struct ModelPolicyService {
     mutation_fence: Option<AdminSessionFence>,
 }
 
-#[derive(Debug, Clone)]
-struct AdminSessionFence {
-    actor_id: String,
-    session_id: String,
-    auth_epoch: i64,
-}
+type AdminSessionFence = crate::web_session::SessionFence;
 
 fn validate_mutation_actor(
     connection: &mut tokio_rusqlite::rusqlite::Connection,
@@ -153,21 +148,7 @@ fn validate_mutation_actor(
     let Some(fence) = fence else {
         return Ok(());
     };
-    if actor_id != fence.actor_id {
-        return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
-    }
-    let active: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM web_sessions s \
-         JOIN users u ON u.id = s.user_id \
-         WHERE s.id = ?1 AND s.user_id = ?2 AND s.revoked_at IS NULL \
-         AND s.expires_at > CURRENT_TIMESTAMP \
-         AND s.last_used_at > datetime('now', '-12 hours') \
-         AND u.state = 'active' AND u.role = 'admin' \
-         AND u.must_change_password = 0 AND u.auth_epoch = ?3)",
-        (&fence.session_id, &fence.actor_id, fence.auth_epoch),
-        |row| row.get(0),
-    )?;
-    if !active {
+    if !fence.validates_actor(connection, actor_id, true)? {
         return Err(tokio_rusqlite::rusqlite::Error::QueryReturnedNoRows);
     }
     Ok(())
@@ -197,11 +178,7 @@ impl ModelPolicyService {
     /// Fence browser-admin mutations against session revocation or user
     /// changes that occur after middleware admits the request.
     pub fn with_browser_admin_session(mut self, principal: &crate::web_session::Principal) -> Self {
-        self.mutation_fence = Some(AdminSessionFence {
-            actor_id: principal.user_id.clone(),
-            session_id: principal.session_id.clone(),
-            auth_epoch: principal.auth_epoch,
-        });
+        self.mutation_fence = Some(AdminSessionFence::from_principal(principal));
         self
     }
 
