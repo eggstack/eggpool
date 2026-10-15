@@ -39,8 +39,8 @@ Command list verified against `eggpool help` (0.8.2).
 
 | Command | Description |
 |---------|-------------|
-| `eggpool status` | Concise proxy/provider health summary (one row per provider; `--json` for structured output) |
-| `eggpool runtime-status` | Detailed process/runtime diagnostics (`--json` for the full snapshot) |
+| `eggpool status` | Concise proxy/provider health summary from the private local control socket (one row per provider; `--json` for structured output) |
+| `eggpool runtime-status` | Detailed local operator diagnostics from the private control socket (`--json` for the full snapshot) |
 | `eggpool stats transcoding` | Show protocol transcoding statistics |
 | `eggpool stats repair-costs` | Dry-run/apply repair for suspicious historical request costs |
 | `eggpool stats recompute-costs` | Recompute `cost_microdollars` on historical requests |

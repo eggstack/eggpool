@@ -769,7 +769,8 @@ eggpool runtime-status                 # detailed process/runtime diagnostics
 eggpool runtime-status --json          # machine-readable JSON
 ```
 
-`eggpool status` calls the authenticated local `/api/status` endpoint and
+`eggpool status` reads the sanitized snapshot over the same-user private local
+control socket and
 prints a compact operator summary: one header line for proxy health, exactly
 one row per configured provider (`ready`/`degraded`/`unavailable`/`disabled`/`unknown`
 with a bounded reason code), and one runtime footer line. It aggregates
@@ -782,9 +783,17 @@ as `unknown`/`disabled` from static config. `eggpool status --json` prints the
 typed server snapshot (deterministic provider ordering, numeric durations in
 named units, no credentials or raw upstream error text).
 
-`eggpool runtime-status` calls the local `/api/stats/runtime` endpoint and
+`eggpool runtime-status` reads the detailed projection over that local control
+socket and
 prints a one-page overview of the running process. It is intended for operators debugging
 systemd, cron, or daemon deployments.
+
+The control runtime directory is private and its Unix socket is mode `0600`.
+This grants readback only to the operating-system account that owns the daemon
+and socket; it does not change HTTP authorization. `/api/status` and
+`/api/stats/runtime` remain browser-session protected after identity bootstrap,
+and personal API tokens cannot access them. Missing or stale sockets are
+reported as unavailable; malformed or oversized responses fail closed.
 
 When the server is not running the command exits non-zero with a clear
 message.  It does not start the server.

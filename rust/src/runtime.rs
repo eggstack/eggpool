@@ -8,8 +8,6 @@ use std::{
 
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
     process::Command as TokioCommand,
     time::{Instant, sleep, timeout},
 };
@@ -40,8 +38,6 @@ const EXIT_CONTROL_UNAVAILABLE: u8 = 3;
 const EXIT_RELOAD_BUSY: u8 = 4;
 const EXIT_PREPARATION_FAILED: u8 = 5;
 const EXIT_DIGEST_MISMATCH: u8 = 6;
-const MAX_STATUS_BODY_BYTES: usize = 1_048_576;
-const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Initialize process-local diagnostics and dispatch the operational CLI.
 pub async fn run(cli: Cli) -> Result<(), BootstrapError> {
@@ -3220,77 +3216,50 @@ async fn runtime_status(path: &Path, json_output: bool) -> Result<(), BootstrapE
 }
 
 async fn fetch_runtime_status(config: &config::Config) -> Result<Value, String> {
-    fetch_local_json(config, "/api/stats/runtime", "runtime-status").await
+    let _ = config;
+    fetch_local_control_status(true).await
 }
 
 async fn fetch_status_snapshot(config: &config::Config) -> Result<Value, String> {
-    fetch_local_json(config, "/api/status", "status").await
+    let _ = config;
+    fetch_local_control_status(false).await
 }
 
-/// Bounded authenticated local-control fetch shared by operational status
-/// commands. No outbound provider requests; one TCP connection, one bounded
-/// body, strict JSON parsing.
-async fn fetch_local_json(
-    config: &config::Config,
-    path: &str,
-    label: &str,
-) -> Result<Value, String> {
-    let host = match config.server.host.as_str() {
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        value => value,
-    };
-    let mut stream = timeout(
-        STATUS_TIMEOUT,
-        TcpStream::connect((host, config.server.port)),
-    )
-    .await
-    .map_err(|error| format!("{label} connection timed out: {error}"))?
-    .map_err(|error| format!("{label} server is not running: {error}"))?;
-    let mut request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
-    if let Some(key) = config.resolved_server_api_key() {
-        request.push_str(&format!("Authorization: Bearer {key}\r\n"));
-    }
-    request.push_str("\r\n");
-    timeout(STATUS_TIMEOUT, stream.write_all(request.as_bytes()))
+async fn fetch_local_control_status(runtime: bool) -> Result<Value, String> {
+    let paths = RuntimePaths::resolve();
+    let response = crate::operations::control::ControlClient::new(&paths.control_socket)
+        .read_status(runtime)
         .await
-        .map_err(|error| format!("{label} request timed out: {error}"))?
-        .map_err(|error| format!("{label} request failed: {error}"))?;
-    let mut bytes = Vec::with_capacity(4096);
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let count = timeout(STATUS_TIMEOUT, stream.read(&mut chunk))
-            .await
-            .map_err(|error| format!("{label} response timed out: {error}"))?
-            .map_err(|error| format!("{label} response failed: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        if bytes.len().saturating_add(count) > MAX_STATUS_BODY_BYTES {
-            return Err(format!("{label} response body is too large"));
-        }
-        bytes.extend_from_slice(&chunk[..count]);
+        .map_err(|error| match error {
+            crate::operations::control::ControlClientError::Connection(
+                std::io::ErrorKind::PermissionDenied,
+            ) => "local operator does not own the control socket".to_owned(),
+            crate::operations::control::ControlClientError::Connection(_) => {
+                match process::read_pid(&paths.pid_file).ok().flatten() {
+                    Some(pid) if !process::process_exists(pid) => {
+                        format!("control socket is absent and the PID file is stale (PID {pid})")
+                    }
+                    Some(_) => "daemon process exists but its control socket is unavailable".into(),
+                    None => "daemon control socket is absent; the server is not running".into(),
+                }
+            }
+            crate::operations::control::ControlClientError::Timeout => {
+                "local control socket timed out".to_owned()
+            }
+            crate::operations::control::ControlClientError::Protocol(_) => {
+                "local control response was malformed or oversized".to_owned()
+            }
+            other => other.to_string(),
+        })?;
+    if !response.ok {
+        return Err(format!(
+            "local status readback failed: {}",
+            response.message
+        ));
     }
-    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
-        return Err(format!("{label} response was malformed"));
-    };
-    let headers = &bytes[..header_end];
-    let status = headers
-        .split(|byte| *byte == b'\n')
-        .next()
-        .and_then(|line| line.split(|byte| *byte == b' ').nth(1))
-        .and_then(|value| std::str::from_utf8(value).ok())
-        .and_then(|value| value.trim().parse::<u16>().ok())
-        .ok_or_else(|| format!("{label} response status was malformed"))?;
-    if status != 200 {
-        return Err(match status {
-            401 | 403 => format!("{label} authentication failed (HTTP {status})"),
-            404 => format!("{label} endpoint is unavailable"),
-            _ => format!("{label} server returned HTTP {status}"),
-        });
-    }
-    serde_json::from_slice(&bytes[header_end + 4..])
-        .map_err(|error| format!("{label} response body was malformed JSON: {error}"))
+    response
+        .payload
+        .ok_or_else(|| "local status response did not include a payload".to_owned())
 }
 
 async fn status(path: &Path, json_output: bool) -> Result<(), BootstrapError> {
@@ -3344,6 +3313,9 @@ fn is_auth_or_malformed_status_error(detail: &str) -> bool {
     detail.contains("authentication failed")
         || detail.contains("malformed")
         || detail.contains("too large")
+        || detail.contains("invalid control response")
+        || detail.contains("control response was malformed")
+        || detail.contains("does not own the control socket")
 }
 
 fn sanitize_status_value(value: &Value) -> Value {

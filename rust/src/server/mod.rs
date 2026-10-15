@@ -896,10 +896,64 @@ pub async fn run_with_digest(
     let reload_service = process.reload_service((*manager).clone());
     let config_path_for_control = process.config_path().map(Path::to_path_buf);
     let control_path = crate::operations::paths::RuntimePaths::resolve().control_socket;
+    let status_state = AppState {
+        server: ServerState::from_config(&config),
+        database: database.clone(),
+        runtime: Arc::clone(&manager),
+        process: Some(process.clone()),
+        body_tasks: BodyTaskTracker::new(),
+    };
     let control_server = match crate::operations::control::start(control_path, move |request| {
         let reload_service = reload_service.clone();
         let config_path = config_path_for_control.clone();
+        let status_state = status_state.clone();
         async move {
+            match request.command.as_str() {
+                "read_status" => {
+                    let snapshot = health::build_status_snapshot(&status_state).await;
+                    return match serde_json::to_value(snapshot) {
+                        Ok(payload)
+                            if serde_json::to_vec(&payload).is_ok_and(|bytes| {
+                                bytes.len() < crate::operations::control::MAX_REQUEST_BYTES - 2048
+                            }) =>
+                        {
+                            crate::operations::control::ControlResponse::with_payload(
+                                request.request_id,
+                                payload,
+                            )
+                        }
+                        Err(_) => crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "local status projection failed",
+                        ),
+                        _ => crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "status projection exceeds the control-response bound",
+                        ),
+                    };
+                }
+                "read_runtime_status" => {
+                    let payload = health::runtime_status_value(&status_state).await;
+                    let within_bound = serde_json::to_vec(&payload).is_ok_and(|bytes| {
+                        bytes.len() < crate::operations::control::MAX_REQUEST_BYTES
+                    });
+                    return if within_bound {
+                        crate::operations::control::ControlResponse::with_payload(
+                            request.request_id,
+                            payload,
+                        )
+                    } else {
+                        crate::operations::control::ControlResponse::error(
+                            request.request_id,
+                            "readback",
+                            "runtime status projection exceeds the control-response bound",
+                        )
+                    };
+                }
+                _ => {}
+            }
             let Some(config_path) = config_path else {
                 return crate::operations::control::ControlResponse::error(
                     request.request_id,
