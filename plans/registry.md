@@ -50,7 +50,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 ready — final PR #7 integration and merge-readiness reconciliation | M014/M015 closed; final candidate, PR metadata, browser/protocol and release evidence still required. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 active — final PR #7 integration and merge-readiness reconciliation | M014/M015 closed; final candidate, PR metadata, browser/protocol and release evidence under review. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M001 conditionally closed — Pi 5/microSD durable-storage tail attribution | Optional follow-up, **nonblocking** to PR #7 merge. Controlled competing-I/O and account/budget matrix evidence remain before broader claims or optimization. SSD/NVMe is optional, not a closure dependency. |
 
 ## Dependency-ready implementation plans
@@ -58,13 +58,13 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | ready | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014/M015 accepted. Verify final candidate checks, browser/protocol, migration and release claims; recommend or hold, never merge automatically. |
+| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014/M015 accepted. Verify final candidate checks, browser/protocol, migration and release claims; recommend or hold, never merge automatically. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | ready | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014 and M015 are closed; M016 owns final candidate reconciliation and must not merge PR #7. |
+| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014 and M015 are closed; M016 owns final candidate reconciliation and must not merge PR #7. |
 
 
 ## Blocked work

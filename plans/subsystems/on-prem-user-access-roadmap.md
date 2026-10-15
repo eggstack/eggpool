@@ -288,7 +288,7 @@ remaining M015 finding. Closure evidence:
 
 ### M016 — Final integration and merge-readiness reconciliation
 
-Class: polish. Ready: M014 and M015 are closed. Check
+Class: polish. Active: M014 and M015 are closed. Check
 final head SHA's hosted CI/installer/**cargo-deny**,
 release/rollback/supported-wire/browser/Q007 qualification,
 current plan/closure sources, and PR description; emit merge
@@ -389,4 +389,4 @@ A ready plan is not an implemented capability.
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
 | M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
 | M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
-| M016 | ready | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | M014 and M015 accepted. Final PR #7 candidate reconciliation and merge recommendation remain; do not merge automatically. |
+| M016 | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | M014 and M015 accepted. Final PR #7 candidate reconciliation and merge recommendation in progress; do not merge automatically. |
