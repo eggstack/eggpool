@@ -288,14 +288,14 @@ remaining M015 finding. Closure evidence:
 
 ### M016 — Final integration and merge-readiness reconciliation
 
-Class: polish. Active: M014 and M015 are closed. Check
-final head SHA's hosted CI/installer/**cargo-deny**,
-release/rollback/supported-wire/browser/Q007 qualification,
-current plan/closure sources, and PR description; emit merge
-recommendation only. **Does not merge automatically**. Exit:
-the on-prem line can be closed again only on an audited
-release-readiness record, without a 49-concurrent capacity claim.
-Source:
+Class: polish. Closed as a pre-merge reconciliation on exact
+head `3d68c715`. Local, browser, release-doc, Q007 and exact-head
+hosted CI/installer/**cargo-deny** evidence pass. Recommendation:
+**merge held pending maintainer review** because GitHub has no
+submitted PR review. PR #7 remains open; the subsystem roadmap stays
+active until a maintainer decides whether to merge. No automatic merge
+was performed and no 49-concurrent capacity claim is made. Closure:
+`plans/closure/on-prem-user-access/016-status.md`. Source:
 `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`.
 
 ### Post-M012 security/merge dependency graph
@@ -389,4 +389,4 @@ A ready plan is not an implemented capability.
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
 | M014 | closed | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | `plans/closure/on-prem-user-access/014-status.md` | Rustls 0.23.46; exact-SHA hosted cargo-deny, CI, and installer jobs pass. Main receives the fix when PR #7 merges. |
 | M015 | closed | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | `plans/closure/on-prem-user-access/015-status.md` | Exact candidate `d8fd9c2a`; findings fixed and independently re-reviewed; exact-SHA hosted gates pass. |
-| M016 | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | M014 and M015 accepted. Final PR #7 candidate reconciliation and merge recommendation in progress; do not merge automatically. |
+| M016 | closed | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | `plans/closure/on-prem-user-access/016-status.md` | Exact candidate checks pass; merge held pending maintainer PR review. The roadmap remains active until the PR decision. |

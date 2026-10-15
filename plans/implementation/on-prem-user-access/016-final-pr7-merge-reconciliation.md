@@ -1,6 +1,6 @@
 # On-Prem User Access M016 — Final on-prem integration and PR #7 merge-readiness reconciliation
 
-Status: active
+Status: implemented
 
 Repository baseline: `3c7def1e35871209e68563b2ee88f36033aff76e` on `plans/on-prem-small-team-user-access` (PR #7, open; 134-file implementation, schema 62).
 
@@ -111,8 +111,9 @@ correctives supersede the old claim, and that 49 accounts
 are distinct from active inference concurrency. Update docs
 only when source-tested claims materially changed. Ensure
 status markers in `plans/registry.md` and roadmap show
-M014/M015 closed **only after** accepted closure evidence;
-M016 itself stays active/closing until exact SHA verification.
+M014/M015 closed only after accepted closure evidence, then M016
+closed only after exact-head verification and its explicit merge
+recommendation are recorded.
 
 ## 7. Ordered work packages
 

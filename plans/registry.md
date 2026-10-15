@@ -50,7 +50,7 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 active — final PR #7 integration and merge-readiness reconciliation | M014/M015 closed; final candidate, PR metadata, browser/protocol and release evidence under review. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M016 closed — merge held pending maintainer review | M014/M015 and exact M016 candidate checks are closed/passed; PR #7 remains open pending maintainer review. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M001 conditionally closed — Pi 5/microSD durable-storage tail attribution | Optional follow-up, **nonblocking** to PR #7 merge. Controlled competing-I/O and account/budget matrix evidence remain before broader claims or optimization. SSD/NVMe is optional, not a closure dependency. |
 
 ## Dependency-ready implementation plans
@@ -58,13 +58,11 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014/M015 accepted. Verify final candidate checks, browser/protocol, migration and release claims; recommend or hold, never merge automatically. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M016 — final PR #7 integration and merge-readiness reconciliation | active | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | M014 and M015 are closed; M016 owns final candidate reconciliation and must not merge PR #7. |
 
 
 ## Blocked work
@@ -102,6 +100,7 @@ Historical M007 blocker assessment at baseline `7e241ad` (`plans/closure/persist
 
 | Subsystem / plan | Disposition | Evidence |
 |---|---|---|
+| On-prem user access M016 — final PR #7 integration and merge-readiness reconciliation | closed — local Rust/tooling, Q007, release-doc, browser and installed release-binary evidence pass; exact PR head `3d68c715` hosted CI, Linux/macOS installer and cargo-deny pass; merge held because no maintainer PR review has been submitted; no future plan depends on M016 | `plans/closure/on-prem-user-access/016-status.md`, PR #7, base `9a0a903c`, head `3d68c715`, CI `38721601336`, installer `38721601305`, audit `38721601318` |
 | On-prem user access M015 — independent authentication/authorization threat review | closed — independent review findings on hard-cost proof bounds and browser-session access corrected and re-reviewed; default 1,024 / no-default 1,025 tests pass (one ignored each); exact-SHA CI, installer and dependency audit pass on `d8fd9c2a`; no M015 security findings remain; M016 promoted to ready | `plans/closure/on-prem-user-access/015-status.md`, implementation `a526980c`, `deb1622f`, `d8fd9c2a`, security scan `52bd79cc`, CI `38720507683`, installer `38720509034`, audit `38720507720` |
 | On-prem user access M014 — Rustls dependency security-advisory corrective | closed — lockfile-only Rustls 0.23.46 patch, unchanged transport feature graph; local default/no-default and 1,009/1,010-test workspace suites, provider TLS (trusted root, wrong-root and hostname rejection), budget/coordinator suites, release build and tooling pass; hosted cargo-deny, CI and both installers pass on `7462263ec482c5fda4bd1a70a9a55b0efc313cd3`; main remains pending PR merge | `plans/closure/on-prem-user-access/014-status.md`, implementation `7462263e`, audit `38671345587`, CI `38671345679`, installers `38671345597` |
 | On-prem concurrency performance M001 — Pi 5/microSD concurrent tail attribution | conditionally closed — three paired physical microSD/tmpfs runs identify durable publication/SQLite/storage as the dominant tested four-way tail contributor; no production change or capacity claim; SSD/NVMe is not required | `plans/closure/on-prem-concurrency-performance/001-status.md`, six Q008 reports + manifest under `artifacts/qualification/on-prem-concurrency-performance/`, artifact guard `tests/tooling/test_on_prem_mmc_tail_attribution.py` |
