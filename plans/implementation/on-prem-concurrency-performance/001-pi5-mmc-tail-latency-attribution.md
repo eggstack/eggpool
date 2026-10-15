@@ -1,6 +1,6 @@
 # On-Prem Concurrency Performance M001 — Pi 5/MMC tail-latency attribution
 
-Status: ready
+Status: implemented
 
 Repository baseline: `3c7def1e35871209e68563b2ee88f36033aff76e` (Pi 5 M012 closure and release 0.8.2 candidate).
 

@@ -1,0 +1,94 @@
+{
+  "schema_version": "on-prem-concurrency-matrix.v1",
+  "plan": "on-prem-concurrency-performance M001",
+  "candidate": {
+    "repository_commit_sha": "d2c0830acaeff90c45bffa393453cf0500c4fa64",
+    "sha256": "8609119a7f0494c8541b7a47ddbbe86be45ce3f84096b5ee87c228c71513a538",
+    "rust_toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "binary_size_bytes": 34984648,
+    "reported_origin": "q005-qualified-aarch64-copy",
+    "provenance_note": "The runner default origin was not overridden on the six benchmark invocations. The same-hash binary was built on-device by the preceding recorded locked release-build command; this metadata mismatch is retained and disclosed rather than editing raw reports."
+  },
+  "target": {
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
+    "architecture": "aarch64",
+    "os": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.0-1065-raspi",
+    "filesystem": "ext4",
+    "root_storage_device_class": "mmc",
+    "attestation": "Linux aarch64 plus device-tree board model"
+  },
+  "thresholds": {
+    "source": "On-prem user-access M012 G3, preserved unchanged",
+    "g3_p95_ms": 1000,
+    "g3_max_ms": 3000
+  },
+  "workload": {
+    "config_fixture": "tests/tooling/fixtures/qualification/sbc-benchmark.toml",
+    "provider": "deterministic loopback fixture",
+    "wire": "native OpenAI Responses finite",
+    "request_count_per_run": 32,
+    "concurrency": 4,
+    "sample_count": 30,
+    "warmup_count": 5,
+    "configured_provider_accounts": 1,
+    "named_principal": "one synthetic administrator personal token",
+    "hard_user_or_global_budgets_enabled": false,
+    "other_bounded_benchmarks": "30 each of native finite, native streaming, and translated Messages streaming",
+    "convergence": "all requests completed; pending_requests=0; active_reservations=0"
+  },
+  "scope_limits": {
+    "tested_concurrency_levels": [4],
+    "tested_named_user_count": 1,
+    "hard_user_or_global_budgets_enabled": false
+  },
+  "conditions": {
+    "mmc": {
+      "database_storage": "runner temporary root under /tmp on root ext4/MMC",
+      "runs": [
+        "mmc-run-1.json",
+        "mmc-run-2.json",
+        "mmc-run-3.json"
+      ],
+      "concurrent_native_responses_finite": [
+        {"p50_ms": 10, "p95_ms": 7599, "max_ms": 7599, "batch_ms": 13220},
+        {"p50_ms": 11, "p95_ms": 12058, "max_ms": 12058, "batch_ms": 18524},
+        {"p50_ms": 11, "p95_ms": 8579, "max_ms": 8579, "batch_ms": 15132}
+      ],
+      "concurrent_medians": {"p50_ms": 11, "p95_ms": 8579, "max_ms": 8579, "batch_ms": 15132},
+      "native_finite_medians": {"p50_ms": 4, "p95_ms": 6780, "max_ms": 8381}
+    },
+    "tmpfs": {
+      "database_storage": "runner temporary root under /dev/shm (tmpfs); qualification output remains on MMC",
+      "runs": [
+        "tmpfs-run-1.json",
+        "tmpfs-run-2.json",
+        "tmpfs-run-3.json"
+      ],
+      "concurrent_native_responses_finite": [
+        {"p50_ms": 10, "p95_ms": 10, "max_ms": 11, "batch_ms": 80},
+        {"p50_ms": 10, "p95_ms": 10, "max_ms": 10, "batch_ms": 81},
+        {"p50_ms": 9, "p95_ms": 13, "max_ms": 13, "batch_ms": 82}
+      ],
+      "concurrent_medians": {"p50_ms": 10, "p95_ms": 10, "max_ms": 11, "batch_ms": 81},
+      "native_finite_medians": {"p50_ms": 4, "p95_ms": 4, "max_ms": 4}
+    }
+  },
+  "commands": [
+    "CARGO_BUILD_JOBS=1 cargo build --manifest-path rust/Cargo.toml --locked --release",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --output artifacts/qualification/on-prem-concurrency-performance/functional.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-1.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-2.json",
+    "uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/mmc-run-3.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-1.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-2.json",
+    "TMPDIR=/dev/shm uv run python scripts/qualification_sbc.py --binary rust/target/release/eggpool --config-fixture tests/tooling/fixtures/qualification/sbc-benchmark.toml --benchmark-samples 30 --output artifacts/qualification/on-prem-concurrency-performance/tmpfs-run-3.json"
+  ],
+  "limitations": [
+    "The 1/2/8 concurrency levels and 5/49 named-principal cases were not run; this corpus isolates the already-reproduced four-way tail.",
+    "Hard user/global budget policies were disabled in this fixture and were not varied.",
+    "No deliberate competing-I/O generator or alternate persistent SSD was used. Ambient host I/O was not controlled and varied during the MMC runs.",
+    "The benchmark emits p50/p95/max only; no p99 is inferred from 30 samples.",
+    "tmpfs is a diagnostic control only and is not a durability recommendation."
+  ]
+}

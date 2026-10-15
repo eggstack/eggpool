@@ -123,15 +123,14 @@ claiming a runtime optimization.
 
 ### M001 — Pi 5/MMC concurrent tail attribution
 
-Class: polish. Ready for instrumentation/experiment design.
-Collect bounded phase-correlated observation of high p95/max
-and repeat same corpus under idle/background I/O, MMC/alternate
-media, solo and 2/4/8-way loads. Exit: deterministic
-reproduction or explicit unreproducible finding; workload/
-device fingerprints, paired baselines, attribution hypothesis
-with falsification evidence, resource cost and decision to
-stop as environment-only or propose one safe targeted
-optimization. Source:
+Class: polish. Conditionally closed with repeated physical MMC/tmpfs
+attribution in `plans/closure/on-prem-concurrency-performance/001-status.md`.
+The completed corpus repeats the existing four-way workload on MMC and tmpfs;
+Plan 238's database-only tmpfs comparison and Plans 237/239's phase controls
+independently support the storage attribution. The original broader target
+(controlled host I/O, persistent alternate media, and repeated 1/2/4/8 plus
+named-user/budget cases) remains a condition for any future optimization or
+wider operating claim. Source:
 `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md`.
 
 Future optimization milestone: **not registered**. Requires
@@ -194,4 +193,4 @@ No optimization promise or new 8-way SLA is inferred.
 
 | Milestone | Status | Implementation plan | Closure record | Blockers |
 |---|---|---|---|---|
-| M001 | ready | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | — | Hard: none. Operational: provisioned Pi/MMC target and paired workload for qualification. Nonblocking to on-prem M016. |
+| M001 | conditionally closed | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | `plans/closure/on-prem-concurrency-performance/001-status.md` | Four-way MMC tail attributed to durable storage; controlled ambient-I/O, persistent SSD, and repeated account/budget matrix remain conditions. No dependency edge to on-prem M016. |
