@@ -1,6 +1,6 @@
 # On-Prem User Access M017 — Managed client credentials and integration reconciliation
 
-Status: ready
+Status: active
 
 Repository baseline: `88f58bbf2e9095cf46437945edf83e580270bdb6` (`main`, PR #7 merged).
 
