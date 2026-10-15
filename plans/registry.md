@@ -49,13 +49,17 @@ pair is a known numbering accident.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | closed | `plans/subsystems/on-prem-user-access-roadmap.md` | M012 closed — physical SBC small-team qualification and final disposition | M001–M013 closed or historically conditionally closed with additive M008–M013 proof; Pi 5 managed envelope measured (solo practical, 49 named users inexpensive, 8-way exceeds hardware); no successor registered. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M014/M015 ready — dependency security and threat review | M016 blocked on both closures and final-SHA CI/installer/security audit. M001–M013 history preserved; physical Pi 5 restricted envelope remains qualified only for solo/light concurrency. |
+| On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M001 ready — controlled Pi 5/MMC tail attribution | Optional follow-up, **nonblocking** to PR #7 merge. Physical target evidence required before claiming a runtime optimization. |
 
 ## Dependency-ready implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
+| On-prem user access | M014 — Rustls four-advisory dependency remediation | ready | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | No hard predecessor. Patch 0.23.45 to compatible >=0.23.46; hosted cargo-deny and TLS/transport/feature qualification mandatory; also affects main. |
+| On-prem user access | M015 — independent authentication/authorization threat review | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | No hard predecessor. May run parallel with M014; cross-role/cross-model/CSRF/budget/restore security negative suite. |
+| On-prem concurrency performance | M001 — physical MMC tail-latency attribution | ready | `plans/implementation/on-prem-concurrency-performance/001-pi5-mmc-tail-latency-attribution.md` | No hard predecessor; physical Pi5/MMC for final qualification. No dependency edge to PR #7 security/merge plan. |
 
 ## Active implementation plans
 
@@ -67,7 +71,21 @@ pair is a known numbering accident.
 
 | Subsystem | Milestone | Blocker |
 |---|---|---|
-| _none_ | — | No blocked implementation plan is currently registered. |
+| On-prem user access | M016 — final PR #7 integration and merge-readiness (`plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`) | Hard: accepted M014 and M015 closure; hosted CI, Linux/macOS installer and cargo-deny all green on candidate SHA, plus scoped browser/security/legacy evidence. |
+
+
+Unblock audit (on-prem user access reopening after M012 closure, baseline
+`3c7def1e`): M001–M013 closure records remain immutable; no
+historical milestone was reopened. M014 and M015 are independent
+dependency-ready security/verification correctives prompted by
+new `rustls` RustSec failures and review of PR #7's large
+authentication change. M016 cannot be promoted until **both**
+are accepted and final-SHA hosted checks exist. Independent
+on-prem concurrency performance M001 is ready as nonblocking
+diagnostic research: the Pi 5/MMC G3 tail-latency failure is
+documented, not waived or treated as a release-blocking
+throughput commitment. No unrelated ready/active milestone
+is promoted or blocked by this registration.
 
 Explicit user direction opens Shared Provider Profile Contract M001 at baseline `b73eea6bc4ecdb6ce6b8974769b7821cf5e7e036`. The milestone extracts the existing secret-free provider endpoint/wire/auth/discovery/verification metadata into a sibling-consumable sans-I/O crate, keeps all account/credential/routing/runtime ownership in EggPool, and adds reviewed non-fixed OpenCode Go model-wire hints. CodeGG is an operational downstream only and must consume an immutable closure revision; no sibling repository is treated as first-party provider authority.
 

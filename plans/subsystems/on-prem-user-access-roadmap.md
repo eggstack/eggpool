@@ -1,6 +1,6 @@
 # On-Prem User Access Roadmap
 
-Status: closed
+Status: active
 
 Long-term references:
 
@@ -264,6 +264,51 @@ blocking budget/security/restore defects. Source:
   milestone closure, audit the blocked registry and promote only
   genuinely ready successors.
 
+### M014 — Rustls dependency security-advisory corrective
+
+Class: invariant. Ready. Current `Cargo.lock` resolves `rustls 0.23.45`
+on both `main` and PR #7; latest hosted cargo-deny fails four
+RUSTSEC-2026-0346/0347/0348/0349 advisories, with minimum fixed
+version >=0.23.46. Bounded patch/requalification, no upstream
+provider family upgrade, no audit ignores. Exit: same-final-SHA hosted
+dependency audit **green**, with default/no-default and provider
+TLS/installer/Q007 regression evidence. Source:
+`plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md`.
+
+### M015 — Independent authentication and authorization threat review
+
+Class: invariant. Ready; runs in parallel with M014. Explicit
+route-method-principal matrix, negative cross-user/model/profile,
+privilege, session/CSRF/trusted-proxy, budget/recovery and
+secret-leak tests on PR #7's combined auth code. Exit: no
+unaccepted high/medium authorization correctness findings,
+all counterexamples addressed with scoped tests and no
+auth boundary regression. Source:
+`plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md`.
+
+### M016 — Final integration and merge-readiness reconciliation
+
+Class: polish. Blocked on accepted M014 + M015 closure. Check
+final head SHA's hosted CI/installer/**cargo-deny**,
+release/rollback/supported-wire/browser/Q007 qualification,
+current plan/closure sources, and PR description; emit merge
+recommendation only. **Does not merge automatically**. Exit:
+the on-prem line can be closed again only on an audited
+release-readiness record, without a 49-concurrent capacity claim.
+Source:
+`plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md`.
+
+### Post-M012 security/merge dependency graph
+
+- Hard: M014 closure + M015 closure -> M016, both can begin now.
+- Operational for M016 closure: hosted CI, installer shells and
+  security audit must pass on the exact final candidate commit.
+- Separate nonblocking performance roadmap:
+  `plans/subsystems/on-prem-concurrency-performance-roadmap.md`,
+  M001 Pi 5/MMC tail attribution, does **not** block M014–M016
+  or revise M012's closed physical evidence. Any new storage
+  topology needs a separate accepted ADR.
+
 ## 8. Cross-cutting requirements
 
 - Storage: append immutable numbered migrations and checksums; preserve DB
@@ -314,12 +359,15 @@ live keys or provider services.
 
 ## 11. Completion definition
 
-M001–M007 historical closure records remain linked and truthful, with their
-open conditions addressed by accepted M008–M012 corrective closure records.
-The subsystem closes only when hard-limit rules are provable or fail closed,
-instance-global budgets intersect correctly, crash/restore and browser
-qualification pass, and physical SBC small-team evidence supports the
-documented target envelope. Conditional closure is not release closure.
+M001–M007 historical closure records remain linked and truthful;
+M008–M013 provide the accepted additive corrections, including a
+physically measured **restricted** Pi 5/MMC envelope. The prior
+M012 roadmap closure is preserved as historical evidence. New
+RUSTSEC advisories and missing integrated pre-merge security
+review require M014/M015 closure and M016 final same-SHA
+integration evidence before this roadmap may close **again**.
+Physical MMC tail attribution is separately nonblocking; no
+unsupported concurrency/service capacity claim is authorized.
 A ready plan is not an implemented capability.
 
 ## 12. Milestone status
@@ -339,3 +387,6 @@ A ready plan is not an implemented capability.
 | M011 | closed | `plans/implementation/on-prem-user-access/011-admin-dashboard-browser-parity-corrective.md` | `plans/closure/on-prem-user-access/011-status.md` | Frozen Python oracle rebuilt and run with no new historical parity gaps; on-prem admin/member pages qualified against a Rust-owned approved reference. Browser sign-in and responsive/navigation defects corrected. |
 | M012 | closed | `plans/implementation/on-prem-user-access/012-physical-sbc-small-team-qualification.md` | `plans/closure/on-prem-user-access/012-status.md` (closed) | Pi 5 managed envelope measured (functional + 3× benchmark, Argon2, 49 named users, 1/2/4/8 concurrency); 8-way saturates, Le Potato/reference-host/16-way recorded as low-severity uncovered dimensions. |
 | M013 | closed | `plans/implementation/on-prem-user-access/013-transcode-eligibility-corrective.md` | `plans/closure/on-prem-user-access/013-status.md` | One-line transcode-protocol restoration plus admission bridge guard; Q007 green. |
+| M014 | ready | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | — | Direct and transitive rustls 0.23.45 on both branches; GitHub audit fails four RustSec advisories. |
+| M015 | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | — | Independent review of complete M001–M013 auth/model/budget/browser boundary; no hard predecessor. |
+| M016 | blocked | `plans/implementation/on-prem-user-access/016-final-pr7-merge-reconciliation.md` | — | Hard: accepted M014 and M015 closures; operational final-SHA hosted audit/CI/installer/browser evidence. |
