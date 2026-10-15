@@ -112,16 +112,24 @@ async fn headless_member_lifecycle_is_atomic_audited_and_works_with_stale_config
     }));
     database.close().await.expect("database closes");
 
+    let default_set = run_cli(
+        &config_path,
+        &["users", "defaults", "set", "restricted"],
+        None,
+    )
+    .await;
+    assert!(
+        default_set.status.success(),
+        "{}",
+        String::from_utf8_lossy(&default_set.stderr)
+    );
+    let default_shown = run_cli(&config_path, &["users", "defaults", "show"], None).await;
+    assert!(default_shown.status.success());
+    assert!(String::from_utf8_lossy(&default_shown.stdout).contains("restricted"));
+
     let created = run_cli(
         &config_path,
-        &[
-            "users",
-            "add",
-            "member",
-            "--password-stdin",
-            "--profile-id",
-            "restricted",
-        ],
+        &["users", "add", "member", "--password-stdin"],
         Some("M020 temporary member password"),
     )
     .await;
@@ -164,6 +172,35 @@ async fn headless_member_lifecycle_is_atomic_audited_and_works_with_stale_config
             .contains("Previously revoked credentials stay revoked")
     );
 
+    let no_profile = run_cli(
+        &config_path,
+        &[
+            "users",
+            "add",
+            "explicit-none",
+            "--password-stdin",
+            "--no-profile",
+        ],
+        Some("M021 explicit no-profile password"),
+    )
+    .await;
+    assert!(
+        no_profile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&no_profile.stderr)
+    );
+    let default_clear = run_cli(&config_path, &["users", "defaults", "clear"], None).await;
+    assert!(
+        default_clear.status.success(),
+        "{}",
+        String::from_utf8_lossy(&default_clear.stderr)
+    );
+    let default_shown = run_cli(&config_path, &["users", "defaults", "show"], None).await;
+    assert!(default_shown.status.success());
+    assert!(
+        String::from_utf8_lossy(&default_shown.stdout).contains("default_member_profile: none")
+    );
+
     let duplicate = run_cli(
         &config_path,
         &["users", "add", "member", "--password-stdin"],
@@ -195,11 +232,16 @@ async fn headless_member_lifecycle_is_atomic_audited_and_works_with_stale_config
             .unwrap(),
         "disabled credentials remain revoked after reactivation"
     );
-    let (assigned_profile, audit_actions) = database
+    let (assigned_profile, explicit_none_assignment, audit_actions) = database
         .call(move |connection| {
             let profile: String = connection.query_row(
                 "SELECT profile_id FROM user_profile_assignments WHERE user_id = ?1",
                 [&member.id],
+                |row| row.get(0),
+            )?;
+            let explicit_none: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM user_profile_assignments a JOIN users u ON u.id = a.user_id WHERE u.username = 'explicit-none')",
+                [],
                 |row| row.get(0),
             )?;
             let mut statement =
@@ -207,11 +249,15 @@ async fn headless_member_lifecycle_is_atomic_audited_and_works_with_stale_config
             let actions = statement
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok((profile, actions))
+            Ok((profile, explicit_none, actions))
         })
         .await
         .expect("profile and audit evidence are readable");
     assert_eq!(assigned_profile, "restricted");
+    assert!(
+        !explicit_none_assignment,
+        "--no-profile bypasses the configured default"
+    );
     assert!(
         audit_actions
             .iter()
