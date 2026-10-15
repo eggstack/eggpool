@@ -5,7 +5,7 @@ Status: ready
 Repository baseline: `3c7def1e35871209e68563b2ee88f36033aff76e` on `plans/on-prem-small-team-user-access` (PR #7, open; 134-file implementation, schema 62).
 
 Source roadmap:
-- `plans/subsystems/on-prem-user-access-roadmap.md#m015`
+- `plans/subsystems/on-prem-user-access-roadmap.md#m015--independent-authentication-and-authorization-threat-review`
 
 Long-term requirements:
 - `plans/000-long-term-specification.md#1-product-definition`
