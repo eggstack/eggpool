@@ -58,7 +58,7 @@ No new runtime, schema or performance claim lands with these plans.
 | Persistence | active | `plans/subsystems/persistence-roadmap.md` | M011 ready — post-M010 roadmap/documentation reconciliation | M009/M010 closures accepted. Documentation/tooling-only corrective; production remains WAL/NORMAL. No technical persistence successor is registered. |
 | Deployment and packaging | closed | `plans/subsystems/deployment-packaging-roadmap.md` | M005 closed — active PATH integration detection corrective | M001–M005 closed; no successor registered. |
 | Dashboard | closed | `plans/subsystems/dashboard-roadmap.md` | M012 closed — lifecycle closure and documentation polish | M001–M012 closed; no registered successor; future dashboard work requires a new bounded plan. |
-| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M021/M022 ready — default member provisioning and hard-budget compatibility | M017–M020 closed; M023 retains its hard dependency/evidence gates. PR #7 and M001–M016 closure records remain immutable. Solo SBC/microSD is not the ordinary-server team-capacity gate. |
+| On-prem user access | active | `plans/subsystems/on-prem-user-access-roadmap.md` | M021 closing; M022 ready — default member provisioning and hard-budget compatibility | M017–M020 closed; M023 retains its hard dependency/evidence gates. PR #7 and M001–M016 closure records remain immutable. Solo SBC/microSD is not the ordinary-server team-capacity gate. |
 | On-prem concurrency performance | active | `plans/subsystems/on-prem-concurrency-performance-roadmap.md` | M002 ready — ordinary-server small-team synthetic capacity baseline | M001's Pi/microSD solo tail attribution stays conditionally closed; M002 is independent measurement on ordinary on-prem Linux with durable SSD/NVMe (operational target required), not an authorization to change WAL/SQLite topology. |
 
 ## Dependency-ready implementation plans
@@ -73,7 +73,7 @@ No new runtime, schema or performance claim lands with these plans.
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
-| On-prem user access | M021 — default member profile and provisioning | active | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | Hard M020 closure accepted; implement explicit deny-by-default profile provisioning. |
+| On-prem user access | M021 — default member profile and provisioning | closing | `plans/implementation/on-prem-user-access/021-default-member-policy-provisioning.md` | Implementation landed; verifying the profile-default, no-profile, migration, and default/no-default contracts. |
 
 
 ## Blocked work
