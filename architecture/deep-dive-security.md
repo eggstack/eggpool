@@ -60,11 +60,14 @@ and a session-bound CSRF token. A same-origin browser form POST presents `Origin
 and `Referer` together, so `server::auth::same_origin` requires every provenance
 header that is present to agree with the request `Host` rather than exactly one
 of them; duplicated headers and userinfo-bearing authorities still fail closed.
-Remote login requires HTTPS or a trusted proxy
-peer listed as a literal IP in `security.trusted_proxies` that sends one
-`X-Forwarded-Proto: https` value. Other forwarded headers do not establish
-trust. `security.allow_insecure_web_auth` is an explicit development override
-and emits a startup warning.
+Remote login requires HTTPS or a trusted proxy peer listed as a literal IP in
+`security.trusted_proxies` that sends one `X-Forwarded-Proto: https` value.
+For login throttling only, one literal client IP in `X-Forwarded-For` is used
+when received from that exact trusted peer; the proxy must replace this
+header. Missing, duplicated, malformed, or chained values fall back to the
+proxy peer. No other forwarded header establishes trust.
+`security.allow_insecure_web_auth` is an explicit development override and
+emits a startup warning.
 Failed personal-token lookups use a 256-entry, one-second negative cache keyed
 by token digest. Successful token lookups are not cached, so revocation takes
 effect on the next request.

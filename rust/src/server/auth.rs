@@ -61,8 +61,7 @@ pub(super) async fn login_submit(
         return (StatusCode::NOT_FOUND, "Browser sign-in is not enabled.").into_response();
     }
 
-    let peer_ip =
-        connection.and_then(|connection| connection.remote_addr.map(|address| address.ip()));
+    let peer_ip = login_throttle_peer(connection, &headers, &state.server);
     if !crate::web_session::login_allowed(&form.username, peer_ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -239,11 +238,7 @@ fn forwarded_https(
     else {
         return false;
     };
-    let trusted = server
-        .trusted_proxy_ips
-        .iter()
-        .any(|proxy| proxy.parse::<IpAddr>().ok() == Some(peer));
-    if !trusted {
+    if !trusted_proxy(peer, server) {
         return false;
     }
     let mut values = headers.get_all("x-forwarded-proto").iter();
@@ -251,6 +246,34 @@ fn forwarded_https(
         return false;
     };
     values.next().is_none() && value.trim().eq_ignore_ascii_case("https")
+}
+
+fn login_throttle_peer(
+    connection: Option<&eggserve_primitives::connection_info::ConnectionInfo>,
+    headers: &HeaderMap,
+    server: &ServerState,
+) -> Option<IpAddr> {
+    let peer = connection
+        .and_then(|connection| connection.remote_addr)
+        .map(|address| address.ip())?;
+    if !trusted_proxy(peer, server) {
+        return Some(peer);
+    }
+    let mut values = headers.get_all("x-forwarded-for").iter();
+    let Some(value) = values.next().and_then(|value| value.to_str().ok()) else {
+        return Some(peer);
+    };
+    if values.next().is_some() {
+        return Some(peer);
+    }
+    Some(value.trim().parse().unwrap_or(peer))
+}
+
+fn trusted_proxy(peer: IpAddr, server: &ServerState) -> bool {
+    server
+        .trusted_proxy_ips
+        .iter()
+        .any(|proxy| proxy.parse::<IpAddr>().ok() == Some(peer))
 }
 
 pub(super) fn same_origin(headers: &HeaderMap, secure: bool) -> bool {
@@ -521,5 +544,82 @@ mod tests {
             &headers,
             &server
         ));
+    }
+
+    #[test]
+    fn login_throttle_uses_forwarded_client_ip_only_from_a_trusted_proxy() {
+        let server = ServerState {
+            api_key: None,
+            dashboard_enabled: true,
+            dashboard_public: false,
+            dashboard_theme: "default".to_owned(),
+            dashboard_refresh_interval_s: 60,
+            configured_server_threads: 1,
+            database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
+            allow_insecure_web_auth: false,
+            started_at: Instant::now(),
+        };
+        let connection = |remote_addr| {
+            eggserve_primitives::connection_info::ConnectionInfo::new(
+                None,
+                Some(remote_addr),
+                eggserve_primitives::connection_info::Scheme::Http,
+                None,
+            )
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.24"));
+
+        let trusted_peer = connection("192.0.2.10:443".parse().unwrap());
+        assert_eq!(
+            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            Some("198.51.100.24".parse().unwrap())
+        );
+
+        let untrusted_peer = connection("198.51.100.30:443".parse().unwrap());
+        assert_eq!(
+            login_throttle_peer(Some(&untrusted_peer), &headers, &server),
+            Some("198.51.100.30".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn login_throttle_rejects_ambiguous_forwarded_client_ip() {
+        let server = ServerState {
+            api_key: None,
+            dashboard_enabled: true,
+            dashboard_public: false,
+            dashboard_theme: "default".to_owned(),
+            dashboard_refresh_interval_s: 60,
+            configured_server_threads: 1,
+            database_path: ":memory:".to_owned(),
+            trusted_proxy_ips: vec!["192.0.2.10".to_owned()],
+            allow_insecure_web_auth: false,
+            started_at: Instant::now(),
+        };
+        let trusted_peer = eggserve_primitives::connection_info::ConnectionInfo::new(
+            None,
+            Some("192.0.2.10:443".parse().unwrap()),
+            eggserve_primitives::connection_info::Scheme::Http,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.24"));
+        headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.25"));
+        assert_eq!(
+            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            Some("192.0.2.10".parse().unwrap())
+        );
+
+        headers.remove("x-forwarded-for");
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.24, 198.51.100.25"),
+        );
+        assert_eq!(
+            login_throttle_peer(Some(&trusted_peer), &headers, &server),
+            Some("192.0.2.10".parse().unwrap())
+        );
     }
 }

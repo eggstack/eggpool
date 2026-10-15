@@ -140,11 +140,13 @@ async fn expired_sessions_and_disabled_users_are_rejected() {
 fn login_throttle_is_bounded_by_username_and_peer() {
     let username = format!("login-test-{}", std::process::id());
     let peer = Some("192.0.2.19".parse().unwrap());
+    let other_peer = Some("198.51.100.19".parse().unwrap());
     assert!(web_session::login_allowed(&username, peer));
     for _ in 0..10 {
         web_session::record_login_failure(&username, peer);
     }
     assert!(!web_session::login_allowed(&username, peer));
+    assert!(web_session::login_allowed(&username, other_peer));
 }
 
 async fn http_request(address: std::net::SocketAddr, raw: &str) -> String {

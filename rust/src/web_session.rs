@@ -226,7 +226,7 @@ pub fn request_peer_ip(request: &axum::http::Request<axum::body::Body>) -> Optio
 }
 
 pub fn login_allowed(username: &str, peer: Option<IpAddr>) -> bool {
-    let username_key = throttle_key("username", &username.to_ascii_lowercase());
+    let username_key = username_throttle_key(username, peer);
     let ip_key = throttle_key(
         "ip",
         &peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string()),
@@ -247,10 +247,7 @@ pub fn login_allowed(username: &str, peer: Option<IpAddr>) -> bool {
 
 pub fn record_login_failure(username: &str, peer: Option<IpAddr>) {
     let keys = [
-        (
-            throttle_key("username", &username.to_ascii_lowercase()),
-            LOGIN_USERNAME_LIMIT,
-        ),
+        (username_throttle_key(username, peer), LOGIN_USERNAME_LIMIT),
         (
             throttle_key(
                 "ip",
@@ -286,6 +283,14 @@ pub fn record_login_failure(username: &str, peer: Option<IpAddr>) {
             );
         }
     }
+}
+
+fn username_throttle_key(username: &str, peer: Option<IpAddr>) -> String {
+    let peer = peer.map_or_else(|| "unknown".to_owned(), |ip| ip.to_string());
+    throttle_key(
+        "username",
+        &format!("{}:{peer}", username.to_ascii_lowercase()),
+    )
 }
 
 fn throttle_key(kind: &str, value: &str) -> String {
