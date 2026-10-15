@@ -1,6 +1,6 @@
 # On-Prem User Access M014 — Rustls advisory remediation and transport qualification
 
-Status: ready
+Status: active
 
 Repository baseline: `3c7def1e35871209e68563b2ee88f36033aff76e` on `plans/on-prem-small-team-user-access` (PR #7, open; 134-file implementation, schema 62).
 

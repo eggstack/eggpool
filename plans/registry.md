@@ -58,13 +58,14 @@ pair is a known numbering accident.
 | Subsystem | Milestone | Status | Implementation plan | Dependencies / handoff note |
 |---|---|---|---|---|
 | Persistence | M011 — post-M010 roadmap and documentation reconciliation | ready | `plans/implementation/persistence/011-post-m010-roadmap-documentation-reconciliation.md` | Hard: M009/M010 closures accepted. Documentation/tooling only; no runtime or physical target dependency. |
-| On-prem user access | M014 — Rustls four-advisory dependency remediation | ready | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | No hard predecessor. Patch 0.23.45 to compatible >=0.23.46; hosted cargo-deny and TLS/transport/feature qualification mandatory; also affects main. |
+| On-prem user access | M014 — Rustls four-advisory dependency remediation | active | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | No hard predecessor. Patch 0.23.45 to compatible >=0.23.46; hosted cargo-deny and TLS/transport/feature qualification mandatory; also affects main. |
 | On-prem user access | M015 — independent authentication/authorization threat review | ready | `plans/implementation/on-prem-user-access/015-authz-threat-review-corrective.md` | No hard predecessor. May run parallel with M014; cross-role/cross-model/CSRF/budget/restore security negative suite. |
 
 ## Active implementation plans
 
 | Subsystem | Milestone | Status | Implementation plan | Handoff note |
 |---|---|---|---|---|
+| On-prem user access | M014 — Rustls four-advisory dependency remediation | active | `plans/implementation/on-prem-user-access/014-rustls-advisory-dependency-corrective.md` | M014 implementation and local qualification in progress; M016 remains blocked. |
 
 
 ## Blocked work
